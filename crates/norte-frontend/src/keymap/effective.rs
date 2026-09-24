@@ -20,9 +20,9 @@ use super::{KeymapDiagnostic, KeymapError};
 /// .unwrap();
 /// let eff = Effective::build_for(&preset, &[], &["pane.copy"], Screen::Browse).unwrap();
 /// let all = eff.bindings_all();
-/// // `pane.pack` existe y este build no lo declara conocido: la tecla se
-/// // queda, marcada. (Fue el ejemplo de `NotBuilt` mientras el catálogo tuvo
-/// // comandos `Planned`; #132 construyó el último.)
+/// // `pane.pack` exists and this build does not declare it known: the key
+/// // stays, marked. (It was the `NotBuilt` example while the catalogue had
+/// // `Planned` commands; #132 built the last one.)
 /// assert!(matches!(all[0].2, Availability::NotHere));
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -83,9 +83,9 @@ pub struct Continuation<'a> {
     pub avail: Availability,
 }
 
-/// Keymap EFECTIVO: capas y contextos ya fusionados y validados
-/// (prefix-free). Inmutable tras construir; clonable barato (el hot-reload
-/// construye uno nuevo y lo cambia entero, ADR 0007).
+/// EFFECTIVE keymap: layers and contexts already merged and validated
+/// (prefix-free). Immutable after building; cheap to clone (hot-reload
+/// builds a new one and swaps it whole, ADR 0007).
 #[derive(Debug, Clone)]
 pub struct Effective {
     bindings: Vec<Binding>,
@@ -102,9 +102,10 @@ pub struct Effective {
     /// — can answer "is a bare digit a count?" without keeping the source
     /// files alive.
     counts: bool,
-    /// Bindings `lua:` DESCARTADOS por venir de la capa de proyecto
-    /// (seguridad, ver [`KeymapFile::mark_project`]). El frontend lo avisa una
-    /// vez (jamás descarte mudo); el mensaje concreto es cosa del frontend.
+    /// `lua:` bindings DISCARDED for coming from the project layer
+    /// (security, see [`KeymapFile::mark_project`]). The frontend warns
+    /// about it once (never a mute discard); the concrete message is the
+    /// frontend's business.
     discarded_lua_bindings: usize,
 }
 
@@ -122,11 +123,11 @@ pub struct Effective {
 /// ```
 pub const LUA_HOST: &str = "lua:*";
 
-/// Charset de un nombre de comando Lua (`lua:<nombre>`): `[a-z0-9._-]{1,64}`.
-/// FUENTE ÚNICA (#88): el motor lo usa para validar el binding `lua:<nombre>`,
-/// y el runtime Lua de un frontend con host (la TUI, `norte.command`) lo reusa
-/// para validar el nombre registrado — así el charset no puede derivar entre
-/// «lo que el keymap acepta» y «lo que el runtime registra».
+/// Charset of a Lua command name (`lua:<name>`): `[a-z0-9._-]{1,64}`. SINGLE
+/// SOURCE (#88): the engine uses it to validate the `lua:<name>` binding, and
+/// a hosting frontend's Lua runtime (the TUI, `norte.command`) reuses it to
+/// validate the registered name — so the charset cannot drift between "what
+/// the keymap accepts" and "what the runtime registers".
 #[must_use]
 pub fn valid_lua_name(name: &str) -> bool {
     !name.is_empty()
@@ -161,20 +162,20 @@ fn check_binding(raw: &RawBinding, known_commands: &[&str]) -> Result<Binding, K
             run: raw.run.clone(),
         });
     }
-    // Esc es la cancelación de secuencia (lo cazó el proptest: un esc
-    // no-inicial sería inalcanzable): solo como binding suelto.
+    // Esc is sequence cancellation (proptest caught it: a non-initial esc
+    // would be unreachable): only as a lone binding.
     if seq.len() > 1 && seq.iter().any(|c| c.is_bare_esc()) {
         return Err(KeymapError::EscInSequence {
             sequence: format!("{:?}", raw.on),
         });
     }
-    // `lua:<nombre>` (M4 Lua, T8): el registro de comandos Lua es DINÁMICO
-    // (runtime), así que jamás está en el catálogo — solo se valida el
-    // charset del nombre (la MISMA `valid_lua_name`, una sola fuente). Un
-    // comando lua no registrado al invocar NO es error de keymap: el frontend
-    // con host avisa en runtime. Un frontend SIN host (la ventana, ADR 0110)
-    // no declara `LUA_HOST`, y la tecla se dice no disponible aquí en vez de
-    // anunciarse y no hacer nada.
+    // `lua:<name>` (M4 Lua, T8): the Lua command registry is DYNAMIC
+    // (runtime), so it is never in the catalogue — only the name's charset
+    // is validated (the SAME `valid_lua_name`, one single source). A lua
+    // command not registered at invocation time is NOT a keymap error: the
+    // hosting frontend warns at runtime. A frontend WITHOUT a host (the
+    // window, ADR 0110) does not declare `LUA_HOST`, and the key is said to
+    // be unavailable here instead of announcing itself and doing nothing.
     let avail = if let Some(lua_name) = raw.run.strip_prefix("lua:") {
         if !valid_lua_name(lua_name) {
             return Err(KeymapError::UnknownCommand {
@@ -189,8 +190,8 @@ fn check_binding(raw: &RawBinding, known_commands: &[&str]) -> Result<Binding, K
     } else if known_commands.contains(&raw.run.as_str()) {
         Availability::Here
     } else {
-        // Ausente del set de ESTE frontend. El catálogo decide si eso es
-        // «norte no lo ha construido» o «lo escribiste mal».
+        // Absent from THIS frontend's set. The catalogue decides whether
+        // that is "norte has not built it" or "you misspelled it".
         match catalogue::lookup(&raw.run).map(|d| d.status) {
             Some(Status::Planned { reason, issue }) => Availability::NotBuilt { reason, issue },
             Some(Status::Live) => Availability::NotHere,
@@ -312,11 +313,11 @@ fn check_digits_free(bindings: &[Binding], counts: bool) -> Result<(), KeymapErr
 }
 
 impl Effective {
-    /// Fusiona `preset` + capa opcional de usuario (ADR 0006). Azúcar de
-    /// [`Self::build_layered`] con cero o una capa.
+    /// Merges `preset` + an optional user layer (ADR 0006). Sugar over
+    /// [`Self::build_layered`] with zero or one layer.
     ///
     /// # Errors
-    /// Ver [`KeymapError`] — todos son errores de CARGA con diagnóstico.
+    /// See [`KeymapError`] — all are LOAD errors with a diagnostic.
     pub fn build(
         preset: &KeymapFile,
         user: Option<&KeymapFile>,
@@ -328,15 +329,15 @@ impl Effective {
         }
     }
 
-    /// Fusiona `preset` + N capas de usuario en precedencia ASCENDENTE
-    /// (sistema → usuario → proyecto, ADR 0007) y valida (ADR 0006): por
-    /// contexto, los `prepend` de capas superiores van primero (ganan),
-    /// luego el preset, luego los `append` (superiores antes); entre
-    /// contextos, el específico (`pane`) pisa al `global`; el resultado
-    /// debe ser prefix-free y con comandos conocidos.
+    /// Merges `preset` + N user layers in ASCENDING precedence (system ->
+    /// user -> project, ADR 0007) and validates (ADR 0006): per context,
+    /// higher layers' `prepend`s go first (they win), then the preset, then
+    /// the `append`s (higher ones first); between contexts, the specific
+    /// one (`pane`) beats `global`; the result must be prefix-free and use
+    /// known commands.
     ///
     /// # Errors
-    /// Ver [`KeymapError`] — todos son errores de CARGA con diagnóstico.
+    /// See [`KeymapError`] — all are LOAD errors with a diagnostic.
     pub fn build_layered(
         preset: &KeymapFile,
         layers: &[KeymapFile],
@@ -345,12 +346,11 @@ impl Effective {
         Self::build_for(preset, layers, known_commands, Screen::Browse)
     }
 
-    /// Fusiona para una pantalla concreta: su contexto específico pisa a
-    /// `global` por secuencia exacta (ADR 0006), capas como en
-    /// [`Self::build_layered`].
+    /// Merges for a specific screen: its specific context beats `global` by
+    /// exact sequence (ADR 0006), layers as in [`Self::build_layered`].
     ///
     /// # Errors
-    /// Ver [`KeymapError`].
+    /// See [`KeymapError`].
     pub fn build_for(
         preset: &KeymapFile,
         layers: &[KeymapFile],
@@ -372,19 +372,19 @@ impl Effective {
 
         let mut seen: HashSet<Vec<Chord>> = HashSet::new();
         let mut bindings: Vec<Binding> = Vec::new();
-        // `merged_bindings` sigue etiquetando el origen (`merge_ctx` lo usa
-        // para descartar los `lua:` de la capa de proyecto); la decisión por
-        // binding ya no depende de él. La SECCIÓN sí importa: es la
-        // procedencia que el editor de atajos necesita para marcar una fila
-        // `[global]` como no editable (#141) — específico gana, así que la
-        // primera vez que `seen` acepta una secuencia es también la única vez
-        // que su sección cuenta.
+        // `merged_bindings` still tags the origin (`merge_ctx` uses it to
+        // discard the project layer's `lua:` ones); the per-binding
+        // decision no longer depends on it. The SECTION does matter: it is
+        // the provenance the shortcut editor needs to mark a `[global]` row
+        // as non-editable (#141) — the specific one wins, so the first time
+        // `seen` accepts a sequence is also the only time its section
+        // counts.
         for (raw, _origin, section) in ordered {
             let binding = check_binding(raw, known_commands)?;
-            // El primero gana (el orden YA codifica la precedencia). Un
-            // binding NO disponible participa igual: ensombrece al de menos
-            // precedencia en vez de dejarlo aflorar — la tecla dice por qué
-            // no hace nada en lugar de hacer otra cosa.
+            // The first one wins (the order ALREADY encodes precedence). An
+            // UNAVAILABLE binding participates just the same: it shadows
+            // the lower-precedence one instead of letting it surface — the
+            // key says why it does nothing instead of doing something else.
             if seen.insert(binding.seq.clone()) {
                 bindings.push(Binding {
                     global: section == Section::Global,
@@ -493,7 +493,7 @@ impl Effective {
     /// let plain = parse_keymap("[pane]\nkeymap = [{ on = [\"j\"], run = \"cursor.down\" }]\n")
     ///     .unwrap();
     /// let eff = Effective::build_for(&plain, &[], &["cursor.down"], Screen::Browse).unwrap();
-    /// assert!(!eff.counts(), "opt-in: sin la clave, un dígito es una tecla");
+    /// assert!(!eff.counts(), "opt-in: with no key, a digit is just a key");
     ///
     /// let counting =
     ///     parse_keymap("counts = true\n[pane]\nkeymap = [{ on = [\"j\"], run = \"cursor.down\" }]\n")
@@ -569,10 +569,10 @@ impl Effective {
         self.bindings.iter().any(|b| b.seq == seq && b.global)
     }
 
-    /// Bindings `lua:` descartados por venir de la capa de PROYECTO (`./
-    /// .norte`, sin trust — seguridad, ver [`KeymapFile::mark_project`]).
-    /// El caller (main) lo pinta una vez por barra; los rebinds de proyecto
-    /// a builtins NO cuentan aquí (siguen funcionando).
+    /// `lua:` bindings discarded for coming from the PROJECT layer (`./
+    /// .norte`, untrusted — security, see [`KeymapFile::mark_project`]).
+    /// The caller (main) paints it once per bar; project rebinds to
+    /// builtins do NOT count here (they keep working).
     #[must_use]
     pub fn discarded_lua_bindings(&self) -> usize {
         self.discarded_lua_bindings
@@ -645,22 +645,25 @@ impl Effective {
             .collect()
     }
 
-    /// El acorde SUELTO que corre `command`, si hay uno.
+    /// The LONE chord that runs `command`, if there is one.
     ///
-    /// Existe para los dos sitios que le entregan el teclado ENTERO a otro
-    /// programa: el subshell (`app.toggle-panels`, ADR 0084) y el panel de
-    /// terminal (`layout.terminal`, #362). Los dos tienen el mismo problema y
-    /// por eso la regla vive aquí una vez: mientras el shell tiene las teclas,
-    /// norte reconoce UN acorde y le pasa todo lo demás, así que ese acorde no
-    /// puede ser una secuencia de dos — reconocerla pediría meter el resolutor
-    /// entero dentro del bucle y, sobre todo, robarle al shell la primera
-    /// tecla justo donde el lector la está escribiendo.
+    /// Exists for the two places that hand the WHOLE keyboard over to
+    /// another program: the subshell (`app.toggle-panels`, ADR 0084) and
+    /// the terminal panel (`layout.terminal`, #362). Both have the same
+    /// problem and that is why the rule lives here once: while the shell
+    /// has the keys, norte recognizes ONE chord and passes it everything
+    /// else, so that chord cannot be a two-key sequence — recognizing one
+    /// would require putting the whole resolver inside the loop and, above
+    /// all, stealing from the shell the first key exactly where the reader
+    /// is typing it.
     ///
-    /// Devuelve `None` si el preset lo ata a una secuencia o no lo ata: quien
-    /// llama entonces NO cede el teclado, en vez de cederlo sin salida.
+    /// Returns `None` if the preset binds it to a sequence or does not bind
+    /// it at all: the caller then does NOT hand over the keyboard, instead
+    /// of handing it over with no way out.
     ///
-    /// Si hay dos acordes sueltos, manda el ÚLTIMO, que es el que gana en el
-    /// keymap efectivo y por tanto el que sale en la hoja de referencia.
+    /// If there are two lone chords, it returns the LAST one, which is the
+    /// one that wins in the effective keymap and therefore the one that
+    /// appears in the reference sheet.
     ///
     /// ```
     /// use norte_frontend::keymap::{Effective, Screen, parse_keymap};
@@ -676,7 +679,7 @@ impl Effective {
     /// let cmds = ["layout.terminal", "layout.timeline"];
     /// let eff = Effective::build_for(&preset, &[], &cmds, Screen::Browse).unwrap();
     /// assert!(eff.lone_chord("layout.terminal").is_some());
-    /// // Atado a una SECUENCIA: no sirve para salir de un terminal.
+    /// // Bound to a SEQUENCE: no good for getting out of a terminal.
     /// assert!(eff.lone_chord("layout.timeline").is_none());
     /// ```
     #[must_use]

@@ -1,12 +1,12 @@
-//! El panel que pinta un PLUGIN (fase 3), por donde pasa de verdad: que su
-//! marco se PINTE, que una zona pulsada despache un comando del catálogo, que
-//! una respuesta vieja no pise la de ahora, y que el texto de un tercero se
-//! enmascare.
+//! The panel a PLUGIN paints (phase 3), through where it really goes: that
+//! its frame PAINTS, that a clicked zone dispatches a catalogue command,
+//! that an old response does not overwrite the current one, and that a
+//! third party's text gets masked.
 //!
-//! El último no es teórico: la primera versión de `marco_de_wire` copiaba los
-//! campos del wire a mano y se saltaba el enmascarado que sí hacía la preview
-//! estilada. Un panel podía colar escapes de terminal por el único camino que
-//! no pasaba por `norte_frontend::ansi::span_de_wire`.
+//! The last one is not theoretical: `marco_de_wire`'s first version copied
+//! the wire's fields by hand and skipped the masking the styled preview did
+//! do. A panel could smuggle terminal escapes through the one path that did
+//! not go through `norte_frontend::ansi::span_de_wire`.
 
 use norte_frontend::ansi::StyledSpan;
 use norte_frontend::frame::{Hit, StyledFrame};
@@ -17,15 +17,15 @@ use norte_tui::{mouse, panelplugin, ui};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 
-/// El hueco donde vive el panel del plugin en todos estos tests.
+/// The slot where the plugin's panel lives in all these tests.
 const PANEL: SlotId = SlotId(71);
 
 fn vp(wire: &str) -> VPath {
     let _ = norte_i18n::force(norte_i18n::Lang::Es);
-    VPath::parse(wire).expect("wire válido")
+    VPath::parse(wire).expect("valid wire")
 }
 
-/// Un plugin aprobado y activo que aporta el panel `status`.
+/// An approved, enabled plugin that contributes the `status` panel.
 fn plugin_con_panel() -> norte_proto::methods::PluginInfo {
     norte_proto::methods::PluginInfo {
         id: "git".to_owned(),
@@ -50,7 +50,7 @@ fn plugin_con_panel() -> norte_proto::methods::PluginInfo {
     }
 }
 
-/// Una pantalla con un listado y el panel del plugin al lado.
+/// A screen with a listing and the plugin's panel next to it.
 fn app_con_panel() -> App {
     let dir = vp("file:///casa");
     let mut app = App::new(
@@ -100,28 +100,30 @@ fn pantalla(app: &App, ancho: u16, alto: u16) -> String {
         .collect()
 }
 
-/// Lo que el guest describe se PINTA, dentro de un marco que dice qué panel es.
+/// What the guest describes gets PAINTED, inside a frame that says which
+/// panel it is.
 ///
-/// El kind de un panel aportado no se conoce al compilar, así que no pasa por
-/// la cadena de `placed_of_kind` que tienen sus vecinos: se resuelve por
-/// prefijo. Sin ese camino, el hueco se colocaba y se quedaba en blanco.
+/// A contributed panel's kind is not known at compile time, so it does not
+/// go through the `placed_of_kind` chain its neighbors have: it resolves
+/// by prefix. Without that path, the slot got placed and stayed blank.
 #[test]
 fn el_marco_del_plugin_se_pinta_con_su_titulo() {
     let mut app = app_con_panel();
     app.paneles.entry(PANEL).frame = Some(marco("rama: main", Vec::new()));
 
     let visto = pantalla(&app, 80, 16);
-    assert!(visto.contains("rama: main"), "el marco se pinta: {visto:?}");
-    assert!(visto.contains("status"), "y el título dice de qué es");
+    assert!(visto.contains("rama: main"), "the frame paints: {visto:?}");
+    assert!(visto.contains("status"), "and the title says what it is");
 }
 
-/// Pulsar una zona del marco despacha SU comando, por el camino de siempre.
+/// Clicking a zone of the frame dispatches ITS command, through the usual
+/// path.
 ///
-/// Un `Hit` no ejecuta nada por su cuenta: nombra un comando del catálogo y lo
-/// despacha norte, así que un clic no puede hacer nada que una tecla no
-/// pudiera (regla dura 9). Lo que este test fija es que la cuenta de
-/// coordenadas es la correcta —el guest habla de celdas DENTRO del marco— y
-/// que el comando acaba en la misma cola que un botón de la barra.
+/// A `Hit` runs nothing on its own: it names a catalogue command and norte
+/// dispatches it, so a click cannot do anything a key could not (hard rule
+/// 9). What this test pins is that the coordinate math is correct — the
+/// guest talks about cells INSIDE the frame — and that the command ends up
+/// in the same queue as a bar button.
 #[test]
 fn pulsar_una_zona_del_panel_deja_su_comando_para_el_despacho() {
     let area = ratatui::layout::Rect::new(0, 0, 80, 16);
@@ -141,9 +143,8 @@ fn pulsar_una_zona_del_panel_deja_su_comando_para_el_despacho() {
     let hueco = slots
         .iter()
         .find(|s| s.slot == PANEL)
-        .expect("el panel se colocó");
-    // La primera celda de DENTRO: una más allá del borde, en las dos
-    // direcciones.
+        .expect("the panel was placed");
+    // The first cell INSIDE: one past the border, in both directions.
     let (col, row) = (hueco.x + 1, hueco.y + 1);
     mouse::after_frame(
         &mut app,
@@ -163,7 +164,7 @@ fn pulsar_una_zona_del_panel_deja_su_comando_para_el_despacho() {
     let after = mouse::handle_at(&mut app, ev, std::time::Instant::now());
     assert!(
         matches!(after, mouse::After::PanelBar),
-        "va por el despacho de la barra, que es el de su atajo"
+        "it goes through the bar's dispatch, which is its own shortcut's"
     );
     assert_eq!(
         app.pending_panel_command.as_deref(),
@@ -171,11 +172,12 @@ fn pulsar_una_zona_del_panel_deja_su_comando_para_el_despacho() {
     );
 }
 
-/// Una zona que nombra un comando FUERA de su alcance no ejecuta nada.
+/// A zone that names a command OUTSIDE its reach runs nothing.
 ///
-/// El plugin elige la etiqueta y el comando, y nada los ata: una zona que pone
-/// «Actualizar» puede nombrar `pane.unpack`, que copia ficheros. El clic tiene
-/// el mismo alcance que la tecla de un panel enfocado, ni una más.
+/// The plugin chooses the label and the command, and nothing ties them
+/// together: a zone that says "Update" can name `pane.unpack`, which
+/// copies files. The click has the same reach as a focused panel's key, not
+/// one bit more.
 #[test]
 fn una_zona_no_puede_nombrar_un_comando_fuera_de_su_alcance() {
     let area = ratatui::layout::Rect::new(0, 0, 80, 16);
@@ -194,7 +196,7 @@ fn una_zona_no_puede_nombrar_un_comando_fuera_de_su_alcance() {
     let hueco = slots
         .iter()
         .find(|s| s.slot == PANEL)
-        .expect("el panel se colocó");
+        .expect("the panel was placed");
     let (col, row) = (hueco.x + 1, hueco.y + 1);
     mouse::after_frame(
         &mut app,
@@ -214,16 +216,16 @@ fn una_zona_no_puede_nombrar_un_comando_fuera_de_su_alcance() {
     let _ = mouse::handle_at(&mut app, ev, std::time::Instant::now());
     assert_eq!(
         app.pending_panel_command, None,
-        "un plugin no conduce el gestor desde una zona"
+        "a plugin does not drive the manager from a zone"
     );
 }
 
-/// Pulsar el BORDE del panel no dispara la zona de debajo.
+/// Clicking the panel's BORDER does not fire the zone underneath.
 ///
-/// La cuenta de celdas protegía el arriba-izquierda y no el otro lado: en el
-/// borde derecho daba la columna siguiente a la última de dentro, así que una
-/// zona que ocupa el ancho entero se disparaba al pulsar el propio marco —por
-/// ejemplo, yendo a arrastrarlo.
+/// The cell count protected the top-left and not the other side: on the
+/// right border it gave the column just past the last interior one, so a
+/// zone spanning the whole width fired when clicking the frame itself — for
+/// instance, going to drag it.
 #[test]
 fn pulsar_el_borde_del_panel_no_dispara_su_zona() {
     let area = ratatui::layout::Rect::new(0, 0, 80, 16);
@@ -242,8 +244,8 @@ fn pulsar_el_borde_del_panel_no_dispara_su_zona() {
     let hueco = slots
         .iter()
         .find(|s| s.slot == PANEL)
-        .expect("el panel se colocó");
-    // El borde DERECHO, a la altura de la primera fila de dentro.
+        .expect("the panel was placed");
+    // The RIGHT border, at the height of the first interior row.
     let (col, row) = (hueco.x + hueco.width - 1, hueco.y + 1);
     mouse::after_frame(
         &mut app,
@@ -261,10 +263,10 @@ fn pulsar_el_borde_del_panel_no_dispara_su_zona() {
         modifiers: crossterm::event::KeyModifiers::NONE,
     };
     let _ = mouse::handle_at(&mut app, ev, std::time::Instant::now());
-    assert_eq!(app.pending_panel_command, None, "el marco no es la zona");
+    assert_eq!(app.pending_panel_command, None, "the frame is not the zone");
 }
 
-/// Una celda del marco donde NO hay zona no ejecuta nada.
+/// A frame cell where there is NO zone runs nothing.
 #[test]
 fn fuera_de_una_zona_no_se_despacha_nada() {
     let area = ratatui::layout::Rect::new(0, 0, 80, 16);
@@ -283,8 +285,8 @@ fn fuera_de_una_zona_no_se_despacha_nada() {
     let hueco = slots
         .iter()
         .find(|s| s.slot == PANEL)
-        .expect("el panel se colocó");
-    // Dos filas más abajo: dentro del panel, fuera de la única zona.
+        .expect("the panel was placed");
+    // Two rows further down: inside the panel, outside the only zone.
     let (col, row) = (hueco.x + 1, hueco.y + 3);
     mouse::after_frame(
         &mut app,
@@ -305,11 +307,11 @@ fn fuera_de_una_zona_no_se_despacha_nada() {
     assert_eq!(app.pending_panel_command, None);
 }
 
-/// Una respuesta de una petición VIEJA no pisa el marco de ahora.
+/// A response to an OLD request does not overwrite the current frame.
 ///
-/// Mientras volaba, el cursor pudo moverse: ese marco describe una pantalla
-/// que ya no es. Y no limpia la petición viva, que es de otra firma y sigue
-/// siendo la que manda.
+/// While it was in flight, the cursor could have moved: that frame
+/// describes a screen that no longer is. And it does not clear the live
+/// request, which has a different signature and is still the one in charge.
 #[test]
 fn una_respuesta_vieja_no_pisa_el_marco_de_ahora() {
     let mut app = app_con_panel();
@@ -348,15 +350,15 @@ fn una_respuesta_vieja_no_pisa_el_marco_de_ahora() {
     );
 
     let panel = app.paneles.entry(PANEL);
-    assert!(panel.en_vuelo.is_some(), "la petición viva sigue viva");
+    assert!(panel.en_vuelo.is_some(), "the live request is still alive");
     assert_eq!(texto_de(panel.frame.as_ref()), "lo de ahora");
 }
 
-/// El texto del guest se ENMASCARA, y un rol del cromo no se le concede.
+/// The guest's text gets MASKED, and a chrome role is not granted to it.
 ///
-/// Las dos puertas viven en `norte_frontend::ansi::span_de_wire`, y este test
-/// existe porque el panel llegó a saltárselas: copiar los campos a mano
-/// compilaba igual.
+/// Both gates live in `norte_frontend::ansi::span_de_wire`, and this test
+/// exists because the panel once managed to skip them: copying the fields
+/// by hand compiled just as well.
 #[test]
 fn el_texto_del_guest_se_enmascara_y_el_cromo_no_se_concede() {
     let mut app = app_con_panel();
@@ -390,7 +392,7 @@ fn el_texto_del_guest_se_enmascara_y_el_cromo_no_se_concede() {
     let pintado = texto_de(panel.frame.as_ref());
     assert!(
         !pintado.contains('\u{1b}'),
-        "ningún escape llega a la pantalla: {pintado:?}"
+        "no escape reaches the screen: {pintado:?}"
     );
     let rol = panel
         .frame
@@ -398,13 +400,10 @@ fn el_texto_del_guest_se_enmascara_y_el_cromo_no_se_concede() {
         .and_then(|f| f.lines.first())
         .and_then(|l| l.first())
         .and_then(|s| s.role);
-    assert!(
-        rol.is_none(),
-        "un rol del cromo no lo puede pedir un plugin"
-    );
+    assert!(rol.is_none(), "a plugin cannot request a chrome role");
     assert_eq!(
         panel.state.as_deref(),
         Some(&b"opaco"[..]),
-        "el estado opaco se guarda para la siguiente"
+        "the opaque state is saved for the next one"
     );
 }

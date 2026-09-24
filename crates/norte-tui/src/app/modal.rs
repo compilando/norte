@@ -1155,7 +1155,7 @@ mod tests {
     /// All ten text prompts say they're prompts, and typing reaches the
     /// field each one calls something different.
     #[test]
-    fn los_diez_prompts_exponen_su_campo() {
+    fn the_ten_prompts_expose_their_field() {
         for (kind, mut m) in all_ten() {
             assert_eq!(
                 m.prompt_kind(),
@@ -1170,7 +1170,7 @@ mod tests {
 
     /// A DECISION modal has no field to type into.
     #[test]
-    fn un_modal_de_decision_no_es_prompt() {
+    fn a_decision_modal_is_not_a_prompt() {
         let mut m = Modal::ConfirmQuit;
         assert_eq!(m.prompt_kind(), None);
         assert!(m.text_prompt().is_none());
@@ -1178,7 +1178,7 @@ mod tests {
 
     /// The cap is per prompt, and the split one's is the short one.
     #[test]
-    fn el_tope_de_partir_para_en_silencio() {
+    fn splits_cap_stops_silently() {
         let mut m = Modal::Split {
             size: "9".repeat(32),
             error: None,
@@ -1191,7 +1191,7 @@ mod tests {
 
     /// The command line's DOES say so (#246 M3).
     #[test]
-    fn el_tope_de_la_linea_de_comandos_se_dice() {
+    fn the_command_lines_cap_gets_stated() {
         let mut m = Modal::CommandLine {
             command: "x".repeat(TEXT_FIELD_MAX_CHARS),
             error: None,
@@ -1205,7 +1205,7 @@ mod tests {
     /// The destination's backspace erases the WHOLE escape, not one
     /// character of the wire text (#246 M3).
     #[test]
-    fn el_retroceso_del_destino_borra_un_escape_entero() {
+    fn the_destinations_backspace_erases_a_whole_escape() {
         let mut m = Modal::TransferDest {
             kind: TransferKind::Copy,
             input: String::from("mem:///caf%C3%A9"),
@@ -1219,7 +1219,7 @@ mod tests {
     /// The editable name marks `touched` only if backspace erased something
     /// (#105 review MINOR-5).
     #[test]
-    fn el_nombre_editable_marca_touched_solo_si_borro() {
+    fn the_editable_name_marks_touched_only_if_it_erased() {
         let mut m = transfer_name();
         m.text_prompt().expect("field").pop();
         assert!(
@@ -1241,7 +1241,7 @@ mod tests {
 
     /// Backspace clears the diagnostic even if it erases nothing.
     #[test]
-    fn el_retroceso_en_vacio_limpia_el_diagnostico() {
+    fn backspace_on_empty_clears_the_diagnostic() {
         let mut m = Modal::Mkdir {
             name: String::new(),
             error: Some(String::from("already exists")),

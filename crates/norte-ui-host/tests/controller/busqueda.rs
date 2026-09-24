@@ -906,7 +906,7 @@ async fn a_hostile_hit_is_marked() {
 #[tokio::test]
 async fn the_window_searches_by_meaning() {
     let fake = arbol_como_falso();
-    *fake.semanticos.lock().expect("semánticos") = Some(vec![
+    *fake.semanticos.lock().expect("semantics") = Some(vec![
         norte_proto::methods::SemanticHit {
             path: VPath::parse("mem:///casa/docs/a.md").expect("vpath"),
             score: 0.91,
@@ -924,7 +924,7 @@ async fn the_window_searches_by_meaning() {
     let id = siguientes_dialogos(&mut sub).await[0].id;
     h.dispatch(UiAction::DialogInput {
         id,
-        text: "facturas del año pasado".to_owned(),
+        text: "invoices from last year".to_owned(),
     })
     .await
     .expect("host alive");
@@ -952,9 +952,13 @@ async fn the_window_searches_by_meaning() {
     // The score is SHOWN: without it, two hits at 0.91 and 0.42 read as
     // equally good and the order looks arbitrary.
     assert!(view.rows[0].score.is_some_and(|s| s > 0.9));
-    let requested = backend.semanticas_pedidas.lock().expect("pedidas").clone();
+    let requested = backend
+        .semanticas_pedidas
+        .lock()
+        .expect("requested")
+        .clone();
     assert_eq!(requested.len(), 1);
-    assert_eq!(requested[0].0, "facturas del año pasado");
+    assert_eq!(requested[0].0, "invoices from last year");
     assert!(
         requested[0].1 <= norte_proto::methods::INDEX_SEMANTIC_MAX_K,
         "k is clamped to what the daemon accepts: {}",
@@ -1019,7 +1023,7 @@ async fn an_empty_semantic_query_is_not_sent() {
         backend
             .semanticas_pedidas
             .lock()
-            .expect("pedidas")
+            .expect("requested")
             .is_empty()
     );
 }
@@ -1054,7 +1058,7 @@ async fn an_empty_ai_instruction_returns_the_field() {
         snap.dialogs
     );
     assert!(
-        backend.instrucciones.lock().expect("pedidas").is_empty(),
+        backend.instrucciones.lock().expect("requested").is_empty(),
         "and nothing goes out to the AI provider"
     );
 }
@@ -1114,7 +1118,7 @@ async fn in_read_only_there_is_no_semantic_search() {
         backend
             .semanticas_pedidas
             .lock()
-            .expect("pedidas")
+            .expect("requested")
             .is_empty()
     );
 }

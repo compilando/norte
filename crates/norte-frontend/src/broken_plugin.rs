@@ -55,7 +55,7 @@ mod tests {
     fn broken(dir: &str, dir_bytes: Option<&[u8]>) -> PluginLoadError {
         PluginLoadError {
             dir: dir.to_owned(),
-            reason: "no cargó".to_owned(),
+            reason: "did not load".to_owned(),
             dir_bytes: dir_bytes.map(<[u8]>::to_vec),
         }
     }

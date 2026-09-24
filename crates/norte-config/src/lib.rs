@@ -11,19 +11,19 @@
 
 pub mod dirs;
 pub mod load;
-/// Montaje de `tracing` para los binarios: fichero rotatorio con permisos
-/// cerrados, y el cap de seguridad de `suppaftp` (#43, regla 10).
+/// `tracing` setup for the binaries: a rotating file with closed permissions,
+/// and `suppaftp`'s security cap (#43, rule 10).
 ///
-/// Tras una feature porque arrastra `tracing-subscriber` y
-/// `tracing-appender`, y solo los BINARIOS los necesitan: una biblioteca que
-/// depende de este crate por leer `norte.toml` no tiene por qué compilarlos.
+/// Behind a feature because it pulls in `tracing-subscriber` and
+/// `tracing-appender`, and only the BINARIES need them: a library that
+/// depends on this crate to read `norte.toml` has no reason to compile them.
 #[cfg(feature = "logging")]
 pub mod logging;
 pub mod logline;
-/// El anillo en memoria que un frontend pinta (#323 dejó ver por qué hacía
-/// falta). Misma feature que [`logging`]: es otra capa del mismo subscriber.
-/// El TIPO de línea, en cambio, vive en [`logline`] y sin feature — lo necesita
-/// quien pinta, que no compila subscriber ninguno.
+/// The in-memory ring a frontend paints (#323 showed why it was needed).
+/// Same feature as [`logging`]: it is another layer of the same subscriber.
+/// The line TYPE, on the other hand, lives in [`logline`] with no feature —
+/// the painter needs it, and it compiles no subscriber at all.
 #[cfg(feature = "logging")]
 pub mod logring;
 pub mod profiles;

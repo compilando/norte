@@ -799,7 +799,7 @@ mod tests {
 
     /// `extend_listing` re-sorts the WHOLE listing (first page + batch).
     #[test]
-    fn extend_reordena_todo() {
+    fn extend_reorders_everything() {
         let mut first = vec![file("b.txt"), file("d.txt")];
         sort_entries(&mut first);
         let mut p = Pane::new(root(), first);
@@ -811,7 +811,7 @@ mod tests {
     /// The cursor re-anchors to the selected PATH, not the index: filling
     /// doesn't move the user's selection under their feet.
     #[test]
-    fn extend_reancla_el_cursor_por_path() {
+    fn extend_reanchors_the_cursor_by_path() {
         let mut first = vec![file("m.txt"), file("z.txt")];
         sort_entries(&mut first);
         let mut p = Pane::new(root(), first);
@@ -827,7 +827,7 @@ mod tests {
 
     /// An empty batch changes nothing (end of drain with no queue).
     #[test]
-    fn extend_vacio_es_noop() {
+    fn extend_empty_is_noop() {
         let mut p = Pane::new(root(), vec![file("a.txt")]);
         p.set_cursor(0);
         p.extend_listing(vec![]);
@@ -837,7 +837,7 @@ mod tests {
 
     /// `finish_listing` clears the loading flag.
     #[test]
-    fn finish_limpia_loading() {
+    fn finish_clears_loading() {
         let mut p = Pane::new(root(), vec![]);
         p.set_loading(true);
         p.finish_listing();
@@ -848,7 +848,7 @@ mod tests {
     /// selection WITHIN the filter; cancelling restores the full listing
     /// with the real cursor where it was (the filter never moved it).
     #[test]
-    fn quick_filter_redirige_seleccion_y_ops() {
+    fn quick_filter_redirects_selection_and_ops() {
         let mut p = pane_con(&["a1", "b", "a2"]);
         p.quick_start(crate::nav::Mode::Filter);
         p.quick_char('a');
@@ -870,7 +870,7 @@ mod tests {
     /// Confirming sets the REAL cursor to what's selected in the filter and
     /// closes it (Enter: the next op — cd, view — starts from that cursor).
     #[test]
-    fn quick_confirm_fija_el_cursor_real() {
+    fn quick_confirm_sets_the_real_cursor() {
         let mut p = pane_con(&["a1", "b", "a2"]);
         p.quick_start(crate::nav::Mode::Filter);
         p.quick_char('a');
@@ -885,7 +885,7 @@ mod tests {
     /// A new batch from the fill re-applies the filter (spec: on new
     /// batches arriving the filter gets re-applied, not frozen).
     #[test]
-    fn extend_listing_reaplica_el_filtro() {
+    fn extend_listing_reapplies_the_filter() {
         let mut p = pane_con(&["a1"]);
         p.quick_start(crate::nav::Mode::Filter);
         p.quick_char('a');
@@ -902,7 +902,7 @@ mod tests {
     /// to the user). `quick_confirm` returns false and doesn't touch the
     /// cursor.
     #[test]
-    fn enter_sin_matches_no_actua_sobre_entrada_invisible() {
+    fn enter_with_no_matches_does_not_act_on_an_invisible_entry() {
         let mut p = pane_con(&["a1", "b", "a2"]);
         p.set_cursor(1);
         p.quick_start(crate::nav::Mode::Filter);
@@ -919,7 +919,7 @@ mod tests {
     /// Jump mode: the listing does NOT change; typing moves the REAL cursor
     /// to the first match and Tab (`quick_next`) to the next one with wrap.
     #[test]
-    fn quick_jump_mueve_el_cursor_real() {
+    fn quick_jump_moves_the_real_cursor() {
         // #54: normalized, the real order is [ab, ac, zz] — ab and ac match.
         let mut p = pane_con(&["ab", "zz", "ac"]);
         p.quick_start(crate::nav::Mode::Jump);
@@ -940,7 +940,7 @@ mod tests {
     /// RE-SORTS the whole listing, so the filter's selection is kept by
     /// PATH, never by index.
     #[test]
-    fn extend_con_resort_conserva_seleccion_por_path() {
+    fn extend_with_resort_keeps_selection_by_path() {
         let mut p = pane_con(&["a1", "a2"]);
         p.quick_start(crate::nav::Mode::Filter);
         p.quick_char('a');
@@ -959,7 +959,7 @@ mod tests {
     /// listing paints WHOLE — the real cursor is visible by definition, so
     /// Enter CAN operate on it (in Filter it's still `false`).
     #[test]
-    fn enter_en_jump_sin_matches_opera_sobre_el_cursor_visible() {
+    fn enter_in_jump_with_no_matches_operates_on_the_visible_cursor() {
         let mut p = pane_con(&["a1", "b"]);
         p.set_cursor(1);
         p.quick_start(crate::nav::Mode::Jump);
@@ -1069,7 +1069,7 @@ mod tests {
     /// hit counter said 1 over an empty-looking pane) was the bug. On
     /// returning to a real listing, the preference takes over again.
     #[test]
-    fn el_pane_virtual_de_busqueda_ensena_hits_ocultos() {
+    fn the_search_virtual_pane_shows_hidden_hits() {
         let mut p = Pane::new(
             VPath::parse("mem:///").unwrap(),
             vec![
@@ -1122,7 +1122,7 @@ mod tests {
 
     /// Tab walks all seven fields and wraps back to the first.
     #[test]
-    fn tab_da_la_vuelta_entera() {
+    fn tab_goes_all_the_way_around() {
         let mut d = SearchDialog::new();
         let first = d.field;
         for _ in 0..SearchField::ORDEN.len() {
@@ -1140,7 +1140,7 @@ mod tests {
 
     /// Names to exclude are split by commas and trimmed.
     #[test]
-    fn los_nombres_a_excluir_se_parten_por_comas() {
+    fn the_names_to_exclude_are_split_by_commas() {
         let mut d = SearchDialog::new();
         d.exclude = " target , node_modules ,, .git ".into();
         assert_eq!(d.exclude_names(), ["target", "node_modules", ".git"]);

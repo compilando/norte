@@ -1,16 +1,17 @@
-//! El modo del fichero que se PUBLICA (#299).
+//! The mode of the file that gets PUBLISHED (#299).
 //!
-//! El staging estable nace `0o600` y no puede nacer de otra forma: su nombre
-//! es predecible, así que mientras dure tiene que ser nuestro y de nadie más
-//! (#297, #298). Pero publicar es un `rename`, que no toca el modo, así que
-//! una copia REANUDADA acababa en `0o600` mientras la misma copia sin cortes
-//! acababa en `0o644`. Misma operación, dos resultados — y el reanudable es el
-//! camino de una hoja desde #219, o sea el más común del producto.
+//! The stable staging is born `0o600` and can't be born any other way: its
+//! name is predictable, so for as long as it lasts it has to be ours and
+//! nobody else's (#297, #298). But publishing is a `rename`, which doesn't
+//! touch the mode, so a RESUMED copy used to end up `0o600` while the same
+//! uninterrupted copy ended up `0o644`. Same operation, two results — and
+//! resumable has been a leaf's path since #219, i.e. the product's most
+//! common one.
 //!
-//! Las aserciones son por IGUALDAD entre los dos caminos y no contra un modo
-//! escrito a mano: el modo correcto depende de la umask de quien corre el
-//! test, y fijar `0o644` haría rojo un CI con otra umask por un motivo que no
-//! es el bug.
+//! The assertions are EQUALITY between the two paths and not against a
+//! hand-written mode: the correct mode depends on whoever runs the test's
+//! umask, and pinning `0o644` would turn a CI with a different umask red
+//! for a reason that isn't the bug.
 
 #![cfg(unix)]
 
@@ -22,7 +23,7 @@ use norte_vfs::Provider;
 use norte_vfs_local::LocalProvider;
 
 fn seg(b: &[u8]) -> Segment {
-    Segment::new(b.to_vec()).expect("segmento válido")
+    Segment::new(b.to_vec()).expect("valid segment")
 }
 
 fn child(base: &VPath, name: &[u8]) -> VPath {
@@ -36,96 +37,93 @@ fn provider() -> (LocalProvider, VPath, std::path::PathBuf) {
     (p, LocalProvider::root(), base)
 }
 
-fn modo(path: &std::path::Path) -> u32 {
+fn mode(path: &std::path::Path) -> u32 {
     std::fs::metadata(path)
-        .expect("existe")
+        .expect("exists")
         .permissions()
         .mode()
         & 0o777
 }
 
-/// **El bug.** Copia normal y copia reanudada publican el MISMO fichero con el
-/// mismo contenido; tienen que publicarlo con el mismo modo.
+/// **The bug.** A normal copy and a resumed copy publish the SAME file
+/// with the same content; they have to publish it with the same mode.
 #[tokio::test]
-async fn una_copia_reanudada_se_publica_con_el_modo_de_una_normal() {
+async fn a_resumed_copy_is_published_with_a_normal_copys_mode() {
     let (p, root, base) = provider();
 
     let normal = child(&root, b"normal.bin");
     let mut sink = p.write(&normal).await.expect("write");
-    sink.write(Bytes::from_static(b"contenido"))
+    sink.write(Bytes::from_static(b"content"))
         .await
         .expect("bytes");
     sink.commit().await.expect("commit");
 
-    let reanudada = child(&root, b"reanudada.bin");
-    let (mut sink, ya) = p.open_resumable(&reanudada).await.expect("open_resumable");
-    assert_eq!(ya, 0, "no había parcial previo");
-    sink.write(Bytes::from_static(b"contenido"))
+    let resumed = child(&root, b"resumed.bin");
+    let (mut sink, already) = p.open_resumable(&resumed).await.expect("open_resumable");
+    assert_eq!(already, 0, "there was no earlier partial");
+    sink.write(Bytes::from_static(b"content"))
         .await
         .expect("bytes");
     sink.commit().await.expect("commit");
 
     assert_eq!(
-        modo(&base.join("reanudada.bin")),
-        modo(&base.join("normal.bin")),
-        "misma operación, mismo modo: sin esto la reanudada queda en 0o600"
+        mode(&base.join("resumed.bin")),
+        mode(&base.join("normal.bin")),
+        "same operation, same mode: without this the resumed one stays at 0o600"
     );
 }
 
-/// La reanudación DE VERDAD —dos sesiones sobre el mismo staging— publica
-/// igual. El caso de arriba abre el staging y lo publica de una; este lo deja
-/// a medias, lo reencuentra y lo termina, que es lo que hace una copia que se
-/// corta.
+/// A REAL resume — two sessions over the same staging — publishes the
+/// same way. The case above opens the staging and publishes it in one go;
+/// this one leaves it half-done, finds it again and finishes it, which is
+/// what an interrupted copy does.
 #[tokio::test]
-async fn una_reanudacion_en_dos_tramos_tambien_publica_con_el_modo_normal() {
+async fn a_resume_in_two_stages_also_publishes_with_the_normal_mode() {
     let (p, root, base) = provider();
 
     let normal = child(&root, b"normal.bin");
     let mut sink = p.write(&normal).await.expect("write");
-    sink.write(Bytes::from_static(b"unodos"))
+    sink.write(Bytes::from_static(b"onetwo"))
         .await
         .expect("bytes");
     sink.commit().await.expect("commit");
 
-    let destino = child(&root, b"grande.bin");
-    let (mut sink, _) = p.open_resumable(&destino).await.expect("primer tramo");
-    sink.write(Bytes::from_static(b"uno")).await.expect("bytes");
-    // `keep` conserva el staging para el resume siguiente (ADR 0012).
-    sink.keep().await.expect("conserva");
+    let dest = child(&root, b"big.bin");
+    let (mut sink, _) = p.open_resumable(&dest).await.expect("first stage");
+    sink.write(Bytes::from_static(b"one")).await.expect("bytes");
+    // `keep` preserves the staging for the next resume (ADR 0012).
+    sink.keep().await.expect("keeps");
 
-    let (mut sink, ya) = p.open_resumable(&destino).await.expect("segundo tramo");
-    assert_eq!(ya, 3, "reencuentra los bytes del primer tramo");
-    sink.write(Bytes::from_static(b"dos")).await.expect("bytes");
+    let (mut sink, already) = p.open_resumable(&dest).await.expect("second stage");
+    assert_eq!(already, 3, "finds the first stage's bytes again");
+    sink.write(Bytes::from_static(b"two")).await.expect("bytes");
     sink.commit().await.expect("commit");
 
     assert_eq!(
-        std::fs::read(base.join("grande.bin")).expect("leer"),
-        b"unodos",
-        "y los bytes son los dos tramos"
+        std::fs::read(base.join("big.bin")).expect("read"),
+        b"onetwo",
+        "and the bytes are the two stages"
     );
-    assert_eq!(
-        modo(&base.join("grande.bin")),
-        modo(&base.join("normal.bin")),
-    );
+    assert_eq!(mode(&base.join("big.bin")), mode(&base.join("normal.bin")),);
 }
 
-/// **Mientras dura, el staging sigue siendo NUESTRO.** El arreglo no puede
-/// consistir en crearlo más abierto: su nombre es predecible, así que un
-/// `0o644` durante la copia deja que cualquiera lea lo que se está copiando —y
-/// un fichero a medias, además. El modo se repone DESPUÉS de publicar.
+/// **For as long as it lasts, the staging stays OURS.** The fix can't
+/// consist of creating it more open: its name is predictable, so a
+/// `0o644` during the copy would let anyone read what's being copied —
+/// and a half-done file, at that. The mode is restored AFTER publishing.
 #[tokio::test]
-async fn el_staging_a_medias_no_se_relaja() {
+async fn the_half_done_staging_is_not_relaxed() {
     let (p, root, base) = provider();
-    let destino = child(&root, b"grande.bin");
+    let dest = child(&root, b"big.bin");
 
-    let (mut sink, _) = p.open_resumable(&destino).await.expect("open_resumable");
-    sink.write(Bytes::from_static(b"a medias"))
+    let (mut sink, _) = p.open_resumable(&dest).await.expect("open_resumable");
+    sink.write(Bytes::from_static(b"halfway"))
         .await
         .expect("bytes");
-    sink.keep().await.expect("conserva");
+    sink.keep().await.expect("keeps");
 
     let staging = std::fs::read_dir(&base)
-        .expect("listar")
+        .expect("list")
         .filter_map(Result::ok)
         .map(|e| e.path())
         .find(|p| {
@@ -133,41 +131,41 @@ async fn el_staging_a_medias_no_se_relaja() {
                 .and_then(|n| n.to_str())
                 .is_some_and(|n| n.starts_with(".norte-partial."))
         })
-        .expect("el staging conservado");
+        .expect("the kept staging");
 
     assert_eq!(
-        modo(&staging),
+        mode(&staging),
         0o600,
-        "el parcial es nuestro y de nadie más"
+        "the partial is ours and nobody else's"
     );
 }
 
-/// El camino CONFINADO (#297) es el que usa una hoja desde #219, así que es el
-/// que de verdad ve el usuario. Misma promesa.
+/// The CONFINED path (#297) is the one a leaf has used since #219, so it's
+/// the one the user really sees. Same promise.
 #[tokio::test]
-async fn el_camino_confinado_publica_con_el_mismo_modo() {
+async fn the_confined_path_publishes_with_the_same_mode() {
     let (p, root, base) = provider();
     std::fs::create_dir(base.join("dest")).expect("dest");
-    let raiz = child(&root, b"dest");
+    let dest_root = child(&root, b"dest");
 
-    let croot = p.open_root(&raiz).await.expect("raíz confinada");
+    let croot = p.open_root(&dest_root).await.expect("confined root");
     let mut sink = croot.write(&[seg(b"normal.bin")]).await.expect("write");
-    sink.write(Bytes::from_static(b"contenido"))
+    sink.write(Bytes::from_static(b"content"))
         .await
         .expect("bytes");
     sink.commit().await.expect("commit");
 
     let (mut sink, _) = croot
-        .open_resumable(&[seg(b"reanudada.bin")])
+        .open_resumable(&[seg(b"resumed.bin")])
         .await
-        .expect("open_resumable confinado");
-    sink.write(Bytes::from_static(b"contenido"))
+        .expect("confined open_resumable");
+    sink.write(Bytes::from_static(b"content"))
         .await
         .expect("bytes");
     sink.commit().await.expect("commit");
 
     assert_eq!(
-        modo(&base.join("dest/reanudada.bin")),
-        modo(&base.join("dest/normal.bin")),
+        mode(&base.join("dest/resumed.bin")),
+        mode(&base.join("dest/normal.bin")),
     );
 }

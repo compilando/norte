@@ -86,7 +86,7 @@ impl App {
             self.return_keys_to_panes();
             return;
         }
-        self.aterrizar(FocusStop::Pane((self.focus + 1) % n));
+        self.land(FocusStop::Pane((self.focus + 1) % n));
     }
 
     /// Exchanges the two panes and everything `App` keeps beside them
@@ -144,7 +144,7 @@ impl App {
             &norte_frontend::layout::Node::slot(id, norte_frontend::layout::KindId::browser()),
         );
         self.panes.refresh_visible(&self.layout);
-        self.podar_por_arbol();
+        self.prune_by_tree();
     }
 
     /// Closes the focused tab. No effect if the pane isn't in a group.
@@ -153,7 +153,7 @@ impl App {
         if let Some(new_layout) = self.layout.close_tab(focus) {
             self.layout = new_layout;
             self.panes.refresh_visible(&self.layout);
-            self.podar_por_arbol();
+            self.prune_by_tree();
         }
     }
 
@@ -171,7 +171,7 @@ impl App {
         let dest = usize::try_from((i + delta).rem_euclid(n)).unwrap_or(0);
         self.layout = self.layout.set_active_for(focus, dest);
         self.panes.refresh_visible(&self.layout);
-        self.podar_por_arbol();
+        self.prune_by_tree();
         // #329: switching tabs can hide the panel that held the keyboard,
         // and then keys went to something no longer on screen. Nothing
         // closes it, so without this there was nothing to hand it back to
@@ -185,7 +185,7 @@ impl App {
         if self.layout.tabs_of(focus).is_some() {
             self.layout = self.layout.set_active_for(focus, n.saturating_sub(1));
             self.panes.refresh_visible(&self.layout);
-            self.podar_por_arbol();
+            self.prune_by_tree();
             // Same reason as in `tab_cycle` (#329).
             self.settle_key_owner();
         }
@@ -199,7 +199,7 @@ impl App {
         if self.layout.tabs_of(focus).is_some() {
             self.layout = self.layout.move_tab(focus, delta);
             self.panes.refresh_visible(&self.layout);
-            self.podar_por_arbol();
+            self.prune_by_tree();
         }
     }
 
@@ -301,7 +301,7 @@ impl App {
         let Some(stop) = self.focus_stop(id) else {
             return false;
         };
-        self.aterrizar(stop);
+        self.land(stop);
         // Pointing at a plugin panel says WHICH one, and that doesn't fit in
         // `KeyOwner::Panel`: without this, with two contributed panels
         // visible the keyboard went to one and `layout.grow` to the other.
@@ -312,7 +312,7 @@ impl App {
     }
 
     /// Puts the keyboard (and focus) on a ring stop.
-    fn aterrizar(&mut self, stop: FocusStop) {
+    fn land(&mut self, stop: FocusStop) {
         match stop {
             FocusStop::Pane(i) => {
                 self.return_keys_to_panes();
@@ -353,7 +353,7 @@ impl App {
         let n = isize::try_from(ring.len()).unwrap_or(1);
         let dest =
             usize::try_from((isize::try_from(i).unwrap_or(0) + delta).rem_euclid(n)).unwrap_or(0);
-        self.aterrizar(ring[dest]);
+        self.land(ring[dest]);
     }
 }
 
@@ -384,7 +384,7 @@ mod tests {
     /// candidates (the focused one first); out of radius, no; a Dir, never;
     /// already hydrated, not either.
     #[test]
-    fn needs_stat_window_cubre_los_dos_panes_dentro_del_radio() {
+    fn needs_stat_window_covers_both_panes_within_the_radius() {
         let lazy = |n: &str| {
             let mut e = file(n);
             e.size = None;
@@ -440,7 +440,7 @@ mod tests {
     /// `size` (a candidate for the lazy probe). Already hydrated or being a
     /// Dir, it doesn't apply.
     #[test]
-    fn focused_needs_stat_solo_file_lazy() {
+    fn focused_needs_stat_only_file_lazy() {
         let mut lazy = file("a.txt");
         lazy.size = None;
         let mut app = App::new(
@@ -469,7 +469,7 @@ mod tests {
     /// same SIDE: whoever was looking left keeps looking left, and now
     /// what's there is what used to be on the right.
     #[test]
-    fn el_intercambio_cruza_pane_e_historial_y_no_mueve_el_foco() {
+    fn the_swap_crosses_pane_and_history_and_doesnt_move_focus() {
         let mut app = app_en("mem:///left", "mem:///right");
         app.history[0].record(vp("mem:///trail-left"));
         app.history[1].record(vp("mem:///trail-right"));
@@ -503,7 +503,7 @@ mod tests {
 
     /// Two swaps are the identity.
     #[test]
-    fn dos_intercambios_dejan_todo_como_estaba() {
+    fn two_swaps_leave_everything_as_it_was() {
         let mut app = app_en("mem:///left", "mem:///right");
         app.swap_panes();
         app.swap_panes();
@@ -516,7 +516,7 @@ mod tests {
     /// `self.focus ^= 1` to `swap_panes` breaks here and in the test above
     /// at the same time.)
     #[test]
-    fn el_intercambio_con_el_foco_a_la_derecha_tampoco_lo_mueve() {
+    fn the_swap_with_focus_on_the_right_doesnt_move_it_either() {
         let mut app = app_en("mem:///left", "mem:///right");
         app.set_focus(1);
         app.swap_panes();
@@ -535,7 +535,7 @@ mod tests {
     /// viewer up front there was no way to walk the screen without
     /// remembering three different keys.
     #[test]
-    fn el_anillo_pasa_por_los_paneles_laterales() {
+    fn the_ring_passes_through_the_side_panels() {
         let mut app = app_dos_panes();
         app.toggle_places();
         app.toggle_preview();
@@ -575,7 +575,7 @@ mod tests {
     /// the previous calculation was a modulo over the number of listings,
     /// and a ring of one left it spinning on itself.
     #[test]
-    fn un_anillo_de_uno_no_va_a_ninguna_parte() {
+    fn a_ring_of_one_goes_nowhere() {
         use norte_frontend::layout::{KindId, Node, SlotId};
         let mut app = app_dos_panes();
         // A single-listing, no-panel layout: it comes from a saved layout,
@@ -595,7 +595,7 @@ mod tests {
     /// nothing and didn't say so. The panel you hadn't split was
     /// unreachable.
     #[test]
-    fn el_tabulador_alcanza_el_tercer_listado() {
+    fn tab_reaches_the_third_listing() {
         use norte_frontend::layout::{Dir, KindId, Node, Size, SlotId};
         let mut app = app_dos_panes();
         app.set_layout(Node::Split {
@@ -625,7 +625,7 @@ mod tests {
     /// With a single listing, `Tab` is a no-op: there's no other panel, and
     /// spinning on yourself would be pretending something happened.
     #[test]
-    fn el_tabulador_sobre_un_solo_listado_no_hace_nada() {
+    fn tab_over_a_single_listing_does_nothing() {
         use norte_frontend::layout::{KindId, Node, SlotId};
         let mut app = app_dos_panes();
         app.set_layout(Node::slot(SlotId(0), KindId::browser()));
@@ -636,7 +636,7 @@ mod tests {
     /// The METADATA panel isn't a ring stop: it has no `KeyOwner`, so
     /// stopping there would be a spot no key gets you out of.
     #[test]
-    fn los_metadatos_no_son_una_parada() {
+    fn metadata_is_not_a_stop() {
         let mut app = app_dos_panes();
         app.toggle_metadata();
         app.return_keys_to_panes();

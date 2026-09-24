@@ -269,7 +269,7 @@ pub fn editor_argv_from(
 ) -> Vec<std::ffi::OsString> {
     use std::ffi::OsString;
     #[cfg(unix)]
-    fn trocea(spec: &std::ffi::OsStr) -> Vec<OsString> {
+    fn split(spec: &std::ffi::OsStr) -> Vec<OsString> {
         use std::os::unix::ffi::{OsStrExt as _, OsStringExt as _};
         spec.as_bytes()
             .split(u8::is_ascii_whitespace)
@@ -278,20 +278,20 @@ pub fn editor_argv_from(
             .collect()
     }
     #[cfg(not(unix))]
-    fn trocea(spec: &std::ffi::OsStr) -> Vec<OsString> {
+    fn split(spec: &std::ffi::OsStr) -> Vec<OsString> {
         spec.to_string_lossy()
             .split_ascii_whitespace()
             .map(OsString::from)
             .collect()
     }
 
-    let elegido = [visual, editor]
+    let chosen = [visual, editor]
         .into_iter()
         .flatten()
         .find(|s| !s.is_empty())
-        .map(trocea)
+        .map(split)
         .filter(|v| !v.is_empty());
-    let mut argv = elegido.unwrap_or_else(|| {
+    let mut argv = chosen.unwrap_or_else(|| {
         vec![OsString::from(if cfg!(windows) {
             "notepad.exe"
         } else {
@@ -302,12 +302,13 @@ pub fn editor_argv_from(
     argv
 }
 
-// El editor SIN fichero —un buffer vacío— vivía aquí, y era la mitad del
-// `pane.edit-new` que creaba el fichero fuera de norte: lo creaba el editor al
-// guardar, sin política, sin journal y sin undo. Desde #290 el fichero lo crea
-// el daemon (`fs.create`) y el editor se abre sobre él, así que lo único que
-// se necesita es `editor_argv`. Se retira en vez de dejarse: una función que
-// solo sirve para volver a saltarse el journal es una invitación.
+// The editor with NO file —an empty buffer— used to live here, and it was
+// half of `pane.edit-new`, which created the file outside norte: the editor
+// created it on save, with no policy, no journal and no undo. Since #290 the
+// daemon creates the file (`fs.create`) and the editor opens on top of it, so
+// the only thing needed is `editor_argv`. It is removed rather than left
+// behind: a function that only serves to skip the journal again is an
+// invitation to do so.
 
 /// The argv that runs ONE command line through `shell`, non-interactively.
 ///
@@ -522,33 +523,34 @@ pub fn terminal_command_candidates_from(
     if orden.is_empty() {
         return out;
     }
-    let cola: Vec<OsString> = orden.iter().map(OsString::from).collect();
+    let tail: Vec<OsString> = orden.iter().map(OsString::from).collect();
     #[cfg(all(unix, not(target_os = "macos")))]
     {
         if let Some(t) = env_terminal.filter(|t| !t.is_empty()) {
-            let conocido = std::path::Path::new(t)
+            let known = std::path::Path::new(t)
                 .file_name()
                 .and_then(std::ffi::OsStr::to_str)
                 .filter(|n| UNIX_TERMINALS.contains(n));
             let mut argv = vec![OsString::from(t)];
-            argv.push(OsString::from(exec_flag(conocido.unwrap_or(""))));
-            argv.extend(cola.clone());
+            argv.push(OsString::from(exec_flag(known.unwrap_or(""))));
+            argv.extend(tail.clone());
             out.push(argv);
         }
         for t in UNIX_TERMINALS {
             let mut argv = vec![OsString::from(*t)];
             argv.push(OsString::from(exec_flag(t)));
-            argv.extend(cola.clone());
+            argv.extend(tail.clone());
             out.push(argv);
         }
     }
-    // macOS y Windows no entran hoy: el relevo es de la fase 9 y esta máquina
-    // es Linux, así que inventar la ortografía de `open -a Terminal` con un
-    // comando dentro sería escribir algo que nadie puede probar. Devolver la
-    // lista vacía es lo honesto — el llamante lo dice en vez de tragárselo.
+    // macOS and Windows are not in scope today: the handoff is phase 9's and
+    // this machine is Linux, so inventing the spelling of `open -a Terminal`
+    // with a command inside would be writing something nobody can test.
+    // Returning the empty list is the honest thing — the caller says so
+    // instead of swallowing it.
     #[cfg(not(all(unix, not(target_os = "macos"))))]
     {
-        let _ = (env_terminal, cola);
+        let _ = (env_terminal, tail);
     }
     out
 }
@@ -613,84 +615,83 @@ pub fn is_local(path: &norte_proto::VPath) -> bool {
     norte_vfs::native::vpath_to_native(path).is_ok()
 }
 
-/// Los programas de aviso del ESCRITORIO que sabemos invocar, en orden
+/// The DESKTOP's notification programs we know how to invoke, in order
 /// (#285).
 ///
-/// Misma forma que [`directory_picker_candidates`] y por lo mismo: una lista,
-/// sin sondear el `PATH`, y quien ejecuta prueba en orden.
+/// Same shape as [`directory_picker_candidates`] and for the same reason: a
+/// list, with no `PATH` probing, and whoever runs it tries them in order.
 ///
-/// El texto va como ARGUMENTO y nunca dentro de una línea de comandos. Aquí
-/// eso importa el doble: el cuerpo lleva un nombre de fichero, y un nombre con
-/// una comilla o un `$` o rompe la línea o ejecuta parte de sí mismo.
+/// The text goes as an ARGUMENT and never inside a command line. It matters
+/// doubly here: the body carries a file name, and a name with a quote or a
+/// `$` either breaks the line or executes part of itself.
 ///
 /// ```
 /// use norte_frontend::shell::notify_candidates;
-/// let cands = notify_candidates("norte", "hecho");
+/// let cands = notify_candidates("norte", "done");
 /// for argv in &cands {
-///     assert!(argv.len() >= 3, "programa, título y cuerpo van separados");
+///     assert!(argv.len() >= 3, "program, title and body travel separately");
 /// }
 /// ```
 #[must_use]
-pub fn notify_candidates(titulo: &str, cuerpo: &str) -> Vec<Vec<std::ffi::OsString>> {
+pub fn notify_candidates(title: &str, body: &str) -> Vec<Vec<std::ffi::OsString>> {
     #[cfg(all(unix, not(target_os = "macos")))]
     {
         vec![
             vec![
                 "notify-send".into(),
-                // Que el aviso se pueda cerrar y no se apile: norte manda uno
-                // por evento, no un flujo.
+                // So the notification can be closed and does not stack:
+                // norte sends one per event, not a stream.
                 "--app-name=norte".into(),
-                titulo.into(),
-                cuerpo.into(),
+                title.into(),
+                body.into(),
             ],
             vec!["kdialog".into(), "--passivepopup".into(), {
-                let mut s = std::ffi::OsString::from(titulo);
+                let mut s = std::ffi::OsString::from(title);
                 s.push("\n");
-                s.push(cuerpo);
+                s.push(body);
                 s
             }],
         ]
     }
     #[cfg(not(all(unix, not(target_os = "macos"))))]
     {
-        let _ = (titulo, cuerpo);
+        let _ = (title, body);
         Vec::new()
     }
 }
 
-/// Los selectores de carpeta del ESCRITORIO que sabemos invocar, en orden
-/// (#284).
+/// The DESKTOP's directory pickers we know how to invoke, in order (#284).
 ///
-/// Una LISTA y no una elección, por lo mismo que [`terminal_candidates`]:
-/// elegir pide sondear el `PATH` y esta función no hace I/O. Vacía significa
-/// que aquí no hay ninguno, y eso se DICE en vez de tragárselo — «no pasó
-/// nada» sobre un selector que nunca se abrió es lo que deja a alguien
-/// esperando una ventana.
+/// A LIST and not a choice, for the same reason as [`terminal_candidates`]:
+/// choosing needs a `PATH` probe and this function does no I/O. Empty means
+/// there is none here, and that gets SAID instead of swallowed — "nothing
+/// happened" about a picker that never opened is what leaves someone waiting
+/// for a window.
 ///
-/// Cada candidato imprime la carpeta elegida por `stdout` y sale con código
-/// distinto de cero si se cierra sin elegir, que es lo que hace que cancelar
-/// y elegir se distingan sin analizar texto.
+/// Each candidate prints the chosen directory to `stdout` and exits with a
+/// nonzero code if closed without choosing, which is what lets cancelling and
+/// choosing be told apart without parsing text.
 ///
-/// El conjunto es CERRADO —zenity, kdialog, yad— porque los argumentos
-/// difieren en cada uno, y adivinar los de un programa desconocido es cómo se
-/// acaba abriendo un selector de FICHEROS donde se pedía uno de carpetas.
+/// The set is CLOSED —zenity, kdialog, yad— because the arguments differ for
+/// each one, and guessing an unknown program's is how you end up opening a
+/// FILE picker where a directory one was asked for.
 ///
 /// ```
 /// use norte_frontend::shell::directory_picker_candidates;
 /// let cands = directory_picker_candidates(std::path::Path::new("/tmp"));
-/// // En una máquina sin ninguno, la lista está vacía y quien llama lo dice.
+/// // On a machine with none, the list is empty and the caller says so.
 /// for argv in &cands {
-///     assert!(!argv.is_empty(), "un candidato sin programa no se lanza");
+///     assert!(!argv.is_empty(), "a candidate with no program is not launched");
 /// }
 /// ```
 #[must_use]
-pub fn directory_picker_candidates(desde: &std::path::Path) -> Vec<Vec<std::ffi::OsString>> {
+pub fn directory_picker_candidates(from: &std::path::Path) -> Vec<Vec<std::ffi::OsString>> {
     #[cfg(all(unix, not(target_os = "macos")))]
     {
-        let d = desde.as_os_str().to_os_string();
-        // La `/` final es lo que hace que zenity y yad ENTREN en el
-        // directorio, en vez de dejarlo señalado desde el padre.
-        let arranque = || {
+        let d = from.as_os_str().to_os_string();
+        // The trailing `/` is what makes zenity and yad ENTER the directory,
+        // instead of leaving it marked from the parent.
+        let start_flag = || {
             let mut s = std::ffi::OsString::from("--filename=");
             s.push(&d);
             s.push("/");
@@ -701,36 +702,36 @@ pub fn directory_picker_candidates(desde: &std::path::Path) -> Vec<Vec<std::ffi:
                 "zenity".into(),
                 "--file-selection".into(),
                 "--directory".into(),
-                arranque(),
+                start_flag(),
             ],
             vec!["kdialog".into(), "--getexistingdirectory".into(), d.clone()],
             vec![
                 "yad".into(),
                 "--file".into(),
                 "--directory".into(),
-                arranque(),
+                start_flag(),
             ],
         ]
     }
     #[cfg(not(all(unix, not(target_os = "macos"))))]
     {
-        let _ = desde;
+        let _ = from;
         Vec::new()
     }
 }
 
-/// El `VPath` de una ruta NATIVA que llega de fuera — el selector de carpetas
-/// del escritorio (#284) —, o `None` si no se puede nombrar.
+/// The `VPath` of a NATIVE path arriving from outside — the desktop's
+/// directory picker (#284) —, or `None` if it cannot be named.
 ///
-/// Va aquí y no en el host porque quien recibe esa ruta es un frontend, y la
-/// conversión tiene una regla que no se puede reinventar: **los bytes son los
-/// bytes**. Un nombre de fichero no es UTF-8 garantizado (regla 1), y una ruta
-/// que se decodifique con pérdida por el camino abre otro fichero.
+/// It goes here and not in the host because whoever receives that path is a
+/// frontend, and the conversion has a rule that cannot be reinvented: **the
+/// bytes are the bytes**. A file name is not guaranteed UTF-8 (hard rule 1),
+/// and a path decoded lossily along the way opens a different file.
 ///
 /// ```
 /// use norte_frontend::shell::vpath_de_ruta_nativa;
 /// assert!(vpath_de_ruta_nativa("/tmp").is_some());
-/// // Una ruta relativa no nombra nada sin un «desde», así que se rehúsa.
+/// // A relative path names nothing without a "from", so it is refused.
 /// assert!(vpath_de_ruta_nativa("tmp").is_none());
 /// ```
 #[must_use]
@@ -742,31 +743,34 @@ pub fn vpath_de_ruta_nativa(nativa: &str) -> Option<norte_proto::VPath> {
     norte_vfs::native::vpath_from_native(p).ok()
 }
 
-/// El directorio del usuario como `VPath`, o la raíz local si el entorno no
-/// lo dice: el destino de última instancia de un panel que se queda sin
-/// sitio (`pane.disconnect`, [`crate::nav::regreso_tras_desconectar`]).
+/// The user's home directory as a `VPath`, or the local root if the
+/// environment does not say: the last-resort destination for a pane left
+/// with nowhere to go (`pane.disconnect`,
+/// [`crate::nav::regreso_tras_desconectar`]).
 ///
-/// La raíz y no un error: un destino que no existe dejaría el panel mirando
-/// una conexión cerrada, que es lo único inaceptable ahí.
+/// The root and not an error: a destination that does not exist would leave
+/// the pane staring at a closed connection, which is the one thing
+/// unacceptable there.
 ///
-/// Toma el `Path` ENTERO, sin pasar por `to_str()`: un `$HOME` que no sea
-/// UTF-8 es un home perfectamente válido (regla 1), y decodificarlo con
-/// pérdida mandaba al usuario a `/` sin decir por qué.
+/// Takes the WHOLE `Path`, without going through `to_str()`: a `$HOME` that
+/// is not UTF-8 is a perfectly valid home (hard rule 1), and decoding it
+/// lossily used to send the user to `/` without saying why.
 ///
-/// **Se llama desde contexto async y se acepta a sabiendas**: sin `$HOME`,
-/// `home_dir` cae a `getpwuid_r`, que puede acabar en NSS (`/etc/passwd`, o
-/// LDAP en una máquina con directorio de red). No va a `spawn_blocking` porque
-/// el caso es el de una sesión sin `$HOME` —donde ya nada del entorno es
-/// normal— y envolverlo obligaría a hacer async una decisión que los dos
-/// frontends toman en medio de pintar. Si alguna vez cuelga, es aquí.
+/// **Called from async context and accepted knowingly**: with no `$HOME`,
+/// `home_dir` falls back to `getpwuid_r`, which can end up in NSS
+/// (`/etc/passwd`, or LDAP on a machine with a network home directory). It
+/// does not go through `spawn_blocking` because the case is a session with
+/// no `$HOME` —where nothing about the environment is normal anymore— and
+/// wrapping it would force a decision both frontends make in the middle of
+/// painting to become async. If it ever hangs, it is here.
 ///
-/// Desde el 2026-09-21 también lo llama anclar el árbol
-/// (`Tree::anchor_near`, en la TUI y en el host) una vez por apertura del
-/// panel: la misma excepción, con la misma frecuencia que un gesto.
+/// Since 2026-09-21 it is also called by anchoring the tree
+/// (`Tree::anchor_near`, in the TUI and in the host) once per pane opening:
+/// the same exception, at the same frequency as a gesture.
 ///
 /// ```
 /// use norte_frontend::shell::home_vpath;
-/// // Siempre nombra algo: con `$HOME` o sin él.
+/// // Always names something: with `$HOME` or without it.
 /// assert_eq!(home_vpath().scheme(), "file");
 /// ```
 #[must_use]
@@ -842,13 +846,13 @@ pub fn clipboard_candidates_from(
         argv(&["xclip", "-selection", "clipboard"]),
         argv(&["xsel", "--clipboard", "--input"]),
     ];
-    // Wayland primero solo si la sesión lo declara; si no, X11 primero. Los
-    // dos conjuntos se ofrecen siempre: XWayland es lo normal, y decirle a
-    // quien tiene `xclip` que no hay portapapeles sería falso.
-    let wayland_primero = wayland.is_some_and(|v| !v.is_empty());
-    let x11_primero = !wayland_primero && x11.is_some_and(|v| !v.is_empty());
+    // Wayland first only if the session declares it; otherwise X11 first.
+    // Both sets are always offered: XWayland is normal, and telling someone
+    // who has `xclip` that there is no clipboard would be false.
+    let wayland_first = wayland.is_some_and(|v| !v.is_empty());
+    let x11_first = !wayland_first && x11.is_some_and(|v| !v.is_empty());
     let mut out = Vec::new();
-    if wayland_primero || !x11_primero {
+    if wayland_first || !x11_first {
         out.extend(wl.clone());
         out.extend(x.clone());
     } else {
@@ -997,11 +1001,11 @@ pub fn next_norte_level_from(current: Option<&std::ffi::OsStr>) -> String {
 
 #[cfg(test)]
 mod tests {
-    /// #133: `$VISUAL` manda sobre `$EDITOR`, y la ruta va SIEMPRE como su
-    /// propio argumento — jamás interpolada en una línea de comandos, que es
-    /// como un nombre con una comilla acaba ejecutando parte de sí mismo.
+    /// #133: `$VISUAL` governs over `$EDITOR`, and the path ALWAYS goes as
+    /// its own argument — never interpolated into a command line, which is
+    /// how a name with a quote ends up executing part of itself.
     #[test]
-    fn el_editor_sale_de_visual_luego_de_editor_y_la_ruta_va_aparte() {
+    fn the_editor_comes_from_visual_then_editor_and_the_path_travels_apart() {
         use std::ffi::OsStr;
         let f = std::path::Path::new("/tmp/a b.txt");
         assert_eq!(
@@ -1014,9 +1018,9 @@ mod tests {
         );
     }
 
-    /// Un spec con banderas se trocea: `EDITOR="code -w"` es lo normal.
+    /// A spec with flags gets split: `EDITOR="code -w"` is normal.
     #[test]
-    fn un_editor_con_banderas_se_trocea() {
+    fn an_editor_with_flags_gets_split() {
         use std::ffi::OsStr;
         let f = std::path::Path::new("/x");
         assert_eq!(
@@ -1025,32 +1029,33 @@ mod tests {
         );
     }
 
-    /// Ausente y VACÍO son la misma respuesta, como en `login_shell_from`:
-    /// `EDITOR=` es lo que deja un entorno pelado, y lanzar `""` es un fallo
-    /// confuso tres marcos más abajo en vez de un error que alguien pueda leer.
+    /// Absent and EMPTY are the same answer, as in `login_shell_from`:
+    /// `EDITOR=` is what a stripped environment leaves, and launching `""`
+    /// is a confusing failure three frames down instead of an error anyone
+    /// can read.
     #[test]
-    fn sin_editor_hay_un_fallback_que_existe() {
+    fn with_no_editor_there_is_a_fallback_that_exists() {
         use std::ffi::OsStr;
         let f = std::path::Path::new("/x");
-        let esperado: &str = if cfg!(windows) { "notepad.exe" } else { "vi" };
+        let expected: &str = if cfg!(windows) { "notepad.exe" } else { "vi" };
         assert_eq!(
             editor_argv_from(None, None, f),
-            [OsStr::new(esperado), OsStr::new("/x")]
+            [OsStr::new(expected), OsStr::new("/x")]
         );
         assert_eq!(
             editor_argv_from(Some(OsStr::new("")), Some(OsStr::new("   ")), f),
-            [OsStr::new(esperado), OsStr::new("/x")]
+            [OsStr::new(expected), OsStr::new("/x")]
         );
     }
 
-    /// Un nombre que NO es UTF-8 llega al editor byte a byte (regla 1).
+    /// A name that is NOT UTF-8 reaches the editor byte for byte (hard rule 1).
     #[cfg(unix)]
     #[test]
-    fn un_nombre_no_utf8_llega_intacto_al_editor() {
+    fn a_non_utf8_name_reaches_the_editor_intact() {
         use std::ffi::OsStr;
         use std::os::unix::ffi::OsStrExt as _;
-        let crudo = OsStr::from_bytes(b"/tmp/raro\xff.txt");
-        let argv = editor_argv_from(Some(OsStr::new("nano")), None, std::path::Path::new(crudo));
+        let raw = OsStr::from_bytes(b"/tmp/raro\xff.txt");
+        let argv = editor_argv_from(Some(OsStr::new("nano")), None, std::path::Path::new(raw));
         assert_eq!(argv[1].as_bytes(), b"/tmp/raro\xff.txt");
     }
 
@@ -1212,8 +1217,8 @@ mod tests {
         assert_eq!(child_cwd(Path::new(r"\\?\C:\CON")), None);
         assert_eq!(child_cwd(Path::new(r"\\?\C:\con.txt")), None);
         // Over MAX_PATH, and verbatim UNC.
-        let largo = format!(r"\\?\C:\{}", "x".repeat(300));
-        assert_eq!(child_cwd(Path::new(&largo)), None);
+        let long = format!(r"\\?\C:\{}", "x".repeat(300));
+        assert_eq!(child_cwd(Path::new(&long)), None);
         assert_eq!(child_cwd(Path::new(r"\\?\UNC\server\share")), None);
     }
 
@@ -1357,73 +1362,73 @@ mod tests {
     }
 }
 
-/// Cómo acabó un intento de escribir en el portapapeles del sistema.
+/// How an attempt to write to the system clipboard ended.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ClipboardOutcome {
-    /// Escrito, con el helper que lo hizo (para poder DECIR cuál fue).
+    /// Written, with the helper that did it (so it can be SAID which one).
     Done(String),
-    /// No hay ningún helper instalado. NO es un fallo: en una sesión por SSH
-    /// es lo normal, y un terminal todavía tiene OSC 52 ([`osc52`]).
+    /// No helper is installed. This is NOT a failure: over an SSH session
+    /// it is normal, and a terminal still has OSC 52 ([`osc52`]).
     NoHelper,
-    /// Había helper y falló al escribir.
+    /// There was a helper and it failed to write.
     Failed,
 }
 
-/// Escribe `bytes` en el portapapeles con el primer helper que EXISTA.
+/// Writes `bytes` to the clipboard with the first helper that EXISTS.
 ///
-/// Compartido por los dos frontends (#286): la ventana no tiene terminal al
-/// que pedírselo, y el terminal sí — pero cuando hay `wl-copy` o `xclip`
-/// delante, usarlo es mejor que OSC 52, porque el helper CONTESTA y la
-/// secuencia de escape no.
+/// Shared by both frontends (#286): the window has no terminal to ask, and
+/// the terminal does — but when `wl-copy` or `xclip` is available, using it
+/// beats OSC 52, because the helper ANSWERS and the escape sequence does
+/// not.
 ///
-/// El texto va siempre por STDIN y nunca en el argv: una ruta es BYTES
-/// (regla 1), y una que empiece por `-` la leería como flag el helper que
-/// toque.
+/// The text always goes over STDIN and never in the argv: a path is BYTES
+/// (hard rule 1), and one starting with `-` would be read as a flag by
+/// whichever helper is running.
 #[must_use]
 pub fn copy_to_clipboard(bytes: &[u8]) -> ClipboardOutcome {
     use std::io::Write as _;
     for argv in clipboard_candidates() {
-        let Some(programa) = argv.first() else {
+        let Some(program) = argv.first() else {
             continue;
         };
-        let Some(ruta) = crate::openers::resolve_program(programa) else {
+        let Some(path) = crate::openers::resolve_program(program) else {
             continue;
         };
-        let hijo = std::process::Command::new(&ruta)
+        let child = std::process::Command::new(&path)
             .args(&argv[1..])
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .spawn();
-        let Ok(mut hijo) = hijo else {
+        let Ok(mut child) = child else {
             continue;
         };
-        // El texto por STDIN y el stdin CERRADO después: `wl-copy` y `xclip`
-        // se quedan de dueños de la selección hasta que el flujo acaba, y sin
-        // cerrarlo el portapapeles queda a medias para siempre.
-        let escrito = hijo
+        // The text over STDIN and stdin CLOSED afterwards: `wl-copy` and
+        // `xclip` remain owners of the selection until the stream ends, and
+        // without closing it the clipboard stays half-done forever.
+        let written = child
             .stdin
             .take()
             .map(|mut w| w.write_all(bytes).and_then(|()| w.flush()));
-        return match escrito {
-            Some(Ok(())) => ClipboardOutcome::Done(programa.to_string_lossy().into_owned()),
+        return match written {
+            Some(Ok(())) => ClipboardOutcome::Done(program.to_string_lossy().into_owned()),
             _ => ClipboardOutcome::Failed,
         };
     }
     ClipboardOutcome::NoHelper
 }
 
-/// La secuencia OSC 52 que pone `bytes` en el portapapeles del TERMINAL.
+/// The OSC 52 sequence that puts `bytes` on the TERMINAL's clipboard.
 ///
-/// Es la salida que la ventana gráfica no tiene y el terminal sí, y la única
-/// que funciona por SSH sin instalar nada al otro lado: quien recibe la
-/// secuencia es el emulador que el humano está mirando, no la máquina donde
-/// corre norte.
+/// This is the output the graphical window does not have and the terminal
+/// does, and the only one that works over SSH with nothing installed on the
+/// other end: whoever receives the sequence is the emulator the human is
+/// looking at, not the machine norte runs on.
 ///
-/// **Un terminal que no la soporte la ignora en silencio**, y no hay forma de
-/// preguntárselo. Por eso el llamante la usa como ÚLTIMO recurso y dice por
-/// qué camino fue: «copiado» sobre un portapapeles vacío es la clase de
-/// mentira que se descubre al pegar en otro sitio.
+/// **A terminal that does not support it ignores it silently**, and there is
+/// no way to ask. That is why the caller uses it as a LAST resort and says
+/// which path it took: "copied" over an empty clipboard is the kind of lie
+/// that is only found out when pasting somewhere else.
 ///
 /// ```
 /// use norte_frontend::shell::osc52;

@@ -1,5 +1,5 @@
-//! Papelera lógica `.norte-trash/` de sftp (fase 9b, ADR 0019) contra el
-//! servidor sftp in-process.
+//! sftp's logical `.norte-trash/` trash (phase 9b, ADR 0019) against the
+//! in-process sftp server.
 #![cfg(target_os = "linux")]
 
 mod common;
@@ -11,8 +11,8 @@ use norte_vfs::Provider;
 use norte_vfs::trash;
 use norte_vfs_sftp::SftpProvider;
 
-/// Provider fresco sobre tempdir + servidor in-process, con la papelera
-/// lógica en el estado pedido.
+/// Fresh provider over a tempdir + in-process server, with the logical
+/// trash in the requested state.
 async fn fresh(logical_trash: bool) -> SftpProvider {
     let dir = tempfile::tempdir().expect("tempdir");
     let base = dir.path().to_path_buf();
@@ -21,12 +21,12 @@ async fn fresh(logical_trash: bool) -> SftpProvider {
     SftpProvider::new(session, "/").with_logical_trash(logical_trash)
 }
 
-/// La raíz remota del cliente (`/`), con authority de test.
+/// The client's remote root (`/`), with a test authority.
 fn root() -> VPath {
     SftpProvider::root(Authority::new("test:22").expect("authority"))
 }
 
-/// Drena un `ByteStream` a bytes.
+/// Drains a `ByteStream` into bytes.
 async fn read_all(p: &SftpProvider, path: &VPath) -> Vec<u8> {
     let mut rd = p.read(path, None).await.expect("read");
     let mut out = Vec::new();
@@ -36,7 +36,7 @@ async fn read_all(p: &SftpProvider, path: &VPath) -> Vec<u8> {
     out
 }
 
-/// Lista los nombres (bytes) de los hijos de un dir remoto (drena el
+/// Lists the names (bytes) of a remote dir's children (drains the
 /// `EntryStream`).
 async fn child_names(p: &SftpProvider, dir: &VPath) -> Vec<Vec<u8>> {
     let mut stream = p.list(dir).await.expect("list");
@@ -47,7 +47,7 @@ async fn child_names(p: &SftpProvider, dir: &VPath) -> Vec<Vec<u8>> {
             entry
                 .path
                 .file_name()
-                .expect("hijo con nombre")
+                .expect("child has a name")
                 .as_bytes()
                 .to_vec(),
         );
@@ -69,14 +69,14 @@ async fn trash_moves_tree_and_writes_info() {
     let p = fresh(true).await;
     let victim = root().join(Segment::new(b"victim.txt".to_vec()).unwrap());
 
-    // Siembra el archivo.
+    // Seeds the file.
     let mut sink = p.write(&victim).await.expect("write");
-    sink.write(Bytes::from_static(b"contenido"))
+    sink.write(Bytes::from_static(b"content"))
         .await
         .expect("chunk");
     sink.commit().await.expect("commit");
 
-    // A la papelera.
+    // To the trash.
     p.trash(
         &victim,
         &norte_vfs::trash::TrashId::new(0, u64::from(line!())),
@@ -84,30 +84,31 @@ async fn trash_moves_tree_and_writes_info() {
     .await
     .expect("trash");
 
-    // El origen desaparece.
+    // The source disappears.
     assert!(matches!(
         p.stat(&victim).await,
         Err(norte_proto::Error::NotFound)
     ));
 
-    // `.norte-trash/<id>/` existe con UNA entrada.
+    // `.norte-trash/<id>/` exists with ONE entry.
     let trash_dir = root().join(Segment::new(trash::TRASH_DIR.to_vec()).unwrap());
     let ids = child_names(&p, &trash_dir).await;
-    assert_eq!(ids.len(), 1, "una entrada de papelera");
+    assert_eq!(ids.len(), 1, "one trash entry");
     let entry = trash_dir.join(Segment::new(ids[0].clone()).unwrap());
 
-    // Contiene el payload + `.norte-info`.
+    // Contains the payload + `.norte-info`.
     let mut names = child_names(&p, &entry).await;
     names.sort();
     let mut expected = vec![b".norte-info".to_vec(), b"victim.txt".to_vec()];
     expected.sort();
     assert_eq!(names, expected);
 
-    // El payload conserva el contenido.
+    // The payload keeps the content.
     let payload = entry.join(Segment::new(b"victim.txt".to_vec()).unwrap());
-    assert_eq!(read_all(&p, &payload).await, b"contenido");
+    assert_eq!(read_all(&p, &payload).await, b"content");
 
-    // El `.norte-info` decodifica a la ruta original (anclado a la conexión).
+    // The `.norte-info` decodes to the original path (anchored to the
+    // connection).
     let info_path = entry.join(Segment::new(trash::INFO_NAME.to_vec()).unwrap());
     let info_bytes = read_all(&p, &info_path).await;
     let info = trash::info_decode(&info_bytes, &root()).expect("decode");
@@ -130,16 +131,16 @@ async fn trash_without_capability_is_unsupported() {
         .await,
         Err(norte_proto::Error::Unsupported)
     ));
-    // El origen sigue ahí (no se degradó a permanente).
+    // The source is still there (did not degrade to permanent).
     assert!(p.stat(&victim).await.is_ok());
 }
 
 #[tokio::test]
 async fn trash_preserves_hostile_basename() {
     let p = fresh(true).await;
-    // sftp (russh-sftp) usa paths String → NO representa bytes no-UTF8
-    // (rechaza con InvalidPath, issue #37); el nombre hostil que SÍ maneja
-    // es UTF-8 retorcido: espacios, unicode, emoji, punto inicial.
+    // sftp (russh-sftp) uses String paths → does NOT represent non-UTF8
+    // bytes (rejects with InvalidPath, issue #37); the hostile name it CAN
+    // handle is twisted UTF-8: spaces, unicode, emoji, leading dot.
     let hostile = "año 名前 😀 .txt".as_bytes().to_vec();
     let victim = root().join(Segment::new(hostile.clone()).unwrap());
 
@@ -158,21 +159,21 @@ async fn trash_preserves_hostile_basename() {
         Err(norte_proto::Error::NotFound)
     ));
 
-    // El payload dentro de la papelera conserva los bytes hostiles.
+    // The payload inside the trash keeps the hostile bytes.
     let trash_dir = root().join(Segment::new(trash::TRASH_DIR.to_vec()).unwrap());
     let ids = child_names(&p, &trash_dir).await;
     let entry = trash_dir.join(Segment::new(ids[0].clone()).unwrap());
     let names = child_names(&p, &entry).await;
     assert!(
         names.iter().any(|n| n == &hostile),
-        "basename hostil preservado"
+        "hostile basename preserved"
     );
 }
 
 #[tokio::test]
 async fn trash_moves_directory_tree() {
-    // Prueba de verdad el claim de ADR 0009: un rename se lleva el ÁRBOL
-    // entero (entries_total = 1), no solo un fichero suelto.
+    // Actually tests ADR 0009's claim: a rename takes the WHOLE tree
+    // (entries_total = 1), not just a single loose file.
     let p = fresh(true).await;
     let dir = root().join(Segment::new(b"proj".to_vec()).unwrap());
     p.mkdir(&dir).await.expect("mkdir proj");
@@ -180,7 +181,7 @@ async fn trash_moves_directory_tree() {
     p.mkdir(&sub).await.expect("mkdir sub");
     let deep = sub.join(Segment::new(b"b.txt".to_vec()).unwrap());
     let mut sink = p.write(&deep).await.expect("write");
-    sink.write(Bytes::from_static(b"hondo"))
+    sink.write(Bytes::from_static(b"deep"))
         .await
         .expect("chunk");
     sink.commit().await.expect("commit");
@@ -193,7 +194,7 @@ async fn trash_moves_directory_tree() {
         Err(norte_proto::Error::NotFound)
     ));
 
-    // El subárbol entero aterrizó en `.norte-trash/<id>/proj/sub/b.txt`.
+    // The whole subtree landed at `.norte-trash/<id>/proj/sub/b.txt`.
     let trash_dir = root().join(Segment::new(trash::TRASH_DIR.to_vec()).unwrap());
     let ids = child_names(&p, &trash_dir).await;
     let entry = trash_dir.join(Segment::new(ids[0].clone()).unwrap());
@@ -201,16 +202,17 @@ async fn trash_moves_directory_tree() {
         .join(Segment::new(b"proj".to_vec()).unwrap())
         .join(Segment::new(b"sub".to_vec()).unwrap())
         .join(Segment::new(b"b.txt".to_vec()).unwrap());
-    assert_eq!(read_all(&p, &moved_deep).await, b"hondo");
+    assert_eq!(read_all(&p, &moved_deep).await, b"deep");
 }
 
 #[tokio::test]
 async fn trash_refuses_to_trash_itself() {
-    // Papelerizar `.norte-trash` (o algo dentro) = Unsupported (auto-ref),
-    // sin dejar basura ni tocar la papelera existente.
+    // Trashing `.norte-trash` (or something inside it) = Unsupported
+    // (self-reference), without leaving garbage or touching the existing
+    // trash.
     let p = fresh(true).await;
 
-    // Crea la papelera trasheando un fichero cualquiera.
+    // Creates the trash by trashing an arbitrary file.
     let victim = root().join(Segment::new(b"v.txt".to_vec()).unwrap());
     let mut sink = p.write(&victim).await.expect("write");
     sink.write(Bytes::from_static(b"a")).await.expect("chunk");
@@ -231,6 +233,6 @@ async fn trash_refuses_to_trash_itself() {
         .await,
         Err(norte_proto::Error::Unsupported)
     ));
-    // La papelera sigue en pie.
+    // The trash is still standing.
     assert!(p.stat(&trash_dir).await.is_ok());
 }

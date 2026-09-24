@@ -1,15 +1,15 @@
-//! El ritual de refresco: el tick que reacciona a las tasks que acaban de
-//! terminar, la recarga de ambos panes tras una mutación, y lo que hay que
-//! soltar después.
+//! The refresh ritual: the tick that reacts to tasks that just finished, the
+//! reload of both panes after a mutation, and what has to be released
+//! afterward.
 //!
-//! Vivía en el root del binario `ntc` —un crate DISTINTO de esta lib—, y lo
-//! nombran cuatro de los módulos de test que siguen ahí esperando a que salgan
-//! sus dependencias.
+//! It used to live in the `ntc` binary's root — a crate DISTINCT from this
+//! lib — and it is named by four of the test modules still waiting there for
+//! their dependencies to leave.
 //!
-//! Los tres disparadores del refresco (una mutación terminada en [`on_tick`],
-//! el confirm del picker de columnas y el hot-reload de `[ui.columns]`) pasan
-//! por el MISMO embudo, [`after_panes_refresh`]: es lo que garantiza que un
-//! drenador paginado viejo no duplique entradas de un pane re-listado.
+//! The refresh's three triggers (a mutation finishing in [`on_tick`], the
+//! column picker's confirm, and `[ui.columns]`'s hot reload) go through the
+//! SAME funnel, [`after_panes_refresh`]: this is what guarantees a stale
+//! paginated drainer does not duplicate entries from a re-listed pane.
 
 use norte_core::backend::Backend;
 use norte_frontend::layout::BySlot;
@@ -24,13 +24,14 @@ use crate::navigate::listing;
 use crate::probes::Probed;
 use norte_frontend::busy::{Busy, BusyKind};
 
-/// Si el resultado de esta clase de task es un INFORME que alguien cosecha
-/// aparte, y por tanto su final no se anuncia con el `done` genérico.
+/// Whether this task kind's result is a REPORT harvested separately by
+/// someone else, and therefore its end is not announced with the generic
+/// `done`.
 ///
-/// Solo las sumas (#311), y por dos razones que van juntas: no mutan nada —así
-/// que no hay panes que re-listar— y su respuesta es el veredicto de la
-/// cosecha, que un `done` posterior taparía. Una copia o un borrado son lo
-/// contrario en las dos cosas.
+/// Only checksums (#311), for two reasons that go together: they mutate
+/// nothing — so there are no panes to re-list — and their answer is the
+/// harvest's verdict, which a later `done` would cover up. A copy or a
+/// delete are the opposite on both counts.
 ///
 /// ```
 /// use norte_proto::TaskKind;
@@ -42,27 +43,28 @@ pub fn habla_por_su_informe(kind: norte_proto::TaskKind) -> bool {
     matches!(kind, norte_proto::TaskKind::Checksum)
 }
 
-/// Tick: refresca snapshots del panel y reacciona a las tasks que ACABAN
-/// de terminar — colisión con contexto → a la COLA de diálogos (jamás se
-/// pisa un modal abierto, hallazgo B1); el resto → mensaje por categoría +
-/// refresh de ambos panes (una mutación pudo cambiarlos).
-/// (Strings de mensaje hardcodeados hasta Fluent — fase 9, issue #1.)
-/// Devuelve qué panes REFRESCÓ (una mutación terminó y `refresh_panes` los
-/// reescribió con el listado completo): el run loop aplica entonces el
-/// ritual de [`after_panes_refresh`] — un drenador viejo de un pane
-/// re-listado duplicaría entradas si siguiera vivo.
+/// Tick: refreshes the panel's snapshots and reacts to tasks that JUST
+/// finished — collision with context → to the dialog QUEUE (an open modal is
+/// never stepped on, finding B1); the rest → message by category + refresh
+/// of both panes (a mutation may have changed them).
+/// (Hardcoded message strings until Fluent — phase 9, issue #1.)
+/// Returns which panes it REFRESHED (a mutation finished and `refresh_panes`
+/// rewrote them with the complete listing): the run loop then applies
+/// [`after_panes_refresh`]'s ritual — a stale drainer from a re-listed pane
+/// would duplicate entries if it stayed alive.
 pub async fn on_tick(
     app: &mut App,
     backend: &Backend,
     events: &mut crate::console::Console<'_>,
 ) -> [bool; 2] {
     let finished = app.board.tick(app.now_ms());
-    // Cada tick, no solo cuando algo acaba: la fila que caduca terminó en un
-    // tick ANTERIOR, así que colgar la limpieza de `finished` la dejaría en
-    // pantalla hasta que otra task cualquiera volviera a pasar por aquí.
+    // Every tick, not just when something finishes: the row that expires
+    // finished on a PREVIOUS tick, so hanging `finished`'s cleanup off it
+    // would leave it on screen until some other task happened to pass
+    // through here again.
     app.board.prune_terminal(app.now_ms());
-    // La barra ligera mira el tablero DESPUÉS de copiar los snapshots: el
-    // mismo instante que pinta el panel de procesos (ADR 0146).
+    // The light bar looks at the board AFTER copying the snapshots: the same
+    // instant the processes panel paints (ADR 0146).
     app.note_strip();
     if finished.is_empty() {
         app.open_next_pending();
@@ -71,116 +73,122 @@ pub async fn on_tick(
     let mut refresh = false;
     for fin in finished {
         use norte_proto::TaskState;
-        let informe = informe_que_pedir(&fin);
+        let report = report_to_request(&fin);
         match fin.state {
-            // #139: contar no muta nada, así que no recarga los paneles — y su
-            // resultado ES su progreso: el último snapshot trae el total.
+            // #139: counting mutates nothing, so it does not reload the
+            // panels — and its result IS its progress: the last snapshot
+            // carries the total.
             TaskState::Completed if fin.progress.kind == norte_proto::TaskKind::DirSize => {
-                let (bytes, entradas) = (fin.progress.bytes_done, fin.progress.entries_done);
-                // Si el diálogo de propiedades esperaba ESTE recuento, el
-                // número va ahí; si no, a la barra.
-                if !app.properties_sized(fin.progress.task_id, bytes, entradas) {
-                    // «Al menos» cuando parte del árbol no se pudo leer
-                    // (#251). El número corto es la dirección peligrosa del
-                    // error —este recuento se usa para decidir si algo cabe
-                    // en el destino—, así que decirlo redondo sin haberlo
-                    // podido contar entero es una respuesta equivocada, no
-                    // una respuesta incompleta.
+                let (bytes, entries) = (fin.progress.bytes_done, fin.progress.entries_done);
+                // If the properties dialog was waiting for THIS count, the
+                // number goes there; if not, to the bar.
+                if !app.properties_sized(fin.progress.task_id, bytes, entries) {
+                    // "At least" when part of the tree could not be read
+                    // (#251). The short number is the dangerous direction
+                    // for this error — this count is used to decide whether
+                    // something fits at the destination — so stating it flat
+                    // without having been able to count it whole is a wrong
+                    // answer, not an incomplete one.
                     //
-                    // `Some(0)` y `None` NO son lo mismo: el primero es «los
-                    // conté y no hubo», el segundo «quien lo emite no cuenta
-                    // esto» (un daemon 0.52). Solo el primero autoriza a
-                    // decir el total a secas.
-                    let saltados = fin.progress.unreadable.unwrap_or(0);
-                    let tamano = norte_frontend::human_bytes(bytes);
-                    let cuantas = entradas.to_string();
-                    app.message = Some(if saltados > 0 {
+                    // `Some(0)` and `None` are NOT the same: the first is "I
+                    // counted them and there were none", the second "whoever
+                    // emits this does not count it" (a 0.52 daemon). Only
+                    // the first authorizes stating the total flat.
+                    let skipped = fin.progress.unreadable.unwrap_or(0);
+                    let size = norte_frontend::human_bytes(bytes);
+                    let count = entries.to_string();
+                    app.message = Some(if skipped > 0 {
                         ta(
                             "msg-dir-size-partial",
                             &[
-                                ("size", &tamano),
-                                ("count", &cuantas),
-                                ("skipped", &saltados.to_string()),
+                                ("size", &size),
+                                ("count", &count),
+                                ("skipped", &skipped.to_string()),
                             ],
                         )
                     } else {
-                        ta("msg-dir-size", &[("size", &tamano), ("count", &cuantas)])
+                        ta("msg-dir-size", &[("size", &size), ("count", &count)])
                     });
                 }
             }
-            // #311: la que contesta con un INFORME ya dijo lo suyo, y no mutó
-            // nada que haya que re-listar. Un `done` genérico aquí pisaría el
-            // veredicto, que es la única respuesta que el gesto tenía que dar.
+            // #311: the one that answers with a REPORT already said its
+            // piece, and did not mutate anything that needs re-listing. A
+            // generic `done` here would step on the verdict, which is the
+            // only answer the gesture had to give.
             TaskState::Completed if habla_por_su_informe(fin.progress.kind) => {}
             TaskState::Completed => {
                 refresh = true;
-                // #314: un lote de permisos que termina «bien» puede no haber
-                // cambiado la mitad —un enlace, un fichero de otro dueño—, y
-                // `done` a secas se lee como que sí. El número está en el
-                // progreso; lo que faltaba era decirlo.
-                let sin_hacer = fin.progress.unreadable.unwrap_or(0);
+                // #314: a permissions batch that finishes "fine" may not
+                // have changed half of it — a symlink, a file owned by
+                // someone else — and a plain `done` reads as if it did. The
+                // number is in the progress; what was missing was saying it.
+                let undone = fin.progress.unreadable.unwrap_or(0);
                 app.message = Some(
-                    if fin.progress.kind == norte_proto::TaskKind::SetMode && sin_hacer > 0 {
-                        ta("msg-chmod-partial", &[("n", &sin_hacer.to_string())])
+                    if fin.progress.kind == norte_proto::TaskKind::SetMode && undone > 0 {
+                        ta("msg-chmod-partial", &[("n", &undone.to_string())])
                     } else {
                         t("msg-done")
                     },
                 );
-                // #290: el fichero que `pane.edit-new` mandó crear YA existe;
-                // el editor se abre ahora y sobre la ruta que se pidió, no
-                // sobre lo que haya bajo el cursor.
-                if let Some(pendiente) = tomar_creacion(app, fin.progress.task_id) {
-                    // La comprobación de #303 NO va aquí: entre este punto y
-                    // el lanzamiento corre `refresh_panes`, así que preguntar
-                    // ahora dejaría detrás justo la ventana que se quería
-                    // estrechar. La suspensión se lleva la ruta y el run loop
-                    // pregunta pegado al `exec`.
-                    match crate::gestures::edit_created(&pendiente) {
+                // #290: the file `pane.edit-new` sent to be created ALREADY
+                // exists; the editor opens now and over the path that was
+                // requested, not over whatever is under the cursor.
+                if let Some(pending) = take_creation(app, fin.progress.task_id) {
+                    // #303's check does NOT go here: between this point and
+                    // launching, `refresh_panes` runs, so asking now would
+                    // leave behind exactly the window that was meant to be
+                    // narrowed. The suspension carries the path and the run
+                    // loop asks right next to the `exec`.
+                    match crate::gestures::edit_created(&pending) {
                         Ok(shell) => app.pending_shell = Some(shell),
-                        // El fichero SE CREÓ y el editor no se puede abrir: se
-                        // dice. Tragarse el `None` dejaba `msg-done` en la
-                        // barra y media mitad del gesto perdida sin una
-                        // palabra, que es la clase de silencio que este
-                        // comando vino a quitar.
+                        // The file WAS CREATED and the editor cannot be
+                        // opened: it says so. Swallowing the `None` left
+                        // `msg-done` in the bar and half the gesture lost
+                        // with no word, which is exactly the kind of silence
+                        // this command came to remove.
                         Err(msg) => app.message = Some(msg),
                     }
                 }
-                // #250: el archivo se escribió entero y aun así puede llevar
-                // dentro dos entradas que en macOS o en Windows son una sola.
-                // El `Completed` es verdad y no lo cubre, así que se pregunta.
+                // #250: the archive was written whole and can still carry
+                // inside two entries that on macOS or Windows are one. The
+                // `Completed` is true and does not cover this, so it asks.
                 if fin.progress.kind == norte_proto::TaskKind::Pack
-                    && let Some(aviso) = aviso_de_empaquetado(backend, fin.progress.task_id).await
+                    && let Some(notice) = pack_notice(backend, fin.progress.task_id).await
                 {
-                    app.message = Some(aviso);
+                    app.message = Some(notice);
                 }
             }
             TaskState::Cancelled => {
-                // Una que no muta no tiene panes que re-listar, ni cancelada.
+                // One that does not mutate has no panes to re-list, not even
+                // cancelled.
                 refresh = refresh || !habla_por_su_informe(fin.progress.kind);
                 app.message = Some(t("msg-cancelled"));
-                // Sin fichero no hay nada que editar: la intención se suelta
-                // para que el SIGUIENTE `edit-new` no abra el fichero de este.
-                drop(tomar_creacion(app, fin.progress.task_id));
+                // With no file there is nothing to edit: the intent is
+                // released so the NEXT `edit-new` does not open this one's
+                // file.
+                drop(take_creation(app, fin.progress.task_id));
             }
             TaskState::Failed { error } => {
-                // La creación que falló —política, journal, un nombre que el
-                // provider rehúsa— NO abre nada: abrir el editor sobre un
-                // fichero que no existe es dejar que lo cree él, que es
-                // exactamente lo que #290 quitó de en medio.
-                drop(tomar_creacion(app, fin.progress.task_id));
+                // A creation that failed — policy, journal, a name the
+                // provider refuses — opens NOTHING: opening the editor over
+                // a file that does not exist is letting the editor create
+                // it, which is exactly what #290 removed from the picture.
+                drop(take_creation(app, fin.progress.task_id));
                 if let (Error::Unsupported, Some(target)) = (&error, &fin.trash_target) {
-                    // La papelera no pudo AQUÍ (mount sin topdir…): se
-                    // reofrece PERMANENTE con aviso — degradación con
-                    // usuario informado (ADR 0009), jamás pisando un modal.
+                    // The trash could not do it HERE (a mount with no
+                    // topdir…): it is re-offered as PERMANENT with a notice
+                    // — degradation with the user informed (ADR 0009), never
+                    // stepping on a modal.
                     if app.modal.is_none() {
                         app.modal = Some(Modal::ConfirmDelete {
-                            // Reoferta de ESE ítem, no del lote: el resto
-                            // de tasks del lote sigue su curso. Confirmarla
-                            // vuelve a pasar por `submit_deletes`, que
-                            // CONSUME las marcas — las del lote original ya
-                            // se consumieron al enviarlo, así que solo
-                            // afectaría a marcas hechas en la ventana entre
-                            // el envío y este tick (sin modal abierto).
+                            // Re-offer of THAT item, not the batch: the rest
+                            // of the batch's tasks run their course.
+                            // Confirming it goes back through
+                            // `submit_deletes`, which CONSUMES the marks —
+                            // the original batch's were already consumed
+                            // when it was submitted, so it would only affect
+                            // marks made in the window between the submit
+                            // and this tick (with no modal open).
                             items: vec![target.clone()],
                             permanent: true,
                         });
@@ -190,25 +198,25 @@ pub async fn on_tick(
                 } else if let (Error::Conflict { .. }, Some(retry)) = (&error, fin.retry) {
                     app.pending_collisions.push_back(retry);
                 } else {
-                    // Render por CATEGORÍA localizado (spec §17.7, #20):
-                    // jamás el Display inglés ni strings del OS.
+                    // Localized render by CATEGORY (spec §17.7, #20): never
+                    // the English Display nor OS strings.
                     app.message = Some(error_message(&error));
                     refresh = refresh || !habla_por_su_informe(fin.progress.kind);
                 }
             }
             _ => {}
         }
-        if let Some((kind, id, fallo)) = informe
-            && let Some(p) = pedir_informe(backend, kind, id, fallo).await
+        if let Some((kind, id, failure)) = report
+            && let Some(p) = request_report(backend, kind, id, failure).await
         {
             app.pending_reports.push_back(p);
         }
     }
     app.open_next_pending();
-    // La línea de tiempo abierta se relee cuando algo termina: lo que acaba
-    // de hacerse —o deshacerse— tiene que aparecer en un panel que sigue a la
-    // vista. El techo del undo ya impide pasar de lo contado; esto es para
-    // que lo contado sea lo de ahora.
+    // The open timeline is re-read when something finishes: what has just
+    // been done — or undone — has to appear in a panel that follows what is
+    // seen. The undo cap already stops going past what was counted; this is
+    // so what was counted is what is current now.
     if app.timeline_slot().is_some() {
         crate::dispatch::cargar_timeline(app, backend, None).await;
     }
@@ -219,25 +227,25 @@ pub async fn on_tick(
     }
 }
 
-/// Lo que hay que enseñar del informe de un lote de renombrado que acaba de
-/// terminar, o `None` si no hay nada que buscar.
+/// What has to be shown from a rename batch's report right after it
+/// finishes, or `None` if there is nothing to look for.
 ///
-/// El mismo criterio que la ventana (`Controller::informe_de_lote`): un lote
-/// limpio no abre nada; uno que dejó algo a medias, sí. Un informe que no se
-/// pudo pedir solo se dice si la Task además falló o se canceló — si terminó
-/// bien, la fila del tablero basta, y si no, el directorio quedaría sin
-/// explicación.
+/// The same criterion as the window (`Controller::informe_de_lote`): a clean
+/// batch opens nothing; one that left something half-done, does. A report
+/// that could not be requested is only mentioned if the Task also failed or
+/// was cancelled — if it finished fine, the board row is enough, and if not,
+/// the directory would be left unexplained.
 ///
 /// ```
 /// use norte_proto::methods::FsRenameBatchReportResult;
-/// let limpio = FsRenameBatchReportResult {
+/// let clean = FsRenameBatchReportResult {
 ///     applied: 2, rolled_back: 0, failed_pair: None, stuck: None,
 ///     uncertain: None, compensations_lost: 0,
 /// };
-/// assert!(norte_tui::refresh::informe_de_lote(&Ok(limpio), false).is_none());
-/// let sin_informe = Err(norte_proto::Error::Unsupported);
-/// assert!(norte_tui::refresh::informe_de_lote(&sin_informe, false).is_none());
-/// assert!(norte_tui::refresh::informe_de_lote(&sin_informe, true).is_some());
+/// assert!(norte_tui::refresh::informe_de_lote(&Ok(clean), false).is_none());
+/// let no_report = Err(norte_proto::Error::Unsupported);
+/// assert!(norte_tui::refresh::informe_de_lote(&no_report, false).is_none());
+/// assert!(norte_tui::refresh::informe_de_lote(&no_report, true).is_some());
 /// ```
 #[must_use]
 pub fn informe_de_lote(
@@ -258,11 +266,12 @@ pub fn informe_de_lote(
     }
 }
 
-/// Si la Task que acaba de terminar tiene un INFORME que pedir: un lote de
-/// renombrado o un undo. Los dos cuentan en él lo que el desenlace de la Task
-/// no cubre —un paso atascado, lo irreversible saltado—, así que se pide
-/// siempre, como hace la ventana. El `bool` es «la Task falló o se canceló».
-fn informe_que_pedir(
+/// Whether the Task that just finished has a REPORT to request: a rename
+/// batch or an undo. Both account in it for what the Task's outcome does not
+/// cover — a stuck step, skipped irreversibles — so it is always requested,
+/// the same as the window does. The `bool` is "the Task failed or was
+/// cancelled".
+fn report_to_request(
     fin: &crate::tasks::Finished,
 ) -> Option<(norte_proto::TaskKind, norte_proto::TaskId, bool)> {
     matches!(
@@ -276,44 +285,45 @@ fn informe_que_pedir(
     ))
 }
 
-/// Pide el informe de un lote o de un undo que acaba de terminar, y devuelve
-/// el diálogo que abrir (su título y sus líneas), o `None` si no hay nada que
-/// decir.
+/// Requests the report for a batch or an undo that just finished, and
+/// returns the dialog to open (its title and its lines), or `None` if there
+/// is nothing to say.
 ///
-/// Se espera DENTRO del tick, como `aviso_de_empaquetado`: contra un daemon
-/// atascado el tick ya se para en `refresh_panes`, justo detrás.
-async fn pedir_informe(
+/// Awaited INSIDE the tick, like `pack_notice`: against a hung daemon the
+/// tick already stalls in `refresh_panes`, right behind it.
+async fn request_report(
     backend: &Backend,
     kind: norte_proto::TaskKind,
     id: norte_proto::TaskId,
-    fallo: bool,
+    failure: bool,
 ) -> Option<(crate::app::ReportKind, Vec<norte_frontend::ReportLine>)> {
     if kind == norte_proto::TaskKind::Undo {
-        informe_de_undo(&backend.undo_report(id).await, fallo)
+        informe_de_undo(&backend.undo_report(id).await, failure)
             .map(|l| (crate::app::ReportKind::Undo, l))
     } else {
-        informe_de_lote(&backend.rename_batch_report(id).await, fallo)
+        informe_de_lote(&backend.rename_batch_report(id).await, failure)
             .map(|l| (crate::app::ReportKind::Batch, l))
     }
 }
 
-/// Lo que hay que enseñar del informe de un undo que acaba de terminar, o
-/// `None` si devolvió todo.
+/// What has to be shown from an undo's report right after it finishes, or
+/// `None` if it returned everything.
 ///
-/// El mismo criterio que la ventana (`Controller::informe_de_undo`) y que
-/// [`informe_de_lote`]: lo saltado —irreversible, o una creación que se queda
-/// porque el destino no tiene papelera— cuenta como no devuelto, y se dice.
+/// The same criterion as the window (`Controller::informe_de_undo`) and as
+/// [`informe_de_lote`]: what was skipped — irreversible, or a creation left
+/// in place because the destination has no trash — counts as not returned,
+/// and is said.
 ///
 /// ```
 /// use norte_proto::methods::PolicyUndoReportResult;
-/// let informe = |saltadas| PolicyUndoReportResult {
-///     undone: 2, skipped_irreversible: saltadas, skipped_created_no_trash: 0,
+/// let report = |skipped| PolicyUndoReportResult {
+///     undone: 2, skipped_irreversible: skipped, skipped_created_no_trash: 0,
 ///     skipped_not_ours: 0,
 ///     blocked: None, batch_stuck: None, compensations_lost: 0,
 ///     denied: Vec::new(), denied_total: 0,
 /// };
-/// assert!(norte_tui::refresh::informe_de_undo(&Ok(informe(0)), false).is_none());
-/// assert!(norte_tui::refresh::informe_de_undo(&Ok(informe(1)), false).is_some());
+/// assert!(norte_tui::refresh::informe_de_undo(&Ok(report(0)), false).is_none());
+/// assert!(norte_tui::refresh::informe_de_undo(&Ok(report(1)), false).is_some());
 /// ```
 #[must_use]
 pub fn informe_de_undo(
@@ -334,67 +344,69 @@ pub fn informe_de_undo(
     }
 }
 
-/// El aviso de un empaquetado que acaba de terminar, o `None` si no hay nada
-/// que decir (#250).
+/// The notice for a pack that just finished, or `None` if there is nothing
+/// to say (#250).
 ///
-/// Se pregunta al COMPLETAR un `archive.pack` —de uno cancelado no hay archivo
-/// del que avisar— y la respuesta corriente es que no hay nada. Que un archivo
-/// limpio no diga nada es lo que hace que decir algo signifique algo.
+/// Asked upon COMPLETING an `archive.pack` — a cancelled one has no archive
+/// to warn about — and the common answer is that there is nothing. That a
+/// clean archive says nothing is what makes saying something mean something.
 ///
-/// Un fallo de la llamada también es `None`: si no se pudo preguntar, no hay
-/// hallazgo que contar sobre el archivo, y pintar «no se pudo comprobar» sobre
-/// un empaquetado que salió bien es ruido.
+/// A failed call is also `None`: if it could not be asked, there is no
+/// finding to report about the archive, and painting "could not check" over
+/// a pack that went fine is noise.
 ///
-/// La llamada se espera DENTRO del tick, como el `refresh_panes` que viene
-/// detrás: contra un daemon atascado el tick ya se para ahí, así que spawnear
-/// esta sola compraría poco y costaría un canal.
-async fn aviso_de_empaquetado(backend: &Backend, task_id: norte_proto::TaskId) -> Option<String> {
-    let informe = backend.archive_pack_report(task_id).await.ok()?;
-    let riesgos = informe.risky.len();
-    if riesgos == 0 {
+/// The call is awaited INSIDE the tick, like the `refresh_panes` that comes
+/// after it: against a hung daemon the tick already stalls there, so
+/// spawning just this one would buy little and cost a channel.
+async fn pack_notice(backend: &Backend, task_id: norte_proto::TaskId) -> Option<String> {
+    let report = backend.archive_pack_report(task_id).await.ok()?;
+    let risky = report.risky.len();
+    if risky == 0 {
         return None;
     }
-    // Un informe RECORTADO dice «al menos», que es lo único honesto: la lista
-    // se corta en `ARCHIVE_PACK_REPORT_MAX` y pintar «64» sobre un archivo con
-    // cuatrocientos es exactamente la mentira que `truncated` existe para
-    // impedir. Misma forma que el «al menos» de `fs.dir_size` (#251).
-    let clave = if informe.truncated {
+    // A TRUNCATED report says "at least", which is the only honest thing:
+    // the list is cut at `ARCHIVE_PACK_REPORT_MAX` and painting "64" over an
+    // archive with four hundred is exactly the lie `truncated` exists to
+    // prevent. Same shape as `fs.dir_size`'s "at least" (#251).
+    let key = if report.truncated {
         "msg-pack-warnings-partial"
     } else {
         "msg-pack-warnings"
     };
-    Some(ta(clave, &[("risky", &riesgos.to_string())]))
+    Some(ta(key, &[("risky", &risky.to_string())]))
 }
 
-/// La intención de `pane.edit-new` SI la task que acaba de terminar es la
-/// suya, consumiéndola (#290).
+/// `pane.edit-new`'s intent IF the task that just finished is its own,
+/// consuming it (#290).
 ///
-/// El id se compara a propósito: entre el submit y este tick puede terminar
-/// cualquier otra task —una copia, un borrado, otra creación—, y abrir el
-/// editor con la primera que pase abriría el fichero equivocado.
+/// The id is compared on purpose: between the submit and this tick any other
+/// task can finish — a copy, a delete, another creation — and opening the
+/// editor with the first one that comes along would open the wrong file.
 ///
-/// **Solo el id, sin época de conexión, y eso descansa en una invariante del
-/// SDK**: tras un relevo del daemon los ids vuelven a empezar (la ventana sí
-/// lleva época por esto — `Controller::epoca_conexion`). Aquí es correcto
-/// porque `norte-client` sintetiza un desenlace `Failed` para toda task
-/// huérfana ANTES de que la conexión nueva reparta ids, conservando el
-/// `task_id`: la intención se consume en la conexión vieja. Si esa síntesis
-/// desapareciera, un id reciclado abriría el editor sobre un fichero que quizá
-/// no se creó — y entonces lo crearía el editor, que es el bug entero de vuelta.
-fn tomar_creacion(app: &mut App, terminada: norte_proto::TaskId) -> Option<norte_proto::VPath> {
+/// **Only the id, with no connection epoch, and that rests on an SDK
+/// invariant**: after a daemon handover ids start over again (the window
+/// does carry an epoch for this reason — `Controller::epoca_conexion`). Here
+/// it is correct because `norte-client` synthesizes a `Failed` outcome for
+/// every orphaned task BEFORE the new connection hands out ids, keeping the
+/// `task_id`: the intent is consumed on the old connection. If that
+/// synthesis went away, a recycled id would open the editor over a file that
+/// may not have been created — and the editor would then create it, which is
+/// the whole bug all over again.
+fn take_creation(app: &mut App, finished: norte_proto::TaskId) -> Option<norte_proto::VPath> {
     match &app.pending_edit_open {
-        Some((id, _)) if *id == terminada => app.pending_edit_open.take().map(|(_, p)| p),
+        Some((id, _)) if *id == finished => app.pending_edit_open.take().map(|(_, p)| p),
         _ => None,
     }
 }
 
-/// Recarga ambos panes tras una mutación (pueden mostrar el mismo dir).
-/// CANCELABLE como el cd (regla 3): Esc abandona el refresh (los panes se
-/// quedan como estaban), Ctrl-C sale. El cursor se conserva por ÍNDICE
-/// (tras un delete queda en la siguiente entrada — semántica ortodoxa).
-/// Devuelve qué panes recibieron DE VERDAD el listado completo (#117
-/// review): un Esc a medias abandona el resto — con esto el caller
-/// ([`after_panes_refresh`]) decide si suelta el drenador paginado (#78).
+/// Reloads both panes after a mutation (they may show the same dir).
+/// CANCELABLE like the cd (rule 3): Esc abandons the refresh (the panes stay
+/// as they were), Ctrl-C quits. The cursor is kept by INDEX (after a delete
+/// it lands on the next entry — orthodox semantics).
+/// Returns which panes REALLY received the complete listing (#117 review):
+/// a half-done Esc abandons the rest — the caller
+/// ([`after_panes_refresh`]) uses this to decide whether to release the
+/// paginated drainer (#78).
 pub async fn refresh_panes(
     app: &mut App,
     backend: &Backend,
@@ -402,52 +414,53 @@ pub async fn refresh_panes(
 ) -> [bool; 2] {
     let mut refreshed = [false; 2];
     for i in 0..app.panes.len() {
-        // Un pane en modo virtual de búsqueda (liveSearch T6) NO se
-        // auto-refresca: `refresh_listing` lo sacaría del modo virtual y el
-        // `reap` cancelaría la Task sin que el usuario saliera (review
-        // MINOR-1). Sus hits viven fuera del FS: no hay dir real que recargar.
+        // A pane in virtual search mode (liveSearch T6) does NOT
+        // auto-refresh: `refresh_listing` would pull it out of virtual mode
+        // and `reap` would cancel the Task without the user leaving (review
+        // MINOR-1). Its hits live outside the FS: there is no real dir to
+        // reload.
         if app.panes[i].virtual_search {
             continue;
         }
         let dir = app.panes[i].dir().clone();
-        // #117: mismos attrs que un cd a este dir — el refresh no puede
-        // dejar las celdas attr en blanco (valores solo si se piden).
+        // #117: same attrs as a cd to this dir — the refresh must not leave
+        // the attr cells blank (values only if requested).
         let attrs = app.columns.attr_ids_for(dir.scheme());
-        // #323: esto también es una espera que se come el bucle, y también
-        // congelaba la pantalla — peor que la navegación, porque el lector no
-        // la pidió: salta al acabar una task y en cada aviso del watcher, y
-        // aquí se espera al listado COMPLETO, no a la primera página. Un
-        // directorio remoto con muchas entradas dejaba la TUI muda un buen
-        // rato sin que nadie hubiera tocado una tecla.
+        // #323: this is also a wait that eats the loop, and it also froze
+        // the screen — worse than navigation, because the reader did not ask
+        // for it: it fires when a task finishes and on every watcher notice,
+        // and here it waits for the COMPLETE listing, not the first page. A
+        // remote directory with many entries left the TUI mute for a good
+        // while with nobody having touched a key.
         let started = std::time::Instant::now();
         app.busy = Some(Busy::new(BusyKind::Listing, Some(dir.clone()), Some(i)));
-        let esperado =
+        let waited =
             crate::console::wait_painting(events, app, started, listing(backend, &dir, &attrs))
                 .await;
         app.busy = None;
-        match esperado {
-            // El listado es COMPLETO: si venía de un cd paginado a medio
-            // rellenar, ya no está cargando (el run loop suelta el drenador
-            // tras este refresh). Un quick search vivo se re-aplica dentro
-            // (índices nuevos).
+        match waited {
+            // The listing is COMPLETE: if it came from a cd paginated
+            // halfway through filling in, it is no longer loading (the run
+            // loop releases the drainer after this refresh). A live quick
+            // search is re-applied inside (new indices).
             Waited::Done(Ok((entries, skipped))) => {
                 app.panes[i].refresh_listing(entries);
-                // #96: el refresh trae las omitidas FRESCAS — sin esto, el
-                // badge conservaba el valor del listado anterior (rancio) tras
-                // una mutación.
+                // #96: the refresh brings the skipped ones FRESH — without
+                // this, the badge kept the previous listing's (stale) value
+                // after a mutation.
                 app.panes[i].set_skipped(skipped);
                 refreshed[i] = true;
             }
-            // La conexión pide su contraseña (#325): un refresco SÍ es un
-            // gesto del lector, así que aquí se PREGUNTA en vez de contestar
-            // con la categoría del error.
+            // The connection asks for its password (#325): a refresh IS a
+            // reader's gesture, so here it ASKS instead of answering with
+            // the error's category.
             //
-            // Es el camino que se recorre de verdad al reabrir: la
-            // restauración de sesión deja el panel sobre la ruta remota sin
-            // preguntar nada —restaurar no es pedir conectarse—, y el primer
-            // Ctrl+R es lo que convierte eso en la pregunta. Sin esto, el
-            // único camino que preguntaba era navegar a mano, o sea salir del
-            // sitio donde estabas para poder volver.
+            // This is the path really walked when reopening: session
+            // restore leaves the panel over the remote path with no
+            // question asked — restoring is not asking to connect — and the
+            // first Ctrl+R is what turns that into the question. Without
+            // this, the only path that asked was navigating by hand, i.e.
+            // leaving the spot you were at to be able to come back.
             Waited::Done(Err(Error::SecretNeeded { conn, endpoint })) => {
                 app.modal = Some(Modal::AskSecret {
                     conn,
@@ -455,18 +468,18 @@ pub async fn refresh_panes(
                     input: crate::app::TypedSecret::default(),
                     dir: dir.clone(),
                     pane: i,
-                    // `Record` y no un paso del rastro: un refresco no salió
-                    // del historial, así que no hay nada que rebobinar si la
-                    // pregunta se abandona. El panel se queda donde está.
+                    // `Record` and not a trail step: a refresh did not leave
+                    // the history, so there is nothing to rewind if the
+                    // question is abandoned. The panel stays where it is.
                     trail: crate::app::Trail::Record,
                 });
                 return refreshed;
             }
-            // Sin silencio: el dir pudo desaparecer (issue #20).
+            // No silence: the dir may have disappeared (issue #20).
             Waited::Done(Err(e)) => {
                 app.message = Some(ta("msg-refresh-error", &[("error", &error_category(&e))]));
             }
-            // Un Esc a medias abandona el RESTO de panes, igual que antes.
+            // A half-done Esc abandons the REST of the panes, same as before.
             Waited::Cancelled => return refreshed,
             Waited::Quit => {
                 app.quit = true;
@@ -477,25 +490,25 @@ pub async fn refresh_panes(
     refreshed
 }
 
-/// El ritual tras un [`refresh_panes`], ÚNICO para sus tres disparadores
-/// (mutación terminada en `on_tick`, confirm del picker y hot-reload de
-/// `[ui.columns]` — #117 review): el drenador paginado se suelta SOLO si su
-/// pane fue re-listado de verdad (soltarlo a ciegas tras un Esc a medias
-/// dejaría el pane colgado en `loading` para siempre, #78 — su relleno
-/// sigue siendo válido); la dedup de la sonda #52 se invalida (un listado
-/// nuevo re-lazifica las entries y un re-probe de la MISMA selección es
-/// legítimo, MAJOR-1); y el run de búsqueda se cosecha ([`reap_search_run`]
-/// ya es no-op si su pane sigue en modo virtual).
+/// The ritual after a [`refresh_panes`], SINGLE for its three triggers (a
+/// mutation finishing in `on_tick`, the picker's confirm, and
+/// `[ui.columns]`'s hot reload — #117 review): the paginated drainer is only
+/// released if its pane was really re-listed (releasing it blindly after a
+/// half-done Esc would leave the pane hanging in `loading` forever, #78 —
+/// its fill is still valid); probe #52's dedup is invalidated (a new listing
+/// re-lazifies the entries and a re-probe of the SAME selection is
+/// legitimate, MAJOR-1); and the search run is harvested ([`reap_search_run`]
+/// is already a no-op if its pane is still in virtual mode).
 ///
-/// Y, si la ayuda está abierta, sus hechos se RECONGELAN (review MAJOR-2). El
-/// congelado existe para que un veredicto no cambie porque el lector se mueva
-/// por la página; no para sobrevivir a que el listado que describe deje de
-/// existir. `enterable` y `viewable` hablan de la entrada bajo el cursor, y
-/// este es el embudo por el que pasan los TRES disparadores del refresh — el
-/// del `tick` incluido, que no tiene guarda de overlay, así que una copia o un
-/// borrado terminan re-listando los panes con la ayuda delante. Recongelar
-/// aquí conserva «ningún veredicto cambia porque el lector se desplace» y
-/// tira «ningún veredicto cambia porque el mundo cambie».
+/// And, if the help is open, its facts are RE-FROZEN (review MAJOR-2). The
+/// freeze exists so a verdict does not change because the reader moves
+/// around the page; not to survive the listing it describes ceasing to
+/// exist. `enterable` and `viewable` talk about the entry under the cursor,
+/// and this is the funnel all THREE refresh triggers go through — including
+/// the `tick`'s, which has no overlay guard, so a copy or a delete end up
+/// re-listing the panes with the help in front. Re-freezing here keeps "no
+/// verdict changes because the reader scrolls" and drops "no verdict changes
+/// because the world changes".
 pub fn after_panes_refresh(
     app: &mut App,
     refreshed: [bool; 2],
@@ -506,8 +519,8 @@ pub fn after_panes_refresh(
     if refreshed == [false; 2] {
         return;
     }
-    // Un refresco es el momento en que el espacio libre puede haber
-    // cambiado sin que nadie navegue: se vuelve a pedir con él.
+    // A refresh is the moment free space may have changed with nobody
+    // navigating: it is requested again along with it.
     app.volumes_stale = true;
     release_refreshed_fill(&app.panes, &refreshed, fill, last_probed);
     reap_search_run(app, search_run);
@@ -516,9 +529,9 @@ pub fn after_panes_refresh(
     }
 }
 
-/// Suelta el [`SearchRun`] si su pane SALIÓ del modo virtual (un `cd`/refresh
-/// lo apagó): su drenador alimentaría un listado real. Cancela la Task si
-/// sigue viva (regla 3).
+/// Releases the [`SearchRun`] if its pane LEFT virtual mode (a `cd`/refresh
+/// turned it off): its drainer would feed a real listing. Cancels the Task
+/// if it is still alive (rule 3).
 pub fn reap_search_run(app: &App, search_run: &mut Option<SearchRun>) {
     if let Some(s) = search_run.as_ref()
         && !app.panes[s.pane].virtual_search
@@ -537,7 +550,7 @@ mod tests {
         norte_proto::TaskId::new(n)
     }
 
-    fn atascado() -> norte_proto::methods::FsRenameBatchReportResult {
+    fn stuck() -> norte_proto::methods::FsRenameBatchReportResult {
         norte_proto::methods::FsRenameBatchReportResult {
             applied: 1,
             rolled_back: 1,
@@ -555,40 +568,43 @@ mod tests {
         }
     }
 
-    /// Un lote que dejó un paso atascado abre su informe, y con otro modal
-    /// abierto ESPERA en la cola en vez de pisarlo o perderse: se abre en
-    /// cuanto el otro se cierra.
+    /// A batch that left a stuck step opens its report, and with another
+    /// modal open it WAITS in the queue instead of stepping on it or being
+    /// lost: it opens as soon as the other one closes.
     #[test]
-    fn un_lote_atascado_abre_su_informe_sin_pisar_otro_modal() {
+    fn a_stuck_batch_opens_its_report_without_stepping_on_another_modal() {
         let mut app = app_with_entries(&["a"]);
-        let lineas = informe_de_lote(&Ok(atascado()), true).expect("hay que decirlo");
+        let lines = informe_de_lote(&Ok(stuck()), true).expect("it must be said");
         assert!(
-            lineas
+            lines
                 .iter()
                 .any(|l| matches!(l, norte_frontend::ReportLine::Path(_))),
-            "dice dónde buscar: {lineas:?}"
+            "says where to look: {lines:?}"
         );
         app.modal = Some(Modal::ConfirmQuit);
         app.pending_reports
-            .push_back((crate::app::ReportKind::Batch, lineas));
+            .push_back((crate::app::ReportKind::Batch, lines));
         app.open_next_pending();
-        assert!(matches!(app.modal, Some(Modal::ConfirmQuit)), "no pisa");
+        assert!(
+            matches!(app.modal, Some(Modal::ConfirmQuit)),
+            "does not step on it"
+        );
         app.modal = None;
         app.open_next_pending();
         assert!(
             matches!(app.modal, Some(Modal::Report { .. })),
-            "se abre al quedar libre la pantalla"
+            "opens once the screen is free"
         );
     }
 
-    /// Un undo que se saltó lo irreversible lo dice, con el mismo modal que el
-    /// lote pero su propio título: antes la terminal lo callaba y el lector
-    /// creía el árbol devuelto entero.
+    /// An undo that skipped an irreversible says so, with the same modal as
+    /// the batch but its own title: before, the terminal stayed silent about
+    /// it and the reader believed the whole tree had been returned.
     #[test]
-    fn un_undo_que_se_salto_algo_abre_su_informe() {
-        let informe = |saltadas| norte_proto::methods::PolicyUndoReportResult {
+    fn an_undo_that_skipped_something_opens_its_report() {
+        let report = |skipped| norte_proto::methods::PolicyUndoReportResult {
             undone: 2,
-            skipped_irreversible: saltadas,
+            skipped_irreversible: skipped,
             skipped_created_no_trash: 0,
             skipped_not_ours: 0,
             blocked: None,
@@ -598,9 +614,9 @@ mod tests {
             denied_total: 0,
         };
         let mut app = app_with_entries(&["a"]);
-        let lineas = informe_de_undo(&Ok(informe(1)), false).expect("hay que decirlo");
+        let lines = informe_de_undo(&Ok(report(1)), false).expect("it must be said");
         app.pending_reports
-            .push_back((crate::app::ReportKind::Undo, lineas));
+            .push_back((crate::app::ReportKind::Undo, lines));
         app.open_next_pending();
         assert!(matches!(
             app.modal,
@@ -610,40 +626,44 @@ mod tests {
             })
         ));
         assert!(
-            informe_de_undo(&Ok(informe(0)), true).is_none(),
-            "un undo que devolvió todo no abre nada"
+            informe_de_undo(&Ok(report(0)), true).is_none(),
+            "an undo that returned everything opens nothing"
         );
     }
 
-    /// El texto del informe pone la ruta SOLA en su línea (#273): un nombre
-    /// no puede fingir una frase del informe si no la comparte.
+    /// The report's text puts the path ALONE on its line (#273): a name
+    /// cannot fake a report sentence it does not share.
     #[test]
-    fn la_ruta_del_informe_va_sola_en_su_linea() {
-        let lineas = informe_de_lote(&Ok(atascado()), false).expect("informe");
-        let texto = crate::ui::report_text(&lineas);
+    fn the_reports_path_stands_alone_on_its_line() {
+        let lines = informe_de_lote(&Ok(stuck()), false).expect("report");
+        let text = crate::ui::report_text(&lines);
         assert!(
-            texto.lines().any(|l| l.trim() == "⟨mem⟩/d/b"),
-            "la ruta actual, sola: {texto}"
+            text.lines().any(|l| l.trim() == "⟨mem⟩/d/b"),
+            "the current path, alone: {text}"
         );
     }
 
-    /// #290: la intención de `edit-new` la consume SU task y solo la suya.
-    /// Cualquier otra que termine mientras tanto —una copia, un borrado— la
-    /// deja intacta; abrirla con la primera que pase abriría otro fichero.
+    /// #290: `edit-new`'s intent is consumed by ITS OWN task and only that
+    /// one. Any other one finishing meanwhile — a copy, a delete — leaves it
+    /// intact; opening it with the first one that comes along would open a
+    /// different file.
     #[test]
-    fn solo_la_task_de_la_creacion_se_lleva_la_intencion() {
+    fn only_the_creations_task_takes_the_intent() {
         let mut app = app_with_entries(&["a"]);
-        let destino = norte_proto::VPath::parse("mem:///notas.txt").expect("wire");
-        app.pending_edit_open = Some((tid(7), destino.clone()));
+        let target = norte_proto::VPath::parse("mem:///notas.txt").expect("wire");
+        app.pending_edit_open = Some((tid(7), target.clone()));
 
-        assert_eq!(tomar_creacion(&mut app, tid(9)), None, "otra task, no");
-        assert!(app.pending_edit_open.is_some(), "y la deja donde estaba");
+        assert_eq!(take_creation(&mut app, tid(9)), None, "another task, no");
+        assert!(
+            app.pending_edit_open.is_some(),
+            "and leaves it where it was"
+        );
 
-        assert_eq!(tomar_creacion(&mut app, tid(7)), Some(destino));
+        assert_eq!(take_creation(&mut app, tid(7)), Some(target));
         assert!(
             app.pending_edit_open.is_none(),
-            "consumida: un segundo desenlace no reabre nada"
+            "consumed: a second outcome reopens nothing"
         );
-        assert_eq!(tomar_creacion(&mut app, tid(7)), None);
+        assert_eq!(take_creation(&mut app, tid(7)), None);
     }
 }

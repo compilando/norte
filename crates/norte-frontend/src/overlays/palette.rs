@@ -77,11 +77,12 @@ pub fn plugin_rows(plugins: &[norte_proto::methods::PluginInfo]) -> Vec<Row> {
     plugin_rows_in(plugins, norte_i18n::active())
 }
 
-/// [`plugin_rows`] en un idioma DADO.
+/// [`plugin_rows`] in a GIVEN language.
 ///
-/// El prefijo es lo que rompe el disfraz de un plugin que se titula como un
-/// comando de casa, así que no puede salir en un idioma distinto del resto de
-/// la paleta: ahí es donde se leería como parte del título.
+/// The prefix is what breaks the disguise of a plugin that titles itself like
+/// a built-in command, so it must not come out in a language different from
+/// the rest of the palette: that is where it would read as part of the
+/// title.
 #[must_use]
 pub fn plugin_rows_in(
     plugins: &[norte_proto::methods::PluginInfo],
@@ -107,27 +108,28 @@ pub fn plugin_rows_in(
             let plugin_id = p.id.clone();
             p.commands.iter().map(move |c| {
                 let (title, masked) = crate::display_name(c.title.as_bytes());
-                // Un RENAMER (C3, ADR 0095) es otra clase de fila: su clave
-                // lleva otro prefijo, porque despacha a `plugin.rename_plan`
-                // y no a `plugin.run_command`, y su rótulo dice qué hace.
-                let (prefijo, etiqueta) = match c.kind {
+                // A RENAMER (C3, ADR 0095) is another class of row: its key
+                // carries a different prefix, because it dispatches to
+                // `plugin.rename_plan` and not `plugin.run_command`, and its
+                // label says what it does.
+                let (prefix, label) = match c.kind {
                     norte_proto::methods::PluginCommandKind::Command => {
                         ("plugin", norte_i18n::t_in(lang, "palette-plugin-prefix"))
                     }
                     norte_proto::methods::PluginCommandKind::Renamer => {
                         ("renamer", norte_i18n::t_in(lang, "palette-renamer-prefix"))
                     }
-                    // Fase 8: otra clase todavía, por lo mismo — despacha a
-                    // `plugin.organize_plan`, y su rótulo dice que esto crea
-                    // carpetas y no solo cambia nombres.
+                    // Phase 8: yet another class, for the same reason — it
+                    // dispatches to `plugin.organize_plan`, and its label
+                    // says this creates folders and not just renames.
                     norte_proto::methods::PluginCommandKind::Organizer => (
                         "organizer",
                         norte_i18n::t_in(lang, "palette-organizer-prefix"),
                     ),
                 };
                 Row {
-                    key: format!("{prefijo}:{plugin_id}:{}", c.id),
-                    text: format!("[{etiqueta}] {title}"),
+                    key: format!("{prefix}:{plugin_id}:{}", c.id),
+                    text: format!("[{label}] {title}"),
                     desc: desc.clone(),
                     chord: "—".to_owned(),
                     hostile: masked || desc_masked,
@@ -178,21 +180,21 @@ pub fn parse_renamer_key(cmd: &str) -> Option<(&str, &str)> {
     (!id.is_empty() && !renamer.is_empty()).then_some((id, renamer))
 }
 
-/// El `(id de plugin, id de organizer)` de una clave `organizer:{id}:{org}`
-/// (fase 8), o `None` para cualquier otra cosa — un renamer incluido: los dos
-/// proponen un plan revisable, pero por métodos distintos y con destinos de
-/// distinta forma.
+/// The `(plugin id, organizer id)` of an `organizer:{id}:{org}` key (phase 8),
+/// or `None` for anything else — a renamer included: the two propose a
+/// reviewable plan, but through different methods and with destinations of a
+/// different shape.
 ///
 /// ```
 /// use norte_frontend::palette::{parse_organizer_key, parse_renamer_key};
 ///
 /// assert_eq!(
-///     parse_organizer_key("organizer:org.norte.demo:por-extension"),
-///     Some(("org.norte.demo", "por-extension"))
+///     parse_organizer_key("organizer:org.norte.demo:by-extension"),
+///     Some(("org.norte.demo", "by-extension"))
 /// );
-/// // Un renamer NO es uno de éstos, en ninguna de las dos direcciones.
-/// assert_eq!(parse_organizer_key("renamer:org.norte.demo:limpiar"), None);
-/// assert_eq!(parse_renamer_key("organizer:org.norte.demo:por-extension"), None);
+/// // A renamer is NOT one of these, in either direction.
+/// assert_eq!(parse_organizer_key("renamer:org.norte.demo:cleanup"), None);
+/// assert_eq!(parse_renamer_key("organizer:org.norte.demo:by-extension"), None);
 /// ```
 #[must_use]
 pub fn parse_organizer_key(cmd: &str) -> Option<(&str, &str)> {
@@ -274,37 +276,37 @@ mod tests {
     }
 
     #[test]
-    fn plugin_rows_solo_aprobados_y_activados() {
+    fn plugin_rows_only_approved_and_enabled() {
         let plugins = vec![
             plugin_info("org.a", true, true, None, vec![("greet", "Greet")]),
             plugin_info("org.b", false, true, None, vec![("x", "X")]),
             plugin_info("org.c", true, false, None, vec![("y", "Y")]),
         ];
         let rows = plugin_rows(&plugins);
-        assert_eq!(rows.len(), 1, "solo org.a está aprobado Y activado");
+        assert_eq!(rows.len(), 1, "only org.a is approved AND enabled");
         assert_eq!(rows[0].key, "plugin:org.a:greet");
     }
 
     #[test]
-    fn plugin_rows_una_fila_por_comando_en_orden_de_manifiesto() {
+    fn plugin_rows_one_row_per_command_in_manifest_order() {
         let plugins = vec![plugin_info(
             "org.norte.demo",
             true,
             true,
-            Some("Saluda desde la palette."),
+            Some("Greets from the palette."),
             vec![("greet", "Greet"), ("wave", "Wave")],
         )];
         let rows = plugin_rows(&plugins);
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].key, "plugin:org.norte.demo:greet");
         assert!(rows[0].text.contains("Greet"));
-        assert_eq!(rows[0].desc, "Saluda desde la palette.");
+        assert_eq!(rows[0].desc, "Greets from the palette.");
         assert_eq!(rows[1].key, "plugin:org.norte.demo:wave");
         assert_eq!(rows[1].chord, "—");
     }
 
     #[test]
-    fn plugin_rows_sin_description_es_desc_vacia() {
+    fn plugin_rows_with_no_description_is_empty_desc() {
         let plugins = vec![plugin_info(
             "org.norte.demo",
             true,
@@ -322,20 +324,20 @@ mod tests {
     /// `plugin_rows` must clamp the same way, without relying on the
     /// caller having already done it.
     #[test]
-    fn plugin_rows_clampa_description_al_tope_del_wire() {
-        let larga = "a".repeat(10_000);
+    fn plugin_rows_clamps_description_to_the_wire_cap() {
+        let long = "a".repeat(10_000);
         let plugins = vec![plugin_info(
             "org.norte.demo",
             true,
             true,
-            Some(larga.as_str()),
+            Some(long.as_str()),
             vec![("greet", "Greet")],
         )];
         let rows = plugin_rows(&plugins);
         assert_eq!(
             rows[0].desc.chars().count(),
             PLUGIN_DESCRIPTION_WIRE_CAP,
-            "description sin tope llegó cruda a la fila"
+            "an unbounded description reached the row raw"
         );
     }
 
@@ -344,29 +346,29 @@ mod tests {
     /// `display_name` BEFORE entering the row (same criterion as the
     /// extension manager and `build_rows`' chord column).
     #[test]
-    fn plugin_rows_enmascara_titulo_hostil() {
-        let hostil = norte_testkit::corpus::hostile_names()
+    fn plugin_rows_masks_a_hostile_title() {
+        let hostile = norte_testkit::corpus::hostile_names()
             .into_iter()
             .find(|n| n.id == "rtl_override")
-            .expect("fixture del corpus");
-        let titulo = String::from_utf8_lossy(&hostil.bytes).into_owned();
+            .expect("corpus fixture");
+        let title = String::from_utf8_lossy(&hostile.bytes).into_owned();
         let plugins = vec![plugin_info(
             "org.evil.x",
             true,
             true,
             None,
-            vec![("run", titulo.as_str())],
+            vec![("run", title.as_str())],
         )];
         let rows = plugin_rows(&plugins);
         assert_eq!(rows.len(), 1);
         assert!(
             !rows[0].text.chars().any(norte_encoding::is_terminal_hazard),
-            "el override RTL se pintó crudo: {:?}",
+            "the RTL override was painted raw: {:?}",
             rows[0].text
         );
         assert!(
             rows[0].text.contains('\u{FFFD}'),
-            "el hazard debe enmascararse a U+FFFD: {:?}",
+            "the hazard must be masked to U+FFFD: {:?}",
             rows[0].text
         );
         assert_eq!(rows[0].key, "plugin:org.evil.x:run");
@@ -376,7 +378,7 @@ mod tests {
     /// plugin cannot disguise itself as a built-in by copying its exact
     /// name, because no built-in carries this prefix.
     #[test]
-    fn plugin_rows_llevan_el_prefijo_de_extension() {
+    fn plugin_rows_carry_the_extension_prefix() {
         let plugins = vec![plugin_info(
             "org.norte.demo",
             true,
@@ -387,7 +389,7 @@ mod tests {
         let rows = plugin_rows(&plugins);
         assert!(
             rows[0].text.starts_with('['),
-            "fila de plugin sin prefijo: {:?}",
+            "plugin row with no prefix: {:?}",
             rows[0].text
         );
     }
@@ -400,7 +402,7 @@ mod tests {
     /// attempted title stays DOUBLED and visible afterwards, never removed
     /// or merged with the original.
     #[test]
-    fn prefijo_doblado_por_titulo_hostil_nunca_se_elimina() {
+    fn doubled_prefix_from_a_hostile_title_is_never_removed() {
         let prefix = norte_i18n::t("palette-plugin-prefix");
         let payload = format!("{prefix}] app.quit");
         let plugins = vec![plugin_info(
@@ -414,20 +416,20 @@ mod tests {
         let genuine_prefix = format!("[{prefix}] ");
         assert!(
             rows[0].text.starts_with(&genuine_prefix),
-            "el prefijo genuino debe seguir siendo el arranque de la fila: {:?}",
+            "the genuine prefix must still be the row's start: {:?}",
             rows[0].text
         );
         assert_eq!(
             rows[0].text,
             format!("{genuine_prefix}{payload}"),
-            "el intento de doblar el prefijo debe quedar íntegro, no colapsado: {:?}",
+            "the attempt to double the prefix must stay whole, not collapsed: {:?}",
             rows[0].text
         );
         assert_ne!(rows[0].text, "app.quit");
     }
 
     #[test]
-    fn rows_for_context_oculta_viewer_si_no_hay_viewer() {
+    fn rows_for_context_hides_viewer_rows_when_there_is_no_viewer() {
         let rows = vec![
             Row {
                 key: "viewer.close".into(),
@@ -444,9 +446,9 @@ mod tests {
                 hostile: false,
             },
         ];
-        let filtradas = rows_for_context(&rows, false);
-        assert_eq!(filtradas.len(), 1);
-        assert_eq!(filtradas[0].key, "pane.copy");
+        let filtered = rows_for_context(&rows, false);
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].key, "pane.copy");
         assert_eq!(rows_for_context(&rows, true), rows);
     }
 }

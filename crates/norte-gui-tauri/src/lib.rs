@@ -1,23 +1,23 @@
-//! El renderer de referencia: una webview de Tauri sobre `norte-ui-host`.
+//! The reference renderer: a Tauri webview over `norte-ui-host`.
 //!
-//! Este crate es un ADAPTADOR, no una capa (ADR 0066, decisión D2). Lo que
-//! sabe hacer es cuatro cosas:
+//! This crate is an ADAPTER, not a layer (ADR 0066, decision D2). What it
+//! knows how to do is four things:
 //!
-//! 1. arrancar (leer configuración, resolver el socket y el directorio),
-//! 2. montar el [`norte_ui_host::UiHost`] sobre el SDK del daemon,
-//! 3. bombear sus actualizaciones a la ventana EN ORDEN,
-//! 4. dejar que la webview mande [`norte_ui_host::UiAction`] y nada más.
+//! 1. start up (read configuration, resolve the socket and the directory),
+//! 2. mount [`norte_ui_host::UiHost`] over the daemon's SDK,
+//! 3. pump its updates to the window IN ORDER,
+//! 4. let the webview send [`norte_ui_host::UiAction`] and nothing else.
 //!
-//! Todo lo que decide algo vive debajo, en Rust: el reparto de la pantalla, el
-//! orden del listado, qué comando lleva ligada una tecla, si una operación
-//! está disponible. La webview pinta.
+//! Everything that decides something lives below, in Rust: the screen layout,
+//! the listing order, which command a key is bound to, whether an operation
+//! is available. The webview paints.
 //!
-//! # Lo que la webview NO puede hacer
+//! # What the webview CANNOT do
 //!
-//! No hay filesystem, ni shell, ni HTTP, ni un `rpc(method, params)` por el
-//! que pedirle al daemon lo que se le ocurra: la lista de comandos de
-//! [`commands`] es la superficie entera, y su fichero de capacidades no
-//! concede más que escuchar eventos (decisión D11).
+//! There is no filesystem, no shell, no HTTP, no `rpc(method, params)` to ask
+//! the daemon for whatever comes to mind: the command list in [`commands`] is
+//! the entire surface, and its capabilities file grants nothing beyond
+//! listening for events (decision D11).
 #![forbid(unsafe_code)]
 
 pub mod catalog;

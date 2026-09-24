@@ -1,11 +1,12 @@
-//! Guest WASM (#29): previewer con syntax-highlight REAL vía syntect.
+//! WASM guest (#29): previewer with REAL syntax highlighting via syntect.
 //!
-//! `previewer::render` recibe el texto YA decodificado por el core (§6.2 — no
-//! asume UTF-8 sobre bytes crudos; aun así hace `from_utf8_lossy` defensivo),
-//! elige un syntax por el mimetype (o por la primera línea) y devuelve el
-//! contenido resaltado como ANSI de 24 bits. El host lo SANEA (frontend `ansi`:
-//! solo color de primer plano llega al pane). `command::run` responde "no
-//! soportado" (guest solo de categoría previewer).
+//! `previewer::render` receives text ALREADY decoded by the core (§6.2 — it
+//! does not assume UTF-8 over raw bytes; it still does a defensive
+//! `from_utf8_lossy`), picks a syntax by mimetype (or by the first line)
+//! and returns the highlighted content as 24-bit ANSI. The host SANITIZES
+//! it (`ansi` frontend: only foreground color reaches the pane).
+//! `command::run` responds "not supported" (previewer-category only
+//! guest).
 
 use syntect::easy::HighlightLines;
 use syntect::highlighting::ThemeSet;
@@ -15,9 +16,9 @@ use syntect::util::as_24_bit_terminal_escaped;
 wit_bindgen::generate!({
     world: "norte-plugin",
     path: "wit",
-    // `host-log`/`host-config` viven en OTRO paquete desde la partición
-    // (ADR 0041 decisión 4); wit-bindgen exige decidir explícitamente qué
-    // hacer con los imports de fuera del paquete del world.
+    // `host-log`/`host-config` live in ANOTHER package since the split
+    // (ADR 0041 decision 4); wit-bindgen requires explicitly deciding what
+    // to do with imports from outside the world's package.
     generate_all,
 });
 
@@ -27,8 +28,8 @@ use norte::host::host_log;
 
 struct Syntect;
 
-/// Mapea el mimetype (grano grueso del core) a un token de extensión que
-/// syntect reconoce. `None` = intentar detección por la primera línea.
+/// Maps the mimetype (the core's coarse grain) to an extension token
+/// syntect recognizes. `None` = try detection by the first line.
 fn ext_for_mime(mime: &str) -> Option<&'static str> {
     match mime {
         "application/json" => Some("json"),
@@ -41,8 +42,9 @@ fn ext_for_mime(mime: &str) -> Option<&'static str> {
     }
 }
 
-/// Elige el `SyntaxReference`: por extensión del mimetype, si no por la primera
-/// línea del contenido, y si no, texto plano (sin resaltar).
+/// Picks the `SyntaxReference`: by the mimetype's extension, failing that
+/// by the content's first line, and failing that, plain text (no
+/// highlighting).
 fn pick_syntax<'a>(ps: &'a SyntaxSet, mime: &str, text: &str) -> &'a SyntaxReference {
     if let Some(ext) = ext_for_mime(mime) {
         if let Some(s) = ps.find_syntax_by_extension(ext) {
@@ -57,11 +59,11 @@ fn pick_syntax<'a>(ps: &'a SyntaxSet, mime: &str, text: &str) -> &'a SyntaxRefer
 
 impl PreviewerGuest for Syntect {
     fn render(input: PreviewInput) -> Result<String, String> {
-        // El host ya decodificó (§6.2); el lossy es defensivo, jamás asume
-        // UTF-8 sobre bytes crudos.
+        // The host already decoded (§6.2); the lossy is defensive, it
+        // never assumes UTF-8 over raw bytes.
         let text = String::from_utf8_lossy(&input.content);
         host_log::log(&format!(
-            "previewer-syntect: {} bytes de {}",
+            "previewer-syntect: {} bytes of {}",
             input.content.len(),
             input.mimetype
         ));
@@ -71,7 +73,7 @@ impl PreviewerGuest for Syntect {
         let theme = ts
             .themes
             .get("base16-ocean.dark")
-            .ok_or("tema base16-ocean.dark ausente")?;
+            .ok_or("base16-ocean.dark theme missing")?;
         let syntax = pick_syntax(&ps, &input.mimetype, &text);
         let mut hl = HighlightLines::new(syntax, theme);
 
@@ -81,21 +83,22 @@ impl PreviewerGuest for Syntect {
                 .highlight_line(line, &ps)
                 .map_err(|e| format!("syntect: {e}"))?;
             out.push_str(&as_24_bit_terminal_escaped(&ranges[..], false));
-            // Reset explícito al fin de línea (el saneador lo entiende) + \n.
+            // Explicit reset at end of line (the sanitizer understands it) + \n.
             out.push_str("\x1b[0m\n");
         }
         Ok(out)
     }
 
-    // ADR 0037 (WIT 0.6.0): `render-styled` es un export REQUERIDO de
-    // `previewer`. Este guest no traduce su resaltado ANSI a spans
-    // estructurados (deuda: haría falta parsear SGR igual que
-    // `norte-frontend::ansi`, fuera de alcance de G3 Task 2) — implementa el
-    // envoltorio TRIVIAL que el ADR reserva para un guest de solo-texto: un
-    // span plano por línea, sin `role` ni `fg`. El texto por span lleva los
-    // códigos ANSI crudos de `render` (el host los vería como texto literal
-    // si alguien llamase a `preview_styled` sobre este guest hoy); un futuro
-    // parseo real de SGR es la mejora natural, no requerida por este guest.
+    // ADR 0037 (WIT 0.6.0): `render-styled` is a REQUIRED export of
+    // `previewer`. This guest does not translate its ANSI highlighting to
+    // structured spans (debt: it would need to parse SGR the same way
+    // `norte-frontend::ansi` does, out of scope for G3 Task 2) — it
+    // implements the TRIVIAL wrapper the ADR reserves for a text-only
+    // guest: one plain span per line, no `role` or `fg`. Each span's text
+    // carries `render`'s raw ANSI codes (the host would see them as
+    // literal text if something called `preview_styled` on this guest
+    // today); a future real SGR parse is the natural improvement, not
+    // required by this guest.
     fn render_styled(input: PreviewInput) -> Result<Vec<Vec<Span>>, String> {
         let plain = Self::render(input)?;
         Ok(plain
@@ -114,7 +117,7 @@ impl PreviewerGuest for Syntect {
 
 impl CommandGuest for Syntect {
     fn run(_id: String, _arg: String) -> Result<String, String> {
-        Err("previewer-syntect no aporta comandos".to_string())
+        Err("previewer-syntect does not provide commands".to_string())
     }
 }
 

@@ -1,25 +1,24 @@
-//! Inyección de fallos determinista para [`MemProvider`](crate::MemProvider):
-//! el copy engine y la cancelación se testean sin tocar disco ni depender
-//! del azar (spec §12). Cada fallo se configura ANTES de la operación y se
-//! dispara en un punto exacto (op N, byte N).
+//! Deterministic fault injection for [`MemProvider`](crate::MemProvider): the
+//! copy engine and cancellation are tested without touching disk or
+//! depending on randomness (spec §12). Every fault is configured BEFORE the
+//! operation and fires at an exact point (op N, byte N).
 
 use std::sync::Mutex;
 use std::time::Duration;
 
 use norte_proto::VPath;
 
-/// Clave interna: los segmentos del `VPath` (bytes crudos).
+/// Internal key: the `VPath`'s segments (raw bytes).
 pub(crate) type SegPath = Vec<Vec<u8>>;
 
 pub(crate) fn seg_path(p: &VPath) -> SegPath {
     p.segments().map(<[u8]>::to_vec).collect()
 }
 
-/// Configuración de fallos de un [`MemProvider`](crate::MemProvider).
+/// A [`MemProvider`](crate::MemProvider)'s fault configuration.
 ///
-/// Se comparte por `Arc`: los tests guardan el handle y mutan la config
-/// mientras el provider está en uso. Todo es determinista — nada de
-/// probabilidades.
+/// Shared via `Arc`: tests keep the handle and mutate the config while the
+/// provider is in use. Everything is deterministic — no probabilities.
 #[derive(Debug, Default)]
 pub struct Faults {
     inner: Mutex<FaultState>,
@@ -30,230 +29,238 @@ struct FaultState {
     latency_per_op: Option<Duration>,
     fail_read_at: Option<(SegPath, usize)>,
     fail_write_at: Option<(SegPath, usize)>,
-    /// El `list` de este path (byte-exacto) falla con `Error::Io`; el resto del
-    /// árbol se lista normal. Para un walker que debe SEGUIR pese a un subdir
-    /// ilegible (fs.search).
+    /// This path's (byte-exact) `list` fails with `Error::Io`; the rest of
+    /// the tree lists normally. For a walker that must KEEP GOING despite an
+    /// unreadable subdir (fs.search).
     fail_list_at: Option<SegPath>,
-    /// El `rename` cuyo ORIGEN es este path (byte-exacto) falla con
-    /// `Error::Io`, SIN aplicar su efecto. Para el ejecutor transaccional de
-    /// lotes: el paso que dispara el rollback.
+    /// The `rename` whose SOURCE is this path (byte-exact) fails with
+    /// `Error::Io`, WITHOUT applying its effect. For the transactional batch
+    /// executor: the step that triggers the rollback.
     fail_rename_at: Option<SegPath>,
-    /// `rename` PISA el destino en vez de rechazarlo (posix-rename de sftp,
-    /// copy+delete de object). Para probar los guardas anti-clobber de quien
-    /// llama, que sobre un provider que ya rechaza no se pueden distinguir del
-    /// rechazo del provider.
+    /// `rename` OVERWRITES the destination instead of rejecting it
+    /// (sftp's posix-rename, object's copy+delete). For testing the
+    /// anti-clobber guards of the CALLER, which cannot be told apart from
+    /// the provider's own rejection on a provider that already rejects.
     rename_clobbers: bool,
-    /// Cuántos renames quedan antes de cancelar [`FaultState::cancel_token`]
-    /// (#274): es lo que deja estar DENTRO de una secuencia de dos.
+    /// How many renames are left before cancelling
+    /// [`FaultState::cancel_token`] (#274): this is what lets a test land
+    /// INSIDE a sequence of two.
     cancel_after_renames: Option<u64>,
-    /// Cuántos `list` quedan antes de cancelar [`FaultState::cancel_token`]:
-    /// es lo que deja estar DENTRO de un recorrido y no antes ni después.
+    /// How many `list`s are left before cancelling
+    /// [`FaultState::cancel_token`]: this is what lets a test land INSIDE a
+    /// walk and neither before nor after it.
     cancel_after_lists: Option<u64>,
-    /// El token que se cancela cuando una de las cuentas de arriba llega a
-    /// cero. Es UNO para las dos: un test arma la que necesita, y armar las dos
-    /// a la vez no describe ningún momento concreto.
+    /// The token that gets cancelled when one of the counters above reaches
+    /// zero. It is ONE for both: a test arms whichever it needs, and arming
+    /// both at once describes no specific moment.
     cancel_token: Option<tokio_util::sync::CancellationToken>,
-    /// `Some(n)`: quedan `n` operaciones antes de la desconexión.
+    /// `Some(n)`: `n` operations left before disconnection.
     disconnect_after: Option<u64>,
-    /// Las próximas `n` operaciones fallan retryable (indisponibilidad
-    /// TRANSITORIA); luego el provider se recupera solo.
+    /// The next `n` operations fail retryable (TRANSIENT unavailability);
+    /// afterward the provider recovers on its own.
     unavailable_next: u64,
-    /// Las próximas `n` MUTACIONES que se apliquen devuelven error
-    /// transitorio DESPUÉS de aplicar su efecto (ambigüedad post-efecto).
+    /// The next `n` MUTATIONS that get applied return a transient error
+    /// AFTER applying their effect (post-effect ambiguity).
     ambiguous_next: u64,
-    /// `copy_native` se queda PENDIENTE mientras esté armado (simula un
-    /// multipart copy S3 de minutos): solo la cancelación del caller —
-    /// dropear el future — lo termina. Determinista, sin latencia global.
+    /// `copy_native` stays PENDING while this is armed (simulates a
+    /// minutes-long S3 multipart copy): only the caller's cancellation —
+    /// dropping the future — ends it. Deterministic, no global latency.
     hold_copy_native: bool,
-    /// `true` desde que un `copy_native` ENTRÓ en el gate: el test sincroniza
-    /// su cancel con esta señal, sin sleeps a ciegas.
+    /// `true` since some `copy_native` ENTERED the gate: the test syncs its
+    /// cancel to this signal, with no blind sleeps.
     copy_native_entered: bool,
-    /// Nº de llamadas a `Provider::read` atendidas (contador, no fallo).
+    /// Number of `Provider::read` calls served (a counter, not a fault).
     read_calls: u64,
 }
 
 impl Faults {
-    /// Latencia fija añadida a cada operación (usa el reloj de tokio:
-    /// compatible con `tokio::time::pause`).
+    /// Fixed latency added to every operation (uses tokio's clock: compatible
+    /// with `tokio::time::pause`).
     pub fn set_latency_per_op(&self, latency: Option<Duration>) {
         self.lock().latency_per_op = latency;
     }
 
-    /// La lectura de `path` falla con [`Error::Io`](norte_proto::Error::Io)
-    /// tras entregar exactamente `byte_n` bytes.
+    /// Reading `path` fails with [`Error::Io`](norte_proto::Error::Io) after
+    /// delivering exactly `byte_n` bytes.
     ///
-    /// La clave se compara byte-exacta contra el path pedido, SIN fold de
-    /// caja: apunta el fallo al mismo string que usará la operación.
+    /// The key is compared byte-exact against the requested path, WITHOUT
+    /// case folding: it points the fault at the same string the operation
+    /// will use.
     pub fn fail_read_at(&self, path: &VPath, byte_n: usize) {
         self.lock().fail_read_at = Some((seg_path(path), byte_n));
     }
 
-    /// La escritura sobre `path` falla con [`Error::Io`](norte_proto::Error::Io)
-    /// en cuanto el total escrito alcanza `byte_n` bytes.
+    /// Writing to `path` fails with [`Error::Io`](norte_proto::Error::Io) as
+    /// soon as the total written reaches `byte_n` bytes.
     ///
-    /// Clave byte-exacta, sin fold de caja (ver [`Self::fail_read_at`]).
+    /// Byte-exact key, no case folding (see [`Self::fail_read_at`]).
     pub fn fail_write_at(&self, path: &VPath, byte_n: usize) {
         self.lock().fail_write_at = Some((seg_path(path), byte_n));
     }
 
-    /// El `list` de `path` (clave byte-exacta, sin fold de caja) falla con
-    /// [`Error::Io`](norte_proto::Error::Io) `{retryable: true}`; los demás
-    /// directorios se listan normal. Para testear que un walker (fs.search)
-    /// SIGUE ante un subdir ilegible.
+    /// `path`'s `list` (byte-exact key, no case folding) fails with
+    /// [`Error::Io`](norte_proto::Error::Io) `{retryable: true}`; other
+    /// directories list normally. For testing that a walker (fs.search)
+    /// KEEPS GOING in the face of an unreadable subdir.
     pub fn fail_list_at(&self, path: &VPath) {
         self.lock().fail_list_at = Some(seg_path(path));
     }
 
-    /// El `rename` cuyo ORIGEN es `path` (clave byte-exacta, sin fold de caja)
-    /// falla con [`Error::Io`](norte_proto::Error::Io) `{retryable: false}` y
-    /// **sin aplicar su efecto**: el árbol queda exactamente como estaba.
+    /// The `rename` whose SOURCE is `path` (byte-exact key, no case folding)
+    /// fails with [`Error::Io`](norte_proto::Error::Io) `{retryable: false}`
+    /// and **without applying its effect**: the tree stays exactly as it
+    /// was.
     ///
-    /// Es el fallo que un ejecutor transaccional necesita — el paso k muere y
-    /// todo lo anterior tiene que desandarse. No retryable a propósito: un
-    /// fallo inyectado no se cura reintentando, y un lote que se reintentase
-    /// solo taparía el rollback que el test quiere observar.
+    /// It is the failure a transactional executor needs — step k dies and
+    /// everything before it has to be undone. Non-retryable on purpose: an
+    /// injected fault is not cured by retrying, and a batch that retried
+    /// would only paper over the rollback the test wants to observe.
     ///
-    /// El fallo NO se consume: mientras esté armado, TODO rename desde ese
-    /// origen falla — incluido el del rollback, que es como se prueba el
-    /// camino «la reversa tampoco pudo». Desármalo con [`Self::clear`].
+    /// The fault is NOT consumed: while it is armed, EVERY rename from that
+    /// source fails — including the rollback's, which is how the "the
+    /// reversal couldn't either" path gets tested. Disarm it with
+    /// [`Self::clear`].
     pub fn fail_rename_at(&self, path: &VPath) {
         self.lock().fail_rename_at = Some(seg_path(path));
     }
 
-    /// Cancela `token` justo DESPUÉS del `n`-ésimo rename que se aplique.
+    /// Cancels `token` right AFTER the `n`-th rename that gets applied.
     ///
-    /// El único mando que permite estar DENTRO de una secuencia de renames y no
-    /// antes ni después: es donde vive el estado que un cambio de ortografía
-    /// (#274) no puede dejar visto — el fichero con el nombre del rodeo. Un
-    /// `sleep` daría con ello por casualidad; esto no depende del reloj.
+    /// The only control that lets a test land INSIDE a sequence of renames
+    /// and neither before nor after: it is where the state a spelling change
+    /// (#274) must not leave visible lives — the file under the bypass name.
+    /// A `sleep` would hit it by chance; this does not depend on the clock.
     pub fn cancel_after_renames(&self, n: u64, token: tokio_util::sync::CancellationToken) {
         let mut s = self.lock();
         s.cancel_after_renames = Some(n);
         s.cancel_token = Some(token);
     }
 
-    /// Lo consulta el provider tras aplicar un rename: descuenta, y al llegar a
-    /// cero cancela el token.
+    /// Queried by the provider after applying a rename: decrements, and
+    /// cancels the token on reaching zero.
     pub fn tick_rename(&self) {
         let mut s = self.lock();
-        let Some(quedan) = s.cancel_after_renames else {
+        let Some(remaining) = s.cancel_after_renames else {
             return;
         };
-        if quedan <= 1 {
+        if remaining <= 1 {
             s.cancel_after_renames = None;
             if let Some(t) = s.cancel_token.take() {
                 t.cancel();
             }
         } else {
-            s.cancel_after_renames = Some(quedan - 1);
+            s.cancel_after_renames = Some(remaining - 1);
         }
     }
 
-    /// Cancela `token` justo DESPUÉS del `n`-ésimo `list` que se atienda.
+    /// Cancels `token` right AFTER the `n`-th `list` that gets served.
     ///
-    /// El gemelo de [`Self::cancel_after_renames`] para los que RECORREN. Un
-    /// recorrido cancelado antes de empezar no demuestra nada —el cuerpo sale
-    /// en su primera comprobación y deja el informe en blanco, que es
-    /// indistinguible de no haber corrido—, así que para probar que un walk se
-    /// para LIMPIO hay que cancelarlo estando dentro. Con un `sleep` se acierta
-    /// por casualidad; con esto, siempre y sin reloj.
+    /// [`Self::cancel_after_renames`]'s twin for walkers. A walk cancelled
+    /// before it starts proves nothing —the body exits on its first check
+    /// and leaves a blank report, indistinguishable from never having
+    /// run— so to prove a walk stops CLEANLY it has to be cancelled while
+    /// inside it. A `sleep` gets it right by chance; this, always and
+    /// without a clock.
     pub fn cancel_after_lists(&self, n: u64, token: tokio_util::sync::CancellationToken) {
         let mut s = self.lock();
         s.cancel_after_lists = Some(n);
         s.cancel_token = Some(token);
     }
 
-    /// Lo consulta el provider al atender un `list`: descuenta, y al llegar a
-    /// cero cancela el token.
+    /// Queried by the provider when serving a `list`: decrements, and
+    /// cancels the token on reaching zero.
     pub fn tick_list(&self) {
         let mut s = self.lock();
-        let Some(quedan) = s.cancel_after_lists else {
+        let Some(remaining) = s.cancel_after_lists else {
             return;
         };
-        if quedan <= 1 {
+        if remaining <= 1 {
             s.cancel_after_lists = None;
             if let Some(t) = s.cancel_token.take() {
                 t.cancel();
             }
         } else {
-            s.cancel_after_lists = Some(quedan - 1);
+            s.cancel_after_lists = Some(remaining - 1);
         }
     }
 
-    /// `rename` deja de rechazar un destino ocupado y lo PISA, como hacen de
-    /// verdad los providers cuyo rename no es atómico: posix-rename en sftp y
-    /// copy+delete en object.
+    /// `rename` stops rejecting a busy destination and OVERWRITES it, the
+    /// way providers whose rename is not atomic really behave: sftp's
+    /// posix-rename and object's copy+delete.
     ///
-    /// Existe para que un guarda anti-clobber del LLAMANTE se pueda probar. Sin
-    /// esto, un test contra `MemProvider` —que rechaza por su cuenta— pasa
-    /// igual con el guarda borrado: lo que demuestra es el contrato del
-    /// provider, no el cinturón de quien lo usa.
+    /// Exists so a CALLER's anti-clobber guard can be tested. Without this, a
+    /// test against `MemProvider` —which rejects on its own— still passes
+    /// with the guard deleted: what it proves is the provider's contract,
+    /// not the belt of whoever uses it.
     pub fn rename_clobbers(&self, clobber: bool) {
         self.lock().rename_clobbers = clobber;
     }
 
-    /// `true` si `rename` debe pisar el destino en vez de rechazarlo.
+    /// `true` if `rename` must overwrite the destination instead of
+    /// rejecting it.
     #[must_use]
     pub(crate) fn renames_clobber(&self) -> bool {
         self.lock().rename_clobbers
     }
 
-    /// Tras `n` operaciones más, TODA operación devuelve
+    /// After `n` more operations, EVERY operation returns
     /// [`Error::ProviderUnavailable`](norte_proto::Error::ProviderUnavailable)
-    /// con `retryable: true` (el provider "se desconectó").
+    /// with `retryable: true` (the provider "disconnected").
     pub fn disconnect_after(&self, n: u64) {
         self.lock().disconnect_after = Some(n);
     }
 
-    /// Las próximas `n` operaciones fallan con
+    /// The next `n` operations fail with
     /// [`Error::ProviderUnavailable`](norte_proto::Error::ProviderUnavailable)
-    /// `{retryable: true}` y DESPUÉS el provider se recupera solo — la
-    /// contraparte transitoria de [`Self::disconnect_after`], para testear
-    /// los reintentos con backoff del engine (ADR 0005).
+    /// `{retryable: true}` and AFTERWARD the provider recovers on its own —
+    /// the transient counterpart of [`Self::disconnect_after`], for testing
+    /// the engine's backoff retries (ADR 0005).
     pub fn unavailable_for_next(&self, n: u64) {
         self.lock().unavailable_next = n;
     }
 
-    /// Las próximas `n` mutaciones puntuales (`mkdir`/`remove`/`rename`/
-    /// `symlink`) que lleguen a APLICARSE devuelven
+    /// The next `n` point mutations (`mkdir`/`remove`/`rename`/`symlink`)
+    /// that reach APPLICATION return
     /// [`Error::ProviderUnavailable`](norte_proto::Error::ProviderUnavailable)
-    /// `{retryable: true}` DESPUÉS de aplicar su efecto — el "timeout tras
-    /// commit" de un provider remoto (issue #17): el caller no puede saber
-    /// si la mutación ocurrió. Las lecturas y las mutaciones que fallan por
-    /// otra causa NO consumen el contador.
+    /// `{retryable: true}` AFTER applying their effect — the "timeout after
+    /// commit" of a remote provider (issue #17): the caller cannot know
+    /// whether the mutation happened. Reads and mutations that fail for
+    /// another reason do NOT consume the counter.
     pub fn ambiguous_mutations(&self, n: u64) {
         self.lock().ambiguous_next = n;
     }
 
-    /// Arma (o desarma) el gate de `copy_native`: armado, la copia nativa se
-    /// queda PENDIENTE indefinidamente — el equivalente determinista de un
-    /// multipart copy S3 de minutos (#51). El caller escapa cancelando
-    /// (dropeando el future) o desarmando el gate (`false` / [`Self::clear`],
-    /// se observa en ≤20ms); las demás operaciones no se ven afectadas.
+    /// Arms (or disarms) `copy_native`'s gate: armed, the native copy stays
+    /// PENDING indefinitely — the deterministic equivalent of a
+    /// minutes-long S3 multipart copy (#51). The caller escapes by
+    /// cancelling (dropping the future) or disarming the gate (`false` /
+    /// [`Self::clear`], observed within ≤20ms); other operations are
+    /// unaffected.
     pub fn hold_copy_native(&self, hold: bool) {
         self.lock().hold_copy_native = hold;
     }
 
-    /// `true` si algún `copy_native` ya ENTRÓ en el gate: el test espera esta
-    /// señal antes de cancelar — determinista, sin sleeps a ciegas.
+    /// `true` if some `copy_native` has already ENTERED the gate: the test
+    /// waits for this signal before cancelling — deterministic, no blind
+    /// sleeps.
     #[must_use]
     pub fn copy_native_entered(&self) -> bool {
         self.lock().copy_native_entered
     }
 
     pub(crate) async fn copy_native_gate(&self) {
-        // Poll barato: compatible con `tokio::time::pause` y sin retener el
-        // lock a través del await.
+        // Cheap poll: compatible with `tokio::time::pause` and does not hold
+        // the lock across the await.
         self.lock().copy_native_entered = true;
         while self.lock().hold_copy_native {
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
     }
 
-    /// Nº de llamadas a `Provider::read` atendidas (no bytes ni chunks):
-    /// observabilidad para tests de coalescing/caché (#61). Cuenta también
-    /// las lecturas que luego fallan por fallo inyectado; no cuenta las
-    /// rechazadas por `op_gate` (desconexión).
+    /// Number of `Provider::read` calls served (not bytes or chunks):
+    /// observability for coalescing/cache tests (#61). Also counts reads
+    /// that then fail from an injected fault; does not count ones rejected
+    /// by `op_gate` (disconnection).
     #[must_use]
     pub fn read_calls(&self) -> u64 {
         self.lock().read_calls
@@ -263,14 +270,14 @@ impl Faults {
         self.lock().read_calls += 1;
     }
 
-    /// Borra toda la configuración de fallos. También reinicia el contador
-    /// de [`Self::read_calls`] (vía `FaultState::default()`).
+    /// Clears the whole fault configuration. Also resets
+    /// [`Self::read_calls`]'s counter (via `FaultState::default()`).
     pub fn clear(&self) {
         *self.lock() = FaultState::default();
     }
 
-    /// Puerta de entrada de cada operación: aplica latencia y desconexión.
-    /// Devuelve `Err` si el provider ya está "desconectado".
+    /// Every operation's entry gate: applies latency and disconnection.
+    /// Returns `Err` if the provider is already "disconnected".
     pub(crate) async fn op_gate(&self) -> Result<(), norte_proto::Error> {
         let latency = {
             let mut st = self.lock();
@@ -292,8 +299,8 @@ impl Faults {
         Ok(())
     }
 
-    /// Consume una carga de mutación ambigua, si está armada. Lo llama cada
-    /// mutación de Mem JUSTO DESPUÉS de aplicar su efecto.
+    /// Consumes one ambiguous-mutation charge, if armed. Called by every Mem
+    /// mutation RIGHT AFTER applying its effect.
     pub(crate) fn take_ambiguous(&self) -> bool {
         let mut st = self.lock();
         if st.ambiguous_next > 0 {
@@ -304,7 +311,7 @@ impl Faults {
         }
     }
 
-    /// Snapshot del fallo de lectura para `path`, si aplica.
+    /// Snapshot of the read fault for `path`, if it applies.
     pub(crate) fn read_fault_for(&self, key: &SegPath) -> Option<usize> {
         let st = self.lock();
         match &st.fail_read_at {
@@ -313,18 +320,18 @@ impl Faults {
         }
     }
 
-    /// `true` si el `list` de `key` debe fallar (fallo inyectado byte-exacto).
+    /// `true` if `key`'s `list` must fail (byte-exact injected fault).
     pub(crate) fn list_fails_for(&self, key: &SegPath) -> bool {
         self.lock().fail_list_at.as_ref() == Some(key)
     }
 
-    /// `true` si el `rename` DESDE `key` debe fallar (fallo inyectado
-    /// byte-exacto) antes de tocar nada.
+    /// `true` if the `rename` FROM `key` must fail (byte-exact injected
+    /// fault) before touching anything.
     pub(crate) fn rename_fails_from(&self, key: &SegPath) -> bool {
         self.lock().fail_rename_at.as_ref() == Some(key)
     }
 
-    /// Snapshot del fallo de escritura para `path`, si aplica.
+    /// Snapshot of the write fault for `path`, if it applies.
     pub(crate) fn write_fault_for(&self, key: &SegPath) -> Option<usize> {
         let st = self.lock();
         match &st.fail_write_at {
@@ -334,7 +341,7 @@ impl Faults {
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, FaultState> {
-        // Invariante: nadie panica con el lock tomado; envenenamiento imposible.
-        self.inner.lock().expect("faults lock sano")
+        // Invariant: nobody panics with the lock held; poisoning is impossible.
+        self.inner.lock().expect("faults lock is sound")
     }
 }

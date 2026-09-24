@@ -1,5 +1,5 @@
-// Pintores de `Screen` para places (ola W10): funciones con `this: Screen`,
-// enganchadas como propiedades en `render.ts`. El estado sigue en la clase.
+// `Screen` painters for places (wave W10): functions with `this: Screen`,
+// hooked in as properties in `render.ts`. State stays in the class.
 
 import type { Screen } from "../render";
 import type { PlacesSlotView, TreeSlotView } from "../types";
@@ -8,49 +8,51 @@ import { icono } from "./iconos";
 import type { SlotDom } from "./dom";
 
 /**
- * El árbol de directorios.
+ * The directory tree.
  *
- * Dos gestos distintos sobre la misma fila: el TRIÁNGULO pliega y despliega,
- * y el nombre NAVEGA. Un solo gesto obligaría a elegir cuál de las dos cosas
- * significa un click, y las dos hacen falta — mirar dentro de una rama sin
- * mover el listado es la mitad de para qué sirve un árbol.
+ * Two different gestures on the same row: the TRIANGLE folds and unfolds,
+ * and the name NAVIGATES. A single gesture would force a choice between
+ * which of the two things a click means, and both are needed — looking
+ * inside a branch without moving the listing is half of what a tree is for.
  *
- * El árbol no se mueve al navegar: es lo que hace útil tenerlo abierto.
+ * The tree does not move when navigating: that is what makes keeping it open
+ * useful.
  */
 export function paintTree(this: Screen, dom: SlotDom, slot: TreeSlotView): void {
   dom.root.setAttribute("aria-label", this.t("tree-title"));
   dom.title.textContent = this.t("tree-title");
   dom.scroller.className = "tree";
-  const lista = document.createElement("ul");
-  lista.className = "tree-rows";
-  lista.setAttribute("role", "tree");
+  const list = document.createElement("ul");
+  list.className = "tree-rows";
+  list.setAttribute("role", "tree");
   for (const [i, r] of slot.rows.entries()) {
-    const fila = document.createElement("li");
-    fila.className = "tree-row";
-    fila.id = `tree-row-${String(i)}`;
-    fila.setAttribute("role", "treeitem");
-    fila.setAttribute("aria-level", String(r.depth + 1));
-    fila.setAttribute("aria-selected", String(slot.cursor === i));
-    // La sangría, por variable: el CSS no puede multiplicar una profundidad
-    // que solo existe en los datos.
-    fila.style.setProperty("--depth", String(r.depth));
-    const marca = document.createElement("span");
-    marca.className = "tree-twisty";
+    const row = document.createElement("li");
+    row.className = "tree-row";
+    row.id = `tree-row-${String(i)}`;
+    row.setAttribute("role", "treeitem");
+    row.setAttribute("aria-level", String(r.depth + 1));
+    row.setAttribute("aria-selected", String(slot.cursor === i));
+    // The indent, as a variable: CSS cannot multiply a depth that only
+    // exists in the data.
+    row.style.setProperty("--depth", String(r.depth));
+    const mark = document.createElement("span");
+    mark.className = "tree-twisty";
     if (r.children === false) {
-      // Una hoja no lleva triángulo, pero SÍ su hueco: sin él los nombres
-      // de un mismo nivel no se alinean y el árbol deja de leerse como tal.
-      marca.textContent = " ";
+      // A leaf carries no triangle, but it DOES carry its gap: without it
+      // names at the same level do not line up and the tree stops reading
+      // as one.
+      mark.textContent = " ";
     } else {
-      // `null` —todavía no se ha mirado— se pinta como plegada y no como
-      // hoja: pintar «no tiene nada dentro» a algo que nadie ha leído es
-      // una respuesta inventada.
-      // Un chevrón que GIRA al desplegar, como en VS Code: la misma
-      // marca en dos posiciones se lee como un interruptor.
-      marca.textContent = "›";
-      marca.dataset["expanded"] = String(r.expanded);
-      fila.setAttribute("aria-expanded", String(r.expanded));
-      marca.addEventListener("click", (ev) => {
-        // Que no llegue al nombre: plegar no navega.
+      // `null` — not looked at yet — is painted as folded and not as a
+      // leaf: painting "there is nothing inside" for something nobody has
+      // read is a made-up answer.
+      // A chevron that ROTATES on unfold, as in VS Code: the same mark in
+      // two positions reads as a switch.
+      mark.textContent = "›";
+      mark.dataset["expanded"] = String(r.expanded);
+      row.setAttribute("aria-expanded", String(r.expanded));
+      mark.addEventListener("click", (ev) => {
+        // Keep it from reaching the name: folding does not navigate.
         ev.stopPropagation();
         this.send({
           action: "tree_toggle_row",
@@ -59,63 +61,63 @@ export function paintTree(this: Screen, dom: SlotDom, slot: TreeSlotView): void 
         });
       });
     }
-    // La carpeta, abierta o cerrada según la rama: es lo que hace que la
-    // columna se lea como un árbol de un vistazo, como en VS Code.
-    const carpeta = icono(document, r.expanded ? "fs:folder-open" : "fs:folder");
-    const nombre = document.createElement("span");
-    nombre.className = "tree-name";
-    nombre.dataset["hostile"] = String(r.hostile);
-    nombre.textContent = r.label;
+    // The folder, open or closed depending on the branch: it is what makes
+    // the column read as a tree at a glance, as in VS Code.
+    const folder = icono(document, r.expanded ? "fs:folder-open" : "fs:folder");
+    const name = document.createElement("span");
+    name.className = "tree-name";
+    name.dataset["hostile"] = String(r.hostile);
+    name.textContent = r.label;
     if (r.hostile) {
-      nombre.append(badge(this.t("hostile-name")));
+      name.append(badge(this.t("hostile-name")));
     }
-    fila.addEventListener("click", () => {
-      // La generación de ESTA pintada: los hijos de una rama llegan solos y
-      // se insertan EN MEDIO, así que sin ella un click podía navegar a una
-      // carpeta que nadie pulsó.
+    row.addEventListener("click", () => {
+      // THIS paint's generation: a branch's children arrive on their own
+      // and get inserted IN THE MIDDLE, so without it a click could navigate
+      // to a folder nobody clicked.
       this.send({
         action: "tree_activate_row",
         row: i,
         generation: slot.generation,
       });
     });
-    if (carpeta !== null) {
-      carpeta.classList.add("tree-icon");
+    if (folder !== null) {
+      folder.classList.add("tree-icon");
     }
-    fila.append(marca, carpeta ?? document.createElement("span"), nombre);
-    lista.append(fila);
+    row.append(mark, folder ?? document.createElement("span"), name);
+    list.append(row);
   }
-  lista.setAttribute("aria-activedescendant", `tree-row-${String(slot.cursor)}`);
-  dom.scroller.replaceChildren(lista);
-  revelar(lista.querySelector(`#tree-row-${String(slot.cursor)}`) ?? undefined);
+  list.setAttribute("aria-activedescendant", `tree-row-${String(slot.cursor)}`);
+  dom.scroller.replaceChildren(list);
+  revelar(list.querySelector(`#tree-row-${String(slot.cursor)}`) ?? undefined);
 }
 
 /**
- * La barra lateral de sitios: volúmenes y favoritos.
+ * The places sidebar: volumes and favorites.
  *
- * Un click ELIGE Y ACTIVA, al contrario que las otras listas: una barra
- * lateral existe para ir a sitios, y un click que solo mueve un cursor
- * obliga a rematar con el teclado. Una cabecera pliega en vez de navegar,
- * que es lo que el host hace con ella.
+ * A click CHOOSES AND ACTIVATES, unlike the other lists: a sidebar exists to
+ * go to places, and a click that only moves a cursor forces finishing with
+ * the keyboard. A header folds instead of navigating, which is what the host
+ * does with it.
  */
 export function paintPlaces(this: Screen, dom: SlotDom, slot: PlacesSlotView): void {
   dom.root.setAttribute("aria-label", this.t("places-title"));
   dom.title.textContent = this.t("places-title");
   dom.scroller.className = "places";
-  const lista = document.createElement("ul");
-  lista.className = "places-rows";
-  lista.setAttribute("role", "listbox");
+  const list = document.createElement("ul");
+  list.className = "places-rows";
+  list.setAttribute("role", "listbox");
   for (const [i, r] of slot.rows.entries()) {
-    const fila = document.createElement("li");
-    fila.className = "places-row";
-    fila.id = `place-row-${String(i)}`;
-    fila.dataset["row"] = r.row;
-    fila.setAttribute("role", "option");
-    fila.setAttribute("aria-selected", String(slot.cursor === i));
-    fila.addEventListener("click", () => {
-      // La generación de ESTA pintada. Los volúmenes llegan solos y se
-      // insertan antes que los favoritos, así que sin ella un click podía
-      // navegar a un sitio que nadie pulsó.
+    const row = document.createElement("li");
+    row.className = "places-row";
+    row.id = `place-row-${String(i)}`;
+    row.dataset["row"] = r.row;
+    row.setAttribute("role", "option");
+    row.setAttribute("aria-selected", String(slot.cursor === i));
+    row.addEventListener("click", () => {
+      // THIS paint's generation. Volumes arrive on their own and get
+      // inserted before the favorites, so without it a click could navigate
+      // to a place nobody clicked.
       this.send({
         action: "place_activate_row",
         row: i,
@@ -123,24 +125,24 @@ export function paintPlaces(this: Screen, dom: SlotDom, slot: PlacesSlotView): v
       });
     });
     if (r.row === "header") {
-      fila.setAttribute("aria-expanded", String(!r.folded));
-      const marca = document.createElement("span");
-      marca.className = "places-fold";
-      marca.textContent = r.folded ? "▸" : "▾";
-      const texto = document.createElement("span");
-      texto.className = "places-header";
-      texto.textContent = r.label;
-      fila.append(marca, texto);
+      row.setAttribute("aria-expanded", String(!r.folded));
+      const mark = document.createElement("span");
+      mark.className = "places-fold";
+      mark.textContent = r.folded ? "▸" : "▾";
+      const text = document.createElement("span");
+      text.className = "places-header";
+      text.textContent = r.label;
+      row.append(mark, text);
     } else if (r.row === "drive") {
-      // UNA línea (captura del 2026-09-21): icono por clase de unidad, el
-      // nombre CORTO y el libre corto a la derecha, como en la TUI. El
-      // montaje entero y la frase del espacio van en el título.
-      fila.dataset["kind"] = r.kind ?? "unknown";
+      // ONE line (2026-09-21 capture): icon by drive kind, the SHORT name
+      // and the short free space on the right, as in the TUI. The whole
+      // mount point and the space sentence go in the title.
+      row.dataset["kind"] = r.kind ?? "unknown";
       if (r.free !== undefined) {
-        fila.dataset["line"] = "one";
+        row.dataset["line"] = "one";
       }
-      fila.title = [r.mount ?? "", r.detail].filter((s) => s !== "").join("\n");
-      const dibujo = icono(
+      row.title = [r.mount ?? "", r.detail].filter((s) => s !== "").join("\n");
+      const drawing = icono(
         document,
         r.kind === "removable"
           ? "fs:removable"
@@ -148,54 +150,54 @@ export function paintPlaces(this: Screen, dom: SlotDom, slot: PlacesSlotView): v
             ? "fs:network"
             : "fs:drive",
       );
-      if (dibujo !== null) {
-        dibujo.classList.add("places-icon");
-        fila.append(dibujo);
+      if (drawing !== null) {
+        drawing.classList.add("places-icon");
+        row.append(drawing);
       }
-      const nombre = document.createElement("span");
-      nombre.className = "places-name";
-      nombre.dataset["hostile"] = String(r.hostile);
-      nombre.textContent = r.label;
+      const name = document.createElement("span");
+      name.className = "places-name";
+      name.dataset["hostile"] = String(r.hostile);
+      name.textContent = r.label;
       if (r.hostile) {
-        nombre.append(badge(this.t("hostile-name")));
+        name.append(badge(this.t("hostile-name")));
       }
-      const detalle = document.createElement("span");
-      detalle.className = "places-detail";
-      detalle.textContent = r.free ?? r.detail;
-      fila.append(nombre, detalle);
+      const detail = document.createElement("span");
+      detail.className = "places-detail";
+      detail.textContent = r.free ?? r.detail;
+      row.append(name, detail);
     } else {
-      // Un favorito, en UNA línea: estrella y nombre; el destino va en el
-      // título. Uno roto sigue diciendo por qué, debajo y en rojo.
-      const estrella = icono(document, "fs:favorite");
-      if (estrella !== null) {
-        estrella.classList.add("places-icon");
-        fila.append(estrella);
+      // A favorite, on ONE line: star and name; the target goes in the
+      // title. A broken one still says why, below and in red.
+      const star = icono(document, "fs:favorite");
+      if (star !== null) {
+        star.classList.add("places-icon");
+        row.append(star);
       }
-      const nombre = document.createElement("span");
-      nombre.className = "places-name";
-      nombre.textContent = r.name;
-      fila.append(nombre);
+      const name = document.createElement("span");
+      name.className = "places-name";
+      name.textContent = r.name;
+      row.append(name);
       if (r.broken === "") {
-        fila.dataset["line"] = "one";
-        fila.title = r.target;
+        row.dataset["line"] = "one";
+        row.title = r.target;
         if (r.hostile) {
-          // El destino no se ve en la fila, así que la marca va al nombre:
-          // un favorito que apunta a un nombre enmascarado lo DICE.
-          nombre.dataset["hostile"] = "true";
-          nombre.append(badge(this.t("hostile-name")));
+          // The target is not visible in the row, so the mark goes on the
+          // name: a favorite that points to a masked name SAYS SO.
+          name.dataset["hostile"] = "true";
+          name.append(badge(this.t("hostile-name")));
         }
       } else {
-        // Un favorito roto se PINTA con su motivo: uno que desaparece en
-        // silencio es un fallo de configuración que nadie puede ver.
-        const roto = document.createElement("span");
-        roto.className = "places-broken";
-        roto.textContent = r.broken;
-        fila.append(roto);
+        // A broken favorite is PAINTED with its reason: one that disappears
+        // silently is a configuration failure nobody can see.
+        const broken = document.createElement("span");
+        broken.className = "places-broken";
+        broken.textContent = r.broken;
+        row.append(broken);
       }
     }
-    lista.append(fila);
+    list.append(row);
   }
-  lista.setAttribute("aria-activedescendant", `place-row-${String(slot.cursor)}`);
-  dom.scroller.replaceChildren(lista);
-  revelar(lista.querySelector(`#place-row-${String(slot.cursor)}`) ?? undefined);
+  list.setAttribute("aria-activedescendant", `place-row-${String(slot.cursor)}`);
+  dom.scroller.replaceChildren(list);
+  revelar(list.querySelector(`#place-row-${String(slot.cursor)}`) ?? undefined);
 }

@@ -1,12 +1,13 @@
-//! La revisión del árbol, en tiempo de compilación, para que las dos
-//! ventanas —`ntc` y la gráfica— digan QUÉ binario son y no solo qué versión
-//! declara el Cargo.toml: en un equipo de desarrollo los enlaces de `just link`
-//! apuntan a `target/debug`, y «0.3.0-alpha.3» es lo mismo diez commits
-//! después. `git describe` da la respuesta que la versión no da.
+//! The tree's revision, at compile time, so the two windows —`ntc` and the
+//! graphical one— can say WHICH binary they are and not just which version
+//! the Cargo.toml declares: on a dev machine `just link`'s symlinks point at
+//! `target/debug`, and "0.3.0-alpha.3" is the same string ten commits later.
+//! `git describe` gives the answer the version does not.
 //!
-//! Sin `.git` (un tarball de release, un `cargo install` desde crates.io) o
-//! sin `git` en el PATH, se respeta `NORTE_REVISION` si el empaquetador lo
-//! puso y, si no, queda `unknown`: jamás falla la compilación por esto.
+//! Without `.git` (a release tarball, a `cargo install` from crates.io) or
+//! without `git` on the PATH, `NORTE_REVISION` is honoured if the packager
+//! set it, and otherwise it is left as `unknown`: this never fails the
+//! build.
 
 use std::path::Path;
 use std::process::Command;
@@ -21,8 +22,8 @@ fn main() {
     println!("cargo:rustc-env=NORTE_REVISION={revision}");
 }
 
-/// `git describe --tags --always --dirty --long` sobre el árbol que contiene
-/// este crate, y los `rerun-if-changed` que hacen que cambie con el HEAD.
+/// `git describe --tags --always --dirty --long` over the tree containing
+/// this crate, plus the `rerun-if-changed`s that make it change with HEAD.
 fn git_describe() -> Option<String> {
     let manifest = std::env::var("CARGO_MANIFEST_DIR").ok()?;
     let top = Command::new("git")
@@ -33,8 +34,9 @@ fn git_describe() -> Option<String> {
         .filter(|o| o.status.success())?;
     let top = String::from_utf8(top.stdout).ok()?.trim().to_owned();
     let git_dir = Path::new(&top).join(".git");
-    // HEAD cambia al mover la rama; la ref a la que apunta, al commitear;
-    // packed-refs y el índice, al etiquetar o tocar el árbol (el `-dirty`).
+    // HEAD changes when the branch moves; the ref it points to, on commit;
+    // packed-refs and the index, on tagging or touching the tree (the
+    // `-dirty`).
     for f in ["HEAD", "packed-refs", "index"] {
         println!("cargo:rerun-if-changed={}", git_dir.join(f).display());
     }

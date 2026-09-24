@@ -136,8 +136,8 @@ impl Estado {
             Fondo::Conexiones(apertura, res) => {
                 self.aplicar_conexiones(apertura, res).into_iter().collect()
             }
-            Fondo::PaginaDeLinea(slot, token, desde, res) => self
-                .aterrizar_pagina(slot, token, desde, res)
+            Fondo::PaginaDeLinea(slot, token, start, res) => self
+                .aterrizar_pagina(slot, token, start, res)
                 .into_iter()
                 .collect(),
             Fondo::ConexionesDeIrA(apertura, res) => {
@@ -1122,7 +1122,7 @@ impl Estado {
     pub(super) fn gobernar(
         &mut self,
         id: &str,
-        que: Gobierno,
+        change: Gobierno,
         backend: &Arc<dyn HostBackend>,
         buzon: &mpsc::Sender<Mensaje>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
@@ -1131,7 +1131,7 @@ impl Estado {
         let buzon2 = buzon.clone();
         let id2 = id.to_owned();
         tokio::spawn(async move {
-            let llamada = match que {
+            let llamada = match change {
                 Gobierno::Aprobar(v, digest) => backend2.plugin_set_approval(id2, v, digest),
                 Gobierno::Encender(v) => backend2.plugin_set_enabled(id2, v),
                 // Whether it had consent does not change what follows: the
@@ -1320,7 +1320,7 @@ impl Estado {
         }
     }
 
-    /// Cierra el panel de salida.
+    /// Closes the output panel.
     pub(super) fn cerrar_salida(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         self.escritorio.salida = None;
         (
@@ -1329,7 +1329,7 @@ impl Estado {
         )
     }
 
-    /// Un click en una fila del gestor: la elige.
+    /// A click on a row of the manager: selects it.
     pub(super) fn elegir_extension(
         &mut self,
         row: u32,

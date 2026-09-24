@@ -7,41 +7,42 @@ use std::path::Path;
 
 use norte_theme::Theme;
 
-/// Error tipado de [`resolve_theme`] (#73): el caller mapea cada variante a
-/// una clave Fluent para la barra — jamás el `Display` del OS (localizado
-/// por el SO) ni el diagnóstico crudo del parser ni el `spec` (que puede
-/// venir de la capa `./.norte` de un repo AJENO) sin sanear. El `Display`
-/// thiserror es solo para logs/stderr.
+/// Typed error from [`resolve_theme`] (#73): the caller maps each variant to
+/// a Fluent key for the bar — never the OS's `Display` (localized by the OS)
+/// nor the parser's raw diagnostic nor `spec` (which can come from a FOREIGN
+/// repo's `./.norte` layer) unsanitized. The thiserror `Display` is only for
+/// logs/stderr.
 #[derive(Debug, thiserror::Error)]
 pub enum ResolveError {
-    /// La ruta del spec no se pudo leer.
-    #[error("tema {spec:?}: {source}")]
+    /// The spec's path could not be read.
+    #[error("theme {spec:?}: {source}")]
     Io {
-        /// El spec `[ui].theme` tal cual (ruta).
+        /// The `[ui].theme` spec as is (a path).
         spec: String,
-        /// La causa.
+        /// The cause.
         source: std::io::Error,
     },
-    /// El TOML del tema (o el preset embebido) no valida.
-    #[error("tema {spec:?}: {detail}")]
+    /// The theme's TOML (or the embedded preset) does not validate.
+    #[error("theme {spec:?}: {detail}")]
     Parse {
-        /// El spec `[ui].theme` tal cual (nombre o ruta).
+        /// The `[ui].theme` spec as is (a name or a path).
         spec: String,
-        /// Diagnóstico de `norte-theme`.
+        /// `norte-theme`'s diagnostic.
         detail: String,
     },
 }
 
-/// ¿Este spec es un preset EMBEBIDO, o sea que resolverlo no toca el disco?
+/// Is this spec an EMBEDDED preset, i.e. does resolving it never touch disk?
 ///
-/// La usan los dos frontends para partir el camino: un preset se resuelve en
-/// el sitio —es aritmética sobre colores, y mandarlo a otro hilo añadiría un
-/// frame de retraso a algo que el lector ve cambiar bajo el cursor— y una RUTA
-/// se lee, así que va por `spawn_blocking` (regla 2). Sin esta pregunta, las
-/// dos superficies elegían «solo presets» y un `[ui] theme` que nombra un
-/// fichero se caía en silencio al cambiar de perfil.
+/// Both frontends use it to split the path: a preset resolves in place — it
+/// is arithmetic over colors, and sending it to another thread would add a
+/// frame of delay to something the reader sees change under the cursor —
+/// while a PATH is read, so it goes through `spawn_blocking` (rule 2). Without
+/// this question, the two surfaces chose "presets only" and a `[ui] theme`
+/// naming a file silently fell over on a profile switch.
 ///
-/// `None` cuenta como preset: es el de fábrica, y tampoco toca el disco.
+/// `None` counts as a preset: it is the factory one, and it does not touch
+/// disk either.
 ///
 /// ```
 /// use norte_frontend::theme::is_preset;
@@ -57,18 +58,19 @@ pub fn is_preset(spec: Option<&str>) -> bool {
     }
 }
 
-/// `EntryKind` del protocolo → `FileKind` del tema.
+/// The protocol's `EntryKind` → the theme's `FileKind`.
 ///
-/// El protocolo no distingue aún ejecutable/fifo/socket/dispositivo —el
-/// `Entry` no lleva modo— así que todo lo que no es directorio ni enlace cae a
-/// `Regular`; el color por EXTENSIÓN sigue aplicando encima. Como consecuencia,
-/// las claves `executable`, `fifo`, `socket`, `block-device` y `char-device`
-/// que los presets traen en `[files.kind]` están DORMIDAS: ningún frontend
-/// puede seleccionarlas todavía.
+/// The protocol does not yet distinguish executable/fifo/socket/device — the
+/// `Entry` carries no mode — so anything that is neither a directory nor a
+/// symlink falls to `Regular`; the color by EXTENSION still applies on top.
+/// As a result, the `executable`, `fifo`, `socket`, `block-device` and
+/// `char-device` keys the presets carry in `[files.kind]` are DORMANT: no
+/// frontend can select them yet.
 ///
-/// Vive aquí y no en cada frontend porque los dos la necesitan y son la misma
-/// decisión (ADR 0077): escrita dos veces, diverge en silencio — y el día que
-/// `Entry` lleve modo, un frontend lo aprovecharía y el otro no.
+/// Lives here and not in each frontend because both need it and it is the
+/// same decision (ADR 0077): written twice, it silently drifts — and the day
+/// `Entry` carries a mode, one frontend would take advantage of it and the
+/// other would not.
 ///
 /// ```
 /// use norte_frontend::theme::file_kind_of;
@@ -88,27 +90,27 @@ pub fn file_kind_of(kind: norte_proto::EntryKind) -> norte_theme::FileKind {
     }
 }
 
-/// Un tema del USUARIO: un `<config>/themes/<nombre>.toml` ya parseado.
+/// A USER theme: an already-parsed `<config>/themes/<name>.toml`.
 ///
-/// Se carga con la config —en un contexto que ya puede tocar el disco— y
-/// viaja con ella, para que los selectores y el asistente lo ofrezcan y lo
-/// previsualicen sin leer un fichero dentro de una tecla (regla 2).
+/// Loaded with the config — in a context that can already touch disk — and
+/// travels with it, so the selectors and the wizard can offer it and preview
+/// it without reading a file inside a keystroke (rule 2).
 #[derive(Debug, Clone)]
 pub struct UserTheme {
-    /// El nombre por el que se elige: el del fichero sin `.toml`.
+    /// The name it is chosen by: the file's, without `.toml`.
     pub name: String,
-    /// El tema, ya validado.
+    /// The theme, already validated.
     pub theme: Theme,
 }
 
-/// ¿Vale `s` como nombre de tema del usuario?
+/// Is `s` valid as a user theme name?
 ///
-/// Un NOMBRE, no una ruta: sin separadores ni `..`, sin empezar por punto y
-/// en un alfabeto que se puede escribir tal cual en `[ui] theme`. Lo que no
-/// pase se trata como ruta, que es lo que era antes de que hubiera nombres.
+/// A NAME, not a path: no separators nor `..`, not starting with a dot, and
+/// in an alphabet that can be written as is in `[ui] theme`. Whatever does
+/// not pass is treated as a path, which is what it was before names existed.
 ///
-/// Pública para `norte theme import`, que tiene que rehusar escribir un
-/// fichero que el resolutor nunca buscaría por nombre.
+/// Public for `norte theme import`, which has to refuse writing a file the
+/// resolver would never look up by name.
 ///
 /// ```
 /// use norte_frontend::theme::is_theme_name;
@@ -126,21 +128,22 @@ pub fn is_theme_name(s: &str) -> bool {
 }
 
 /// `<config_dir>/themes`.
-fn directorio_de_temas(config_dir: &Path) -> std::path::PathBuf {
+fn themes_directory(config_dir: &Path) -> std::path::PathBuf {
     config_dir.join("themes")
 }
 
-/// Los temas del usuario de `<config_dir>/themes/*.toml`, por nombre.
+/// The user's themes from `<config_dir>/themes/*.toml`, by name.
 ///
-/// No falla: lo que no sirve se salta, porque una lista de la que falta un
-/// fichero roto es mejor que un selector que no abre. Se salta un fichero que
-/// no parsea, un nombre que no es de tema, un nombre que no es UTF-8 (tiene
-/// que poder escribirse en `[ui] theme`, que es texto) y un nombre que ya es
-/// de un preset: el resolutor pone los presets primero, así que ese fichero
-/// nunca se leería, y listarlo ofrecería una elección que no existe.
+/// Does not fail: whatever does not work is skipped, because a list missing
+/// one broken file is better than a selector that does not open. Skipped: a
+/// file that does not parse, a name that is not a theme name, a name that is
+/// not UTF-8 (it has to be writable in `[ui] theme`, which is text), and a
+/// name that already belongs to a preset — the resolver puts presets first,
+/// so that file would never be read, and listing it would offer a choice
+/// that does not exist.
 ///
-/// SYNC: lee el disco. La llama la carga de la config, que ya corre donde
-/// puede.
+/// SYNC: reads disk. Called by the config load, which already runs where it
+/// can.
 ///
 /// ```
 /// let dir = tempfile::tempdir().unwrap();
@@ -148,13 +151,13 @@ fn directorio_de_temas(config_dir: &Path) -> std::path::PathBuf {
 /// ```
 #[must_use]
 pub fn load_user_themes(config_dir: &Path) -> Vec<UserTheme> {
-    let Ok(entradas) = std::fs::read_dir(directorio_de_temas(config_dir)) else {
+    let Ok(entries) = std::fs::read_dir(themes_directory(config_dir)) else {
         return Vec::new();
     };
-    let mut temas: Vec<UserTheme> = entradas
+    let mut themes: Vec<UserTheme> = entries
         .filter_map(Result::ok)
-        .filter_map(|entrada| {
-            let path = entrada.path();
+        .filter_map(|entry| {
+            let path = entry.path();
             if path.extension().is_none_or(|x| x != "toml") {
                 return None;
             }
@@ -167,21 +170,21 @@ pub fn load_user_themes(config_dir: &Path) -> Vec<UserTheme> {
             Some(UserTheme { name, theme })
         })
         .collect();
-    temas.sort_by(|a, b| a.name.cmp(&b.name));
-    temas
+    themes.sort_by(|a, b| a.name.cmp(&b.name));
+    themes
 }
 
-/// Los nombres de tema que se ofrecen: los presets embebidos y, detrás, los
-/// del usuario.
+/// The theme names offered: the embedded presets and, after them, the
+/// user's.
 ///
-/// UNA lista para todas las superficies —los dos selectores, los dos
-/// asistentes, las dos pantallas de ajustes—, que construían cada una la suya
-/// desde `preset_names()`: seis sitios escribiendo «qué temas hay» es como una
-/// lista diverge en silencio (ADR 0077).
+/// ONE list for every surface — both selectors, both wizards, both settings
+/// screens — which each used to build their own from `preset_names()`: six
+/// places writing "which themes exist" is how a list silently drifts (ADR
+/// 0077).
 ///
 /// ```
-/// let nombres = norte_frontend::theme::theme_names(&[]);
-/// assert!(nombres.iter().any(|n| n == "nord"));
+/// let names = norte_frontend::theme::theme_names(&[]);
+/// assert!(names.iter().any(|n| n == "nord"));
 /// ```
 #[must_use]
 pub fn theme_names(user: &[UserTheme]) -> Vec<String> {
@@ -192,8 +195,8 @@ pub fn theme_names(user: &[UserTheme]) -> Vec<String> {
         .collect()
 }
 
-/// El tema que nombra `name` SIN tocar el disco: un preset embebido o uno del
-/// usuario ya cargado. Es lo que usa una vista previa en vivo.
+/// The theme named `name` WITHOUT touching disk: an embedded preset or an
+/// already-loaded user one. This is what a live preview uses.
 ///
 /// ```
 /// let t = norte_frontend::theme::theme_by_name("nord", &[]).expect("preset");
@@ -248,10 +251,10 @@ pub fn resolve_theme_in(
     if let Some(dir) = config_dir
         && is_theme_name(spec)
     {
-        let candidato = directorio_de_temas(dir).join(format!("{spec}.toml"));
-        match std::fs::read_to_string(&candidato) {
+        let candidate = themes_directory(dir).join(format!("{spec}.toml"));
+        match std::fs::read_to_string(&candidate) {
             Ok(raw) => return Theme::from_toml(&raw).map_err(parse),
-            // No hay tema con ese nombre: puede ser una ruta relativa.
+            // No theme with that name: it may be a relative path.
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
             Err(e) => {
                 return Err(ResolveError::Io {
@@ -274,23 +277,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn none_es_el_preset_default() {
+    fn none_is_the_default_preset() {
         let t = resolve_theme(None).expect("default");
         assert_eq!(t.name.as_deref(), Theme::preset_default().name.as_deref());
     }
 
     #[test]
-    fn nombre_de_preset_resuelve() {
-        let t = resolve_theme(Some("nord")).expect("preset embebido");
+    fn a_preset_name_resolves() {
+        let t = resolve_theme(Some("nord")).expect("embedded preset");
         assert_eq!(t.name.as_deref(), Some("nord"));
     }
 
     #[test]
-    fn ruta_a_fichero_resuelve_y_rota_es_error() {
+    fn a_file_path_resolves_and_a_broken_one_is_an_error() {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("mio.toml");
         std::fs::write(&p, "name = \"mio\"\n").unwrap();
-        let t = resolve_theme(Some(p.to_str().unwrap())).expect("fichero");
+        let t = resolve_theme(Some(p.to_str().unwrap())).expect("file");
         assert_eq!(t.name.as_deref(), Some("mio"));
         let missing = dir.path().join("no-existe.toml");
         assert!(matches!(
@@ -299,83 +302,84 @@ mod tests {
         ));
     }
 
-    fn con_tema(dir: &Path, nombre: &str, toml: &str) {
-        let temas = dir.join("themes");
-        std::fs::create_dir_all(&temas).unwrap();
-        std::fs::write(temas.join(format!("{nombre}.toml")), toml).unwrap();
+    fn with_theme(dir: &Path, name: &str, toml: &str) {
+        let themes = dir.join("themes");
+        std::fs::create_dir_all(&themes).unwrap();
+        std::fs::write(themes.join(format!("{name}.toml")), toml).unwrap();
     }
 
-    /// Un nombre que no es preset se busca en `<config>/themes/<nombre>.toml`
-    /// ANTES de tratarse como ruta.
+    /// A name that is not a preset is looked up in
+    /// `<config>/themes/<name>.toml` BEFORE being treated as a path.
     #[test]
-    fn un_nombre_de_usuario_resuelve_contra_el_directorio_de_temas() {
+    fn a_user_name_resolves_against_the_themes_directory() {
         let dir = tempfile::tempdir().unwrap();
-        con_tema(dir.path(), "mio", "name = \"mio\"\n");
-        let t = resolve_theme_in(Some("mio"), Some(dir.path())).expect("resuelve");
+        with_theme(dir.path(), "mio", "name = \"mio\"\n");
+        let t = resolve_theme_in(Some("mio"), Some(dir.path())).expect("resolves");
         assert_eq!(t.name.as_deref(), Some("mio"));
     }
 
-    /// Y un preset EMBEBIDO no se puede tapar con un fichero.
+    /// And an EMBEDDED preset cannot be shadowed by a file.
     #[test]
-    fn un_fichero_no_puede_tapar_un_preset() {
+    fn a_file_cannot_shadow_a_preset() {
         let dir = tempfile::tempdir().unwrap();
-        con_tema(dir.path(), "nord", "name = \"impostor\"\n");
-        let t = resolve_theme_in(Some("nord"), Some(dir.path())).expect("resuelve");
-        assert_eq!(t.name.as_deref(), Some("nord"), "gana el preset embebido");
+        with_theme(dir.path(), "nord", "name = \"impostor\"\n");
+        let t = resolve_theme_in(Some("nord"), Some(dir.path())).expect("resolves");
+        assert_eq!(t.name.as_deref(), Some("nord"), "the embedded preset wins");
         assert!(
             load_user_themes(dir.path()).is_empty(),
-            "y no se lista: sería una elección que no existe"
+            "and it is not listed: it would be a choice that does not exist"
         );
     }
 
-    /// La lista: presets primero, los del usuario detrás y por nombre, sin
-    /// los rotos, los ocultos ni los que no son un nombre.
+    /// The list: presets first, the user's after and by name, without the
+    /// broken ones, the hidden ones, nor the ones that are not a name.
     #[test]
-    fn los_temas_del_usuario_se_listan_detras_de_los_presets() {
+    fn user_themes_are_listed_after_the_presets() {
         let dir = tempfile::tempdir().unwrap();
-        con_tema(dir.path(), "zeta", "name = \"zeta\"\n");
-        con_tema(dir.path(), "mio", "name = \"mio\"\n");
-        con_tema(dir.path(), "roto", "esto no es toml {{{");
-        con_tema(dir.path(), ".oculto", "name = \"oculto\"\n");
-        std::fs::write(dir.path().join("themes/nota.txt"), "no es un tema").unwrap();
-        let usuario = load_user_themes(dir.path());
-        let nombres: Vec<&str> = usuario.iter().map(|t| t.name.as_str()).collect();
-        assert_eq!(nombres, ["mio", "zeta"]);
+        with_theme(dir.path(), "zeta", "name = \"zeta\"\n");
+        with_theme(dir.path(), "mio", "name = \"mio\"\n");
+        with_theme(dir.path(), "roto", "this is not toml {{{");
+        with_theme(dir.path(), ".oculto", "name = \"oculto\"\n");
+        std::fs::write(dir.path().join("themes/nota.txt"), "not a theme").unwrap();
+        let user = load_user_themes(dir.path());
+        let names: Vec<&str> = user.iter().map(|t| t.name.as_str()).collect();
+        assert_eq!(names, ["mio", "zeta"]);
 
-        let todos = theme_names(&usuario);
-        assert!(todos.iter().any(|n| n == "vscode-dark"));
-        assert_eq!(&todos[todos.len() - 2..], ["mio", "zeta"]);
+        let all = theme_names(&user);
+        assert!(all.iter().any(|n| n == "vscode-dark"));
+        assert_eq!(&all[all.len() - 2..], ["mio", "zeta"]);
     }
 
-    /// Sin directorio de temas no hay nada, y no es un error.
+    /// With no themes directory there is nothing, and it is not an error.
     #[test]
-    fn sin_directorio_de_temas_la_lista_es_la_de_presets() {
+    fn with_no_themes_directory_the_list_is_the_presets_one() {
         let dir = tempfile::tempdir().unwrap();
         assert!(load_user_themes(dir.path()).is_empty());
         assert_eq!(theme_names(&[]).len(), norte_theme::preset_names().len());
     }
 
-    /// La vista previa no toca el disco: preset o tema ya cargado, o nada.
+    /// The preview does not touch disk: a preset or an already-loaded theme,
+    /// or nothing.
     #[test]
-    fn theme_by_name_encuentra_presets_y_temas_cargados() {
-        let usuario = vec![UserTheme {
+    fn theme_by_name_finds_presets_and_loaded_themes() {
+        let user = vec![UserTheme {
             name: "mio".to_owned(),
             theme: Theme::preset_default(),
         }];
-        assert!(theme_by_name("mio", &usuario).is_some());
+        assert!(theme_by_name("mio", &user).is_some());
         assert_eq!(
-            theme_by_name("nord", &usuario).and_then(|t| t.name),
+            theme_by_name("nord", &user).and_then(|t| t.name),
             Some("nord".to_owned())
         );
-        assert!(theme_by_name("otro", &usuario).is_none());
+        assert!(theme_by_name("otro", &user).is_none());
     }
 
-    /// Un spec con separador no es un nombre: no se busca en `themes/`, se
-    /// trata como ruta.
+    /// A spec with a separator is not a name: it is not looked up in
+    /// `themes/`, it is treated as a path.
     #[test]
-    fn un_spec_con_separador_no_se_busca_como_tema_de_usuario() {
+    fn a_spec_with_a_separator_is_not_looked_up_as_a_user_theme() {
         let dir = tempfile::tempdir().unwrap();
-        con_tema(dir.path(), "mio", "name = \"mio\"\n");
+        with_theme(dir.path(), "mio", "name = \"mio\"\n");
         assert!(matches!(
             resolve_theme_in(Some("themes/../mio"), Some(dir.path())),
             Err(ResolveError::Io { .. })

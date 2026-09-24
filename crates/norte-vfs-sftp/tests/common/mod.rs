@@ -1,7 +1,7 @@
-//! Servidor SFTP IN-PROCESS para los tests (ADR 0013, C2): `russh-sftp`
-//! server sobre un `tokio::io::duplex`, respaldado por un `tempdir` real.
-//! Permite correr la suite contractual COMPLETA (y el corpus hostil) en CI
-//! normal, sin Docker. Un modo HOSTIL inyectable cubre la contención.
+//! IN-PROCESS SFTP server for the tests (ADR 0013, C2): `russh-sftp`
+//! server over a `tokio::io::duplex`, backed by a real `tempdir`.
+//! Lets the FULL contract suite (and the hostile corpus) run in normal
+//! CI, without Docker. An injectable HOSTILE mode covers containment.
 
 #![allow(dead_code)]
 
@@ -15,17 +15,17 @@ use russh_sftp::protocol::{
 };
 use russh_sftp::server::Handler;
 
-/// Cómo se comporta el servidor de test.
+/// How the test server behaves.
 #[derive(Clone, Copy)]
 pub enum Mode {
-    /// Fiel: refleja el tempdir tal cual.
+    /// Faithful: mirrors the tempdir as is.
     Honest,
-    /// Hostil: inyecta en TODO `readdir` una entrada `../../escape` y un
-    /// symlink que apunta fuera de la base — para probar la contención.
+    /// Hostile: injects into EVERY `readdir` a `../../escape` entry and a
+    /// symlink pointing outside the base — to test containment.
     Hostile,
 }
 
-/// Handler respaldado por `base` (tempdir). Estado de handles en memoria.
+/// Handler backed by `base` (tempdir). In-memory handle state.
 pub struct TestHandler {
     base: PathBuf,
     mode: Mode,
@@ -56,7 +56,7 @@ impl TestHandler {
     }
 }
 
-/// Traduce un errno de `std::io` a un `StatusCode` de sftp.
+/// Translates a `std::io` errno into an sftp `StatusCode`.
 fn code(e: &std::io::Error) -> StatusCode {
     use std::io::ErrorKind as K;
     match e.kind() {
@@ -82,8 +82,8 @@ impl Handler for TestHandler {
     }
 
     async fn realpath(&mut self, id: u32, path: String) -> Result<Name, Self::Error> {
-        // El cliente canonicaliza al conectar; devolvemos el path tal cual
-        // (los paths ya son absolutos POSIX bajo la base).
+        // The client canonicalizes on connect; we return the path as is
+        // (paths are already absolute POSIX under the base).
         let p = if path.is_empty() || path == "." {
             "/".to_string()
         } else {
@@ -108,9 +108,10 @@ impl Handler for TestHandler {
         opts.write(pflags.contains(OpenFlags::WRITE));
         opts.append(pflags.contains(OpenFlags::APPEND));
         if pflags.contains(OpenFlags::EXCLUDE) {
-            // SSH_FXF_EXCL = create-new: falla si el path ya existe (incluido un
-            // symlink) y NO lo sigue. OpenSSH real lo honra nativamente; el
-            // servidor de test debe replicarlo para probar la contención H1.
+            // SSH_FXF_EXCL = create-new: fails if the path already exists
+            // (including a symlink) and does NOT follow it. Real OpenSSH
+            // honors it natively; the test server must replicate it to test
+            // H1 containment.
             opts.create_new(true);
         } else {
             opts.create(pflags.contains(OpenFlags::CREATE));
@@ -197,7 +198,8 @@ impl Handler for TestHandler {
         _path: String,
         _attrs: FileAttributes,
     ) -> Result<Status, Self::Error> {
-        // El provider no fija metadatos; aceptamos para no romper flujos.
+        // The provider does not set metadata; we accept it so as not to
+        // break flows.
         Ok(ok(id))
     }
 
@@ -230,7 +232,7 @@ impl Handler for TestHandler {
     async fn readdir(&mut self, id: u32, handle: String) -> Result<Name, Self::Error> {
         let st = self.dirs.get_mut(&handle).ok_or(StatusCode::Failure)?;
         if st.served {
-            // Segunda llamada: fin del listado.
+            // Second call: end of the listing.
             return Err(StatusCode::Eof);
         }
         st.served = true;
@@ -244,7 +246,7 @@ impl Handler for TestHandler {
             files.push(NameFile::new(name, FileAttributes::from(&md)));
         }
         if hostile {
-            // Un servidor hostil intenta que el cliente escape la base.
+            // A hostile server tries to get the client to escape the base.
             let mut attrs = FileAttributes::default();
             attrs.set_dir(true);
             files.push(NameFile::new("../../escape", attrs));
@@ -306,22 +308,22 @@ impl Handler for TestHandler {
         targetpath: String,
     ) -> Result<Status, Self::Error> {
         let link = self.resolve(&linkpath)?;
-        // El target es dato crudo: se crea tal cual (puede ser relativo/roto).
+        // The target is raw data: created as is (may be relative/broken).
         std::os::unix::fs::symlink(&targetpath, &link).map_err(|e| code(&e))?;
         Ok(ok(id))
     }
 }
 
 impl TestHandler {
-    /// Traduce un path remoto (`/sub/f`) a un path del tempdir, CONTENIDO:
-    /// jamás sale de la base (un cliente que intente `../` se queda dentro).
-    /// El servidor honesto no lo necesita; es la red del propio servidor.
+    /// Translates a remote path (`/sub/f`) into a tempdir path, CONTAINED:
+    /// never leaves the base (a client trying `../` stays inside). The
+    /// honest server does not need this; it is the server's own safety net.
     fn resolve(&self, remote: &str) -> Result<PathBuf, StatusCode> {
         let mut p = self.base.clone();
         for comp in remote.split('/').filter(|c| !c.is_empty() && *c != ".") {
             if comp == ".." {
-                // El servidor de test NO deja escapar (defensa propia); el
-                // cliente conforme jamás manda `..`.
+                // The test server does NOT let it escape (self-defense); a
+                // compliant client never sends `..`.
                 return Err(StatusCode::PermissionDenied);
             }
             p.push(comp);
@@ -339,12 +341,12 @@ fn ok(id: u32) -> Status {
     }
 }
 
-/// Arranca un servidor sftp in-process respaldado por `base` y devuelve una
-/// `SftpSession` de cliente conectada por un `duplex` (sin SSH).
+/// Starts an in-process sftp server backed by `base` and returns a client
+/// `SftpSession` connected over a `duplex` (no SSH).
 pub async fn connect(base: &Path, mode: Mode) -> russh_sftp::client::SftpSession {
     let (client_end, server_end) = tokio::io::duplex(64 * 1024);
     russh_sftp::server::run(server_end, TestHandler::new(base.to_path_buf(), mode)).await;
     russh_sftp::client::SftpSession::new(client_end)
         .await
-        .expect("handshake sftp in-process")
+        .expect("in-process sftp handshake")
 }

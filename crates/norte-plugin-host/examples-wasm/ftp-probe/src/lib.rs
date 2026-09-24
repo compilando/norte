@@ -1,9 +1,10 @@
-//! Guest WASM (#30 stage 3b, PROOF): cliente FTP REAL con `suppaftp` SYNC sobre
-//! `wasi:sockets`. `command::run(_, arg)` con `arg = "ip:puerto"` conecta al
-//! servidor FTP, se loguea anónimo, lista `/` en BINARIO y devuelve el nº de
-//! entradas. De-riskea el stack completo del stage 3b (capability `net` gateada
-//! → FTP sync compilado a wasm → servidor FTP real) sin el port entero del
-//! provider (milestone aparte). `previewer::render` = no-soportado.
+//! WASM guest (#30 stage 3b, PROOF): REAL FTP client with SYNC
+//! `suppaftp` over `wasi:sockets`. `command::run(_, arg)` with
+//! `arg = "ip:port"` connects to the FTP server, logs in anonymously,
+//! lists `/` in BINARY and returns the entry count. De-risks stage 3b's
+//! whole stack (gated `net` capability → wasm-compiled sync FTP → real
+//! FTP server) without the provider's full port (a separate milestone).
+//! `previewer::render` = not-supported.
 
 use suppaftp::FtpStream;
 use suppaftp::types::FileType;
@@ -11,9 +12,9 @@ use suppaftp::types::FileType;
 wit_bindgen::generate!({
     world: "norte-plugin",
     path: "wit",
-    // `host-log`/`host-config` viven en OTRO paquete desde la partición
-    // (ADR 0041 decisión 4); wit-bindgen exige decidir explícitamente qué
-    // hacer con los imports de fuera del paquete del world.
+    // `host-log`/`host-config` live in ANOTHER package since the split
+    // (ADR 0041 decision 4); wit-bindgen requires explicitly deciding what
+    // to do with imports from outside the world's package.
     generate_all,
 });
 
@@ -39,12 +40,12 @@ impl CommandGuest for FtpProbe {
 
 impl PreviewerGuest for FtpProbe {
     fn render(_input: PreviewInput) -> Result<String, String> {
-        Err("ftp-probe no aporta preview".to_string())
+        Err("ftp-probe does not provide a preview".to_string())
     }
 
-    // ADR 0037 (WIT 0.6.0): export REQUERIDO de `previewer`, guest solo-command.
+    // ADR 0037 (WIT 0.6.0): REQUIRED export of `previewer`, command-only guest.
     fn render_styled(_input: PreviewInput) -> Result<Vec<Vec<Span>>, String> {
-        Err("ftp-probe no aporta preview".to_string())
+        Err("ftp-probe does not provide a preview".to_string())
     }
 }
 

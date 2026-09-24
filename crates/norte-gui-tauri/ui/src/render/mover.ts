@@ -1,25 +1,25 @@
-// Mover un panel arrastrándolo por su título o su pestaña (ADR 0138), como
-// en VS Code: al pasar por encima de otro panel se ve dónde caería —una de
-// sus mitades, o el panel entero para unirse como pestaña— y al soltar se
-// manda `move_slot`. Qué le pasa al árbol lo decide el host.
+// Moving a pane by dragging its title or its tab (ADR 0138), like VS Code:
+// passing over another pane shows where it would land — one of its halves, or
+// the whole pane to join as a tab — and releasing sends `move_slot`. What
+// happens to the tree is decided by the host.
 
 import type { Screen } from "../render";
 import type { DropZone } from "../types";
 
-/** Píxeles que hay que mover antes de que un clic pase a ser un arrastre:
- *  el título lleva migas que se pulsan, y la pestaña se elige con un clic. */
+/** Pixels that have to move before a click turns into a drag: the title
+ *  carries breadcrumbs that get clicked, and the tab is chosen with a click. */
 const UMBRAL = 6;
 
-/** Qué parte del panel, desde cada borde, es «ese lado». El resto es el
- *  centro. */
+/** How much of the pane, from each edge, counts as "that side". The rest is
+ *  the center. */
 const BORDE = 0.25;
 
-/** Los huecos de cromo: ni se arrastran ni reciben. */
+/** The chrome slots: they neither drag nor receive. */
 const CROMO = new Set(["status", "tasks"]);
 
 /**
- * La zona de `rect` bajo el punto: el lado más cercano si está a menos de
- * un cuarto de él, y si no el centro.
+ * The zone of `rect` under the point: the nearest side if it is within a
+ * quarter of it, and the center otherwise.
  */
 export function zonaDe(
   x: number,
@@ -28,28 +28,28 @@ export function zonaDe(
 ): DropZone {
   const fx = rect.width > 0 ? (x - rect.left) / rect.width : 0.5;
   const fy = rect.height > 0 ? (y - rect.top) / rect.height : 0.5;
-  const lados: [DropZone, number][] = [
+  const sides: [DropZone, number][] = [
     ["left", fx],
     ["right", 1 - fx],
     ["top", fy],
     ["bottom", 1 - fy],
   ];
-  let mejor: [DropZone, number] = ["center", Number.POSITIVE_INFINITY];
-  for (const lado of lados) {
-    if (lado[1] < mejor[1]) {
-      mejor = lado;
+  let best: [DropZone, number] = ["center", Number.POSITIVE_INFINITY];
+  for (const side of sides) {
+    if (side[1] < best[1]) {
+      best = side;
     }
   }
-  return mejor[1] < BORDE ? mejor[0] : "center";
+  return best[1] < BORDE ? best[0] : "center";
 }
 
-/** El panel bajo el punto y la zona, o `null` sobre el propio, el cromo o
- *  nada. */
+/** The pane under the point and the zone, or `null` over itself, the chrome
+ *  or nothing. */
 function destinoEn(
   screen: Screen,
   x: number,
   y: number,
-  origen: number,
+  origin: number,
 ): { slot: number; zone: DropZone; rect: DOMRect } | null {
   for (const [id, dom] of screen.slots) {
     if (CROMO.has(dom.root.dataset["kind"] ?? "")) {
@@ -59,27 +59,27 @@ function destinoEn(
     if (x < r.left || x >= r.right || y < r.top || y >= r.bottom) {
       continue;
     }
-    return id === origen ? null : { slot: id, zone: zonaDe(x, y, r), rect: r };
+    return id === origin ? null : { slot: id, zone: zonaDe(x, y, r), rect: r };
   }
   return null;
 }
 
-/** El rectángulo de la zona, relativo al tablero. */
+/** The zone's rectangle, relative to the board. */
 function pintarVelo(
-  velo: HTMLElement,
-  tablero: DOMRect,
+  veil: HTMLElement,
+  board: DOMRect,
   d: { zone: DropZone; rect: DOMRect } | null,
 ): void {
   if (d === null) {
-    velo.hidden = true;
+    veil.hidden = true;
     return;
   }
-  velo.hidden = false;
-  velo.dataset["zone"] = d.zone;
+  veil.hidden = false;
+  veil.dataset["zone"] = d.zone;
   const r = d.rect;
   let [left, top, width, height] = [
-    r.left - tablero.left,
-    r.top - tablero.top,
+    r.left - board.left,
+    r.top - board.top,
     r.width,
     r.height,
   ];
@@ -94,108 +94,109 @@ function pintarVelo(
       top += r.height / 2;
     }
   }
-  velo.style.setProperty("left", `${String(left)}px`);
-  velo.style.setProperty("top", `${String(top)}px`);
-  velo.style.setProperty("width", `${String(width)}px`);
-  velo.style.setProperty("height", `${String(height)}px`);
+  veil.style.setProperty("left", `${String(left)}px`);
+  veil.style.setProperty("top", `${String(top)}px`);
+  veil.style.setProperty("width", `${String(width)}px`);
+  veil.style.setProperty("height", `${String(height)}px`);
 }
 
 /**
- * Hace de `asa` —el título de un panel, o una pestaña— el sitio por donde
- * se arrastra el hueco `slotId`.
+ * Makes `handle` — a pane's title, or a tab — the spot slot `slotId` is
+ * dragged from.
  *
- * Por `window` y no por captura del puntero: el arrastre sale del asa en el
- * primer píxel, y lo que importa es dónde se suelta. `Esc` lo cancela sin
- * que la tecla llegue al host, y el clic que el navegador dispara al soltar
- * sobre el asa se traga: un arrastre no es elegir la pestaña.
+ * Through `window` and not pointer capture: the drag leaves the handle on
+ * the first pixel, and what matters is where it is released. `Esc` cancels
+ * it without the key reaching the host, and the click the browser fires on
+ * release over the handle is swallowed: a drag is not choosing the tab.
  */
-export function hacerArrastrable(screen: Screen, asa: HTMLElement, slotId: number): void {
-  asa.addEventListener("pointerdown", (e: PointerEvent) => {
+export function hacerArrastrable(screen: Screen, handle: HTMLElement, slotId: number): void {
+  handle.addEventListener("pointerdown", (e: PointerEvent) => {
     if (e.button !== 0) {
       return;
     }
-    const doc = asa.ownerDocument;
-    const ventana = doc.defaultView;
-    if (ventana === null) {
+    const doc = handle.ownerDocument;
+    const win = doc.defaultView;
+    if (win === null) {
       return;
     }
     const [x0, y0] = [e.clientX, e.clientY];
-    let arrastrando = false;
-    let destino: { slot: number; zone: DropZone; rect: DOMRect } | null = null;
-    const velo = doc.createElement("div");
-    velo.className = "drop-target";
-    velo.hidden = true;
+    let dragging = false;
+    let target: { slot: number; zone: DropZone; rect: DOMRect } | null = null;
+    const veil = doc.createElement("div");
+    veil.className = "drop-target";
+    veil.hidden = true;
 
-    const limpiar = (): void => {
-      ventana.removeEventListener("pointermove", mover);
-      ventana.removeEventListener("pointerup", soltar);
-      ventana.removeEventListener("pointercancel", cancelar);
-      ventana.removeEventListener("keydown", tecla, true);
-      velo.remove();
+    const cleanup = (): void => {
+      win.removeEventListener("pointermove", move);
+      win.removeEventListener("pointerup", release);
+      win.removeEventListener("pointercancel", cancel);
+      win.removeEventListener("keydown", key, true);
+      veil.remove();
       delete doc.documentElement.dataset["dragging"];
     };
-    const tragarClic = (): void => {
-      const trago = (ev: Event): void => {
+    const swallowClick = (): void => {
+      const swallow = (ev: Event): void => {
         ev.stopPropagation();
         ev.preventDefault();
       };
-      ventana.addEventListener("click", trago, { capture: true, once: true });
-      // El clic del soltar llega JUSTO detrás del `pointerup`, antes que
-      // cualquier temporizador. Si no llega —se soltó sobre otro panel, y
-      // el navegador solo hace clic si se baja y se sube en el mismo sitio—
-      // el trago se quita: si no, se comería el siguiente clic de verdad.
-      ventana.setTimeout(() => {
-        ventana.removeEventListener("click", trago, { capture: true });
+      win.addEventListener("click", swallow, { capture: true, once: true });
+      // The release's click arrives RIGHT behind `pointerup`, before any
+      // timer. If it does not arrive — it was released over another pane,
+      // and the browser only clicks if pressed and released in the same
+      // spot — the swallow is removed: otherwise it would eat the next real
+      // click.
+      win.setTimeout(() => {
+        win.removeEventListener("click", swallow, { capture: true });
       }, 0);
     };
-    const mover = (ev: PointerEvent): void => {
-      if (!arrastrando) {
+    const move = (ev: PointerEvent): void => {
+      if (!dragging) {
         if (Math.hypot(ev.clientX - x0, ev.clientY - y0) < UMBRAL) {
           return;
         }
-        arrastrando = true;
+        dragging = true;
         doc.documentElement.dataset["dragging"] = "slot";
-        screen.root.append(velo);
+        screen.root.append(veil);
       }
-      destino = destinoEn(screen, ev.clientX, ev.clientY, slotId);
-      pintarVelo(velo, screen.root.getBoundingClientRect(), destino);
+      target = destinoEn(screen, ev.clientX, ev.clientY, slotId);
+      pintarVelo(veil, screen.root.getBoundingClientRect(), target);
     };
-    const soltar = (): void => {
-      limpiar();
-      if (!arrastrando) {
+    const release = (): void => {
+      cleanup();
+      if (!dragging) {
         return;
       }
-      tragarClic();
-      if (destino !== null) {
+      swallowClick();
+      if (target !== null) {
         screen.send({
           action: "move_slot",
           slot_id: slotId,
-          target: destino.slot,
-          zone: destino.zone,
+          target: target.slot,
+          zone: target.zone,
         });
       }
     };
-    const tecla = (ev: KeyboardEvent): void => {
+    const key = (ev: KeyboardEvent): void => {
       if (ev.key !== "Escape") {
         return;
       }
       ev.stopImmediatePropagation();
       ev.preventDefault();
-      destino = null;
-      arrastrando = false;
-      limpiar();
+      target = null;
+      dragging = false;
+      cleanup();
     };
-    // Un puntero que el sistema cancela (la ventana pierde el foco) no
-    // suelta nada: sin esto los oyentes seguían puestos y el siguiente
-    // `pointerup`, en cualquier sitio, mandaba un movimiento rancio.
-    const cancelar = (): void => {
-      destino = null;
-      arrastrando = false;
-      limpiar();
+    // A pointer the system cancels (the window loses focus) does not release
+    // anything: without this the listeners stayed attached and the next
+    // `pointerup`, anywhere, sent a stale move.
+    const cancel = (): void => {
+      target = null;
+      dragging = false;
+      cleanup();
     };
-    ventana.addEventListener("pointermove", mover);
-    ventana.addEventListener("pointerup", soltar);
-    ventana.addEventListener("pointercancel", cancelar);
-    ventana.addEventListener("keydown", tecla, true);
+    win.addEventListener("pointermove", move);
+    win.addEventListener("pointerup", release);
+    win.addEventListener("pointercancel", cancel);
+    win.addEventListener("keydown", key, true);
   });
 }

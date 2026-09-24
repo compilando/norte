@@ -1,4 +1,4 @@
-//! El binario del renderer: monta el host, abre UNA ventana y bombea.
+//! The renderer's binary: mounts the host, opens ONE window and pumps.
 #![forbid(unsafe_code)]
 
 use std::process::ExitCode;
@@ -9,18 +9,18 @@ use norte_gui_tauri::startup::{self, USAGE};
 use norte_ui_host::{BridgeEnvelope, UiAction, dto::UiUpdate};
 use tauri::{Emitter, Manager};
 
-/// Cuándo arrancó el proceso. Es la referencia del arranque en frío: lo que
-/// se mide es de aquí a que el renderer pide su primera foto, que es cuando
-/// la webview existe, ha cargado su script y ya puede pintar.
-static ARRANQUE: std::sync::LazyLock<std::time::Instant> =
+/// When the process started. It is the cold-start reference: what gets
+/// measured runs from here to when the renderer asks for its first frame,
+/// which is when the webview exists, has loaded its script and can paint.
+static STARTUP: std::sync::LazyLock<std::time::Instant> =
     std::sync::LazyLock::new(std::time::Instant::now);
 
-/// El sumidero de verdad: la ventana principal.
-struct VentanaSink {
+/// The real sink: the main window.
+struct WindowSink {
     app: tauri::AppHandle,
 }
 
-impl UpdateSink for VentanaSink {
+impl UpdateSink for WindowSink {
     fn update(&self, env: &BridgeEnvelope<UiUpdate>) -> Result<(), SinkError> {
         self.app
             .emit(EVENT_UPDATE, env)
@@ -34,15 +34,16 @@ impl UpdateSink for VentanaSink {
     }
 }
 
-// `tauri::State` va POR VALOR en un comando: es lo que el macro genera, y no
-// hay una versión por referencia. El lint no conoce esa restricción.
+// `tauri::State` travels BY VALUE in a command: that is what the macro
+// generates, and there is no by-reference version. The lint does not know
+// about that restriction.
 #[expect(
     clippy::needless_pass_by_value,
-    reason = "`tauri::command` exige `State` por valor"
+    reason = "`tauri::command` requires `State` by value"
 )]
 #[tauri::command]
 fn initial_snapshot(state: tauri::State<'_, AppState>) -> Result<BridgeEnvelope<UiUpdate>, String> {
-    tracing::info!(ms = ARRANQUE.elapsed().as_millis(), "primera foto pedida");
+    tracing::info!(ms = STARTUP.elapsed().as_millis(), "first frame requested");
     Ok(state.bridge()?.initial_snapshot())
 }
 
@@ -61,13 +62,13 @@ async fn request_snapshot(
     state.bridge()?.request_snapshot().await
 }
 
-/// Lo que el renderer midió (tarea 3.6). Solo con la feature `metrics`.
+/// What the renderer measured (task 3.6). Only with the `metrics` feature.
 #[cfg(feature = "metrics")]
 #[derive(Debug, serde::Deserialize)]
 struct MetricSample {
-    /// Qué se midió (`key-to-paint`, `scroll-frame`).
+    /// What was measured (`key-to-paint`, `scroll-frame`).
     what: String,
-    /// Las muestras, en milisegundos.
+    /// The samples, in milliseconds.
     samples: Vec<f64>,
 }
 
@@ -83,7 +84,7 @@ fn metrics(sample: MetricSample) {
         let i = (((v.len() - 1) as f64) * p).round() as usize;
         v[i]
     };
-    // A stdout: esto es una medida, y quien mide la está mirando.
+    // To stdout: this is a measurement, and whoever is measuring is watching.
     println!(
         "metrics {} n={} p50={:.2}ms p95={:.2}ms max={:.2}ms",
         sample.what,
@@ -94,15 +95,15 @@ fn metrics(sample: MetricSample) {
     );
 }
 
-/// Los bytes de la imagen abierta, CRUDOS.
+/// The bytes of the open image, RAW.
 ///
-/// `tauri::ipc::Response` y no un `Vec<u8>` serializado: por el camino de
-/// serde, un vector de bytes cruza como un array JSON de números —cuatro o
-/// cinco bytes de texto por byte real—, que para ocho megas es absurdo.
+/// `tauri::ipc::Response` and not a serialized `Vec<u8>`: over serde's path, a
+/// byte vector crosses as a JSON array of numbers — four or five bytes of
+/// text per real byte — which for eight megabytes is absurd.
 ///
-/// Un vector VACÍO significa «no hay imagen», que es lo que el renderer ya
-/// sabe por la foto: esto no es una segunda fuente de verdad sobre si hay
-/// imagen, solo el transporte de sus bytes.
+/// An EMPTY vector means "there is no image", which the renderer already
+/// knows from the frame: this is not a second source of truth about whether
+/// there is an image, only the transport for its bytes.
 #[tauri::command]
 async fn image_bytes(state: tauri::State<'_, AppState>) -> Result<tauri::ipc::Response, String> {
     let bytes = state.bridge()?.image_bytes().await?;
@@ -111,7 +112,7 @@ async fn image_bytes(state: tauri::State<'_, AppState>) -> Result<tauri::ipc::Re
 
 #[expect(
     clippy::needless_pass_by_value,
-    reason = "`tauri::command` exige `State` por valor"
+    reason = "`tauri::command` requires `State` by value"
 )]
 #[tauri::command]
 fn catalog(
@@ -120,14 +121,14 @@ fn catalog(
     Ok(state.bridge()?.catalog())
 }
 
-/// La barra de título propia (ADR 0136): minimizar, maximizar, cerrar o
-/// arrastrar la ventana que LLAMA.
+/// The window's own title bar (ADR 0136): minimize, maximize, close or drag
+/// the window that CALLS.
 ///
-/// Rechaza con la barra nativa: entonces el escritorio ya hace todo esto, y
-/// una puerta que nadie necesita no se deja abierta.
+/// Rejects with the native bar: then the desktop already does all of this,
+/// and a door nobody needs is not left open.
 #[expect(
     clippy::needless_pass_by_value,
-    reason = "`tauri::command` exige `State` y la ventana por valor"
+    reason = "`tauri::command` requires `State` and the window by value"
 )]
 #[tauri::command]
 fn window_control(
@@ -137,24 +138,24 @@ fn window_control(
 ) -> Result<(), String> {
     use norte_gui_tauri::commands::WindowVerb;
     if !state.bridge()?.catalog().appearance.custom_titlebar {
-        return Err("la barra de título es la del escritorio".to_owned());
+        return Err("the title bar is the desktop's".to_owned());
     }
-    let hecho = match verb {
+    let done = match verb {
         WindowVerb::Minimize => window.minimize(),
         WindowVerb::ToggleMaximize => match window.is_maximized() {
             Ok(true) => window.unmaximize(),
             Ok(false) => window.maximize(),
             Err(e) => Err(e),
         },
-        // `close` pasa por `CloseRequested`, así que `[ui] confirm_quit`
-        // pregunta igual que con la X del escritorio.
+        // `close` goes through `CloseRequested`, so `[ui] confirm_quit` asks
+        // just as it does with the desktop's X.
         WindowVerb::Close => window.close(),
         WindowVerb::Drag => window.start_dragging(),
     };
-    hecho.map_err(|e| e.to_string())
+    done.map_err(|e| e.to_string())
 }
 
-/// Los comandos registrados. Con `metrics`, uno más — y solo entonces.
+/// The registered commands. With `metrics`, one more — and only then.
 #[cfg(not(feature = "metrics"))]
 fn handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static {
     tauri::generate_handler![
@@ -196,14 +197,14 @@ fn main() -> ExitCode {
         println!("norte-gui {}", norte_frontend::version::VERSION_LINE);
         return ExitCode::SUCCESS;
     }
-    // Se toca aquí para que la referencia sea el arranque del proceso y no la
-    // primera vez que alguien la lee.
-    let _ = *ARRANQUE;
+    // Touched here so the reference is the process's startup and not the
+    // first time someone reads it.
+    let _ = *STARTUP;
 
-    // El arranque va sobre el runtime de Tauri: las tasks que el host deja
-    // vivas (listado, progreso, conexión) tienen que correr en el mismo.
-    let arranque = tauri::async_runtime::block_on(startup::boot(&cli));
-    let state = match arranque {
+    // Startup runs over Tauri's runtime: the tasks the host keeps alive
+    // (listing, progress, connection) have to run on the same one.
+    let boot_result = tauri::async_runtime::block_on(startup::boot(&cli));
+    let state = match boot_result {
         Ok(boot) => {
             let mut cat =
                 norte_gui_tauri::catalog::catalogo(boot.host.instance(), boot.lang, &boot.theme);
@@ -219,88 +220,90 @@ fn main() -> ExitCode {
                 boot.lang,
             )))
         }
-        // Sin daemon no hay pantalla, pero SÍ hay ventana: un binario que
-        // muere en el terminal no le dice nada a quien lo abrió desde un
-        // lanzador.
+        // Without a daemon there is no screen, but there IS a window: a
+        // binary that dies in the terminal tells whoever opened it from a
+        // launcher nothing at all.
         Err(e) => {
-            tracing::error!(error = %e, "el arranque falló");
+            tracing::error!(error = %e, "startup failed");
             AppState::Failed(e.to_string())
         }
     };
 
-    let resultado = tauri::Builder::default()
+    let result = tauri::Builder::default()
         .manage(state)
         .invoke_handler(handler())
         .plugin(guardia_de_navegacion())
         .setup(|app| {
-            // Qué binario es este, en el título: versión y revisión del árbol.
-            // La webview no lo necesita saber y el título no pasa por ella.
+            // Which binary this is, in the title: version and tree revision.
+            // The webview does not need to know it and the title does not go
+            // through it.
             if let Some(v) = app.get_webview_window("main") {
                 let _ = v.set_title(&format!("norte {}", norte_frontend::version::VERSION_LINE));
             }
-            let estado: tauri::State<'_, AppState> = app.state();
-            // La barra de título propia (ADR 0136): sin la del escritorio.
-            // Aquí, al crearla, y no en `tauri.conf.json`: allí es fija, y
-            // la de serie tiene que seguir siendo la nativa.
-            if estado
+            let state: tauri::State<'_, AppState> = app.state();
+            // The window's own title bar (ADR 0136): without the desktop's.
+            // Here, when it is created, and not in `tauri.conf.json`: there
+            // it is fixed, and the stock one has to stay the native one.
+            if state
                 .bridge()
                 .is_ok_and(|b| b.catalog().appearance.custom_titlebar)
                 && let Some(v) = app.get_webview_window("main")
             {
                 let _ = v.set_decorations(false);
             }
-            if let Ok(bridge) = estado.bridge() {
+            if let Ok(bridge) = state.bridge() {
                 let sub = bridge.host().subscribe();
-                let sink = VentanaSink {
+                let sink = WindowSink {
                     app: app.handle().clone(),
                 };
                 tauri::async_runtime::spawn(norte_gui_tauri::sink::pump(sub, sink));
-                // Y los efectos NATIVOS, por su propio canal: portapapeles,
-                // abrir con el escritorio y terminal. No pasan por la
-                // webview —no ve las rutas ni tiene permiso para ejecutar
-                // nada— sino por este proceso, con una puerta estrecha por
-                // cosa (ADR 0066 D11).
-                let nativos = bridge.host().native_effects();
-                // El TEMA vuelve a resolverse en ESTE proceso: los colores
-                // cruzan convertidos en variables CSS, y esa conversión no es
-                // del host. Se rehace el catálogo y se le dice al renderer que
-                // vuelva a pedirlo; si el nombre no resuelve, no se le dice
-                // nada — repintar por nada es peor que no repintar.
-                let mando = app.handle().clone();
-                let aplicar_tema = move |nombre: &str| {
-                    let estado: tauri::State<'_, AppState> = mando.state();
-                    if estado.bridge().is_ok_and(|b| b.cambiar_tema(nombre)) {
-                        let _ = mando.emit(EVENT_CATALOG, ());
+                // And the NATIVE effects, over their own channel: clipboard,
+                // open with the desktop and terminal. They do not go through
+                // the webview — it neither sees the paths nor has permission
+                // to run anything — but through this process, with one
+                // narrow door per thing (ADR 0066 D11).
+                let native_effects = bridge.host().native_effects();
+                // The THEME is resolved again in THIS process: colors cross
+                // over converted into CSS variables, and that conversion is
+                // not the host's. The catalogue is rebuilt and the renderer
+                // is told to ask for it again; if the name does not resolve,
+                // it is told nothing — repainting for nothing is worse than
+                // not repainting.
+                let handle = app.handle().clone();
+                let apply_theme = move |name: &str| {
+                    let state: tauri::State<'_, AppState> = handle.state();
+                    if state.bridge().is_ok_and(|b| b.cambiar_tema(name)) {
+                        let _ = handle.emit(EVENT_CATALOG, ());
                     }
                 };
-                // El host va también, y no solo el canal: el selector de
-                // carpeta le CONTESTA (#284), y esa respuesta entra por
-                // `dispatch` como cualquier otra acción.
-                // Y cerrar: el host lo pide cuando `[ui] confirm_quit` ya no
-                // tiene nada que preguntar. `CONFIRMADO` deja pasar el
-                // siguiente `CloseRequested` sin volver a preguntar — sin él
-                // la ventana no se cerraría nunca, que es peor que no
-                // preguntar.
-                let mando_cierre = app.handle().clone();
-                let cerrar = move || {
-                    CONFIRMADO.store(true, std::sync::atomic::Ordering::SeqCst);
-                    if let Some(v) = mando_cierre.get_webview_window("main") {
+                // The host travels too, not just the channel: the folder
+                // picker ANSWERS it (#284), and that answer comes in through
+                // `dispatch` like any other action.
+                // And closing: the host asks for it when `[ui] confirm_quit`
+                // has nothing left to ask. `CONFIRMED` lets the next
+                // `CloseRequested` through without asking again — without
+                // that flag the window would never close, which is worse
+                // than not asking.
+                let close_handle = app.handle().clone();
+                let close = move || {
+                    CONFIRMED.store(true, std::sync::atomic::Ordering::SeqCst);
+                    if let Some(v) = close_handle.get_webview_window("main") {
                         let _ = v.close();
                     }
                 };
                 tauri::async_runtime::spawn(norte_gui_tauri::nativo::bombear(
-                    nativos,
+                    native_effects,
                     bridge.host_compartido(),
-                    aplicar_tema,
-                    cerrar,
+                    apply_theme,
+                    close,
                 ));
             }
             Ok(())
         })
-        .on_window_event(al_evento_de_ventana)
+        .on_window_event(on_window_event)
         .run(tauri::generate_context!());
 
-    match resultado {
+    match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("norte-gui: {e}");
@@ -309,55 +312,54 @@ fn main() -> ExitCode {
     }
 }
 
-/// Los esquemas desde los que la webview puede cargar una página.
+/// The schemes the webview is allowed to load a page from.
 ///
-/// `tauri:` es el bundle empaquetado; `ipc:` es cómo la webview habla con
-/// este proceso. Nada más.
+/// `tauri:` is the packaged bundle; `ipc:` is how the webview talks to this
+/// process. Nothing else.
 const ESQUEMAS_DE_PAGINA: &[&str] = &["tauri", "ipc"];
 
-/// La webview NO navega fuera de sus assets.
+/// The webview does NOT navigate outside its assets.
 ///
-/// La CSP no cubre la navegación de PRIMER NIVEL —`form-action` son
-/// formularios y no existe `navigate-to`—, así que sin esto un
-/// `window.location = "https://…"` sustituye la interfaz entera por una
-/// página ajena DENTRO del marco de la aplicación: la ventana que el usuario
-/// cree estar mirando es la de norte. Tauri sigue rechazando los comandos
-/// desde un origen remoto, así que lo que esto cierra es la SUPLANTACIÓN, no
-/// el IPC (ADR 0066, decisión D11).
+/// The CSP does not cover TOP-LEVEL navigation — `form-action` is forms and
+/// there is no `navigate-to` — so without this, a `window.location =
+/// "https://…"` replaces the entire interface with someone else's page
+/// INSIDE the application's frame: the window the user believes they are
+/// looking at is norte's. Tauri still rejects commands from a remote origin,
+/// so what this closes is IMPERSONATION, not IPC (ADR 0066, decision D11).
 fn guardia_de_navegacion<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
     tauri::plugin::Builder::new("norte-navegacion")
         .on_navigation(|_webview, url| {
-            let permitido = ESQUEMAS_DE_PAGINA.contains(&url.scheme());
-            if !permitido {
-                tracing::warn!(scheme = url.scheme(), "navegación rechazada");
+            let allowed = ESQUEMAS_DE_PAGINA.contains(&url.scheme());
+            if !allowed {
+                tracing::warn!(scheme = url.scheme(), "navigation rejected");
             }
-            permitido
+            allowed
         })
         .build()
 }
 
-/// Lo que se espera al apagar antes de cerrar la ventana de todas formas.
+/// What to wait for on shutdown before closing the window anyway.
 const PLAZO_APAGADO: std::time::Duration = std::time::Duration::from_secs(2);
 
-/// El cierre ya está confirmado: el siguiente `CloseRequested` no pregunta.
+/// The close is already confirmed: the next `CloseRequested` does not ask.
 ///
-/// Lo pone el efecto `CloseWindow` del host, que es lo que llega cuando el
-/// lector contesta que sí —o cuando `[ui] confirm_quit` dice que no hay nada
-/// que preguntar—. Sin esta marca, cerrar volvería a preguntar en bucle y la
-/// ventana no se cerraría nunca.
-static CONFIRMADO: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// Set by the host's `CloseWindow` effect, which arrives when the reader
+/// answers yes — or when `[ui] confirm_quit` says there is nothing to ask.
+/// Without this flag, closing would keep asking in a loop and the window
+/// would never close.
+static CONFIRMED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-/// Los eventos de la VENTANA que el host necesita saber.
+/// The WINDOW events the host needs to know about.
 ///
-/// Fuera de `main` porque son tres cosas sin relación entre sí —el foco, lo
-/// que se suelta y el cierre— y meterlas en el constructor de la aplicación
-/// hace que se lean como parte del arranque, que es lo que menos son.
-fn al_evento_de_ventana(window: &tauri::Window, event: &tauri::WindowEvent) {
-    // El foco, al host (#285): con la ventana delante no se avisa por
-    // el escritorio, porque la barra y el tablero ya lo cuentan.
+/// Outside `main` because they are three unrelated things — focus, what gets
+/// dropped and closing — and putting them in the application builder would
+/// make them read as part of startup, which is the last thing they are.
+fn on_window_event(window: &tauri::Window, event: &tauri::WindowEvent) {
+    // Focus, to the host (#285): with the window in front, the desktop does
+    // not need to be told, because the bar and the dashboard already show it.
     if let tauri::WindowEvent::Focused(focused) = event {
-        let estado: tauri::State<'_, AppState> = window.state();
-        if let Ok(bridge) = estado.bridge() {
+        let state: tauri::State<'_, AppState> = window.state();
+        if let Ok(bridge) = state.bridge() {
             let host = bridge.host_compartido();
             let focused = *focused;
             tauri::async_runtime::spawn(async move {
@@ -367,22 +369,23 @@ fn al_evento_de_ventana(window: &tauri::Window, event: &tauri::WindowEvent) {
             });
         }
     }
-    // Lo que se SUELTA sobre la ventana (#283), y solo lo que se
-    // suelta: `Over`/`Leave` no se reenvían, porque el host no pinta
-    // realce de arrastre y mandarlos sería tráfico por cada píxel que
-    // cruza el puntero. El drop no copia nada por sí solo: abre la
-    // confirmación, que es donde el lector ve qué llegó de verdad.
+    // What gets DROPPED on the window (#283), and only what gets dropped:
+    // `Over`/`Leave` are not forwarded, because the host does not paint
+    // drag highlighting and sending them would be traffic for every pixel
+    // the pointer crosses. The drop does not copy anything by itself: it
+    // opens the confirmation, which is where the reader sees what really
+    // arrived.
     if let tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) = event {
-        let estado: tauri::State<'_, AppState> = window.state();
-        if let Ok(bridge) = estado.bridge() {
+        let state: tauri::State<'_, AppState> = window.state();
+        if let Ok(bridge) = state.bridge() {
             let host = bridge.host_compartido();
-            // A texto tal cual, sin `to_string_lossy`: un nombre que
-            // no sea UTF-8 no se convierte con reemplazos, porque eso
-            // nombraría OTRO fichero. Se descarta aquí y el host no
-            // llega a saberlo —el puente es JSON y no hay forma de que
-            // esos bytes lo crucen—, así que el lector ve una lista
-            // más corta que lo que arrastró. Es el límite conocido de
-            // esta vía, y el que la ve entera es el panel.
+            // As text as-is, without `to_string_lossy`: a name that is not
+            // UTF-8 is not converted with replacements, because that would
+            // name ANOTHER file. It is dropped here and the host never gets
+            // to know about it — the bridge is JSON and there is no way for
+            // those bytes to cross it — so the reader sees a shorter list
+            // than what they dragged. It is this path's known limit, and the
+            // one that sees the whole thing is the pane.
             let paths: Vec<String> = paths
                 .iter()
                 .filter_map(|p| p.to_str().map(str::to_owned))
@@ -395,16 +398,16 @@ fn al_evento_de_ventana(window: &tauri::Window, event: &tauri::WindowEvent) {
         }
     }
     if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-        let estado: tauri::State<'_, AppState> = window.state();
-        // `[ui] confirm_quit`: preguntar es del HOST, que es quien tiene la
-        // configuración y el tablero de tasks. Cerrar no preguntaba nunca, y
-        // `always` es justo el valor que pide la guarda.
+        let state: tauri::State<'_, AppState> = window.state();
+        // `[ui] confirm_quit`: asking belongs to the HOST, which is the one
+        // that has the configuration and the task dashboard. Closing never
+        // used to ask, and `always` is exactly the value the guard calls for.
         //
-        // Solo la PRIMERA vez: cuando el lector confirma, el host contesta
-        // con `CloseWindow`, que marca `CONFIRMADO` y vuelve a cerrar. Sin esa
-        // marca la ventana no se cerraría nunca.
-        if !CONFIRMADO.swap(false, std::sync::atomic::Ordering::SeqCst)
-            && let Ok(bridge) = estado.bridge()
+        // Only the FIRST time: when the reader confirms, the host answers
+        // with `CloseWindow`, which sets `CONFIRMED` and closes again.
+        // Without that flag the window would never close.
+        if !CONFIRMED.swap(false, std::sync::atomic::Ordering::SeqCst)
+            && let Ok(bridge) = state.bridge()
         {
             let host = bridge.host_compartido();
             let ack = tauri::async_runtime::block_on(async {
@@ -414,37 +417,38 @@ fn al_evento_de_ventana(window: &tauri::Window, event: &tauri::WindowEvent) {
                 )
                 .await
             });
-            // Si el host contestó, él decide: o abrió el diálogo o pidió
-            // cerrar, y en los dos casos este gesto se detiene aquí. Si NO
-            // contestó —socket atascado, host muerto— se cierra igual: una
-            // ventana que no se puede cerrar es peor que una que no pregunta.
+            // If the host answered, it decides: it either opened the dialog
+            // or asked to close, and in both cases this gesture stops here.
+            // If it did NOT answer — stuck socket, dead host — it closes
+            // anyway: a window that cannot be closed is worse than one that
+            // does not ask.
             if ack.is_ok() {
                 api.prevent_close();
                 return;
             }
-            tracing::warn!("el host no contestó a la pregunta de cerrar: se cierra igual");
+            tracing::warn!("the host did not answer the close question: closing anyway");
         }
-        if let Ok(bridge) = estado.bridge() {
-            // Cerrar vuelca la sesión: es la única oportunidad de
-            // guardar dónde estaba cada panel, y hacerlo en un hilo
-            // suelto sería cerrarla a medias.
-            // CON PLAZO: esto corre en el hilo del bucle de eventos y
-            // `apagar` espera una respuesta del daemon. Con el socket
-            // atascado, la ventana dejaba de repintarse y no se
-            // cerraba nunca — y matar el proceso es justo el camino
-            // que garantiza perder la sesión.
-            let informe = tauri::async_runtime::block_on(async {
+        if let Ok(bridge) = state.bridge() {
+            // Closing flushes the session: it is the only chance to save
+            // where each pane was, and doing it on a loose thread would
+            // close it halfway.
+            // WITH A DEADLINE: this runs on the event-loop thread and
+            // `shutdown` waits for an answer from the daemon. With the
+            // socket stuck, the window stopped repainting and never closed
+            // — and killing the process is exactly the path that guarantees
+            // losing the session.
+            let report = tauri::async_runtime::block_on(async {
                 tokio::time::timeout(PLAZO_APAGADO, bridge.host().shutdown()).await
             });
-            match informe {
+            match report {
                 Ok(Ok(r)) if r.incomplete => {
-                    tracing::warn!("quedó trabajo sin terminar al cerrar");
+                    tracing::warn!("work was left unfinished on close");
                 }
                 Ok(Ok(_)) => {}
-                Ok(Err(e)) => tracing::warn!(error = %e, "el apagado falló"),
+                Ok(Err(e)) => tracing::warn!(error = %e, "shutdown failed"),
                 Err(_) => tracing::warn!(
-                    "el apagado no contestó en {PLAZO_APAGADO:?}: la sesión puede \
-                         haberse quedado sin escribir"
+                    "shutdown did not answer within {PLAZO_APAGADO:?}: the session may \
+                         have been left unwritten"
                 ),
             }
         }

@@ -1,136 +1,140 @@
-//! El panel de registro en la TUI: el kind, las teclas y la mitad remota.
+//! The TUI's log panel: the kind, the keys and the remote half.
 //!
-//! El estado (nivel, filtro, seguimiento del final, la fuente) vive en
-//! [`norte_frontend::logpanel`] porque la ventana necesita el mismo, y las
-//! líneas vienen del anillo de `norte_config::logring`. Aquí queda lo que es de
-//! esta terminal: qué tecla hace qué, y cómo se junta lo de este proceso con lo
-//! del daemon.
+//! The state (level, filter, follow-tail, the source) lives in
+//! [`norte_frontend::logpanel`] because the window needs the same one, and
+//! the lines come from `norte_config::logring`'s ring. What is left here is
+//! what belongs to this terminal: which key does what, and how this
+//! process's own lines are joined with the daemon's.
 //!
-//! # Por qué hay una mitad remota (#328)
+//! # Why there is a remote half (#328)
 //!
-//! `ntc --socket <ruta>` habla con un daemon que es OTRO proceso: los
-//! providers, el journal, la política y el motivo por el que una conexión
-//! falló están al otro lado del socket, y este anillo solo tiene las líneas
-//! de la propia terminal. Un panel que no lo dijera pareciría roto — alguien
-//! lo abre justo cuando una conexión falla, no ve la línea que lo explica, y
-//! concluye que el registro no funciona en vez de que está mirando otro sitio.
+//! `ntc --socket <path>` talks to a daemon that is ANOTHER process: the
+//! providers, the journal, the policy and the reason a connection failed are
+//! on the other side of the socket, and this ring only has the terminal's
+//! own lines. A panel that did not say so would look broken — someone opens
+//! it right when a connection fails, does not see the line that explains it,
+//! and concludes the log does not work instead of that it is looking
+//! somewhere else.
 //!
-//! La ventana resolvió esto primero (`norte_ui_host::controller::logpanel`) y
-//! esto es la MISMA respuesta a propósito: una decisión que un frontend toma y
-//! el otro no diverge en silencio (ADR 0077).
+//! The window solved this first (`norte_ui_host::controller::logpanel`) and
+//! this is the SAME answer on purpose: a decision one frontend makes and the
+//! other does not silently diverge from (ADR 0077).
 
 use norte_config::logline::{LogLevel, LogLine};
 use norte_frontend::logpanel::LogSource;
 use norte_i18n::{t, ta};
 
-/// El kind que ocupa un hueco de registro.
+/// The kind that occupies a log slot.
 pub const KIND: &str = "log";
 
-/// Cuántas líneas se le piden al daemon en cada vuelta.
+/// How many lines are requested from the daemon on each round.
 ///
-/// El daemon recorta a 1000, así que esto es una petición y no un contrato.
-/// Quinientas porque una vuelta que no quepa NO pierde nada —lo que sobra
-/// sigue después del cursor y lo recoge la vuelta siguiente— y porque el panel
-/// enseña como mucho una pantalla.
+/// The daemon caps it at 1000, so this is a request and not a contract. Five
+/// hundred because a round that does not fit loses NOTHING —what is left
+/// over follows after the cursor and is picked up by the next round— and
+/// because the panel shows at most one screen.
 pub const MAX_REMOTO: u32 = 500;
 
-/// Techo de líneas del daemon que se guardan en memoria.
+/// Cap on the daemon lines kept in memory.
 ///
-/// El anillo local ya tiene el suyo; éste es el mismo cuidado para el remoto,
-/// porque aquí las líneas se ACUMULAN vuelta a vuelta y sin tope un panel
-/// abierto toda una tarde crecería sin fin.
+/// The local ring already has its own; this is the same care for the remote
+/// one, because here lines ACCUMULATE round after round and with no cap a
+/// panel left open all afternoon would grow without end.
 const MAX_LINEAS_REMOTAS: usize = 2000;
 
-/// Qué se sabe del registro del DAEMON.
+/// What is known about the DAEMON's log.
 ///
-/// Tres valores y no un `bool`, porque «todavía no ha contestado» y «ha dicho
-/// que no tiene registro» se enseñan distinto: lo primero no dice nada, y lo
-/// segundo es una frase que el panel tiene que poner en pantalla. Colapsarlos
-/// haría que un panel recién abierto afirmara una carencia que nadie ha
-/// comprobado.
+/// Three values and not a `bool`, because "has not answered yet" and "said
+/// it has no log" are shown differently: the first says nothing, and the
+/// second is a sentence the panel has to put on screen. Collapsing them
+/// would make a freshly opened panel assert an absence nobody has checked.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Servicio {
-    /// Nunca ha contestado: no se sabe.
+    /// Never answered: unknown.
     #[default]
     SinRespuesta,
-    /// Sirve su registro: hay una segunda fuente de verdad.
+    /// Serves its log: there is a second source of truth.
     Sirve,
-    /// Dijo que no tiene registro que servir.
+    /// Said it has no log to serve.
     SinAnillo,
 }
 
-/// La mitad remota del panel de registro (#328).
+/// The log panel's remote half (#328).
 ///
-/// Lo que NO está aquí es la petición en vuelo: en esta terminal eso es
-/// `InFlight::log_tail`, del bucle de eventos, que es quien lanza y cosecha
-/// todo lo que va al backend. La ventana lo lleva dentro porque allí el actor
-/// es el único que escribe.
+/// What is NOT here is the in-flight request: on this terminal that is
+/// `InFlight::log_tail`, in the event loop, which is the one that launches
+/// and harvests everything that goes to the backend. The window carries it
+/// inside because there the actor is the only writer.
 #[derive(Debug, Default)]
 pub struct RegistroRemoto {
-    /// ¿Hay un daemon del que hablar?
+    /// Is there a daemon to speak of?
     ///
-    /// Lo pone `main` una sola vez, de `Backend::is_remote`, y no cambia: el
-    /// backend no cambia de brazo en vida del proceso. En `false` —un `ntc`
-    /// corriente, que es el arranque POR DEFECTO— este panel es exactamente el
-    /// de #326: un proceso, un anillo, y ni una palabra sobre un daemon.
+    /// `main` sets it once, from `Backend::is_remote`, and it does not
+    /// change: the backend does not switch arms during the process's
+    /// lifetime. At `false` —a plain `ntc`, which is the DEFAULT startup—
+    /// this panel is exactly #326's: one process, one ring, and not a word
+    /// about a daemon.
     ///
-    /// Sin este campo el panel mentía, y de dos maneras seguidas: el brazo
-    /// embebido contesta `Unsupported` a `log.tail` con toda la razón —su
-    /// anillo es el que este panel ya está leyendo—, así que el borde pasaba
-    /// por «de este proceso (el daemon registra aparte)» durante el primer
-    /// sondeo y se quedaba en «este daemon no sirve su registro» después. No
-    /// hay ningún daemon. La frase estaba escrita para la otra degradación —un
-    /// daemon de verdad compilado sin la feature `logging`— y aquí se la estaba
-    /// poniendo a nadie.
+    /// Without this field the panel lied, and in two ways in a row: the
+    /// embedded arm rightly answers `Unsupported` to `log.tail` —its ring is
+    /// the one this panel is already reading—, so the border went from "of
+    /// this process (the daemon logs separately)" during the first probe to
+    /// staying at "this daemon does not serve its log" afterward. There is
+    /// no daemon at all. The sentence was written for the OTHER degradation
+    /// —a real daemon built without the `logging` feature— and here it was
+    /// being said to nobody.
     pub hay_daemon: bool,
-    /// Lo que el daemon lleva entregado, de lo más viejo a lo más nuevo.
+    /// What the daemon has delivered so far, oldest to newest.
     ///
-    /// Se acumula y no se repide entero en cada vuelta: el sondeo tira del
-    /// anillo remoto con un cursor, así que cada respuesta trae solo lo nuevo.
+    /// It accumulates and is not re-fetched whole on every round: the probe
+    /// pulls the remote ring with a cursor, so each response brings only
+    /// what is new.
     pub lineas: Vec<LogLine>,
-    /// Por dónde iba. `None` = todavía no se ha preguntado, que es «dame lo
-    /// que haya» y NO es lo mismo que cero: contra un anillo que ya dio la
-    /// vuelta, un cero reportaría un `lost` falso en el primer sondeo.
+    /// Where it was up to. `None` = not asked yet, which is "give me
+    /// whatever there is" and is NOT the same as zero: against a ring that
+    /// has already wrapped, a zero would report a false `lost` on the first
+    /// probe.
     pub cursor: Option<u64>,
-    /// Qué se sabe de si sirve su registro.
+    /// What is known about whether it serves its log.
     pub servicio: Servicio,
-    /// El nivel que contestó tener puesto, en forma de wire.
+    /// The level it answered having set, in wire form.
     ///
-    /// Suyo y no nuestro: es global a todos sus clientes y solo sube, así que
-    /// lo que se pidió y lo que hay puesto no tienen por qué coincidir.
+    /// Its own and not ours: it is global to all its clients and only goes
+    /// up, so what was requested and what is set need not match.
     pub nivel: Option<String>,
-    /// Cuántas líneas se cayeron por detrás de este cursor. Se acumulan: un
-    /// hueco silencioso miente sobre lo que pasó.
+    /// How many lines fell off behind this cursor. They accumulate: a
+    /// silent gap lies about what happened.
     pub perdidas: u64,
-    /// Qué apertura del panel es ésta.
+    /// Which opening of the panel this is.
     ///
-    /// Entre pedir y contestar caben un cierre y una apertura, y la respuesta
-    /// de la sesión anterior tiene que morir en vez de aterrizar —con su
-    /// cursor— en el panel nuevo.
+    /// Between asking and answering there is room for a close and an open,
+    /// and the previous session's response has to die instead of landing
+    /// —with its cursor— in the new panel.
     pub epoca: u64,
-    /// Un nivel que hay que pedirle al daemon, puesto por la tecla y drenado
-    /// por el bucle.
+    /// A level that has to be requested from the daemon, set by the key and
+    /// drained by the loop.
     ///
-    /// Mismo patrón que `App::places_wants_drives` y por lo mismo: `log.level`
-    /// es I/O y `App` no tiene backend. Lo último pulsado gana — pedirle dos
-    /// niveles seguidos a un anillo que solo sube es pedirle el mayor.
+    /// Same pattern as `App::places_wants_drives` and for the same reason:
+    /// `log.level` is I/O and `App` has no backend. The last one pressed
+    /// wins — asking a ring that only goes up for two levels in a row is
+    /// asking for the higher one.
     pub pide_nivel: Option<LogLevel>,
 }
 
 impl RegistroRemoto {
-    /// Empieza de cero, conservando lo que se sabe del daemon.
+    /// Starts from scratch, keeping what is known about the daemon.
     ///
-    /// Las líneas y el cursor son de ESTA apertura; que el daemon sirva o no
-    /// su registro es un hecho sobre el daemon, y olvidarlo escondería la
-    /// segunda fuente cada vez que se reabre el panel.
+    /// The lines and the cursor belong to THIS opening; whether the daemon
+    /// serves its log or not is a fact about the daemon, and forgetting it
+    /// would hide the second source every time the panel is reopened.
     ///
-    /// Eso hace que un veredicto `SinAnillo` dure lo que dure el proceso, y es
-    /// deliberado, no un descuido: ese estado sale de una feature de
-    /// COMPILACIÓN del binario que hay al otro lado del socket (o de un montaje
-    /// que le falló al arrancar), así que no puede cambiar bajo un daemon vivo.
-    /// Lo que sí cambia —que un daemon se reinicie compilado de otra manera— es
-    /// una conexión nueva, y ésa trae su propia sesión. Revisado y aparcado a
-    /// propósito, para que no haya que volver a discutirlo.
+    /// That makes a `SinAnillo` verdict last as long as the process does,
+    /// and it is deliberate, not an oversight: that state comes from a
+    /// COMPILE-time feature of the binary on the other side of the socket
+    /// (or a mount that failed on startup), so it cannot change under a
+    /// live daemon. What DOES change —a daemon restarting built a different
+    /// way— is a new connection, and that brings its own session. Reviewed
+    /// and shelved on purpose, so it does not have to be argued again.
     pub fn reiniciar(&mut self) {
         self.lineas.clear();
         self.cursor = None;
@@ -139,32 +143,32 @@ impl RegistroRemoto {
         self.epoca = self.epoca.wrapping_add(1);
     }
 
-    /// ¿Tiene sentido volver a preguntarle?
+    /// Is it worth asking it again?
     ///
-    /// A un daemon que ya dijo que no tiene registro NO se le vuelve a
-    /// preguntar: la negativa no puede cambiar mientras ese daemon viva —sale
-    /// de una feature de compilación o de un montaje que falló al arrancar—, y
-    /// seguir sondeando serían dos RPC por segundo para siempre por una
-    /// respuesta que no puede ser otra. Es asimétrico a propósito: lo POSITIVO
-    /// sí hay que seguir pidiéndolo, porque el registro crece.
+    /// A daemon that has already said it has no log is NOT asked again: the
+    /// refusal cannot change while that daemon lives —it comes from a
+    /// compile-time feature or a mount that failed on startup—, and
+    /// continuing to probe would be two RPCs a second forever for an answer
+    /// that cannot be different. It is asymmetric on purpose: the POSITIVE
+    /// case does need to keep being asked, because the log grows.
     ///
-    /// No hay comparación de versiones en ningún sitio, y no la hay porque un
-    /// daemon más viejo ni siquiera completa el `initialize`.
+    /// There is no version comparison anywhere, and there is none because
+    /// an older daemon does not even complete `initialize`.
     ///
-    /// Y a un daemon que no existe tampoco: sin `hay_daemon` no se pregunta
-    /// nunca — ver ese campo.
+    /// And a daemon that does not exist, either: without `hay_daemon` it is
+    /// never asked — see that field.
     #[must_use]
     pub const fn debe_pedir(&self) -> bool {
         self.hay_daemon && !matches!(self.servicio, Servicio::SinAnillo)
     }
 }
 
-/// Una línea del cable a la forma que el panel pinta.
+/// A line from the wire into the shape the panel paints.
 ///
-/// Un nivel que no se reconozca cae en `Info` en vez de tirar la línea: el
-/// protocolo dice que un valor desconocido tiene que poder LLEGAR, y perder el
-/// mensaje entero por no entender su etiqueta es peor que enseñarlo con la
-/// etiqueta corriente.
+/// An unrecognized level falls back to `Info` instead of dropping the line:
+/// the protocol says an unknown value must be able to ARRIVE, and losing the
+/// whole message for not understanding its label is worse than showing it
+/// with the ordinary label.
 fn linea_de_wire(l: norte_proto::methods::LogLine) -> LogLine {
     LogLine {
         epoch_ms: l.epoch_ms,
@@ -174,21 +178,21 @@ fn linea_de_wire(l: norte_proto::methods::LogLine) -> LogLine {
     }
 }
 
-/// La fuente que de verdad se está enseñando.
+/// The source that is truly being shown.
 ///
-/// La preferencia se guarda tal cual (`LogPanel::source`), pero una fuente que
-/// no existe no se puede enseñar, y el panel informa de lo que hay y no de lo
-/// que se pidió. Se colapsa en las DOS direcciones, que son la misma regla
-/// vista desde cada orilla:
+/// The preference is stored as-is (`LogPanel::source`), but a source that
+/// does not exist cannot be shown, and the panel reports what there is, not
+/// what was asked for. It collapses in BOTH directions, which are the same
+/// rule seen from each shore:
 ///
-/// - sin un anillo al otro lado (el caso embebido, o un daemon sin la feature
-///   `logging`) todo cae a `Window`;
-/// - sin anillo en ESTE proceso —nadie montó la capa— no hay nada local que
-///   mezclar, así que todo cae a `Daemon`.
+/// - with no ring on the other side (the embedded case, or a daemon without
+///   the `logging` feature) everything falls back to `Window`;
+/// - with no ring in THIS process —nobody mounted the layer— there is
+///   nothing local to mix in, so everything falls back to `Daemon`.
 ///
-/// Con los dos anillos ausentes queda `Window`, que es donde vive la frase de
-/// «sin registro instalado en este proceso»: no hay registro EN MEMORIA que
-/// leer, y eso no es lo mismo que «no se registra nada».
+/// With both rings absent it stays at `Window`, which is where the "no log
+/// installed in this process" sentence lives: there is no log IN MEMORY to
+/// read, and that is not the same as "nothing is being logged".
 #[must_use]
 pub fn fuente_efectiva(app: &crate::app::App) -> LogSource {
     match (
@@ -201,11 +205,11 @@ pub fn fuente_efectiva(app: &crate::app::App) -> LogSource {
     }
 }
 
-/// El anillo local, ya clonado. Vacío si no hay ninguno instalado.
+/// The local ring, already cloned. Empty if none is installed.
 ///
-/// Aparte de [`visibles`] porque el préstamo lo tiene que sostener quien
-/// pinta: `merge` devuelve referencias a propósito, y el anillo ya clonó una
-/// vez en su `snapshot`.
+/// Separate from [`visibles`] because the borrow has to be held by whoever
+/// paints: `merge` returns references on purpose, and the ring already
+/// cloned once in its `snapshot`.
 #[must_use]
 pub fn instantanea(app: &crate::app::App) -> Vec<LogLine> {
     app.log_ring
@@ -214,8 +218,8 @@ pub fn instantanea(app: &crate::app::App) -> Vec<LogLine> {
         .unwrap_or_default()
 }
 
-/// Lo que el panel enseña: las dos fuentes mezcladas y ya filtradas, cada
-/// línea con el proceso del que salió.
+/// What the panel shows: the two sources merged and already filtered, each
+/// line with the process it came from.
 #[must_use]
 pub fn visibles<'a>(
     app: &'a crate::app::App,
@@ -227,21 +231,22 @@ pub fn visibles<'a>(
         .collect()
 }
 
-/// Cómo se llama lo que se está enseñando. `None` = no hay nada que decir.
+/// What what is being shown is called. `None` = nothing to say.
 ///
-/// **Sin daemon no hay segmento**, y la ausencia ES la respuesta: un `ntc`
-/// corriente tiene un proceso y un anillo, así que no hay dos cosas que
-/// distinguir y cualquier frase sobre el origen sería contestar una pregunta
-/// que nadie se ha hecho. Es el mismo razonamiento con el que la ventana
-/// esconde su selector cuando no hay una segunda fuente, y deja el panel
-/// exactamente como lo dejó #326.
+/// **With no daemon there is no segment**, and the absence IS the answer: a
+/// plain `ntc` has one process and one ring, so there are not two things to
+/// distinguish and any sentence about the origin would be answering a
+/// question nobody asked. It is the same reasoning by which the window
+/// hides its selector when there is no second source, and it leaves the
+/// panel exactly as #326 left it.
 ///
-/// Un daemon que ha dicho que no tiene registro que servir se dice AQUÍ y no
-/// en una frase aparte, y es una diferencia con la ventana que tiene motivo: el
-/// borde de un panel de terminal es una línea, no una fila de etiquetas que
-/// pueda crecer, y las dos frases juntas —«de este proceso (el daemon registra
-/// aparte)» y «este daemon no sirve su registro»— dicen lo mismo dos veces y
-/// no caben. La segunda gana porque explica POR QUÉ no hay más que esto.
+/// A daemon that has said it has no log to serve is stated HERE and not in
+/// a separate sentence, and it is a difference from the window that has a
+/// reason: a terminal panel's border is a single line, not a row of labels
+/// that can grow, and the two sentences together —"of this process (the
+/// daemon logs separately)" and "this daemon does not serve its log"— say
+/// the same thing twice and do not fit. The second one wins because it
+/// explains WHY there is nothing more than this.
 #[must_use]
 pub fn etiqueta_de_fuente(app: &crate::app::App, fuente: LogSource) -> Option<String> {
     if !app.log_remote.hay_daemon {
@@ -251,40 +256,41 @@ pub fn etiqueta_de_fuente(app: &crate::app::App, fuente: LogSource) -> Option<St
         return Some(t("log-source-unsupported"));
     }
     Some(t(match fuente {
-        // De ESTE proceso, y decirlo es el punto: con `--socket`, aquí NO está
-        // lo del daemon —los providers, el journal, la política—, que es la
-        // mitad interesante.
+        // Of THIS process, and saying so is the point: with `--socket`, the
+        // daemon's part —the providers, the journal, the policy— is NOT
+        // here, and that is the interesting half.
         LogSource::Window if app.log_ring.is_some() => "log-source-window",
-        // No es «no se registra nada»: el proceso sigue escribiendo a su
-        // fichero. Lo que falta es el anillo en memoria, que es lo que este
-        // panel lee.
+        // It is not "nothing is being logged": the process keeps writing to
+        // its file. What is missing is the in-memory ring, which is what
+        // this panel reads.
         LogSource::Window => "log-no-ring",
         LogSource::Daemon => "log-source-daemon",
         LogSource::Both => "log-source-both",
     }))
 }
 
-/// De quién es el nivel que se acaba de subir. Vacío = de nadie más que de
-/// este proceso, y entonces no hay nada que anunciar.
+/// Whose level was just raised. Empty = nobody's but this process's, and
+/// then there is nothing to announce.
 ///
-/// **Siempre que el daemon sea una de las fuentes que se leen**, no solo
-/// cuando es la única: en `Both`, que es lo que trae el panel al abrirse,
-/// pulsar `t` sube un anillo GLOBAL del daemon, compartido con todos sus
-/// clientes, que no vuelve a bajar y que cerrar este panel no baja. Callarlo
-/// en el camino corriente dejaría esa decisión sin anunciar.
+/// **Whenever the daemon is one of the sources being read**, not only when
+/// it is the sole one: in `Both`, which is what the panel opens with,
+/// pressing `t` raises a GLOBAL daemon ring, shared with all its clients,
+/// that never goes back down and that closing this panel does not lower.
+/// Staying quiet about it on the common path would leave that decision
+/// unannounced.
 ///
-/// Va a la barra de estado y no al borde del panel, y aquí las dos ventanas se
-/// separan: la de la ventana es una fila de etiquetas que crece, y el borde de
-/// un panel de terminal es UNA línea que `ratatui` recorta en silencio — con
-/// esta frase puesta ahí, a 120 columnas ya no cabía la nota de captura, que es
-/// la que dice el nivel del daemon. Y la barra de estado es además el sitio
-/// donde esta terminal explica lo que acaba de hacer una tecla, que es
-/// exactamente lo que esto es.
+/// It goes to the status bar and not to the panel's border, and this is
+/// where the two windows part ways: the window's is a row of labels that
+/// grows, and a terminal panel's border is ONE line that `ratatui` silently
+/// truncates — with this sentence placed there, at 120 columns the capture
+/// note (the one that states the daemon's level) no longer fit. And the
+/// status bar is also the place where this terminal explains what a key
+/// just did, which is exactly what this is.
 ///
-/// Por la fuente EFECTIVA y no por la preferencia: se anuncia lo que de verdad
-/// se ha subido. La petición sí sale por la preferencia —ver
-/// [`aplicar_accion`]—, porque es una de las dos formas de averiguar si ese
-/// daemon sabe de registro.
+/// By the EFFECTIVE source and not by the preference: what has truly been
+/// raised is announced. The request does go by the preference —see
+/// [`aplicar_accion`]—, because it is one of the two ways to find out
+/// whether that daemon knows about logging.
 #[must_use]
 pub fn aviso_de_nivel(app: &crate::app::App) -> String {
     if fuente_efectiva(app) == LogSource::Window {
@@ -294,96 +300,97 @@ pub fn aviso_de_nivel(app: &crate::app::App) -> String {
     }
 }
 
-/// Qué anillo está guardando MÁS de lo que se enseña, y cuál.
+/// Which ring is keeping MORE than what is shown, and which one.
 ///
-/// Solo cuando se captura de más: decir «capturando info» sobre un panel que
-/// enseña info sería ruido, y el ruido es lo que hace que se deje de leer la
-/// línea que sí importa.
+/// Only when it is over-capturing: saying "capturing info" over a panel
+/// that shows info would be noise, and noise is what makes the line that
+/// does matter stop being read.
 ///
-/// Con una sola fuente la frase no nombra el anillo —no hay otro con el que
-/// confundirlo—; con las dos, cada parte dice de quién habla. Que aquí aparezca
-/// el nivel del daemon es lo que hace legible la regla entera: el suyo es
-/// global a sus clientes y solo sube, así que puede estar muy por encima del
-/// que este panel enseña, y ese hueco es exactamente lo que esta frase existe
-/// para no callar.
+/// With a single source the sentence does not name the ring —there is no
+/// other one to confuse it with—; with both, each part says whose it is.
+/// That the daemon's level appears here is what makes the whole rule
+/// legible: its own is global to its clients and only goes up, so it can be
+/// far above what this panel shows, and that gap is exactly what this
+/// sentence exists to not stay quiet about.
 #[must_use]
 pub fn nota_de_captura(app: &crate::app::App, fuente: LogSource) -> String {
-    let ensena = app.log_panel.level();
+    let shown = app.log_panel.level();
     let local = app
         .log_ring
         .as_ref()
         .map(norte_config::logring::LogRing::level)
-        .filter(|cap| *cap > ensena);
-    let remoto = app
+        .filter(|cap| *cap > shown);
+    let remote = app
         .log_remote
         .nivel
         .as_deref()
         .and_then(LogLevel::from_wire)
-        .filter(|cap| *cap > ensena);
-    let frase = |clave, cap: LogLevel| ta(clave, &[("level", cap.label().trim())]);
-    let partes: Vec<String> = match fuente {
+        .filter(|cap| *cap > shown);
+    let phrase = |key, cap: LogLevel| ta(key, &[("level", cap.label().trim())]);
+    let parts: Vec<String> = match fuente {
         LogSource::Window => local
-            .map(|c| frase("log-capturing", c))
+            .map(|c| phrase("log-capturing", c))
             .into_iter()
             .collect(),
-        LogSource::Daemon => remoto
-            .map(|c| frase("log-capturing-daemon", c))
+        LogSource::Daemon => remote
+            .map(|c| phrase("log-capturing-daemon", c))
             .into_iter()
             .collect(),
         LogSource::Both => local
-            .map(|c| frase("log-capturing-window", c))
+            .map(|c| phrase("log-capturing-window", c))
             .into_iter()
-            .chain(remoto.map(|c| frase("log-capturing-daemon", c)))
+            .chain(remote.map(|c| phrase("log-capturing-daemon", c)))
             .collect(),
     };
-    partes.join(" · ")
+    parts.join(" · ")
 }
 
-/// Las líneas que se han perdido, por anillo y DICIENDO de cuál.
+/// The lines that have been lost, by ring and SAYING which one.
 ///
-/// Dos números y no uno, porque no significan lo mismo y no viven lo mismo: el
-/// del anillo local cuenta lo que ha evacuado desde que arrancó el proceso y no
-/// se reinicia nunca; el del daemon cuenta lo que ESTA apertura del panel se
-/// perdió, y vuelve a cero al reabrirlo. Sumarlos daría un número que no es
-/// ninguna de las dos cosas.
+/// Two numbers and not one, because they do not mean the same thing and do
+/// not have the same lifetime: the local ring's counts what it has evicted
+/// since the process started and is never reset; the daemon's counts what
+/// THIS opening of the panel lost, and goes back to zero on reopening it.
+/// Adding them would give a number that is neither of the two things.
 ///
-/// De cada anillo solo se habla si se está leyendo: avisar de un hueco en un
-/// registro que no está en pantalla es una alarma sobre nada.
+/// Each ring is mentioned only if it is being read: warning about a gap in
+/// a log that is not on screen is an alarm about nothing.
 #[must_use]
 pub fn nota_de_descartes(app: &crate::app::App, fuente: LogSource) -> String {
-    let mut partes: Vec<String> = Vec::new();
-    let locales = app
+    let mut parts: Vec<String> = Vec::new();
+    let local = app
         .log_ring
         .as_ref()
         .map_or(0, norte_config::logring::LogRing::dropped);
-    if locales > 0 && fuente != LogSource::Daemon {
-        partes.push(ta(
-            // Sin nombrar el anillo cuando es el único que se lee.
+    if local > 0 && fuente != LogSource::Daemon {
+        parts.push(ta(
+            // Without naming the ring when it is the only one being read.
             if fuente == LogSource::Window {
                 "log-dropped"
             } else {
                 "log-dropped-window"
             },
-            &[("n", &locales.to_string())],
+            &[("n", &local.to_string())],
         ));
     }
     if app.log_remote.perdidas > 0 && fuente != LogSource::Window {
-        partes.push(ta(
+        parts.push(ta(
             "log-missed-daemon",
             &[("n", &app.log_remote.perdidas.to_string())],
         ));
     }
-    partes.join(" · ")
+    parts.join(" · ")
 }
 
-/// Aterriza lo que el daemon contestó a `log.tail` (#328).
+/// Lands what the daemon answered to `log.tail` (#328).
 pub fn aterrizar_tail(
     app: &mut crate::app::App,
     epoca: u64,
     res: Result<norte_proto::methods::LogTailResult, norte_proto::Error>,
 ) {
     if epoca != app.log_remote.epoca {
-        // De una apertura anterior: ni sus líneas ni su cursor valen ya.
+        // From a previous opening: neither its lines nor its cursor are
+        // valid anymore.
         return;
     }
     match res {
@@ -395,35 +402,35 @@ pub fn aterrizar_tail(
             app.log_remote
                 .lineas
                 .extend(r.lines.into_iter().map(linea_de_wire));
-            // El tope se aplica por delante: lo viejo es lo que se tira, igual
-            // que en el anillo, y cuenta como perdido — que es lo que impide
-            // que el recorte deje un hueco callado.
-            let sobra = app
+            // The cap is applied from the front: what is old is what gets
+            // dropped, same as in the ring, and it counts as lost — which is
+            // what keeps the trim from leaving a silent gap.
+            let overflow = app
                 .log_remote
                 .lineas
                 .len()
                 .saturating_sub(MAX_LINEAS_REMOTAS);
-            if sobra > 0 {
-                app.log_remote.lineas.drain(..sobra);
+            if overflow > 0 {
+                app.log_remote.lineas.drain(..overflow);
                 app.log_remote.perdidas = app
                     .log_remote
                     .perdidas
-                    .saturating_add(sobra.try_into().unwrap_or(u64::MAX));
+                    .saturating_add(overflow.try_into().unwrap_or(u64::MAX));
             }
         }
-        // La ÚNICA degradación alcanzable: un daemon de la misma versión sin
-        // la feature `logging` (o el brazo embebido, que no tiene una segunda
-        // fuente que ofrecer). Ver `RegistroRemoto::debe_pedir`.
+        // The ONLY reachable degradation: a daemon of the same version
+        // without the `logging` feature (or the embedded arm, which has no
+        // second source to offer). See `RegistroRemoto::debe_pedir`.
         Err(norte_proto::Error::Unsupported) => app.log_remote.servicio = Servicio::SinAnillo,
-        // Un fallo cualquiera —la conexión se cayó, el daemon está ocupado— NO
-        // es «este daemon no tiene registro»: decirlo sería acusar de una
-        // carencia permanente a algo que se arregla solo en la vuelta
-        // siguiente. Se calla y se reintenta.
+        // Any failure —the connection dropped, the daemon is busy— is NOT
+        // "this daemon has no log": saying so would accuse something that
+        // fixes itself on the very next round of a permanent lack. It stays
+        // quiet and retries.
         Err(_) => {}
     }
 }
 
-/// Aterriza el nivel que el daemon dejó puesto de verdad (#328).
+/// Lands the level the daemon has truly set (#328).
 pub fn aterrizar_nivel(
     app: &mut crate::app::App,
     epoca: u64,
@@ -442,38 +449,38 @@ pub fn aterrizar_nivel(
     }
 }
 
-/// Cuántas filas avanza una página.
+/// How many rows a page advances.
 ///
-/// El ALTO ya no se adivina aquí —lo pone quien pinta, por frame
-/// (`LogPanel::set_viewport_rows`)—; esto es solo cuánto salta `AvPág`.
+/// The HEIGHT is no longer guessed here —whoever paints sets it, per frame
+/// (`LogPanel::set_viewport_rows`)—; this is only how far `PageDown` jumps.
 const PAGINA: isize = 10;
 
-/// Lo que una tecla le pide al panel.
+/// What a key asks the panel for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LogAction {
-    /// Enseñar hasta este nivel.
+    /// Show up to this level.
     Level(norte_config::logline::LogLevel),
-    /// Subir o bajar `n` líneas.
+    /// Scroll `n` lines up or down.
     Scroll(isize),
-    /// Volver a pegarse al final.
+    /// Go back to sticking to the end.
     Follow,
-    /// Recorrer la fuente: este proceso, el daemon, los dos (#328).
+    /// Cycle the source: this process, the daemon, both (#328).
     Source,
-    /// Empezar a teclear un filtro.
+    /// Start typing a filter.
     StartFilter,
-    /// Devolver el teclado.
+    /// Return the keyboard.
     Leave,
 }
 
-/// Traduce una tecla del panel de registro.
+/// Translates a log panel key.
 ///
-/// Un `match` explícito y NO el keymap: estas teclas solo existen mientras el
-/// panel tiene el teclado, son de una sola letra, y meterlas en el keymap
-/// obligaría a los siete presets a declarar seis atajos que fuera de aquí no
-/// significan nada. Es el mismo criterio que el selector de conexiones y el de
-/// disposición, y es también por lo que `s` (la fuente, #328) no aparece en
-/// ningún preset: no es un comando del catálogo, es una tecla de este panel,
-/// como `e`, `w`, `i`, `d`, `t` y `/`.
+/// An explicit `match` and NOT the keymap: these keys only exist while the
+/// panel holds the keyboard, they are single letters, and putting them in
+/// the keymap would force the seven presets to declare six shortcuts that
+/// mean nothing outside here. It is the same criterion as the connections
+/// picker and the layout one, and it is also why `s` (the source, #328)
+/// does not appear in any preset: it is not a catalogue command, it is a key
+/// of this panel, like `e`, `w`, `i`, `d`, `t` and `/`.
 #[must_use]
 pub fn key(
     code: crossterm::event::KeyCode,
@@ -490,32 +497,34 @@ pub fn key(
         KeyCode::Char('i') => LogAction::Level(LogLevel::Info),
         KeyCode::Char('d') => LogAction::Level(LogLevel::Debug),
         KeyCode::Char('t') => LogAction::Level(LogLevel::Trace),
-        // La inicial de «source»/«fuente», y la única letra suelta que quedaba
-        // libre entre las cinco de nivel.
+        // The initial of "source", and the one loose letter left free among
+        // the five level ones.
         KeyCode::Char('s') => LogAction::Source,
         KeyCode::Char('/') => LogAction::StartFilter,
         KeyCode::Up => LogAction::Scroll(-1),
         KeyCode::Down => LogAction::Scroll(1),
         KeyCode::PageUp => LogAction::Scroll(-PAGINA),
         KeyCode::PageDown => LogAction::Scroll(PAGINA),
-        // `End` es «vuelve a lo último», que es distinto de bajar mucho: tras
-        // un filtro nuevo la lista cambia de largo y bajar a ciegas no acierta.
+        // `End` is "go back to the very end", which is different from
+        // scrolling down a lot: after a new filter the list changes length
+        // and scrolling down blind does not land right.
         KeyCode::End => LogAction::Follow,
-        // Y `Inicio`, al principio de lo que quede: quien tiene `Fin` lo busca.
-        // `isize::MIN` no, que se desbordaría al negarlo — el desplazamiento se
-        // acota solo contra el tope.
+        // And `Home`, to the start of what is left: whoever has `End` looks
+        // for it. Not `isize::MIN`, which would overflow on negation — the
+        // scroll is clamped only against the cap.
         KeyCode::Home => LogAction::Scroll(isize::MIN + 1),
         KeyCode::Esc => LogAction::Leave,
         _ => return None,
     })
 }
 
-/// Aplica una tecla al panel de registro de `app`.
+/// Applies a key to `app`'s log panel.
 ///
-/// Subir el nivel del PANEL sube también el del ANILLO cuando hace falta: sin
-/// eso, pedir DEBUG filtraría a DEBUG unas líneas que se guardaron a INFO, o
-/// sea que enseñaría exactamente nada y parecería roto. Bajarlo no baja el del
-/// anillo — ver la nota de [`norte_frontend::logpanel`].
+/// Raising the PANEL's level also raises the RING's when needed: without
+/// that, asking for DEBUG would filter down to DEBUG some lines that were
+/// stored at INFO, i.e. it would show exactly nothing and look broken.
+/// Lowering it does not lower the ring's — see the note on
+/// [`norte_frontend::logpanel`].
 pub fn apply(
     app: &mut crate::app::App,
     resolver: &mut crate::keymap::Resolver,
@@ -523,114 +532,119 @@ pub fn apply(
     code: crossterm::event::KeyCode,
 ) {
     use crossterm::event::{KeyCode, KeyModifiers};
-    // `Ctrl+C` ANTES que nada, también con el campo de filtro abierto: es la
-    // salida de emergencia, y todos los demás manejadores de este árbol la
-    // comprueban primero. Estaba después y escribir un filtro dejaba al lector
-    // sin forma de salir del programa.
+    // `Ctrl+C` BEFORE anything else, even with the filter field open: it is
+    // the emergency exit, and every other handler in this tree checks it
+    // first. It used to come after, and typing a filter left the reader with
+    // no way to quit the program.
     if mods.contains(KeyModifiers::CONTROL) && code == KeyCode::Char('c') {
         app.quit = true;
         return;
     }
-    // Con el campo de filtro abierto, el resto de teclas son suyas: si no, una
-    // `d` a mitad de una palabra cambiaría el nivel en vez de escribirse.
+    // With the filter field open, the rest of the keys belong to it:
+    // otherwise a `d` in the middle of a word would change the level instead
+    // of being typed.
     if app.log_filter_input.is_some() {
         editar_filtro(app, mods, code);
         return;
     }
     let Some(accion) = key(code, mods) else {
-        // Lo que este panel NO es suyo sigue su camino por el keymap, y esto
-        // no es un detalle: sin ello el propio `layout.log` moría aquí y el
-        // panel no se podía cerrar con la misma tecla que lo abrió. Un panel
-        // que se queda TODAS las teclas secuestra el teclado en vez de
-        // tomarlo.
+        // What this panel does NOT own follows its path through the keymap,
+        // and this is not a detail: without it `layout.log` itself would die
+        // here and the panel could not be closed with the same key that
+        // opened it. A panel that keeps ALL the keys hijacks the keyboard
+        // instead of taking it.
         pasar_al_keymap(app, resolver, mods, code);
         return;
     };
     aplicar_accion(app, accion);
 }
 
-/// Lo que hace cada acción del panel.
+/// What each panel action does.
 ///
-/// Separado de [`apply`] para que se pueda probar sin montar un resolver de
-/// teclas: lo que estas líneas deciden —cuándo sube el nivel del anillo y
-/// cuándo no— es el invariante del panel, no la traducción de una tecla.
+/// Separate from [`apply`] so it can be tested without setting up a key
+/// resolver: what these lines decide —when the ring's level rises and when
+/// it does not— is the panel's invariant, not a key's translation.
 pub fn aplicar_accion(app: &mut crate::app::App, accion: LogAction) {
     match accion {
         LogAction::Level(l) => {
             app.log_panel.show_level(l);
-            // Y el anillo captura AL MENOS eso: filtrar a DEBUG lo que se
-            // guardó a INFO no enseñaría nada y parecería roto. `raise_to`
-            // nunca baja — ver su rustdoc.
+            // And the ring captures AT LEAST that: filtering down to DEBUG
+            // what was stored at INFO would show nothing and look broken.
+            // `raise_to` never lowers — see its rustdoc.
             if let Some(ring) = app.log_ring.as_ref() {
                 ring.raise_to(l);
             }
-            // Y, si el daemon es una de las fuentes, se lo pide TAMBIÉN a él
-            // (#328): su anillo es suyo, y sin subirlo las líneas que se están
-            // pidiendo no llegan a existir al otro lado.
+            // And, if the daemon is one of the sources, it is asked TOO
+            // (#328): its ring is its own, and without raising it the lines
+            // being requested never come to exist on the other side.
             //
-            // Por la PREFERENCIA y no por la fuente efectiva: quien ha elegido
-            // leer el daemon está pidiendo su nivel aunque todavía no haya
-            // contestado, y la respuesta a esta llamada es justamente una de
-            // las dos formas de averiguar si sabe de registro.
+            // By the PREFERENCE and not by the effective source: whoever has
+            // chosen to read the daemon is asking for its level even if it
+            // has not answered yet, and the response to this call is
+            // precisely one of the two ways to find out whether it knows
+            // about logging.
             //
-            // Y solo si hay alguien a quien pedírselo: sin daemon, o con uno
-            // que ya dijo que no tiene anillo, esto sería estado muerto que
-            // nadie drena.
+            // And only if there is someone to ask: with no daemon, or with
+            // one that has already said it has no ring, this would be dead
+            // state nobody drains.
             if app.log_panel.source() != LogSource::Window && app.log_remote.debe_pedir() {
                 app.log_remote.pide_nivel = Some(l);
             }
-            // Y se DICE, porque ese anillo no es de este proceso: es global a
-            // todos los clientes del daemon y no vuelve a bajar. Ver
-            // [`aviso_de_nivel`] para por qué va a la barra y no al borde.
-            let aviso = aviso_de_nivel(app);
-            if !aviso.is_empty() {
-                app.message = Some(aviso);
+            // And it is STATED, because that ring does not belong to this
+            // process: it is global to all the daemon's clients and never
+            // goes back down. See [`aviso_de_nivel`] for why it goes to the
+            // bar and not the border.
+            let notice = aviso_de_nivel(app);
+            if !notice.is_empty() {
+                app.message = Some(notice);
             }
         }
-        // Sin una segunda fuente no hace nada: recorrer tres vistas de un mismo
-        // anillo sería un mando que promete algo que no existe, y cambiar la
-        // preferencia por debajo dejaría al lector con una fuente que no pidió
-        // el día que sí haya daemon. Es lo mismo que hace la ventana, donde el
-        // selector directamente no se pinta.
+        // With no second source it does nothing: cycling through three views
+        // of the same ring would be a control that promises something that
+        // does not exist, and changing the preference underneath would leave
+        // the reader with a source they did not ask for on the day there
+        // really is a daemon. It is the same thing the window does, where
+        // the selector simply is not painted.
         LogAction::Source => {
             if app.log_remote.servicio == Servicio::Sirve {
                 app.log_panel.cycle_source();
             }
         }
         LogAction::Scroll(n) => {
-            // Solo aquí se cuenta lo visible: hacerlo para cada tecla recorría
-            // el anillo entero también al cambiar de nivel o al abrir el
-            // filtro, que no desplazan nada.
+            // The visible count is taken only here: doing it for every key
+            // would also walk the whole ring on a level change or on
+            // opening the filter, neither of which scrolls anything.
             //
-            // Sobre la lista MEZCLADA, que es la que se ve: contar solo las
-            // locales dejaría el tope corto y una página no llegaría al final.
-            let locales = instantanea(app);
-            let cuantas = visibles(app, &locales).len();
+            // Over the MERGED list, which is what is seen: counting only the
+            // local ones would leave the cap short and a page would not
+            // reach the end.
+            let local = instantanea(app);
+            let count = visibles(app, &local).len();
             if n < 0 {
-                app.log_panel.scroll_up(n.unsigned_abs(), cuantas);
+                app.log_panel.scroll_up(n.unsigned_abs(), count);
             } else {
                 app.log_panel
-                    .scroll_down(usize::try_from(n).unwrap_or(0), cuantas);
+                    .scroll_down(usize::try_from(n).unwrap_or(0), count);
             }
         }
         LogAction::Follow => app.log_panel.follow(),
-        // El filtro se teclea en el mismo campo que el resto de entradas de
-        // una línea del TUI; abrirlo es lo que hace `/`.
-        // Se abre con lo que ya estaba filtrando, no en blanco: afinar un
-        // filtro es lo normal, y volver a teclearlo entero, no.
+        // The filter is typed in the same field as the rest of the TUI's
+        // single-line inputs; `/` is what opens it.
+        // It opens with what was already being filtered, not blank: refining
+        // a filter is the normal case, and retyping it whole is not.
         LogAction::StartFilter => {
             app.log_filter_input = Some(app.log_panel.filter().to_string());
         }
-        // Suelta las teclas SIN cerrar el panel: cerrar algo que el lector solo
-        // quería dejar de manejar es la respuesta equivocada, y cerrarlo ya lo
-        // hace `alt+l` otra vez.
+        // Releases the keys WITHOUT closing the panel: closing something the
+        // reader only wanted to stop operating is the wrong response, and
+        // closing it is already what `alt+l` does again.
         LogAction::Leave => app.return_keys_to_panes(),
     }
 }
 
-/// Resuelve por el keymap lo que este panel no reclama, y lo despacha por el
-/// mismo camino que el panel de procesos (`App::processes_command`, que ya
-/// atiende los `layout.*`).
+/// Resolves through the keymap what this panel does not claim, and
+/// dispatches it the same way as the process panel (`App::processes_command`,
+/// which already handles the `layout.*` ones).
 fn pasar_al_keymap(
     app: &mut crate::app::App,
     resolver: &mut crate::keymap::Resolver,
@@ -639,7 +653,7 @@ fn pasar_al_keymap(
 ) {
     use crate::keymap::Resolution;
     let Some(chord) = crate::keymap::chord_from_crossterm(mods, code) else {
-        return; // tecla no modelada por el keymap: ignorar
+        return; // key not modeled by the keymap: ignore
     };
     let cmd = match resolver.push(chord) {
         Resolution::Run { command, .. } => command,
@@ -652,28 +666,28 @@ fn pasar_al_keymap(
     app.log_command(&cmd);
 }
 
-/// Teclas mientras se escribe el filtro.
+/// Keys while the filter is being typed.
 ///
-/// `Esc` cancela y deja el filtro ANTERIOR, no lo borra: cancelar es
-/// «déjalo como estaba», y en un panel de log borrar el filtro por accidente
-/// devuelve mil líneas encima de lo que estabas leyendo.
+/// `Esc` cancels and leaves the PREVIOUS filter, it does not clear it:
+/// cancel means "leave it as it was", and in a log panel clearing the filter
+/// by accident dumps a thousand lines over whatever you were reading.
 fn editar_filtro(
     app: &mut crate::app::App,
     mods: crossterm::event::KeyModifiers,
     code: crossterm::event::KeyCode,
 ) {
     use crossterm::event::{KeyCode, KeyModifiers};
-    let Some(texto) = app.log_filter_input.as_mut() else {
+    let Some(text) = app.log_filter_input.as_mut() else {
         return;
     };
     match code {
-        KeyCode::Char(c) if mods.is_empty() || mods == KeyModifiers::SHIFT => texto.push(c),
+        KeyCode::Char(c) if mods.is_empty() || mods == KeyModifiers::SHIFT => text.push(c),
         KeyCode::Backspace => {
-            texto.pop();
+            text.pop();
         }
         KeyCode::Enter => {
-            let texto = app.log_filter_input.take().unwrap_or_default();
-            app.log_panel.set_filter(texto);
+            let text = app.log_filter_input.take().unwrap_or_default();
+            app.log_panel.set_filter(text);
         }
         KeyCode::Esc => app.log_filter_input = None,
         _ => {}
@@ -686,39 +700,41 @@ mod tests {
     use crossterm::event::{KeyCode, KeyModifiers};
     use norte_config::logline::LogLevel;
 
-    /// Las cinco letras de nivel están y son las iniciales del nivel en
-    /// inglés, que es como se llaman en el propio log.
+    /// The five level letters are there and are the English level's
+    /// initials, which is how they are named in the log itself.
     #[test]
     fn cada_nivel_tiene_su_letra() {
-        let esperado = [
+        let expected = [
             ('e', LogLevel::Error),
             ('w', LogLevel::Warn),
             ('i', LogLevel::Info),
             ('d', LogLevel::Debug),
             ('t', LogLevel::Trace),
         ];
-        for (c, nivel) in esperado {
+        for (c, level) in expected {
             assert_eq!(
                 key(KeyCode::Char(c), KeyModifiers::empty()),
-                Some(LogAction::Level(nivel)),
-                "la tecla «{c}» no pide {nivel:?}"
+                Some(LogAction::Level(level)),
+                "key '{c}' does not request {level:?}"
             );
         }
     }
 
-    /// Una tecla con Ctrl NO es de este panel: `ctrl+c` sale del programa y
-    /// `ctrl+…` son atajos globales. Tragárselos aquí sería secuestrarlos.
+    /// A key with Ctrl is NOT this panel's: `ctrl+c` quits the program and
+    /// `ctrl+…` are global shortcuts. Swallowing them here would be hijacking
+    /// them.
     #[test]
     fn los_atajos_con_control_no_se_los_queda() {
         assert_eq!(key(KeyCode::Char('c'), KeyModifiers::CONTROL), None);
         assert_eq!(key(KeyCode::Char('d'), KeyModifiers::CONTROL), None);
     }
 
-    /// Un acorde con modificador NO lo reclama este panel, y ahí estaba el
-    /// fallo: `alt+l` es el comando que abre y cierra el registro, y mientras
-    /// el panel tenía el teclado se lo tragaba entero — o sea que la misma
-    /// tecla que lo abría no lo cerraba. `key` diciendo `None` es lo que manda
-    /// la tecla al keymap; si algún día reclama un `alt+…`, este test cae.
+    /// A chord with a modifier is NOT claimed by this panel, and that is
+    /// where the bug was: `alt+l` is the command that opens and closes the
+    /// log, and while the panel held the keyboard it swallowed it whole —
+    /// meaning the same key that opened it did not close it. `key` returning
+    /// `None` is what sends the key to the keymap; if it ever claims an
+    /// `alt+…`, this test fails.
     #[test]
     fn los_acordes_con_modificador_siguen_su_camino() {
         for (code, mods) in [
@@ -729,68 +745,76 @@ mod tests {
             assert_eq!(
                 key(code, mods),
                 None,
-                "{code:?}+{mods:?} se lo quedó el panel en vez de dejarlo pasar"
+                "{code:?}+{mods:?} was kept by the panel instead of let through"
             );
         }
     }
 
-    /// El panel SUBE el nivel del anillo y NUNCA lo baja, y cerrar el panel es
-    /// lo único que lo devuelve a donde estaba.
+    /// The panel RAISES the ring's level and NEVER lowers it, and closing
+    /// the panel is the only thing that returns it to where it was.
     ///
-    /// Las tres mitades importan. Sin subirlo, filtrar a DEBUG lo que se guardó
-    /// a INFO no enseña nada y parece roto. Sin el «nunca baja», ir a DEBUG,
-    /// volver a WARN y pedir DEBUG otra vez borraría justo el rato que estabas
-    /// investigando. Y sin bajarlo al cerrar, una sola pulsación de `t` deja el
-    /// proceso capturando TRACE el resto de la sesión, con su coste, mucho
-    /// después de que nadie mire.
+    /// All three halves matter. Without raising it, filtering down to DEBUG
+    /// what was stored at INFO shows nothing and looks broken. Without the
+    /// "never lowers", going to DEBUG, back to WARN and asking for DEBUG
+    /// again would erase exactly the stretch you were investigating. And
+    /// without lowering it on close, a single press of `t` leaves the
+    /// process capturing TRACE for the rest of the session, with its cost,
+    /// long after nobody is looking.
     #[test]
     fn el_nivel_del_anillo_sube_no_baja_y_vuelve_al_cerrar() {
         use norte_config::logring::LogRing;
         let mut app = crate::app::testutil::app_dos_panes();
-        let anillo = LogRing::new(10);
-        app.log_ring = Some(anillo.clone());
-        app.toggle_log(); // abre y toma el teclado
+        let ring = LogRing::new(10);
+        app.log_ring = Some(ring.clone());
+        app.toggle_log(); // opens and takes the keyboard
 
         aplicar_accion(&mut app, LogAction::Level(LogLevel::Debug));
-        assert_eq!(anillo.level(), LogLevel::Debug, "pedir DEBUG no lo subió");
+        assert_eq!(
+            ring.level(),
+            LogLevel::Debug,
+            "asking for DEBUG did not raise it"
+        );
         aplicar_accion(&mut app, LogAction::Level(LogLevel::Warn));
         assert_eq!(
-            anillo.level(),
+            ring.level(),
             LogLevel::Debug,
-            "bajar lo que se ENSEÑA no puede dejar de capturar"
+            "lowering what is SHOWN must not stop capturing"
         );
         assert_eq!(app.log_panel.level(), LogLevel::Warn);
 
-        app.toggle_log(); // cierra
+        app.toggle_log(); // closes
         assert_eq!(
-            anillo.level(),
+            ring.level(),
             LogLevel::Warn,
-            "cerrar el panel tiene que devolver el anillo a lo que se enseñaba"
+            "closing the panel must return the ring to what was being shown"
         );
     }
 
-    /// La allowlist del registro NO es la de procesos: allí `dialog.confirm`
-    /// cancela la tarea bajo el cursor, y aquí no hay nada que confirmar. Un
-    /// `Enter` que cancela una copia desde un visor de log es justo el
-    /// accidente que una allowlist existe para impedir.
+    /// The log's allowlist is NOT the process one's: there `dialog.confirm`
+    /// cancels the task under the cursor, and here there is nothing to
+    /// confirm. An `Enter` that cancels a copy from a log viewer is exactly
+    /// the accident an allowlist exists to prevent.
     #[test]
     fn confirmar_es_inerte_en_el_registro_y_su_propia_tecla_lo_cierra() {
         let mut app = crate::app::testutil::app_dos_panes();
         app.toggle_log();
-        assert!(app.log_slot().is_some(), "no se abrió");
+        assert!(app.log_slot().is_some(), "did not open");
 
-        // Inerte: ni cierra el panel ni cambia de dueño del teclado.
+        // Inert: it neither closes the panel nor changes who owns the
+        // keyboard.
         app.log_command("dialog.confirm");
         assert!(app.log_slot().is_some());
         assert_eq!(app.key_owner(), crate::app::KeyOwner::Log);
 
-        // Y lo suyo sí: la misma tecla que lo abrió lo cierra desde dentro.
+        // And its own key does: the same key that opened it closes it from
+        // inside.
         app.log_command("layout.log");
-        assert!(app.log_slot().is_none(), "no se cerró desde dentro");
+        assert!(app.log_slot().is_none(), "did not close from inside");
     }
 
-    /// `End` no es «baja mucho»: tras cambiar el filtro la lista cambia de
-    /// largo, y volver al final tiene que ser una orden, no una apuesta.
+    /// `End` is not "scroll down a lot": after changing the filter the list
+    /// changes length, and going back to the end has to be a command, not a
+    /// bet.
     #[test]
     fn el_final_es_una_orden_propia() {
         assert_eq!(
@@ -803,9 +827,9 @@ mod tests {
         );
     }
 
-    // --- La mitad remota (#328) -------------------------------------------
+    // --- The remote half (#328) --------------------------------------------
 
-    /// Una línea del cable, ya en forma de presentación.
+    /// A line from the wire, already in presentation form.
     fn wire(epoch_ms: i64, level: &str, msg: &str) -> norte_proto::methods::LogLine {
         norte_proto::methods::LogLine {
             epoch_ms,
@@ -815,7 +839,7 @@ mod tests {
         }
     }
 
-    /// Una respuesta de `log.tail` con lo justo.
+    /// A `log.tail` response with just enough.
     fn tail(
         lines: Vec<norte_proto::methods::LogLine>,
         next: u64,
@@ -830,104 +854,105 @@ mod tests {
         }
     }
 
-    /// Mete líneas en el anillo por donde entran de verdad: la capa de
-    /// `tracing`.
+    /// Puts lines into the ring through where they truly enter: the
+    /// `tracing` layer.
     ///
-    /// `LogRing::push` es privado a propósito, y no debe dejar de serlo — el
-    /// filtro por el que pasa la capa es donde vive la cota de `suppaftp`, que
-    /// loguea `PASS <contraseña>` a nivel TRACE. Un atajo para los tests que se
-    /// saltara esa cota probaría un camino que no existe.
-    fn con_lineas(anillo: &norte_config::logring::LogRing, f: impl FnOnce()) {
+    /// `LogRing::push` is private on purpose, and must stay that way — the
+    /// filter the layer goes through is where `suppaftp`'s cap lives, since
+    /// it logs `PASS <password>` at TRACE level. A shortcut for tests that
+    /// skipped that cap would be testing a path that does not exist.
+    fn con_lineas(ring: &norte_config::logring::LogRing, f: impl FnOnce()) {
         use tracing_subscriber::layer::SubscriberExt as _;
-        let s = tracing_subscriber::registry().with(norte_config::logring::ring_layer(anillo));
+        let s = tracing_subscriber::registry().with(norte_config::logring::ring_layer(ring));
         tracing::subscriber::with_default(s, f);
     }
 
-    /// Una app con el panel abierto, un anillo local con una línea y el daemon
-    /// contestando otra. Es el montaje de `ntc --socket`: dos procesos, dos
-    /// anillos.
+    /// An app with the panel open, a local ring with one line and the daemon
+    /// answering another. It is `ntc --socket`'s setup: two processes, two
+    /// rings.
     ///
-    /// La línea del daemon se fecha UN milisegundo después de la local, leída
-    /// del propio anillo: la hora la pone el reloj al registrar, así que
-    /// inventarse aquí un `epoch_ms` pequeño pondría al daemon en 1970 y la
-    /// mezcla saldría al revés por un motivo que no tiene nada que ver con lo
-    /// que el test mira.
+    /// The daemon's line is dated ONE millisecond after the local one, read
+    /// from the ring itself: the clock sets the time on logging, so making
+    /// up a small `epoch_ms` here would put the daemon in 1970 and the merge
+    /// would come out backward for a reason that has nothing to do with what
+    /// the test is looking at.
     fn app_con_las_dos_fuentes() -> crate::app::App {
         use norte_config::logring::LogRing;
         let mut app = crate::app::testutil::app_dos_panes();
-        let anillo = LogRing::new(10);
-        con_lineas(&anillo, || tracing::info!("de esta terminal"));
-        let local_ms = anillo.snapshot()[0].epoch_ms;
-        app.log_ring = Some(anillo);
-        // Lo que `main` pone de `Backend::is_remote`: hay un segundo proceso.
+        let ring = LogRing::new(10);
+        con_lineas(&ring, || tracing::info!("from this terminal"));
+        let local_ms = ring.snapshot()[0].epoch_ms;
+        app.log_ring = Some(ring);
+        // What `main` sets from `Backend::is_remote`: there is a second
+        // process.
         app.log_remote.hay_daemon = true;
         app.toggle_log();
         let epoca = app.log_remote.epoca;
         aterrizar_tail(
             &mut app,
             epoca,
-            Ok(tail(vec![wire(local_ms + 1, "info", "del daemon")], 7, 0)),
+            Ok(tail(
+                vec![wire(local_ms + 1, "info", "from the daemon")],
+                7,
+                0,
+            )),
         );
         app
     }
 
-    /// Con un daemon aparte, el panel enseña LAS DOS fuentes, en orden de
-    /// tiempo y sabiendo de cuál es cada línea.
+    /// With a separate daemon, the panel shows BOTH sources, in time order
+    /// and knowing which one each line is from.
     ///
-    /// Es el agujero de #328 y la misma respuesta que la ventana (ADR 0077):
-    /// con `--socket`, los providers, el journal, la política y el motivo por
-    /// el que una conexión falló están en el otro proceso. Arreglarlo en un
-    /// solo frontend es lo que hace que los dos diverjan en silencio.
+    /// It is #328's gap and the same answer as the window's (ADR 0077): with
+    /// `--socket`, the providers, the journal, the policy and the reason a
+    /// connection failed are in the other process. Fixing it in a single
+    /// frontend is what makes the two silently diverge.
     #[test]
     fn la_vista_mezcla_la_terminal_y_el_daemon() {
         let app = app_con_las_dos_fuentes();
-        let locales = instantanea(&app);
-        let filas = visibles(&app, &locales);
-        let textos: Vec<&str> = filas.iter().map(|(l, _)| l.message.as_str()).collect();
+        let local = instantanea(&app);
+        let rows = visibles(&app, &local);
+        let texts: Vec<&str> = rows.iter().map(|(l, _)| l.message.as_str()).collect();
         assert_eq!(
-            textos,
-            ["de esta terminal", "del daemon"],
-            "la mezcla no llegó a las filas"
+            texts,
+            ["from this terminal", "from the daemon"],
+            "the merge did not reach the rows"
         );
-        assert_eq!(filas[0].1, LogSource::Window);
-        assert_eq!(filas[1].1, LogSource::Daemon);
+        assert_eq!(rows[0].1, LogSource::Window);
+        assert_eq!(rows[1].1, LogSource::Daemon);
     }
 
-    /// La fuente EFECTIVA no es la preferencia guardada: una fuente que no
-    /// existe no se puede enseñar, y el panel informa de lo que hay y no de lo
-    /// que se pidió. Se colapsa en las dos direcciones.
+    /// The EFFECTIVE source is not the stored preference: a source that
+    /// does not exist cannot be shown, and the panel reports what there is,
+    /// not what was asked for. It collapses in both directions.
     #[test]
     fn la_fuente_efectiva_colapsa_hacia_el_anillo_que_existe() {
         let mut app = app_con_las_dos_fuentes();
-        assert_eq!(
-            fuente_efectiva(&app),
-            LogSource::Both,
-            "con los dos anillos"
-        );
+        assert_eq!(fuente_efectiva(&app), LogSource::Both, "with both rings");
 
         app.log_ring = None;
         assert_eq!(
             fuente_efectiva(&app),
             LogSource::Daemon,
-            "sin anillo local no hay nada de esta terminal que mezclar"
+            "with no local ring there is nothing from this terminal to mix in"
         );
 
         app.log_remote.servicio = Servicio::SinAnillo;
         assert_eq!(
             fuente_efectiva(&app),
             LogSource::Window,
-            "sin registro al otro lado no se puede enseñar el del daemon"
+            "with no log on the other side the daemon's cannot be shown"
         );
     }
 
-    /// El nivel que se MARCA es el que se enseña, siempre; el del daemon se
-    /// dice en la nota de captura, que es el sitio que ya significa «se recoge
-    /// más de lo que se ve».
+    /// The level that gets SET is always the one being shown; the daemon's
+    /// is stated in the capture note, which is the place that already means
+    /// "more is being collected than is shown".
     ///
-    /// Marcar el del daemon fue el peor fallo del primer intento de la
-    /// ventana: el filtro sigue siendo el del panel, así que con el daemon en
-    /// `trace` y el panel en `info` la cabecera decía `trace` mientras cada
-    /// línea `debug` cruzaba el socket y se tiraba en silencio.
+    /// Setting the daemon's was the worst bug in the window's first attempt:
+    /// the filter is still the panel's, so with the daemon at `trace` and
+    /// the panel at `info` the header said `trace` while every `debug` line
+    /// crossed the socket and was silently dropped.
     #[test]
     fn el_nivel_del_daemon_va_en_la_captura_y_no_en_el_nivel() {
         let mut app = app_con_las_dos_fuentes();
@@ -935,26 +960,27 @@ mod tests {
         assert_eq!(
             app.log_panel.level(),
             LogLevel::Info,
-            "el nivel del panel lo mueven las teclas, no el daemon"
+            "the panel's level is moved by the keys, not the daemon"
         );
-        let nota = nota_de_captura(&app, fuente_efectiva(&app));
+        let note = nota_de_captura(&app, fuente_efectiva(&app));
         assert!(
-            nota.contains(LogLevel::Trace.label().trim()),
-            "la captura no dice el nivel del daemon: {nota:?}"
+            note.contains(LogLevel::Trace.label().trim()),
+            "the capture note does not state the daemon's level: {note:?}"
         );
         assert!(
-            nota.contains(&norte_i18n::ta(
+            note.contains(&norte_i18n::ta(
                 "log-capturing-daemon",
                 &[("level", LogLevel::Trace.label().trim())]
             )),
-            "la captura no dice DE QUIÉN es ese nivel: {nota:?}"
+            "the capture note does not say WHOSE level that is: {note:?}"
         );
     }
 
-    /// Subir el anillo del daemon se anuncia SIEMPRE que el daemon sea una de
-    /// las fuentes, no solo cuando es la única: en `Both` —que es como abre el
-    /// panel— pulsar `t` sube un anillo GLOBAL del daemon que no vuelve a
-    /// bajar, y callarlo dejaría esa decisión sin anunciar.
+    /// Raising the daemon's ring is announced WHENEVER the daemon is one of
+    /// the sources, not only when it is the sole one: in `Both` —which is
+    /// how the panel opens— pressing `t` raises a GLOBAL daemon ring that
+    /// never goes back down, and staying quiet about it would leave that
+    /// decision unannounced.
     #[test]
     fn subir_el_anillo_del_daemon_se_anuncia_tambien_en_mezcla() {
         let mut app = app_con_las_dos_fuentes();
@@ -965,7 +991,7 @@ mod tests {
             assert_eq!(
                 app.message.as_deref(),
                 Some(norte_i18n::t("log-source-daemon-level").as_str()),
-                "no se anuncia con la fuente {fuente:?}"
+                "not announced with source {fuente:?}"
             );
         }
         app.log_panel.set_source(LogSource::Window);
@@ -973,13 +999,13 @@ mod tests {
         aplicar_accion(&mut app, LogAction::Level(LogLevel::Warn));
         assert_eq!(
             app.message, None,
-            "leyendo solo esta terminal no hay ningún anillo ajeno que subir"
+            "reading only this terminal, there is no other ring to raise"
         );
     }
 
-    /// Que el daemon NO sirve su registro se dice en la etiqueta de la fuente,
-    /// que es la que ocupa el borde: el lector creería, si no, que la mitad
-    /// interesante simplemente no ocurre.
+    /// That the daemon does NOT serve its log is stated in the source
+    /// label, which is what occupies the border: otherwise the reader
+    /// would believe the interesting half simply is not happening.
     #[test]
     fn un_daemon_sin_registro_lo_dice_la_etiqueta_de_la_fuente() {
         let mut app = app_con_las_dos_fuentes();
@@ -991,74 +1017,71 @@ mod tests {
         assert_eq!(
             etiqueta_de_fuente(&app, fuente_efectiva(&app)),
             Some(norte_i18n::t("log-source-unsupported")),
-            "un daemon sin registro tiene que decirse"
+            "a daemon with no log has to be stated"
         );
     }
 
-    /// Sin daemon —el `ntc` corriente, que es el arranque por defecto— no se
-    /// pregunta nada y no se nombra a nadie.
+    /// With no daemon —a plain `ntc`, which is the default startup—
+    /// nothing is asked and nobody is named.
     ///
-    /// Es la avería que la revisión encontró: el brazo embebido contesta
-    /// `Unsupported` a `log.tail` con toda la razón —su anillo es el que este
-    /// panel ya lee—, y el panel lo leía como un hecho sobre un daemon. Con un
-    /// `ntc` sin daemon ninguno, el borde pasaba por «de este proceso (el
-    /// daemon registra aparte)» y se quedaba en «este daemon no sirve su
-    /// registro». La respuesta correcta no es una tercera frase: es la ausencia
-    /// del segmento, que es como estaba en #326.
+    /// It is the fault the review found: the embedded arm rightly answers
+    /// `Unsupported` to `log.tail` —its ring is the one this panel already
+    /// reads—, and the panel read that as a fact about a daemon. With an
+    /// `ntc` with no daemon at all, the border went from "of this process
+    /// (the daemon logs separately)" to staying at "this daemon does not
+    /// serve its log". The correct answer is not a third sentence: it is
+    /// the segment's absence, which is how it was in #326.
     #[test]
     fn sin_daemon_no_se_sondea_ni_se_nombra_a_nadie() {
         let mut app = crate::app::testutil::app_dos_panes();
         app.log_ring = Some(norte_config::logring::LogRing::new(10));
         app.toggle_log();
-        assert!(!app.log_remote.hay_daemon, "por defecto no hay daemon");
+        assert!(!app.log_remote.hay_daemon, "by default there is no daemon");
         assert!(
             !app.log_remote.debe_pedir(),
-            "se iba a sondear a un daemon que no existe"
+            "it was about to probe a daemon that does not exist"
         );
         for fuente in [LogSource::Window, LogSource::Daemon, LogSource::Both] {
             assert_eq!(
                 etiqueta_de_fuente(&app, fuente),
                 None,
-                "se nombró un origen con un solo anillo ({fuente:?})"
+                "an origin was named with a single ring ({fuente:?})"
             );
         }
-        // Y la fuente efectiva no puede ser otra cosa: `servicio` jamás llega a
-        // `Sirve` porque nadie pregunta.
+        // And the effective source cannot be anything else: `servicio`
+        // never reaches `Sirve` because nobody asks.
         assert_eq!(fuente_efectiva(&app), LogSource::Window);
-        // Ni se anuncia el anillo de nadie al subir el nivel.
+        // Nor is anyone's ring announced when the level is raised.
         aplicar_accion(&mut app, LogAction::Level(LogLevel::Trace));
         assert_eq!(app.message, None);
         assert_eq!(app.log_remote.pide_nivel, None);
     }
 
-    /// El sondeo mira si el panel se VE, no si existe: uno escondido detrás de
-    /// una pestaña que no es la activa sigue en el árbol, y sondearlo son dos
-    /// RPC por segundo toda la sesión por algo que nadie tiene delante.
+    /// The probe checks whether the panel is VISIBLE, not whether it
+    /// exists: one hidden behind a tab that is not the active one is still
+    /// in the tree, and probing it is two RPCs a second for the whole
+    /// session for something nobody has in front of them.
     ///
-    /// La barra de paneles sigue contando el hueco escondido como abierto —eso
-    /// es #329 y no se toca aquí—; lo que este test fija es que el gasto de red
-    /// no depende de ese bug.
+    /// The panel bar still counts the hidden slot as open —that is #329 and
+    /// is not touched here—; what this test pins down is that the network
+    /// cost does not depend on that bug.
     #[test]
     fn un_panel_detras_de_una_pestana_no_se_sondea() {
         use norte_frontend::layout::{KindId, Node};
         let mut app = app_con_las_dos_fuentes();
-        let id = app.log_slot().expect("el panel está abierto");
-        assert_eq!(
-            app.log_slot_visible(),
-            Some(id),
-            "se ve antes de esconderlo"
-        );
+        let id = app.log_slot().expect("the panel is open");
+        assert_eq!(app.log_slot_visible(), Some(id), "visible before hiding it");
 
-        // El mismo hueco, ahora en la pestaña NO activa de unas pestañas.
-        let otro = app
+        // The same slot, now in the NON-active tab of a tab group.
+        let other = app
             .layout
             .slot_ids()
             .into_iter()
             .find(|s| *s != id)
-            .expect("hay más huecos que el registro");
+            .expect("there are more slots than the log");
         app.layout = Node::Tabs {
             children: vec![
-                Node::slot(otro, KindId::new("pane")),
+                Node::slot(other, KindId::new("pane")),
                 Node::slot(id, KindId::new(KIND)),
             ],
             active: 0,
@@ -1066,69 +1089,69 @@ mod tests {
         assert_eq!(
             app.log_slot(),
             Some(id),
-            "sigue existiendo, que es lo que `log_slot` contesta"
+            "still exists, which is what `log_slot` answers"
         );
         assert_eq!(
             app.log_slot_visible(),
             None,
-            "un hueco detrás de otra pestaña no está en pantalla"
+            "a slot behind another tab is not on screen"
         );
     }
 
-    /// Dos contadores y JAMÁS su suma: el del anillo local cuenta lo evacuado
-    /// desde que arrancó el proceso, el del daemon lo que esta apertura del
-    /// panel se perdió. Sumarlos daría un número que no es ninguna de las dos
-    /// cosas.
+    /// Two counters and NEVER their sum: the local ring's counts what has
+    /// been evicted since the process started, the daemon's what THIS
+    /// opening of the panel lost. Adding them would give a number that is
+    /// neither of the two things.
     #[test]
     fn los_dos_contadores_se_dicen_por_separado() {
         use norte_config::logring::LogRing;
         let mut app = crate::app::testutil::app_dos_panes();
-        let anillo = LogRing::new(1);
-        con_lineas(&anillo, || {
+        let ring = LogRing::new(1);
+        con_lineas(&ring, || {
             for _ in 0..4 {
                 tracing::info!("x");
             }
         });
-        app.log_ring = Some(anillo);
+        app.log_ring = Some(ring);
         app.toggle_log();
         let epoca = app.log_remote.epoca;
         aterrizar_tail(&mut app, epoca, Ok(tail(Vec::new(), 9, 5)));
-        let nota = nota_de_descartes(&app, LogSource::Both);
-        assert!(nota.contains('3'), "faltan las 3 locales: {nota:?}");
-        assert!(nota.contains('5'), "faltan las 5 del daemon: {nota:?}");
-        assert!(!nota.contains('8'), "los contadores se sumaron: {nota:?}");
-        // Y de un anillo que no se está leyendo no se avisa: una alarma sobre
-        // un hueco que no está en pantalla es una alarma sobre nada.
+        let note = nota_de_descartes(&app, LogSource::Both);
+        assert!(note.contains('3'), "missing the 3 local ones: {note:?}");
+        assert!(note.contains('5'), "missing the daemon's 5: {note:?}");
+        assert!(!note.contains('8'), "the counters were added: {note:?}");
+        // And a ring that is not being read gets no warning: an alarm
+        // about a gap that is not on screen is an alarm about nothing.
         assert!(!nota_de_descartes(&app, LogSource::Window).contains('5'));
         assert!(!nota_de_descartes(&app, LogSource::Daemon).contains('3'));
     }
 
-    /// El cursor se encadena (`None` la primera vez, nunca cero) y las
-    /// pérdidas se ACUMULAN: un hueco silencioso miente sobre lo que pasó.
+    /// The cursor chains (`None` the first time, never zero) and losses
+    /// ACCUMULATE: a silent gap lies about what happened.
     #[test]
     fn el_cursor_se_encadena_y_las_perdidas_se_acumulan() {
         let mut app = crate::app::testutil::app_dos_panes();
         app.toggle_log();
         assert_eq!(
             app.log_remote.cursor, None,
-            "la primera vez no se pide cero"
+            "zero is not requested the first time"
         );
         let epoca = app.log_remote.epoca;
         aterrizar_tail(&mut app, epoca, Ok(tail(vec![wire(1, "warn", "a")], 4, 2)));
         assert_eq!(app.log_remote.cursor, Some(4));
         aterrizar_tail(&mut app, epoca, Ok(tail(vec![wire(2, "warn", "b")], 9, 3)));
         assert_eq!(app.log_remote.cursor, Some(9));
-        assert_eq!(app.log_remote.perdidas, 5, "las pérdidas no se acumularon");
+        assert_eq!(app.log_remote.perdidas, 5, "the losses did not accumulate");
         assert_eq!(
             app.log_remote.lineas.len(),
             2,
-            "la vuelta no trae solo lo nuevo"
+            "the round does not bring only what is new"
         );
     }
 
-    /// Un daemon que dice que no tiene registro no se vuelve a preguntar: la
-    /// negativa sale de una feature de compilación y no puede cambiar mientras
-    /// ese daemon viva. Un fallo CUALQUIERA no es eso, y se reintenta.
+    /// A daemon that says it has no log is not asked again: the refusal
+    /// comes from a compile-time feature and cannot change while that
+    /// daemon lives. ANY OTHER failure is not that, and it retries.
     #[test]
     fn un_daemon_sin_registro_deja_de_sondearse_y_un_fallo_no() {
         let mut app = crate::app::testutil::app_dos_panes();
@@ -1143,44 +1166,46 @@ mod tests {
         assert_eq!(
             app.log_remote.servicio,
             Servicio::SinRespuesta,
-            "un fallo pasajero no es una carencia permanente"
+            "a transient failure is not a permanent lack"
         );
-        assert!(app.log_remote.debe_pedir(), "un fallo no apaga el sondeo");
+        assert!(
+            app.log_remote.debe_pedir(),
+            "a failure does not turn off the probe"
+        );
 
         aterrizar_tail(&mut app, epoca, Err(norte_proto::Error::Unsupported));
         assert_eq!(app.log_remote.servicio, Servicio::SinAnillo);
         assert!(
             !app.log_remote.debe_pedir(),
-            "seguir preguntando serían dos RPC por segundo para siempre"
+            "continuing to ask would be two RPCs a second forever"
         );
     }
 
-    /// Entre pedir y contestar caben un cierre y una apertura, y la respuesta
-    /// de la sesión anterior tiene que MORIR: aterrizar su cursor en el panel
-    /// nuevo dejaría un `lost` inventado y líneas de otra lectura.
+    /// Between asking and answering there is room for a close and an open,
+    /// and the previous session's response has to DIE: landing its cursor
+    /// in the new panel would leave a made-up `lost` and lines from another
+    /// read.
     #[test]
     fn la_respuesta_de_una_apertura_anterior_no_aterriza() {
         let mut app = crate::app::testutil::app_dos_panes();
         app.toggle_log();
-        let vieja = app.log_remote.epoca;
-        app.toggle_log(); // cierra: reinicia y cambia de época
-        app.toggle_log(); // vuelve a abrir
+        let old = app.log_remote.epoca;
+        app.toggle_log(); // closes: resets and changes epoch
+        app.toggle_log(); // reopens
         aterrizar_tail(
             &mut app,
-            vieja,
-            Ok(tail(vec![wire(1, "info", "de la otra vez")], 99, 7)),
+            old,
+            Ok(tail(vec![wire(1, "info", "from the other time")], 99, 7)),
         );
-        assert!(
-            app.log_remote.lineas.is_empty(),
-            "aterrizó una respuesta vieja"
-        );
+        assert!(app.log_remote.lineas.is_empty(), "an old response landed");
         assert_eq!(app.log_remote.cursor, None);
         assert_eq!(app.log_remote.perdidas, 0);
     }
 
-    /// Cerrar el panel suelta lo del daemon pero NO olvida que lo sirve: que
-    /// haya una segunda fuente es un hecho sobre el daemon, no sobre esta
-    /// apertura, y olvidarlo escondería la tecla `s` medio segundo cada vez.
+    /// Closing the panel releases the daemon's lines but does NOT forget
+    /// that it serves them: that there is a second source is a fact about
+    /// the daemon, not about this opening, and forgetting it would hide the
+    /// `s` key for half a second every time.
     #[test]
     fn cerrar_suelta_las_lineas_pero_no_lo_que_se_sabe_del_daemon() {
         let mut app = app_con_las_dos_fuentes();
@@ -1191,13 +1216,13 @@ mod tests {
         assert_eq!(
             app.log_remote.servicio,
             Servicio::Sirve,
-            "olvidar que sirve escondería el mando al reabrir"
+            "forgetting that it serves would hide the control on reopen"
         );
     }
 
-    /// `s` recorre la fuente, y solo cuando hay una segunda que ofrecer:
-    /// recorrer tres vistas del MISMO anillo sería un mando que promete algo
-    /// que no existe.
+    /// `s` cycles the source, and only when there is a second one to offer:
+    /// cycling through three views of the SAME ring would be a control that
+    /// promises something that does not exist.
     #[test]
     fn la_tecla_de_la_fuente_solo_significa_algo_con_daemon() {
         assert_eq!(
@@ -1210,7 +1235,7 @@ mod tests {
         assert_eq!(
             app.log_panel.source(),
             LogSource::Both,
-            "sin daemon, la preferencia no se toca"
+            "with no daemon, the preference is not touched"
         );
 
         let mut app = app_con_las_dos_fuentes();
@@ -1222,16 +1247,17 @@ mod tests {
         assert_eq!(
             app.log_panel.source(),
             LogSource::Both,
-            "no vuelve al principio"
+            "does not go back to the start"
         );
     }
 
-    /// Pedir más detalle se lo pide TAMBIÉN al daemon cuando es una de las
-    /// fuentes: su anillo es suyo, y sin subirlo las líneas que se están
-    /// pidiendo no llegan a existir al otro lado. Por la PREFERENCIA y no por
-    /// la fuente efectiva — quien eligió leer el daemon está pidiendo su nivel
-    /// aunque todavía no haya contestado. Que HAYA daemon, en cambio, sí manda:
-    /// sin él la petición sería estado muerto que nadie drena.
+    /// Asking for more detail asks the daemon TOO when it is one of the
+    /// sources: its ring is its own, and without raising it the lines being
+    /// requested never come to exist on the other side. By the PREFERENCE
+    /// and not by the effective source — whoever chose to read the daemon is
+    /// asking for its level even if it has not answered yet. Whether there
+    /// IS a daemon, though, does matter: without it the request would be
+    /// dead state nobody drains.
     #[test]
     fn subir_el_nivel_se_lo_pide_tambien_al_daemon() {
         let mut app = crate::app::testutil::app_dos_panes();
@@ -1240,13 +1266,13 @@ mod tests {
         assert_eq!(
             app.log_remote.servicio,
             Servicio::SinRespuesta,
-            "todavía no ha contestado, y aun así se le pide"
+            "has not answered yet, and it is asked anyway"
         );
         aplicar_accion(&mut app, LogAction::Level(LogLevel::Debug));
         assert_eq!(
             app.log_remote.pide_nivel,
             Some(LogLevel::Debug),
-            "no se le pidió al daemon"
+            "the daemon was not asked"
         );
 
         app.log_remote.pide_nivel = None;
@@ -1254,49 +1280,51 @@ mod tests {
         aplicar_accion(&mut app, LogAction::Level(LogLevel::Trace));
         assert_eq!(
             app.log_remote.pide_nivel, None,
-            "leyendo solo esta terminal no hay por qué subirle el anillo global a nadie"
+            "reading only this terminal, there is no reason to raise anyone's global ring"
         );
     }
 
-    /// El desplazamiento cuenta sobre la lista MEZCLADA: contando solo las
-    /// locales el tope se queda corto y una página no llega al final.
+    /// Scrolling counts over the MERGED list: counting only the local ones
+    /// leaves the cap short and a page does not reach the end.
     #[test]
     fn el_desplazamiento_cuenta_las_dos_fuentes() {
         let mut app = app_con_las_dos_fuentes();
         app.log_panel.set_viewport_rows(1);
         aplicar_accion(&mut app, LogAction::Scroll(-1));
-        assert!(!app.log_panel.following(), "subir no despegó del final");
-        let locales = instantanea(&app);
+        assert!(
+            !app.log_panel.following(),
+            "scrolling up did not detach from the end"
+        );
+        let local = instantanea(&app);
         assert_eq!(
-            app.log_panel
-                .window_start(visibles(&app, &locales).len(), 1),
+            app.log_panel.window_start(visibles(&app, &local).len(), 1),
             0,
-            "con dos líneas y una fila, subir una deja la primera arriba"
+            "with two lines and one row, scrolling up one leaves the first on top"
         );
         aplicar_accion(&mut app, LogAction::Scroll(1));
         assert!(
             app.log_panel.following(),
-            "bajar hasta el final no volvió a pegarlo: el tope contó solo el anillo local"
+            "scrolling down to the end did not reattach it: the cap counted only the local ring"
         );
     }
 
-    /// El tope de líneas remotas se aplica por DELANTE y lo recortado cuenta
-    /// como perdido: un panel abierto toda una tarde no puede crecer sin fin,
-    /// y el recorte no puede dejar un hueco callado.
+    /// The remote line cap is applied from the FRONT and what is trimmed
+    /// counts as lost: a panel left open all afternoon cannot grow without
+    /// end, and the trim cannot leave a silent gap.
     #[test]
     fn el_tope_remoto_tira_lo_viejo_y_lo_cuenta() {
         let mut app = crate::app::testutil::app_dos_panes();
         app.toggle_log();
         let epoca = app.log_remote.epoca;
-        let muchas: Vec<_> = (0..i64::try_from(MAX_LINEAS_REMOTAS).unwrap() + 3)
+        let many: Vec<_> = (0..i64::try_from(MAX_LINEAS_REMOTAS).unwrap() + 3)
             .map(|i| wire(i, "info", "x"))
             .collect();
-        aterrizar_tail(&mut app, epoca, Ok(tail(muchas, 1, 0)));
+        aterrizar_tail(&mut app, epoca, Ok(tail(many, 1, 0)));
         assert_eq!(app.log_remote.lineas.len(), MAX_LINEAS_REMOTAS);
-        assert_eq!(app.log_remote.perdidas, 3, "el recorte se calló");
+        assert_eq!(app.log_remote.perdidas, 3, "the trim stayed silent");
         assert_eq!(
             app.log_remote.lineas[0].epoch_ms, 3,
-            "se tiró lo nuevo en vez de lo viejo"
+            "the new ones were dropped instead of the old ones"
         );
     }
 }

@@ -1,15 +1,15 @@
-//! Lo que un tablero de tasks pinta de un progreso, compartido.
+//! What a tasks board paints about a progress, shared.
 //!
-//! Aquí y no en un frontend por la misma razón que los avisos persistentes:
-//! es aritmética de presentación sobre datos del wire, y dos copias acaban
-//! divergiendo. La divergencia ya ocurrió una vez: el TUI caía a las
-//! ENTRADAS cuando no había bytes totales y la ventana gráfica no, así que un
-//! borrado —que no cuenta bytes— pintaba una barra clavada en cero.
+//! Here and not in a frontend for the same reason as persistent notices: it
+//! is presentation arithmetic over wire data, and two copies end up
+//! drifting. The drift already happened once: the TUI fell back to ENTRIES
+//! when there were no total bytes and the graphical window did not, so a
+//! deletion — which does not count bytes — painted a bar stuck at zero.
 
-/// Si una task de esta clase se para de verdad al pausarla EN MARCHA
-/// (ADR 0147): solo las que tienen puntos de control —copiar, mover y
-/// borrar—. Las demás aceptarían la pausa y seguirían, y un control que no
-/// hace lo que dice es peor que uno que falta: los frontends dicen que no.
+/// Whether a task of this class really stops when paused WHILE RUNNING
+/// (ADR 0147): only the ones with checkpoints — copy, move and delete. The
+/// others would accept the pause and keep going, and a control that does not
+/// do what it says is worse than one that is missing: the frontends say no.
 ///
 /// ```
 /// use norte_frontend::tasks::pausable;
@@ -25,57 +25,61 @@ pub fn pausable(kind: norte_proto::TaskKind) -> bool {
     )
 }
 
-/// El porcentaje de una task: por bytes si se conocen, si no por entradas.
+/// A task's percentage: by bytes if known, otherwise by entries.
 ///
-/// `None` = no se sabe todavía (el walk no ha terminado y no hay totales).
-/// Es `None` y no un `0` fingido a propósito: «va por el 0 %» y «no se sabe
-/// cuánto queda» son dos cosas distintas, y el wire ya las distingue —los
-/// totales son `Option` justo por eso—.
+/// `None` = not known yet (the walk has not finished and there are no
+/// totals). It is `None` and not a faked `0` on purpose: "it is at 0%" and
+/// "how much is left is not known" are two different things, and the wire
+/// already distinguishes them — the totals are `Option` for exactly that
+/// reason.
 #[must_use]
 pub fn progress_pct(p: &norte_proto::TaskProgress) -> Option<u8> {
-    let de = |hecho: u64, total: u64| -> Option<u8> {
+    let pct = |done: u64, total: u64| -> Option<u8> {
         if total == 0 {
             return None;
         }
-        u8::try_from((hecho.min(total).saturating_mul(100)) / total).ok()
+        u8::try_from((done.min(total).saturating_mul(100)) / total).ok()
     };
     match (p.bytes_total, p.entries_total) {
-        (Some(total), _) if total > 0 => de(p.bytes_done, total),
-        (_, Some(total)) if total > 0 => de(p.entries_done, total),
+        (Some(total), _) if total > 0 => pct(p.bytes_done, total),
+        (_, Some(total)) if total > 0 => pct(p.entries_done, total),
         _ => None,
     }
 }
 
-/// Peso de la muestra nueva en la media del ritmo.
+/// Weight of the new sample in the rate's average.
 ///
-/// Un tercio: con el ritmo instantáneo a secas el número baila en cada
-/// snapshot (el wire coalesce a 30 Hz y un fichero pequeño entra entero entre
-/// dos), y con una media larga el ritmo tarda en enterarse de que la red se
-/// cayó. Un tercio se asienta en unas pocas muestras y sigue reaccionando.
-const PESO: f64 = 1.0 / 3.0;
+/// A third: with the plain instantaneous rate the number jumps on every
+/// snapshot (the wire coalesces at 30 Hz and a small file arrives whole
+/// between two), and with a long average the rate is slow to notice the
+/// network dropped. A third settles within a few samples and keeps
+/// reacting.
+const WEIGHT: f64 = 1.0 / 3.0;
 
-/// El ritmo de una task, estimado de sus snapshots.
+/// A task's rate, estimated from its snapshots.
 ///
-/// **No viene del wire**: `TaskProgress` dice cuánto va hecho y no a qué
-/// velocidad, así que el ritmo lo calcula quien mira, con el reloj del
-/// pintado. Vive aquí porque las dos superficies lo enseñan y una media
-/// distinta en cada una sería otra divergencia silenciosa (ADR 0077).
+/// **Does not come from the wire**: `TaskProgress` says how much is done and
+/// not at what speed, so the rate is computed by whoever watches, with the
+/// painting clock. Lives here because both surfaces show it and a different
+/// average in each would be another silent drift (ADR 0077).
 ///
-/// Es por TASK: quien lo guarda es el tablero, y una task que no publica dos
-/// veces no tiene ritmo — `None`, que no es «cero».
+/// It is PER TASK: the board is what stores it, and a task that has not
+/// published twice has no rate — `None`, which is not "zero".
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct Rate {
-    ultimo: Option<(u64, i64)>,
+    last: Option<(u64, i64)>,
     bps: Option<f64>,
 }
 
 impl Rate {
-    /// Anota un snapshot y devuelve el ritmo vigente, en bytes por segundo.
+    /// Records a snapshot and returns the rate in effect, in bytes per
+    /// second.
     ///
-    /// Descarta lo que no puede medir: dos snapshots con el mismo reloj (o uno
-    /// que va hacia atrás, que en un reloj inyectado es un test o un ajuste de
-    /// hora) y un contador que RETROCEDE — una task reanudada empieza a contar
-    /// de nuevo, y arrastrar el ritmo viejo mentiría sobre la red de ahora.
+    /// Discards what it cannot measure: two snapshots with the same clock
+    /// (or one that goes backwards, which on an injected clock is a test or
+    /// a time adjustment) and a counter that GOES BACK — a resumed task
+    /// starts counting again, and carrying the old rate over would lie
+    /// about the current network.
     ///
     /// ```
     /// use norte_frontend::tasks::Rate;
@@ -87,44 +91,46 @@ impl Rate {
     /// #         unreadable: None, unvisited: None }
     /// # }
     /// let mut r = Rate::default();
-    /// assert_eq!(r.observe(&p(0), 0), None, "con una sola foto no hay ritmo");
-    /// assert_eq!(r.observe(&p(100), 1000), Some(100.0), "100 B en un segundo");
+    /// assert_eq!(r.observe(&p(0), 0), None, "with a single snapshot there is no rate");
+    /// assert_eq!(r.observe(&p(100), 1000), Some(100.0), "100 B in one second");
     /// ```
     pub fn observe(&mut self, p: &norte_proto::TaskProgress, now_ms: i64) -> Option<f64> {
-        let hechos = p.bytes_done;
-        // La primera foto solo deja la base: sin dos no hay velocidad.
-        let (antes, cuando) = self.ultimo.replace((hechos, now_ms))?;
-        let dt = now_ms - cuando;
-        if dt <= 0 || hechos < antes {
-            // Sin tiempo que dividir, o un contador que se reinició: se toma
-            // esta foto como la nueva base y se olvida lo estimado.
+        let done = p.bytes_done;
+        // The first snapshot only leaves the baseline: without two there is
+        // no speed.
+        let (before, when) = self.last.replace((done, now_ms))?;
+        let dt = now_ms - when;
+        if dt <= 0 || done < before {
+            // No time to divide by, or a counter that reset: this snapshot
+            // is taken as the new baseline and the estimate is forgotten.
             self.bps = None;
             return None;
         }
         #[expect(
             clippy::cast_precision_loss,
-            reason = "bytes y milisegundos a f64 para una media: la pérdida es \
-                      de dígitos que nadie pinta"
+            reason = "bytes and milliseconds to f64 for an average: the loss is \
+                      of digits nobody paints"
         )]
-        let muestra = (hechos - antes) as f64 * 1000.0 / dt as f64;
+        let sample = (done - before) as f64 * 1000.0 / dt as f64;
         self.bps = Some(match self.bps {
-            Some(previo) => previo.mul_add(1.0 - PESO, muestra * PESO),
-            None => muestra,
+            Some(previous) => previous.mul_add(1.0 - WEIGHT, sample * WEIGHT),
+            None => sample,
         });
         self.bps
     }
 
-    /// El ritmo vigente, en bytes por segundo. `None` = todavía no se sabe.
+    /// The rate in effect, in bytes per second. `None` = not known yet.
     #[must_use]
     pub fn bps(&self) -> Option<f64> {
         self.bps
     }
 
-    /// Cuánto queda, en segundos, o `None` si no se puede decir.
+    /// How much is left, in seconds, or `None` if it cannot be said.
     ///
-    /// Hacen falta las dos cosas: un total (una copia sabe cuánto pesa; un
-    /// borrado no) y un ritmo. Sin alguna, «queda un rato» es lo único cierto
-    /// y se dice callando, no con un número inventado.
+    /// Both things are needed: a total (a copy knows how much it weighs; a
+    /// deletion does not) and a rate. Missing either, "a while longer" is
+    /// the only certain thing and it is said by staying silent, not with a
+    /// made-up number.
     ///
     /// ```
     /// use norte_frontend::tasks::Rate;
@@ -138,8 +144,8 @@ impl Rate {
     /// let mut r = Rate::default();
     /// r.observe(&p(0, Some(1000)), 0);
     /// r.observe(&p(100, Some(1000)), 1000);
-    /// assert_eq!(r.eta_secs(&p(100, Some(1000))), Some(9), "900 B a 100 B/s");
-    /// assert_eq!(r.eta_secs(&p(100, None)), None, "sin total no hay cuenta atrás");
+    /// assert_eq!(r.eta_secs(&p(100, Some(1000))), Some(9), "900 B at 100 B/s");
+    /// assert_eq!(r.eta_secs(&p(100, None)), None, "with no total there is no countdown");
     /// ```
     #[must_use]
     pub fn eta_secs(&self, p: &norte_proto::TaskProgress) -> Option<u64> {
@@ -152,14 +158,14 @@ impl Rate {
             clippy::cast_precision_loss,
             clippy::cast_possible_truncation,
             clippy::cast_sign_loss,
-            reason = "segundos que se pintan redondeados hacia arriba"
+            reason = "seconds are painted rounded up"
         )]
-        let segundos = ((total - p.bytes_done) as f64 / bps).ceil() as u64;
-        Some(segundos)
+        let seconds = ((total - p.bytes_done) as f64 / bps).ceil() as u64;
+        Some(seconds)
     }
 }
 
-/// El ritmo, escrito para una fila: `1.2 MiB/s`. Vacío si no se sabe.
+/// The rate, written for a row: `1.2 MiB/s`. Empty if not known.
 ///
 /// ```
 /// use norte_frontend::tasks::human_rate;
@@ -174,17 +180,17 @@ pub fn human_rate(bps: Option<f64>) -> String {
     #[expect(
         clippy::cast_possible_truncation,
         clippy::cast_sign_loss,
-        reason = "un ritmo negativo no existe y uno mayor que u64 tampoco"
+        reason = "a negative rate does not exist, and neither does one bigger than u64"
     )]
     let bytes = bps.max(0.0) as u64;
     format!("{}/s", crate::human_bytes(bytes))
 }
 
-/// Lo que queda, escrito para una fila: `9s`, `1m 20s`, `2h 05m`. Vacío si no
-/// se sabe.
+/// What is left, written for a row: `9s`, `1m 20s`, `2h 05m`. Empty if not
+/// known.
 ///
-/// Sin Fluent a propósito: son símbolos de unidad, como los de `human_bytes`,
-/// y una cuenta atrás que cambia de idioma cada segundo no se lee mejor.
+/// No Fluent on purpose: these are unit symbols, like `human_bytes`'s, and a
+/// countdown that changes language every second does not read any better.
 ///
 /// ```
 /// use norte_frontend::tasks::human_eta;
@@ -205,21 +211,20 @@ pub fn human_eta(secs: Option<u64>) -> String {
     }
 }
 
-/// `true` si esta clase de task es TRABAJO de tablero.
+/// `true` if this task class is board WORK.
 ///
-/// El panel de procesos es de lo que el lector puso a correr y puede parar:
-/// copias, movimientos, borrados, empaquetados, una sincronización. Las
-/// clases *observacionales* —buscar, comparar, medir un directorio, sumar,
-/// indexar, planear una sincronización— no lo son: cada una tiene su propia
-/// superficie (la lista de hallazgos, la ficha de sumas, el plan), y ahí es
-/// donde se ven y se cancelan.
+/// The processes panel is for what the reader set running and can stop:
+/// copies, moves, deletions, packing, a sync. The *observational* classes —
+/// search, compare, measure a directory, checksum, index, plan a sync — are
+/// not: each has its own surface (the findings list, the checksum sheet,
+/// the plan), and that is where they are seen and cancelled.
 ///
-/// La distinción existe porque el panel puede ABRIRSE SOLO (ADR 0115), y
-/// abrirlo por una búsqueda tapa media pantalla para decir lo que la lista de
-/// hallazgos ya está diciendo. La TUI nunca metió esas clases en su tablero
-/// —viven en `work.search`, `work.checksum`—, así que sin esta regla escrita
-/// los dos frontends contaban cosas distintas: es la clase de divergencia que
-/// el ADR 0077 pide matar en la REGLA, no en cada cableado.
+/// The distinction exists because the panel can OPEN ON ITS OWN (ADR 0115),
+/// and opening it for a search would cover half the screen to say what the
+/// findings list is already saying. The TUI never put those classes in its
+/// board — they live in `work.search`, `work.checksum` — so without this
+/// rule written down the two frontends counted different things: it is the
+/// kind of drift ADR 0077 asks to kill in the RULE, not in each wiring.
 ///
 /// ```
 /// use norte_frontend::tasks::counts_as_work;
@@ -235,9 +240,9 @@ pub fn counts_as_work(kind: norte_proto::TaskKind) -> bool {
         norte_proto::TaskKind::Search
             | norte_proto::TaskKind::Compare
             | norte_proto::TaskKind::DirSize
-            // Medir de qué está hecho un directorio es lo mismo que medir
-            // cuánto ocupa: una LECTURA que el lector pidió mirando, no trabajo
-            // que el tablero deba anunciar.
+            // Measuring what a directory is made of is the same as measuring
+            // how much space it takes: a READ the reader asked for by
+            // looking, not work the board should announce.
             | norte_proto::TaskKind::DirUsage
             | norte_proto::TaskKind::Checksum
             | norte_proto::TaskKind::Index
@@ -250,23 +255,24 @@ pub fn counts_as_work(kind: norte_proto::TaskKind) -> bool {
 mod tests {
     use super::*;
 
-    /// Cada clase del wire decide, A MANO, si es trabajo de tablero.
+    /// Every wire class decides, BY HAND, whether it is board work.
     ///
-    /// El `match` de [`counts_as_work`] es por exclusión, así que una clase
-    /// NUEVA cuenta como trabajo sin que nadie lo piense — que es el valor
-    /// por defecto correcto (una clase nueva suele mutar, y un panel que no
-    /// se abre nunca es una función que no existe), pero no puede ser una
-    /// decisión silenciosa.
+    /// [`counts_as_work`]'s `match` is by exclusion, so a NEW class counts
+    /// as work without anyone thinking about it — which is the right
+    /// default (a new class usually mutates, and a panel that never opens
+    /// is a feature that does not exist) — but it cannot be a silent
+    /// decision.
     ///
-    /// **Y este test no la caza solo.** El `match` de abajo no lleva comodín
-    /// —el `otra => panic!` obliga a elegir—, pero lo que itera es el ARRAY de
-    /// aquí al lado, escrito a mano: una clase que no esté en el array no se
-    /// prueba, y el `panic!` no llega a dispararse. Pasó con `DirUsage`
-    /// (0.75.0), que entró clasificada y sin ejercitar. Al añadir una clase se
-    /// tocan los DOS sitios, y esta frase existe porque la de antes prometía
-    /// una red que no había.
+    /// **And this test does not catch it alone.** The `match` below carries
+    /// no wildcard — the `other => panic!` forces a choice — but what it
+    /// iterates is the ARRAY right next to it, written by hand: a class
+    /// missing from the array is not tested, and the `panic!` never fires.
+    /// It happened with `DirUsage` (0.75.0), which arrived classified and
+    /// unexercised. Adding a class touches BOTH places, and this sentence
+    /// exists because the previous one promised a safety net that was not
+    /// there.
     #[test]
-    fn cada_clase_decide_a_mano_si_es_trabajo() {
+    fn every_class_decides_by_hand_whether_it_is_work() {
         use norte_proto::TaskKind as K;
         for kind in [
             K::Copy,
@@ -291,8 +297,8 @@ mod tests {
             K::SyncPlan,
             K::Sync,
         ] {
-            let esperado = match kind {
-                // TRABAJO: mueve bytes o cambia el disco, y se para desde el
+            let expected = match kind {
+                // WORK: moves bytes or changes the disk, and stops from the
                 // panel.
                 K::Copy
                 | K::Move
@@ -307,9 +313,9 @@ mod tests {
                 | K::Split
                 | K::Combine
                 | K::Sync => true,
-                // OBSERVACIÓN: cada una tiene su propia superficie —la lista
-                // de hallazgos, la ficha de sumas, el plan—, y taparla con el
-                // panel sería decir dos veces lo mismo.
+                // OBSERVATION: each has its own surface — the findings list,
+                // the checksum sheet, the plan — and covering it with the
+                // panel would say the same thing twice.
                 K::Search
                 | K::Compare
                 | K::DirSize
@@ -318,21 +324,21 @@ mod tests {
                 | K::Index
                 | K::Embed
                 | K::SyncPlan => false,
-                // Sin comodín A PROPÓSITO: ver el rustdoc de este test.
-                otra => panic!(
-                    "clase nueva en el wire ({otra:?}): decide aquí si abre \
-                     el panel de procesos, y escríbelo en `counts_as_work`"
+                // No wildcard ON PURPOSE: see this test's rustdoc.
+                other => panic!(
+                    "new class on the wire ({other:?}): decide here whether it opens \
+                     the processes panel, and write it in `counts_as_work`"
                 ),
             };
             assert_eq!(
                 counts_as_work(kind),
-                esperado,
-                "{kind:?} cambió de lado sin que nadie lo dijera"
+                expected,
+                "{kind:?} switched sides without anyone saying so"
             );
         }
     }
 
-    fn progreso(bytes: Option<u64>, entradas: Option<u64>) -> norte_proto::TaskProgress {
+    fn progress(bytes: Option<u64>, entries: Option<u64>) -> norte_proto::TaskProgress {
         norte_proto::TaskProgress {
             task_id: norte_proto::TaskId::new(1),
             kind: norte_proto::TaskKind::Delete,
@@ -340,37 +346,38 @@ mod tests {
             bytes_done: 5,
             bytes_total: bytes,
             entries_done: 1,
-            entries_total: entradas,
+            entries_total: entries,
             current: None,
             unreadable: None,
             unvisited: None,
         }
     }
 
-    /// Con bytes, manda el byte.
+    /// With bytes, the byte count wins.
     #[test]
-    fn con_bytes_totales_manda_el_byte() {
-        assert_eq!(progress_pct(&progreso(Some(10), Some(4))), Some(50));
+    fn with_total_bytes_the_byte_count_wins() {
+        assert_eq!(progress_pct(&progress(Some(10), Some(4))), Some(50));
     }
 
-    /// Sin bytes totales, cuentan las entradas: un borrado no pesa bytes, y
-    /// sin esta caída pintaba una barra parada en cero de principio a fin.
+    /// With no total bytes, entries count: a deletion has no byte weight,
+    /// and without this fallback it painted a bar stuck at zero start to
+    /// finish.
     #[test]
-    fn sin_bytes_cuentan_las_entradas() {
-        assert_eq!(progress_pct(&progreso(None, Some(4))), Some(25));
+    fn with_no_bytes_entries_count() {
+        assert_eq!(progress_pct(&progress(None, Some(4))), Some(25));
     }
 
-    /// Sin ninguno de los dos, no se sabe, y eso NO es cero.
+    /// With neither of the two, it is not known, and that is NOT zero.
     #[test]
-    fn sin_totales_no_se_sabe() {
-        assert_eq!(progress_pct(&progreso(None, None)), None);
-        assert_eq!(progress_pct(&progreso(Some(0), None)), None);
+    fn with_no_totals_it_is_not_known() {
+        assert_eq!(progress_pct(&progress(None, None)), None);
+        assert_eq!(progress_pct(&progress(Some(0), None)), None);
     }
 
-    /// Un `done` mayor que su total no pasa del 100 %.
+    /// A `done` bigger than its total does not go past 100%.
     #[test]
-    fn no_se_pasa_del_cien() {
-        let mut p = progreso(Some(2), None);
+    fn it_does_not_go_past_a_hundred() {
+        let mut p = progress(Some(2), None);
         p.bytes_done = 9;
         assert_eq!(progress_pct(&p), Some(100));
     }

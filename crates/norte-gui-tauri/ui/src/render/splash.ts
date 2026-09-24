@@ -1,25 +1,25 @@
-// Pintor de `Screen` para la pantalla de arranque (puente 69, ADR 0115):
-// función con `this: Screen`, enganchada como propiedad en `render.ts`. El
-// estado sigue en la clase.
+// `Screen` painter for the startup screen (bridge 69, ADR 0115): a function
+// with `this: Screen`, hooked in as a property in `render.ts`. State stays
+// in the class.
 //
-// Lo que se enseña lo decide el host (`norte_frontend::splash`), así que esta
-// pantalla dice lo mismo que la del terminal; aquí solo se elige dónde cae
-// cada cosa y quién se lleva el clic.
+// What gets shown is decided by the host (`norte_frontend::splash`), so this
+// screen says the same thing as the terminal's; only where each thing lands
+// and who gets the click is chosen here.
 
 import type { Screen } from "../render";
 import type { SplashView } from "../types";
 
 /**
- * El plazo del modo `brief` lo CUMPLE el renderer: no hay bucle de eventos
- * que despierte al host, y el número viene en la propia pantalla
- * (`close_after_ms`). Vive en `Screen` —no en este módulo— y se arma una vez
- * por aparición; ver `Screen.splashPlazo`.
+ * `brief` mode's deadline is MET by the renderer: there is no event loop to
+ * wake the host up, and the number comes in the screen itself
+ * (`close_after_ms`). Lives in `Screen` — not in this module — and is armed
+ * once per appearance; see `Screen.splashPlazo`.
  */
 export function paintSplash(this: Screen, splash: SplashView | null): void {
   if (splash === null) {
-    // Se fue (una tecla, un clic, el propio plazo): desarmar lo que quedara,
-    // o un temporizador vivo mandaría el cierre de una pantalla que ya no
-    // está y quemaría un número de secuencia.
+    // It is gone (a key, a click, its own deadline): disarm whatever was
+    // left, or a live timer would send the close for a screen that is no
+    // longer there and burn a sequence number.
     if (this.splashPlazo !== null) {
       clearTimeout(this.splashPlazo);
       this.splashPlazo = null;
@@ -31,98 +31,98 @@ export function paintSplash(this: Screen, splash: SplashView | null): void {
   }
   this.splashRoot.dataset["open"] = "true";
 
-  const caja = document.createElement("section");
-  caja.className = "splash";
-  caja.setAttribute("role", "dialog");
-  caja.setAttribute("aria-modal", "true");
-  caja.setAttribute("aria-label", this.t("splash-title"));
-  // PORTADA: `brief` viene SIN secciones a propósito, y sin lista que enmarcar
-  // una caja centrada es un marco alrededor de nada. Misma señal que usa el
-  // terminal, para que las dos superficies decidan igual sin que el modo tenga
-  // que viajar por el puente.
+  const box = document.createElement("section");
+  box.className = "splash";
+  box.setAttribute("role", "dialog");
+  box.setAttribute("aria-modal", "true");
+  box.setAttribute("aria-label", this.t("splash-title"));
+  // COVER: `brief` comes with NO sections on purpose, and with no list to
+  // frame, a centered box is a frame around nothing. Same signal the
+  // terminal uses, so both surfaces decide the same way without the mode
+  // having to travel over the bridge.
   if (splash.sections.length === 0) {
-    caja.dataset["cover"] = "true";
+    box.dataset["cover"] = "true";
   }
 
-  // El arte, en su propio bloque y ESCONDIDO para quien lee con los oídos:
-  // una brújula dibujada con barras y guiones se deletrea como ruido.
-  const arte = document.createElement("pre");
-  arte.className = "splash-art";
-  arte.setAttribute("aria-hidden", "true");
-  arte.textContent = splash.art.join("\n");
-  caja.append(arte);
+  // The art, in its own block and HIDDEN for whoever reads with their ears:
+  // a compass drawn with bars and dashes spells out as noise.
+  const art = document.createElement("pre");
+  art.className = "splash-art";
+  art.setAttribute("aria-hidden", "true");
+  art.textContent = splash.art.join("\n");
+  box.append(art);
 
   const version = document.createElement("p");
   version.className = "splash-version";
   version.textContent = `${splash.version} ${splash.revision}`.trim();
-  caja.append(version);
+  box.append(version);
 
   const daemon = document.createElement("p");
   daemon.className = "splash-daemon";
   daemon.textContent = splash.daemon;
-  caja.append(daemon);
+  box.append(daemon);
 
-  for (const seccion of splash.sections) {
-    const titulo = document.createElement("h2");
-    titulo.className = "splash-section";
-    titulo.textContent = seccion.title;
-    caja.append(titulo);
+  for (const section of splash.sections) {
+    const title = document.createElement("h2");
+    title.className = "splash-section";
+    title.textContent = section.title;
+    box.append(title);
 
-    const lista = document.createElement("ul");
-    lista.className = "splash-rows";
-    for (const fila of seccion.rows) {
+    const list = document.createElement("ul");
+    list.className = "splash-rows";
+    for (const row of section.rows) {
       const li = document.createElement("li");
       li.className = "splash-row";
-      // El número que la fila enseña, o un hueco: más allá de nueve la fila
-      // se lee y no se promete, igual que en el terminal.
+      // The number the row shows, or a gap: past nine the row reads and
+      // promises nothing, same as in the terminal.
       const num = document.createElement("span");
       num.className = "splash-number";
-      num.textContent = fila.number === 0 ? "" : String(fila.number);
+      num.textContent = row.number === 0 ? "" : String(row.number);
       const label = document.createElement("span");
       label.className = "splash-label";
-      label.textContent = fila.label;
-      const detalle = document.createElement("span");
-      detalle.className = "splash-detail";
-      detalle.textContent = fila.detail;
-      li.append(num, label, detalle);
-      if (fila.number !== 0) {
-        // Un clic en una fila numerada la abre. Las demás no son botones y
-        // no se anuncian como tales: un clic ahí solo quita la pantalla, que
-        // es lo que un clic en cualquier otro sitio hace.
+      label.textContent = row.label;
+      const detail = document.createElement("span");
+      detail.className = "splash-detail";
+      detail.textContent = row.detail;
+      li.append(num, label, detail);
+      if (row.number !== 0) {
+        // A click on a numbered row opens it. The rest are not buttons and
+        // are not announced as such: a click there only dismisses the
+        // screen, which is what a click anywhere else does too.
         li.dataset["actionable"] = "true";
         li.addEventListener("click", (e) => {
           e.stopPropagation();
-          this.send({ action: "splash_activate_row", number: fila.number });
+          this.send({ action: "splash_activate_row", number: row.number });
         });
       }
-      lista.append(li);
+      list.append(li);
     }
-    caja.append(lista);
+    box.append(list);
   }
 
-  const pie = document.createElement("p");
-  pie.className = "splash-hint";
-  pie.textContent = splash.hint;
-  caja.append(pie);
+  const footer = document.createElement("p");
+  footer.className = "splash-hint";
+  footer.textContent = splash.hint;
+  box.append(footer);
 
-  // Un clic EN CUALQUIER SITIO la quita. Va en la raíz y no en la caja para
-  // que el aire de alrededor cuente también: quitarla es lo que se intenta.
+  // A click ANYWHERE dismisses it. Set on the root and not the box so the
+  // surrounding air counts too: dismissing it is what is being attempted.
   this.splashRoot.onclick = (): void => {
     this.send({ action: "splash_close" });
   };
-  this.splashRoot.replaceChildren(caja);
+  this.splashRoot.replaceChildren(box);
 
-  // El plazo se arma en la PRIMERA pintada de esta aparición y no se toca
-  // más: el host manda la vista entera en cada parche, así que rearmarlo aquí
-  // convertía «1,2 segundos» en «1,2 segundos después del último parche» — y
-  // durante el arranque los parches no paran de llegar, que es exactamente
-  // cuando esta pantalla está puesta.
-  const queda = splash.close_after_ms;
-  if (!this.splashPuesto && queda !== null && queda !== undefined) {
+  // The deadline is armed on the FIRST paint of this appearance and is not
+  // touched again: the host sends the whole view on every patch, so
+  // re-arming it here turned "1.2 seconds" into "1.2 seconds after the last
+  // patch" — and during startup patches keep arriving nonstop, which is
+  // exactly when this screen is up.
+  const remaining = splash.close_after_ms;
+  if (!this.splashPuesto && remaining !== null && remaining !== undefined) {
     this.splashPlazo = setTimeout(() => {
       this.splashPlazo = null;
       this.send({ action: "splash_close" });
-    }, queda);
+    }, remaining);
   }
   this.splashPuesto = true;
 }

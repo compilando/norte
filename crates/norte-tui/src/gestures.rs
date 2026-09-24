@@ -201,7 +201,7 @@ async fn spawn_detached(
         if let Some(dir) = &cwd {
             cmd.current_dir(dir);
         }
-        cmd.args(resto)
+        cmd.args(rest)
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
@@ -295,7 +295,7 @@ pub async fn disconnect(app: &mut App, backend: &Backend) {
     }
 }
 
-/// El editor sobre la entrada bajo el cursor (#133).
+/// The editor over the entry under the cursor (#133).
 ///
 /// An editor opens a SYSTEM FILE: over a remote pane there is none to give
 /// it —downloading it, editing it and uploading it back is a different

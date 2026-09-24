@@ -1,37 +1,38 @@
-//! Lo que el host hace con una miniatura ANTES de que cruce (ADR 0107,
-//! decisión 3): un guest devuelve bytes de imagen, y esos bytes acabarían
-//! en un `blob:` de la webview, donde los decodifica libpng/libjpeg/libwebp
-//! nativos —fuera de cualquier sandbox de norte—. Dos puertas:
+//! What the host does with a thumbnail BEFORE it crosses (ADR 0107,
+//! decision 3): a guest returns image bytes, and those bytes would end up
+//! in a webview `blob:`, where native libpng/libjpeg/libwebp decode
+//! them — outside any norte sandbox. Two gates:
 //!
-//! 1. [`sniff`]: solo la cabecera —magia y dimensiones— de los tres
-//!    encodings que la ventana pinta. Barata, y basta para rechazar lo que
-//!    ni siquiera dice ser una imagen o miente sobre lo que es.
-//! 2. [`reencode`]: se DECODIFICA en el host con el crate `image` (Rust
-//!    seguro, con límites de tamaño) y se vuelve a codificar. Lo que llega
-//!    al `blob:` es un raster hecho aquí; los bytes del guest no salen del
-//!    proceso. Una cabecera veraz sobre un flujo comprimido malformado —el
-//!    poliglota que pasa la puerta 1— muere en un decodificador de Rust,
-//!    no en uno de C con el escritorio detrás.
+//! 1. [`sniff`]: only the header — magic bytes and dimensions — of the
+//!    three encodings the window paints. Cheap, and enough to reject
+//!    something that doesn't even claim to be an image or lies about what
+//!    it is.
+//! 2. [`reencode`]: it is DECODED on the host with the `image` crate (safe
+//!    Rust, with size limits) and re-encoded. What reaches the `blob:` is
+//!    a raster made here; the guest's bytes never leave the process. A
+//!    truthful header over a malformed compressed stream — the polyglot
+//!    that passes gate 1 — dies in a Rust decoder, not a C one with the
+//!    desktop behind it.
 
 use std::io::Cursor;
 
-/// El lado mayor que se le pide a un guest, como mucho (espejo de
-/// `runtime::THUMB_MAX_EDGE`, aquí para los límites del decodificador).
+/// The largest edge asked of a guest, at most (mirrors
+/// `runtime::THUMB_MAX_EDGE`, here for the decoder's limits).
 const MAX_EDGE: u32 = 2048;
 
-/// Memoria que el decodificador del host puede pedir por miniatura: un
-/// 2048×2048 RGBA son 16 MiB; el doble deja sitio a las tablas del códec.
+/// Memory the host's decoder can ask for per thumbnail: a 2048×2048 RGBA
+/// is 16 MiB; double that leaves room for the codec's tables.
 const MAX_DECODE_ALLOC: u64 = 32 * 1024 * 1024;
 
-/// Re-codifica `bytes` (ya pasados por [`sniff`]) en el host: decodifica con
-/// límites, comprueba que las dimensiones decodificadas son `w`×`h`, y
-/// escribe PNG — o JPEG de calidad 85 si el PNG no cabe en `max_bytes` (una
-/// foto de 2048 px en PNG son diez megas; el mismo raster en JPEG, uno).
-/// Devuelve el mimetype del raster que sale y sus bytes.
+/// Re-encodes `bytes` (already passed through [`sniff`]) on the host:
+/// decodes with limits, checks the decoded dimensions are `w`×`h`, and
+/// writes PNG — or quality-85 JPEG if the PNG does not fit in `max_bytes`
+/// (a 2048 px photo in PNG is ten megabytes; the same raster in JPEG,
+/// one). Returns the resulting raster's mimetype and its bytes.
 ///
 /// # Errors
-/// El mensaje del decodificador o del codificador, para el registro del
-/// host; la miniatura entonces no cruza.
+/// The decoder's or encoder's message, for the host's log; the thumbnail
+/// then does not cross.
 pub fn reencode(
     bytes: &[u8],
     w: u32,
@@ -40,23 +41,23 @@ pub fn reencode(
 ) -> Result<(&'static str, Vec<u8>), String> {
     let mut reader = image::ImageReader::new(Cursor::new(bytes))
         .with_guessed_format()
-        .map_err(|e| format!("cabecera: {e}"))?;
+        .map_err(|e| format!("header: {e}"))?;
     let mut limits = image::Limits::default();
     limits.max_image_width = Some(MAX_EDGE);
     limits.max_image_height = Some(MAX_EDGE);
     limits.max_alloc = Some(MAX_DECODE_ALLOC);
     reader.limits(limits);
-    let img = reader.decode().map_err(|e| format!("decodificar: {e}"))?;
+    let img = reader.decode().map_err(|e| format!("decode: {e}"))?;
     if (img.width(), img.height()) != (w, h) {
         return Err(format!(
-            "la cabecera decía {w}x{h} y el raster es {}x{}",
+            "the header said {w}x{h} and the raster is {}x{}",
             img.width(),
             img.height()
         ));
     }
     let mut png = Cursor::new(Vec::new());
     img.write_to(&mut png, image::ImageFormat::Png)
-        .map_err(|e| format!("codificar png: {e}"))?;
+        .map_err(|e| format!("encode png: {e}"))?;
     let png = png.into_inner();
     if png.len() <= max_bytes {
         return Ok(("image/png", png));
@@ -65,18 +66,18 @@ pub fn reencode(
     let mut jpeg = Cursor::new(Vec::new());
     image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg, 85)
         .encode_image(&rgb)
-        .map_err(|e| format!("codificar jpeg: {e}"))?;
+        .map_err(|e| format!("encode jpeg: {e}"))?;
     let jpeg = jpeg.into_inner();
     if jpeg.len() > max_bytes {
         return Err(format!(
-            "ni en JPEG cabe: {} bytes con un techo de {max_bytes}",
+            "does not fit even in JPEG: {} bytes with a ceiling of {max_bytes}",
             jpeg.len()
         ));
     }
     Ok(("image/jpeg", jpeg))
 }
 
-/// Los encodings que la ventana pinta, con su mimetype.
+/// The encodings the window paints, with their mimetype.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ThumbKind {
     Png,
@@ -85,7 +86,7 @@ pub enum ThumbKind {
 }
 
 impl ThumbKind {
-    /// El mimetype que el guest tiene que haber declarado para este raster.
+    /// The mimetype the guest must have declared for this raster.
     #[must_use]
     pub const fn mimetype(self) -> &'static str {
         match self {
@@ -96,13 +97,14 @@ impl ThumbKind {
     }
 }
 
-/// Lo que la cabecera dice: el encoding por su magia y las dimensiones.
-/// `None` si no es ninguno de los tres o la cabecera no llega entera.
+/// What the header says: the encoding by its magic bytes and the
+/// dimensions. `None` if it is none of the three or the header does not
+/// arrive whole.
 #[must_use]
 pub fn sniff(bytes: &[u8]) -> Option<(ThumbKind, u32, u32)> {
     if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
-        // IHDR es SIEMPRE el primer chunk: firma (8) + longitud (4) + tipo
-        // (4) + ancho (4) + alto (4).
+        // IHDR is ALWAYS the first chunk: signature (8) + length (4) +
+        // type (4) + width (4) + height (4).
         if bytes.len() < 24 || &bytes[12..16] != b"IHDR" {
             return None;
         }
@@ -119,8 +121,9 @@ pub fn sniff(bytes: &[u8]) -> Option<(ThumbKind, u32, u32)> {
     None
 }
 
-/// Recorre los marcadores hasta el primer SOF (`FFC0`–`FFCF`, salvo los
-/// que no son frames: `C4` DHT, `C8` JPG, `CC` DAC) y lee alto y ancho.
+/// Walks the markers up to the first SOF (`FFC0`–`FFCF`, except the ones
+/// that are not frames: `C4` DHT, `C8` JPG, `CC` DAC) and reads height and
+/// width.
 fn jpeg_dims(bytes: &[u8]) -> Option<(u32, u32)> {
     let mut i = 2usize;
     while i + 4 <= bytes.len() {
@@ -128,12 +131,12 @@ fn jpeg_dims(bytes: &[u8]) -> Option<(u32, u32)> {
             return None;
         }
         let marker = bytes[i + 1];
-        // Relleno `FF FF …` entre marcadores.
+        // `FF FF …` padding between markers.
         if marker == 0xFF {
             i += 1;
             continue;
         }
-        // Sin carga: SOI, EOI, RSTn, TEM.
+        // No payload: SOI, EOI, RSTn, TEM.
         if marker == 0xD8 || marker == 0xD9 || (0xD0..=0xD7).contains(&marker) || marker == 0x01 {
             i += 2;
             continue;
@@ -142,9 +145,9 @@ fn jpeg_dims(bytes: &[u8]) -> Option<(u32, u32)> {
         if len < 2 {
             return None;
         }
-        let es_sof = (0xC0..=0xCF).contains(&marker) && !matches!(marker, 0xC4 | 0xC8 | 0xCC);
-        if es_sof {
-            // Longitud (2) + precisión (1) + alto (2) + ancho (2).
+        let is_sof = (0xC0..=0xCF).contains(&marker) && !matches!(marker, 0xC4 | 0xC8 | 0xCC);
+        if is_sof {
+            // Length (2) + precision (1) + height (2) + width (2).
             if i + 9 > bytes.len() {
                 return None;
             }
@@ -157,13 +160,14 @@ fn jpeg_dims(bytes: &[u8]) -> Option<(u32, u32)> {
     None
 }
 
-/// Los tres sabores de WebP: `VP8 ` (con pérdida), `VP8L` (sin pérdida) y
-/// `VP8X` (extendido, con el lienzo en la propia cabecera).
+/// The three WebP flavors: `VP8 ` (lossy), `VP8L` (lossless) and `VP8X`
+/// (extended, with the canvas in the header itself).
 fn webp_dims(bytes: &[u8]) -> Option<(u32, u32)> {
     let chunk = &bytes[12..16];
     match chunk {
         b"VP8X" => {
-            // Lienzo: 24 bits ancho-1 y 24 bits alto-1, tras 4 bytes de flags.
+            // Canvas: 24 bits width-1 and 24 bits height-1, after 4 bytes
+            // of flags.
             if bytes.len() < 30 {
                 return None;
             }
@@ -172,7 +176,7 @@ fn webp_dims(bytes: &[u8]) -> Option<(u32, u32)> {
             Some((w, h))
         }
         b"VP8L" => {
-            // Firma 0x2F y 14 bits de ancho-1, 14 de alto-1.
+            // Signature 0x2F and 14 bits width-1, 14 height-1.
             if bytes.len() < 25 || bytes[20] != 0x2F {
                 return None;
             }
@@ -180,8 +184,8 @@ fn webp_dims(bytes: &[u8]) -> Option<(u32, u32)> {
             Some((1 + (b & 0x3FFF), 1 + ((b >> 14) & 0x3FFF)))
         }
         b"VP8 " => {
-            // Frame tag (3) + código de inicio 9d 01 2a (3) + ancho (2) + alto
-            // (2), los 14 bits bajos de cada uno.
+            // Frame tag (3) + start code 9d 01 2a (3) + width (2) + height
+            // (2), the low 14 bits of each.
             if bytes.len() < 30 || &bytes[23..26] != b"\x9d\x01\x2a" {
                 return None;
             }
@@ -196,7 +200,7 @@ fn webp_dims(bytes: &[u8]) -> Option<(u32, u32)> {
 #[cfg(test)]
 #[expect(
     clippy::cast_possible_truncation,
-    reason = "rásteres de juguete: los píxeles se generan con aritmética modular"
+    reason = "toy rasters: pixels are generated with modular arithmetic"
 )]
 mod tests {
     use super::*;
@@ -220,7 +224,7 @@ mod tests {
 
     #[test]
     fn jpeg_dims_come_from_the_first_sof_past_app_segments() {
-        // SOI, APP0 de 16 bytes, DHT (no es frame), SOF0 320x200.
+        // SOI, 16-byte APP0, DHT (not a frame), SOF0 320x200.
         let mut v = vec![0xFF, 0xD8];
         v.extend_from_slice(&[0xFF, 0xE0, 0x00, 0x10]);
         v.extend_from_slice(&[0u8; 14]);
@@ -230,7 +234,7 @@ mod tests {
         v.extend_from_slice(&320u16.to_be_bytes());
         v.extend_from_slice(&[3, 1, 0x22, 0, 2, 0x11, 1, 3, 0x11, 1]);
         assert_eq!(sniff(&v), Some((ThumbKind::Jpeg, 320, 200)));
-        assert_eq!(sniff(&[0xFF, 0xD8, 0xFF, 0xE0]), None, "sin SOF");
+        assert_eq!(sniff(&[0xFF, 0xD8, 0xFF, 0xE0]), None, "no SOF");
     }
 
     #[test]
@@ -253,8 +257,8 @@ mod tests {
         assert_eq!(sniff(&ext), Some((ThumbKind::Webp, 100, 50)));
     }
 
-    /// Un PNG de verdad, hecho con el mismo crate: la puerta 2 tiene que
-    /// DECODIFICAR, y una cabecera sola no basta.
+    /// A real PNG, made with the same crate: gate 2 has to DECODE, and a
+    /// header alone is not enough.
     fn png_real(w: u32, h: u32) -> Vec<u8> {
         let img = image::RgbaImage::from_fn(w, h, |x, y| {
             image::Rgba([(x % 256) as u8, (y % 256) as u8, 7, 255])
@@ -269,24 +273,25 @@ mod tests {
     #[test]
     fn reencode_makes_a_host_png_and_refuses_a_lying_header_or_a_broken_stream() {
         let bytes = png_real(64, 32);
-        let (mime, out) = reencode(&bytes, 64, 32, 4 * 1024 * 1024).expect("re-codifica");
+        let (mime, out) = reencode(&bytes, 64, 32, 4 * 1024 * 1024).expect("re-encode");
         assert_eq!(mime, "image/png");
         assert!(out.starts_with(b"\x89PNG"));
         assert_eq!(sniff(&out), Some((ThumbKind::Png, 64, 32)));
-        // Cabecera veraz sobre un flujo roto: pasa `sniff`, muere aquí.
-        let mut roto = bytes.clone();
-        for b in roto.iter_mut().skip(40) {
+        // Truthful header over a broken stream: passes `sniff`, dies here.
+        let mut broken = bytes.clone();
+        for b in broken.iter_mut().skip(40) {
             *b = 0xAA;
         }
-        assert_eq!(sniff(&roto).map(|(k, _, _)| k), Some(ThumbKind::Png));
-        assert!(reencode(&roto, 64, 32, 4 * 1024 * 1024).is_err());
-        // Dimensiones que no son las decodificadas.
+        assert_eq!(sniff(&broken).map(|(k, _, _)| k), Some(ThumbKind::Png));
+        assert!(reencode(&broken, 64, 32, 4 * 1024 * 1024).is_err());
+        // Dimensions that are not the decoded ones.
         assert!(reencode(&bytes, 32, 64, 4 * 1024 * 1024).is_err());
     }
 
     #[test]
     fn reencode_falls_back_to_jpeg_when_png_does_not_fit() {
-        // Ruido: PNG no comprime, y un techo pequeño lo echa a JPEG.
+        // Noise: PNG doesn't compress, and a small ceiling pushes it to
+        // JPEG.
         let img = image::RgbaImage::from_fn(256, 256, |x, y| {
             let v = (x.wrapping_mul(2_654_435_761) ^ y.wrapping_mul(40_503)) as u8;
             image::Rgba([v, v.wrapping_mul(3), v.wrapping_mul(7), 255])
@@ -296,7 +301,7 @@ mod tests {
             .write_to(&mut out, image::ImageFormat::Png)
             .expect("png");
         let (mime, bytes) =
-            reencode(&out.into_inner(), 256, 256, 120 * 1024).expect("cabe en jpeg");
+            reencode(&out.into_inner(), 256, 256, 120 * 1024).expect("fits in jpeg");
         assert_eq!(mime, "image/jpeg");
         assert_eq!(sniff(&bytes), Some((ThumbKind::Jpeg, 256, 256)));
     }

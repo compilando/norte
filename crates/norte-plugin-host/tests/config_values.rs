@@ -1,12 +1,13 @@
-//! P2 Task 2: `resolve_settings` — valores EFECTIVOS de `[config]` para un
-//! plugin, fusionando los defaults del esquema con `dir/config.toml`
-//! (validado fail-closed, decisión 3). Sin catálogo/registro (eso lo cubren
-//! `tests/model.rs`/`norte-core::plugins`); solo la función pura.
+//! P2 Task 2: `resolve_settings` — EFFECTIVE `[config]` values for a
+//! plugin, merging the schema's defaults with `dir/config.toml`
+//! (validated fail-closed, decision 3). No catalog/registry (that is
+//! covered by `tests/model.rs`/`norte-core::plugins`); just the pure
+//! function.
 
 use norte_plugin_host::{ConfigValueError, Manifest, resolve_settings};
 
-/// Manifiesto con los 4 tipos de `[config]`, mismos valores que
-/// `tests/model.rs::WITH_CONFIG` para reusar intuición entre ambos ficheros.
+/// Manifest with the 4 `[config]` types, same values as
+/// `tests/model.rs::WITH_CONFIG` to reuse intuition between both files.
 const WITH_CONFIG: &str = r#"
 [plugin]
 id = "org.norte.demo-config"
@@ -35,8 +36,8 @@ default = "fast"
 values = ["fast", "slow"]
 "#;
 
-/// Manifiesto SIN `[config]` (mapa vacío) — para el caso "sin esquema, sin
-/// fichero".
+/// Manifest WITHOUT `[config]` (empty map) — for the "no schema, no file"
+/// case.
 const NO_CONFIG: &str = r#"
 [plugin]
 id = "org.norte.no-config"
@@ -51,10 +52,10 @@ fn write_values(dir: &std::path::Path, toml: &str) {
 }
 
 #[test]
-fn config_toml_ausente_son_todos_los_defaults() {
+fn absent_config_toml_is_all_defaults() {
     let manifest = Manifest::from_toml(WITH_CONFIG).unwrap();
     let dir = tempfile::tempdir().unwrap();
-    // Sin escribir config.toml.
+    // Without writing config.toml.
     let settings = resolve_settings(&manifest, dir.path()).unwrap();
     assert_eq!(settings.len(), 4);
     assert_eq!(settings.get("greeting").map(String::as_str), Some("hola"));
@@ -64,7 +65,7 @@ fn config_toml_ausente_son_todos_los_defaults() {
 }
 
 #[test]
-fn sin_config_en_manifiesto_y_sin_fichero_es_mapa_vacio() {
+fn no_config_in_manifest_and_no_file_is_an_empty_map() {
     let manifest = Manifest::from_toml(NO_CONFIG).unwrap();
     let dir = tempfile::tempdir().unwrap();
     let settings = resolve_settings(&manifest, dir.path()).unwrap();
@@ -72,7 +73,7 @@ fn sin_config_en_manifiesto_y_sin_fichero_es_mapa_vacio() {
 }
 
 #[test]
-fn overrides_validos_reemplazan_los_defaults() {
+fn valid_overrides_replace_the_defaults() {
     let manifest = Manifest::from_toml(WITH_CONFIG).unwrap();
     let dir = tempfile::tempdir().unwrap();
     write_values(
@@ -95,35 +96,35 @@ fn overrides_validos_reemplazan_los_defaults() {
 }
 
 #[test]
-fn override_parcial_conserva_el_resto_en_default() {
+fn a_partial_override_keeps_the_rest_at_default() {
     let manifest = Manifest::from_toml(WITH_CONFIG).unwrap();
     let dir = tempfile::tempdir().unwrap();
     write_values(dir.path(), r"retries = 9");
     let settings = resolve_settings(&manifest, dir.path()).unwrap();
     assert_eq!(settings.get("retries").map(String::as_str), Some("9"));
-    // El resto sigue en su default (no se escribieron en config.toml).
+    // The rest stays at its default (not written into config.toml).
     assert_eq!(settings.get("greeting").map(String::as_str), Some("hola"));
     assert_eq!(settings.get("enabled").map(String::as_str), Some("true"));
     assert_eq!(settings.get("mode").map(String::as_str), Some("fast"));
 }
 
 #[test]
-fn clave_desconocida_en_config_toml_se_rechaza_nombrando_la_clave() {
+fn an_unknown_key_in_config_toml_is_rejected_naming_the_key() {
     let manifest = Manifest::from_toml(WITH_CONFIG).unwrap();
     let dir = tempfile::tempdir().unwrap();
-    write_values(dir.path(), r#"no-declarada = "x""#);
+    write_values(dir.path(), r#"not-declared = "x""#);
     let err = resolve_settings(&manifest, dir.path()).unwrap_err();
     assert!(
-        matches!(&err, ConfigValueError::UnknownKey { key } if key == "no-declarada"),
+        matches!(&err, ConfigValueError::UnknownKey { key } if key == "not-declared"),
         "{err:?}"
     );
 }
 
 #[test]
-fn tipo_toml_incorrecto_se_rechaza_nombrando_la_clave() {
+fn wrong_toml_type_is_rejected_naming_the_key() {
     let manifest = Manifest::from_toml(WITH_CONFIG).unwrap();
     let dir = tempfile::tempdir().unwrap();
-    // `enabled` es bool en el esquema; aquí llega un entero.
+    // `enabled` is bool in the schema; here an integer arrives.
     write_values(dir.path(), r"enabled = 1");
     let err = resolve_settings(&manifest, dir.path()).unwrap_err();
     assert!(
@@ -133,11 +134,11 @@ fn tipo_toml_incorrecto_se_rechaza_nombrando_la_clave() {
 }
 
 #[test]
-fn tabla_anidada_bajo_una_clave_escalar_se_rechaza_config_toml_es_plano() {
+fn a_table_nested_under_a_scalar_key_is_rejected_config_toml_is_flat() {
     let manifest = Manifest::from_toml(WITH_CONFIG).unwrap();
     let dir = tempfile::tempdir().unwrap();
-    // config.toml debe ser PLANO: una tabla anidada bajo `greeting` (string)
-    // es un tipo incorrecto, no se desciende dentro de ella.
+    // config.toml must be FLAT: a table nested under `greeting` (string)
+    // is a wrong type, it is not descended into.
     write_values(
         dir.path(),
         r#"
@@ -153,7 +154,7 @@ fn tabla_anidada_bajo_una_clave_escalar_se_rechaza_config_toml_es_plano() {
 }
 
 #[test]
-fn int_fuera_de_rango_se_rechaza_nombrando_la_clave() {
+fn an_int_out_of_range_is_rejected_naming_the_key() {
     let manifest = Manifest::from_toml(WITH_CONFIG).unwrap();
     let dir = tempfile::tempdir().unwrap();
     write_values(dir.path(), r"retries = 99");
@@ -165,7 +166,7 @@ fn int_fuera_de_rango_se_rechaza_nombrando_la_clave() {
 }
 
 #[test]
-fn int_en_el_borde_del_rango_es_valido() {
+fn an_int_at_the_range_edge_is_valid() {
     let manifest = Manifest::from_toml(WITH_CONFIG).unwrap();
     let dir = tempfile::tempdir().unwrap();
     write_values(dir.path(), r"retries = 10");
@@ -174,7 +175,7 @@ fn int_en_el_borde_del_rango_es_valido() {
 }
 
 #[test]
-fn enum_no_miembro_se_rechaza_nombrando_la_clave() {
+fn a_non_member_enum_is_rejected_naming_the_key() {
     let manifest = Manifest::from_toml(WITH_CONFIG).unwrap();
     let dir = tempfile::tempdir().unwrap();
     write_values(dir.path(), r#"mode = "turbo""#);
@@ -186,94 +187,95 @@ fn enum_no_miembro_se_rechaza_nombrando_la_clave() {
 }
 
 #[test]
-fn config_toml_roto_no_es_toml_valido() {
+fn a_broken_config_toml_is_not_valid_toml() {
     let manifest = Manifest::from_toml(WITH_CONFIG).unwrap();
     let dir = tempfile::tempdir().unwrap();
-    write_values(dir.path(), "esto no es [ toml valido =");
+    write_values(dir.path(), "this is not [ valid toml =");
     let err = resolve_settings(&manifest, dir.path()).unwrap_err();
     assert!(matches!(err, ConfigValueError::Toml { .. }), "{err:?}");
 }
 
-/// El mensaje de error NUNCA interpola el VALOR hostil (#73), solo la clave.
+/// The error message NEVER interpolates the hostile VALUE (#73), only the
+/// key.
 #[test]
-fn el_mensaje_de_error_nunca_lleva_el_valor() {
+fn the_error_message_never_carries_the_value() {
     let manifest = Manifest::from_toml(WITH_CONFIG).unwrap();
     let dir = tempfile::tempdir().unwrap();
-    let secreto = "hunter2-super-secret-marker";
-    write_values(dir.path(), &format!(r#"mode = "{secreto}""#));
+    let secret = "hunter2-super-secret-marker";
+    write_values(dir.path(), &format!(r#"mode = "{secret}""#));
     let err = resolve_settings(&manifest, dir.path()).unwrap_err();
     assert!(
-        !err.to_string().contains(secreto),
-        "el error no debe llevar el valor: {err}"
+        !err.to_string().contains(secret),
+        "the error must not carry the value: {err}"
     );
 }
 
 // --- security review P2 Task 4a --------------------------------------
 
-/// Una clave DESCONOCIDA de `config.toml` que lleva un hazard de terminal
-/// (ESC) NO debe aparecer cruda en el mensaje del error — a diferencia de una
-/// clave declarada en el esquema (siempre `[a-z0-9-]{1,32}`, segura), esta
-/// clave viene de TOML de usuario sin esa garantía.
+/// An UNKNOWN `config.toml` key carrying a terminal hazard (ESC) must NOT
+/// appear raw in the error message — unlike a key declared in the schema
+/// (always `[a-z0-9-]{1,32}`, safe), this key comes from user TOML with
+/// no such guarantee.
 #[test]
-fn clave_desconocida_hostil_no_aparece_en_el_mensaje() {
+fn a_hostile_unknown_key_does_not_appear_in_the_message() {
     let manifest = Manifest::from_toml(WITH_CONFIG).unwrap();
     let dir = tempfile::tempdir().unwrap();
-    // Clave TOML entrecomillada con un ESC embebido (``, escape TOML
-    // válido → byte de control real en la clave).
+    // Quoted TOML key with an embedded ESC (`\u001b`, valid TOML escape →
+    // a real control byte in the key).
     write_values(dir.path(), "\"mal\\u001bicious\" = \"x\"\n");
     let err = resolve_settings(&manifest, dir.path()).unwrap_err();
     let msg = err.to_string();
     assert!(
         !msg.contains('\u{1b}'),
-        "el ESC de la clave no debe llegar al mensaje: {msg:?}"
+        "the key's ESC must not reach the message: {msg:?}"
     );
     assert!(
         matches!(&err, ConfigValueError::UnknownKey { key } if key.contains('\u{1b}')),
-        "pero el campo `key` SIGUE llevando la clave cruda (uso programático): {err:?}"
+        "but the `key` field STILL carries the raw key (programmatic use): {err:?}"
     );
 }
 
-/// Una clave DESCONOCIDA "segura" (charset `[a-z0-9-]{1,32}`, la MISMA
-/// exigencia que ya cumple cualquier clave declarada) SÍ se muestra —
-/// mensajes útiles para el caso común, sin sacrificar seguridad.
+/// An UNKNOWN "safe" key (charset `[a-z0-9-]{1,32}`, the SAME requirement
+/// any declared key already meets) IS shown — useful messages for the
+/// common case, without sacrificing security.
 #[test]
-fn clave_desconocida_segura_si_aparece_en_el_mensaje() {
+fn a_safe_unknown_key_does_appear_in_the_message() {
     let manifest = Manifest::from_toml(WITH_CONFIG).unwrap();
     let dir = tempfile::tempdir().unwrap();
-    write_values(dir.path(), "no-declarada = \"x\"\n");
+    write_values(dir.path(), "not-declared = \"x\"\n");
     let err = resolve_settings(&manifest, dir.path()).unwrap_err();
     assert!(
-        err.to_string().contains("no-declarada"),
-        "una clave charset-segura sí se muestra: {err}"
+        err.to_string().contains("not-declared"),
+        "a charset-safe key is shown: {err}"
     );
 }
 
-/// Un fallo de parseo TOML sobre una fuente con un fragmento "secreto" no
-/// debe filtrar ese fragmento en el mensaje — solo un resumen content-free.
+/// A TOML parse failure over a source with a "secret" fragment must not
+/// leak that fragment into the message — only a content-free summary.
 #[test]
-fn error_de_parseo_toml_no_filtra_el_fragmento_de_fuente() {
+fn a_toml_parse_error_does_not_leak_the_source_fragment() {
     let manifest = Manifest::from_toml(WITH_CONFIG).unwrap();
     let dir = tempfile::tempdir().unwrap();
-    let secreto = "hunter2-super-secret-marker";
-    // Cadena SIN CERRAR: el parseo falla, pero el fragmento de la línea
-    // (incluido el secreto) no debe aparecer en el mensaje.
-    write_values(dir.path(), &format!("greeting = \"{secreto}\n"));
+    let secret = "hunter2-super-secret-marker";
+    // UNCLOSED string: parsing fails, but the line's fragment (including
+    // the secret) must not appear in the message.
+    write_values(dir.path(), &format!("greeting = \"{secret}\n"));
     let err = resolve_settings(&manifest, dir.path()).unwrap_err();
     let msg = err.to_string();
     assert!(
-        !msg.contains(secreto),
-        "el resumen content-free no debe llevar el fragmento de fuente: {msg:?}"
+        !msg.contains(secret),
+        "the content-free summary must not carry the source fragment: {msg:?}"
     );
     assert!(matches!(err, ConfigValueError::Toml { .. }));
 }
 
-/// `config.toml` que supera el tope de tamaño se rechaza ANTES de parsear.
+/// `config.toml` exceeding the size cap is rejected BEFORE parsing.
 #[test]
-fn config_toml_demasiado_grande_se_rechaza() {
+fn a_config_toml_too_large_is_rejected() {
     let manifest = Manifest::from_toml(WITH_CONFIG).unwrap();
     let dir = tempfile::tempdir().unwrap();
-    // Contenido dummy que supera el tope, aunque no sea TOML válido: el
-    // tamaño se comprueba ANTES de intentar parsear.
+    // Dummy content exceeding the cap, even if it is not valid TOML: the
+    // size is checked BEFORE trying to parse.
     let cap_usize = usize::try_from(norte_plugin_host::CONFIG_VALUES_MAX_BYTES).unwrap();
     let oversized = "x".repeat(cap_usize + 1);
     write_values(dir.path(), &oversized);
@@ -289,16 +291,16 @@ fn config_toml_demasiado_grande_se_rechaza() {
     );
 }
 
-/// `config.toml` justo EN el tope de tamaño sí se acepta (parsea como TOML
-/// inválido, pero no por `TooLarge` — el tope es EXCLUSIVO por encima).
+/// `config.toml` right AT the size cap is accepted (parses as invalid
+/// TOML, but not via `TooLarge` — the cap is EXCLUSIVE above it).
 #[test]
-fn config_toml_en_el_tope_exacto_no_es_too_large() {
+fn a_config_toml_at_the_exact_cap_is_not_too_large() {
     let manifest = Manifest::from_toml(WITH_CONFIG).unwrap();
     let dir = tempfile::tempdir().unwrap();
-    // Comentario TOML válido relleno hasta EXACTAMENTE el tope.
+    // Valid TOML comment padded to EXACTLY the cap.
     let cap_usize = usize::try_from(norte_plugin_host::CONFIG_VALUES_MAX_BYTES).unwrap();
     let mut src = "#".repeat(cap_usize);
-    // Un comentario de puro `#` es TOML válido (línea vacía de comentario).
+    // A pure-`#` comment is valid TOML (an empty comment line).
     src.truncate(cap_usize);
     write_values(dir.path(), &src);
     let result = resolve_settings(&manifest, dir.path());
@@ -308,15 +310,15 @@ fn config_toml_en_el_tope_exacto_no_es_too_large() {
     );
 }
 
-/// Un valor `string` que supera `CONFIG_STRING_MAX_CHARS` se rechaza
-/// nombrando la clave — mismo tope que un `default` (decisión 1), aplicado
-/// también a overrides de usuario.
+/// A `string` value exceeding `CONFIG_STRING_MAX_CHARS` is rejected
+/// naming the key — same cap as a `default` (decision 1), also applied to
+/// user overrides.
 #[test]
-fn valor_string_281_chars_se_rechaza_nombrando_la_clave() {
+fn a_281_char_string_value_is_rejected_naming_the_key() {
     let manifest = Manifest::from_toml(WITH_CONFIG).unwrap();
     let dir = tempfile::tempdir().unwrap();
-    let largo = "a".repeat(281);
-    write_values(dir.path(), &format!("greeting = \"{largo}\"\n"));
+    let long = "a".repeat(281);
+    write_values(dir.path(), &format!("greeting = \"{long}\"\n"));
     let err = resolve_settings(&manifest, dir.path()).unwrap_err();
     assert!(
         matches!(&err, ConfigValueError::ValueTooLong { key } if key == "greeting"),
@@ -324,13 +326,13 @@ fn valor_string_281_chars_se_rechaza_nombrando_la_clave() {
     );
 }
 
-/// Un valor `string` de exactamente 280 chars (el tope) SÍ se acepta.
+/// A `string` value of exactly 280 chars (the cap) IS accepted.
 #[test]
-fn valor_string_280_chars_es_el_tope_exacto() {
+fn a_280_char_string_value_is_the_exact_cap() {
     let manifest = Manifest::from_toml(WITH_CONFIG).unwrap();
     let dir = tempfile::tempdir().unwrap();
-    let limite = "a".repeat(280);
-    write_values(dir.path(), &format!("greeting = \"{limite}\"\n"));
+    let limit = "a".repeat(280);
+    write_values(dir.path(), &format!("greeting = \"{limit}\"\n"));
     let settings = resolve_settings(&manifest, dir.path()).unwrap();
-    assert_eq!(settings.get("greeting"), Some(&limite));
+    assert_eq!(settings.get("greeting"), Some(&limit));
 }

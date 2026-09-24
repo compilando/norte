@@ -1,5 +1,5 @@
-//! Catálogo de plugins (ADR 0022 D5/D6): descubre los `.wasm` locales y sus
-//! manifiestos, y los ordena por categoría para el gestor de extensiones.
+//! Plugin catalog (ADR 0022 D5/D6): discovers local `.wasm` files and their
+//! manifests, and orders them by category for the extensions manager.
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
@@ -7,72 +7,74 @@ use std::path::{Path, PathBuf};
 use crate::config_values::resolve_settings;
 use crate::manifest::{Category, Manifest, ManifestError};
 
-/// Nivel de una acción invocable (ADR 0022 D5): los tres NUNCA se mezclan. El
-/// catálogo cubre `Plugin`; `Script` (Lua) y `BuiltIn` (comandos nativos) los
-/// aporta la UI desde sus propias fuentes y los muestra en grupos aparte.
+/// Level of an invocable action (ADR 0022 D5): the three are NEVER mixed.
+/// The catalog covers `Plugin`; `Script` (Lua) and `BuiltIn` (native
+/// commands) are supplied by the UI from its own sources and shown in
+/// separate groups.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tier {
-    /// WASM de terceros, sandbox por capabilities.
+    /// Third-party WASM, sandboxed by capabilities.
     Plugin,
-    /// Lua del usuario, permisos del usuario (no sandbox).
+    /// User Lua, user permissions (no sandbox).
     Script,
-    /// Comando nativo del binario.
+    /// Native command of the binary.
     BuiltIn,
 }
 
-/// Un plugin instalado: su manifiesto + estado local.
+/// An installed plugin: its manifest + local state.
 #[derive(Debug, Clone)]
 pub struct PluginEntry {
-    /// Manifiesto validado.
+    /// Validated manifest.
     pub manifest: Manifest,
-    /// Directorio del plugin (`~/.config/norte/plugins/<id>/`).
+    /// Plugin directory (`~/.config/norte/plugins/<id>/`).
     pub dir: PathBuf,
-    /// Activado por el usuario.
+    /// Enabled by the user.
     pub enabled: bool,
-    /// El usuario aprobó las capabilities declaradas (si no, `⚠ sin aprobar`
-    /// y el host no lo carga — ADR 0022 D4).
+    /// The user approved the declared capabilities (if not, `⚠ unapproved`
+    /// and the host does not load it — ADR 0022 D4).
     pub approved: bool,
-    /// Valores EFECTIVOS de `[config]` (P2 decisión 3): defaults del esquema
-    /// del manifiesto, con `dir/config.toml` superpuesto y ya validado —
-    /// [`crate::resolve_settings`] corre en `load_dir` y, si falla, el
-    /// plugin va a `errors` en vez de aquí (ver [`Catalog::load_dir`]).
-    /// Codificación canónica de string (decisión 4). Vacío si el manifiesto
-    /// no declara `[config]`.
+    /// EFFECTIVE `[config]` values (P2 decision 3): the manifest schema's
+    /// defaults, with `dir/config.toml` overlaid and already
+    /// validated — [`crate::resolve_settings`] runs in `load_dir` and, if
+    /// it fails, the plugin goes to `errors` instead of here (see
+    /// [`Catalog::load_dir`]). Canonical string encoding (decision 4).
+    /// Empty if the manifest does not declare `[config]`.
     pub settings: BTreeMap<String, String>,
-    /// Qué hay en `<dir>/help.md` al descubrir (H3e).
+    /// What is in `<dir>/help.md` at discovery time (H3e).
     pub help: HelpPresence,
-    /// Sha256 hex de `<dir>/plugin.wasm` al DESCUBRIR, o `None` si no hay
-    /// binario que hashear (#241).
+    /// Sha256 hex of `<dir>/plugin.wasm` at DISCOVERY time, or `None` if
+    /// there is no binary to hash (#241).
     ///
-    /// Entra en [`Self::approval_anchor`], y ese es todo su motivo: el digest
-    /// del manifiesto cierra el TOCTOU de aprobar↔ejecutar por el lado del
-    /// `plugin.toml`, y dejaba el otro lado abierto de par en par. Quien
-    /// pudiera cambiar el `.wasm` sin tocar el `.toml` —un instalador, un
-    /// paquete comprometido, cualquier proceso del usuario— se quedaba con
-    /// las capacidades que un humano aprobó para OTRO código.
+    /// Goes into [`Self::approval_anchor`], and that is its whole reason:
+    /// the manifest digest closes the approve↔run TOCTOU on the
+    /// `plugin.toml` side, and left the other side wide open. Whoever
+    /// could change the `.wasm` without touching the `.toml` — an
+    /// installer, a compromised package, any process of the user's — kept
+    /// the capabilities a human approved for OTHER code.
     ///
-    /// Se calcula UNA vez, al descubrir, y no en cada llamada: la aprobación
-    /// se comprueba por cada previsualización y por cada página de columnas,
-    /// y leer megabytes ahí sería pagar el hash en el bucle de pintado.
+    /// Computed ONCE, at discovery, not on every call: the approval is
+    /// checked on every preview and every columns page, and reading
+    /// megabytes there would mean paying for the hash in the paint loop.
     pub wasm_digest: Option<String>,
 }
 
 impl PluginEntry {
-    /// El ancla de una aprobación humana: manifiesto **y** binario (#241).
+    /// The anchor of a human approval: manifest **and** binary (#241).
     ///
-    /// [`Manifest::approval_digest`] contesta «¿sigue pidiendo lo mismo, y
-    /// disparándose igual?». Le faltaba la otra mitad: «¿sigue siendo el mismo
-    /// código?». Sin ella, cambiar `plugin.wasm` y dejar el `plugin.toml`
-    /// quieto conservaba la aprobación — que es justo el confused-deputy que
-    /// el digest existe para cerrar, entrando por la otra puerta del bundle.
+    /// [`Manifest::approval_digest`] answers "is it still asking for the
+    /// same thing, and firing the same way?". It was missing the other
+    /// half: "is it still the same code?". Without it, changing
+    /// `plugin.wasm` while leaving `plugin.toml` untouched kept the
+    /// approval — which is exactly the confused-deputy the digest exists
+    /// to close, coming in through the bundle's other door.
     ///
-    /// Un plugin sin binario ancla solo el manifiesto: no hay código que
-    /// pueda cambiar sin que se note, porque no hay código.
+    /// A plugin with no binary anchors only the manifest: there is no code
+    /// that could change unnoticed, because there is no code.
     ///
-    /// **Subir esto invalida todas las aprobaciones ya dadas**, y es
-    /// deliberado: la pregunta que el humano contestó no incluía «y este
-    /// binario», así que su respuesta no cubre lo que se le está preguntando
-    /// ahora.
+    /// **Bumping this invalidates every approval already given**, and it
+    /// is deliberate: the question the human answered did not include "and
+    /// this binary", so their answer does not cover what is now being
+    /// asked.
     #[must_use]
     pub fn approval_anchor(&self) -> String {
         use sha2::Digest as _;
@@ -81,9 +83,9 @@ impl PluginEntry {
             b"norte-plugin-approval:v2
 ",
         );
-        let manifiesto = self.manifest.approval_digest();
-        h.update((manifiesto.len() as u64).to_le_bytes());
-        h.update(manifiesto.as_bytes());
+        let manifest = self.manifest.approval_digest();
+        h.update((manifest.len() as u64).to_le_bytes());
+        h.update(manifest.as_bytes());
         match &self.wasm_digest {
             None => h.update([0u8]),
             Some(d) => {
@@ -96,74 +98,78 @@ impl PluginEntry {
     }
 }
 
-/// Qué encontró el descubrimiento en `<dir>/help.md` (H3e).
+/// What discovery found in `<dir>/help.md` (H3e).
 ///
-/// Un TRI-ESTADO y no dos banderas: "pasa la guarda" implica "existe", nunca al
-/// revés, así que dos bools tendrían una cuarta combinación imposible
-/// (verificado y ausente) que alguien acabaría construyendo.
+/// A TRI-STATE and not two flags: "passes the guard" implies "exists",
+/// never the other way around, so two bools would have a fourth,
+/// impossible combination (verified and absent) that someone would end up
+/// constructing.
 ///
-/// Se resuelve AQUÍ, al descubrir, y no en `plugin.list`: ese listado corre en
-/// el reactor async y bajo el lock global de plugins, así que las tres llamadas
-/// al sistema de la guarda (un `is_file` y dos `canonicalize`) por plugin
-/// bloquearían a todas las demás conexiones sobre un directorio que puede estar
-/// en autofs o NFS, y `plugin.list` está ABIERTO a un agente. El descubrimiento
-/// ya es I/O y ya corre fuera del reactor, así que este es su sitio — como
-/// `name`, `commands` o `capabilities`, que también son instantáneas del momento
-/// de descubrir.
+/// Resolved HERE, at discovery, not in `plugin.list`: that listing runs on
+/// the async reactor and under the global plugins lock, so the guard's
+/// three syscalls (one `is_file` and two `canonicalize`) per plugin would
+/// block every other connection over a directory that might be on autofs
+/// or NFS, and `plugin.list` is OPEN to an agent. Discovery is already I/O
+/// and already runs off the reactor, so this is its place — like `name`,
+/// `commands` or `capabilities`, which are also snapshots taken at
+/// discovery time.
 ///
-/// NUNCA es una lectura del contenido: el catálogo se recorre entero en cada
-/// `plugin.list` (el registro es efímero por llamada), y leer 64 KiB por plugin
-/// ahí pagaría el contenido en cada listado para decidir si se pinta un nodo en
-/// una barra lateral. El contenido se lee bajo demanda, en `plugin.help`.
+/// NEVER a read of the content: the whole catalog is walked on every
+/// `plugin.list` (the registry is ephemeral per call), and reading 64 KiB
+/// per plugin there would mean paying for the content on every listing
+/// just to decide whether to paint a node in a side bar. The content is
+/// read on demand, in `plugin.help`.
 ///
-/// Es una PISTA cacheada, y por eso puede quedar rancia sin consecuencias: quien
-/// sirve el contenido vuelve a aplicar la guarda al leer, así que un
-/// [`Self::Servable`] rancio no entrega nada de fuera. Lo único que revela es
-/// que al descubrir había un fichero regular no-escapado en la ruta FIJA
-/// `<dir>/help.md`, que no la elige quien pregunta.
+/// It is a cached HINT, and that is why it can go stale with no
+/// consequence: whoever serves the content re-applies the guard on read,
+/// so a stale [`Self::Servable`] hands out nothing from outside. All it
+/// reveals is that, at discovery time, there was a regular, non-escaped
+/// file at the FIXED path `<dir>/help.md`, which whoever asks does not
+/// choose.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HelpPresence {
-    /// No hay `help.md`.
+    /// No `help.md`.
     Absent,
-    /// Hay un `help.md` pero el host NO lo servirá: no pasa la guarda de escape
-    /// ([`verified_child`]) — un symlink que sale del directorio del plugin, o
-    /// uno roto. Existe para el DIAGNÓSTICO (`norte doctor` lo reporta), nunca
-    /// para el wire: distinguirlo ahí sería un oráculo de rutas.
+    /// There is a `help.md` but the host will NOT serve it: it does not
+    /// pass the escape guard ([`verified_child`]) — a symlink that leaves
+    /// the plugin's directory, or a broken one. Exists for DIAGNOSTICS
+    /// (`norte doctor` reports it), never for the wire: distinguishing it
+    /// there would be a path oracle.
     Unservable,
-    /// Hay un `help.md` y pasa la guarda. Es el estado que cruza el wire como
-    /// `PluginInfo::has_help`.
+    /// There is a `help.md` and it passes the guard. The state that
+    /// crosses the wire as `PluginInfo::has_help`.
     Servable,
 }
 
 impl HelpPresence {
-    /// ¿El autor puso un `help.md`, lo sirvamos o no? La pregunta LAXA, la del
-    /// diagnóstico.
+    /// Did the author put a `help.md` there, whether we serve it or not?
+    /// The LOOSE question, the diagnostic one.
     #[must_use]
     pub fn is_present(self) -> bool {
         !matches!(self, Self::Absent)
     }
 
-    /// ¿Hay una página que el host vaya a servir? La pregunta ESTRICTA, la que
-    /// cruza el wire.
+    /// Is there a page the host is going to serve? The STRICT question,
+    /// the one that crosses the wire.
     #[must_use]
     pub fn is_servable(self) -> bool {
         matches!(self, Self::Servable)
     }
 }
 
-/// Los bytes de `<dir>/plugin.wasm`, por la misma guarda con la que se
-/// ejecuta ([`verified_child`]) — hashear un fichero y ejecutar otro sería
-/// peor que no hashear.
+/// The bytes of `<dir>/plugin.wasm`, through the same guard it is run with
+/// ([`verified_child`]) — hashing one file and running another would be
+/// worse than not hashing at all.
 ///
-/// `None` cuando no hay binario servible: un plugin sin `.wasm` no ejecuta
-/// nada, así que no hay código que anclar.
+/// `None` when there is no servable binary: a plugin without `.wasm` runs
+/// nothing, so there is no code to anchor.
 fn read_wasm(dir: &Path) -> WasmRead {
     let Some(path) = verified_child(dir, "plugin.wasm") else {
         return WasmRead::Absent;
     };
-    // El tope ANTES de leer: `std::fs::metadata` y no `read` — un fichero
-    // disperso de varios GiB se instala sin coste y se leería entero en cada
-    // descubrimiento. El mismo tope que aplica el runtime al instanciar.
+    // The cap BEFORE reading: `std::fs::metadata`, not `read` — a sparse
+    // file of several GiB installs at no cost and would be read whole on
+    // every discovery. The same cap the runtime applies when instantiating.
     match std::fs::metadata(&path).map(|m| m.len()) {
         Ok(len) if len > crate::MAX_ARTIFACT_BYTES => WasmRead::TooLarge(len),
         Ok(_) => std::fs::read(&path).map_or(WasmRead::Absent, WasmRead::Bytes),
@@ -171,21 +177,22 @@ fn read_wasm(dir: &Path) -> WasmRead {
     }
 }
 
-/// Lo que hay en `<dir>/plugin.wasm`, sin haberlo leído si no cabe.
+/// What is in `<dir>/plugin.wasm`, without having read it if it doesn't fit.
 enum WasmRead {
-    /// No hay binario servible (ausente, symlink fuera, ilegible).
+    /// No servable binary (absent, symlink out, unreadable).
     Absent,
-    /// Lo hay, y mide más que [`crate::MAX_ARTIFACT_BYTES`]: no se lee.
+    /// There is one, and it is larger than [`crate::MAX_ARTIFACT_BYTES`]:
+    /// not read.
     TooLarge(u64),
-    /// Los bytes.
+    /// The bytes.
     Bytes(Vec<u8>),
 }
 
-/// El digest de un binario tal como el catálogo lo ancla en
-/// [`PluginEntry::wasm_digest`]: sha256 en hex minúscula. Público para que
-/// quien vaya a INSTANCIAR unos bytes pueda comprobar que son los que el
-/// humano aprobó, en vez de confiar en que la ruta no cambió entre el
-/// descubrimiento y la carga.
+/// The digest of a binary as the catalog anchors it in
+/// [`PluginEntry::wasm_digest`]: sha256 in lowercase hex. Public so that
+/// whoever is about to INSTANTIATE some bytes can check they are the ones a
+/// human approved, instead of trusting that the path did not change
+/// between discovery and load.
 ///
 /// ```
 /// use norte_plugin_host::wasm_digest_of;
@@ -200,9 +207,9 @@ pub fn wasm_digest_of(bytes: &[u8]) -> String {
     crate::capability::hex_lower(&h.finalize())
 }
 
-/// Resuelve el tri-estado de `<dir>/help.md` (H3e). El `is_file` LAXO sigue
-/// enlaces a propósito —presencia, no permiso—, y la guarda decide si además es
-/// servible.
+/// Resolves the `<dir>/help.md` tri-state (H3e). The LOOSE `is_file`
+/// follows links on purpose — presence, not permission — and the guard
+/// decides whether it is also servable.
 fn help_presence(dir: &Path) -> HelpPresence {
     if verified_child(dir, "help.md").is_some() {
         HelpPresence::Servable
@@ -213,45 +220,48 @@ fn help_presence(dir: &Path) -> HelpPresence {
     }
 }
 
-/// `<dir>/<name>` canonicalizado, SOLO si el fichero real cae DENTRO de `dir`.
+/// `<dir>/<name>` canonicalized, ONLY if the real file falls INSIDE `dir`.
 ///
-/// La forma común del guard de issue #69: un fichero que el host lee o ejecuta
-/// desde el directorio de un plugin no puede resolver fuera de él POR SYMLINK.
-/// `None` si no existe, no es fichero, no canonicaliza (enlace roto) o escapa.
+/// The common form of issue #69's guard: a file the host reads or runs
+/// from a plugin's directory must not be able to resolve outside it VIA
+/// SYMLINK. `None` if it does not exist, is not a file, does not
+/// canonicalize (broken link) or escapes.
 ///
-/// Vive aquí, y no en `norte-core` junto a sus llamadores, para que exista UNA
-/// sola implementación: el catálogo necesita el veredicto al descubrir (ver
-/// [`PluginEntry::help`]) y `norte-core` lo necesita al leer o
-/// ejecutar. Copiar la guarda para evitar la dependencia sería mucho peor que
-/// tenerla aquí — dos copias de un guard de seguridad divergen.
+/// Lives here, not in `norte-core` next to its callers, so that ONE single
+/// implementation exists: the catalog needs the verdict at discovery time
+/// (see [`PluginEntry::help`]) and `norte-core` needs it when reading or
+/// running. Copying the guard to avoid the dependency would be much worse
+/// than keeping it here — two copies of a security guard diverge.
 ///
-/// # Qué NO cubre (dicho, no insinuado)
+/// # What it does NOT cover (stated, not implied)
 ///
-/// - **Solo symlinks.** Un HARDLINK no tiene ruta de destino: `<dir>/x`
-///   canonicaliza a sí mismo y pasa la guarda aunque su inodo sea el de
-///   `~/.ssh/id_ed25519`. Un bind mount igual. Ninguna guarda BASADA EN RUTAS
-///   puede verlos, así que "no puede escapar de su directorio" es más fuerte de
-///   lo que esto entrega: lo que entrega es "no puede escapar por symlink".
-/// - **Es una observación PUNTUAL, no un handle.** Devolver la ruta canónica
-///   evita re-resolver los componentes INTERMEDIOS, pero el kernel resuelve la
-///   ruta entera en cada `open`, componente final incluido: quien pueda escribir
-///   en el directorio puede cambiar ese último componente entre el chequeo y la
-///   apertura (TOCTOU). Una ruta canónica no congela nada. Está FUERA del modelo
-///   de amenaza —quien escribe ahí ya puede reemplazar el bundle entero, misma
-///   frontera de confianza— pero se dice en vez de darse por resuelto.
+/// - **Symlinks only.** A HARDLINK has no target path: `<dir>/x`
+///   canonicalizes to itself and passes the guard even if its inode is
+///   `~/.ssh/id_ed25519`'s. A bind mount, likewise. No PATH-BASED guard can
+///   see them, so "cannot escape its directory" is a stronger claim than
+///   what this delivers: what it delivers is "cannot escape via symlink".
+/// - **It is a POINT-IN-TIME observation, not a handle.** Returning the
+///   canonical path avoids re-resolving the INTERMEDIATE components, but
+///   the kernel resolves the whole path on every `open`, final component
+///   included: whoever can write to the directory can change that last
+///   component between the check and the open (TOCTOU). A canonical path
+///   freezes nothing. It is OUTSIDE the threat model — whoever writes
+///   there can already replace the whole bundle, same trust boundary —
+///   but it is stated rather than assumed.
 ///
-/// `O_NOFOLLOW` cerraría esa carrera del componente final y se DESCARTA a
-/// sabiendas: también prohibiría un symlink INTERNO al directorio, que un plugin
-/// organizando sus propios ficheros con enlaces usa legítimamente (hay un test
-/// que lo fija). No re-litigar sin ese caso a mano.
+/// `O_NOFOLLOW` would close that final-component race and is DISCARDED
+/// knowingly: it would also forbid a symlink INTERNAL to the directory,
+/// which a plugin organizing its own files with links legitimately uses
+/// (there is a test that pins it). Do not re-litigate without that case in
+/// hand.
 ///
 /// ```
 /// use norte_plugin_host::verified_child;
 ///
 /// let dir = tempfile::tempdir().unwrap();
-/// std::fs::write(dir.path().join("help.md"), "hola").unwrap();
+/// std::fs::write(dir.path().join("help.md"), "hello").unwrap();
 /// assert!(verified_child(dir.path(), "help.md").is_some());
-/// assert!(verified_child(dir.path(), "ausente.md").is_none());
+/// assert!(verified_child(dir.path(), "absent.md").is_none());
 /// ```
 #[must_use]
 pub fn verified_child(dir: &Path, name: &str) -> Option<PathBuf> {
@@ -264,39 +274,40 @@ pub fn verified_child(dir: &Path, name: &str) -> Option<PathBuf> {
     canon_child.starts_with(&canon_dir).then_some(canon_child)
 }
 
-/// Un manifiesto que no cargó, con su causa (para avisar en el gestor en vez de
-/// desaparecer en silencio).
+/// A manifest that failed to load, with its cause (to warn in the manager
+/// instead of vanishing silently).
 #[derive(Debug)]
 pub struct LoadError {
-    /// Directorio culpable.
+    /// Culprit directory.
     pub dir: PathBuf,
-    /// La causa.
+    /// The cause.
     pub error: ManifestError,
 }
 
-/// El catálogo de plugins descubiertos + los que fallaron al cargar.
+/// The catalog of discovered plugins + those that failed to load.
 #[derive(Debug, Default)]
 pub struct Catalog {
-    /// Plugins válidos, ordenados por categoría y luego por id.
+    /// Valid plugins, ordered by category then by id.
     pub plugins: Vec<PluginEntry>,
-    /// Manifiestos inválidos (se muestran como error, no se ocultan).
+    /// Invalid manifests (shown as an error, not hidden).
     pub errors: Vec<LoadError>,
 }
 
 impl Catalog {
-    /// Descubre plugins en `root/<id>/plugin.toml`. No es I/O async: el host lo
-    /// llama una vez al arrancar (o vía `spawn_blocking` desde contexto async).
-    /// Un `root` inexistente = catálogo vacío (no es error).
+    /// Discovers plugins at `root/<id>/plugin.toml`. Not async I/O: the
+    /// host calls it once at startup (or via `spawn_blocking` from async
+    /// context). A nonexistent `root` = empty catalog (not an error).
     #[must_use]
     pub fn load_dir(root: &Path) -> Catalog {
         let mut cat = Catalog::default();
         let Ok(entries) = std::fs::read_dir(root) else {
             return cat;
         };
-        // Se recogen los manifiestos válidos aparte para poder DEDUPLICAR por id
-        // antes de aceptarlos: dos directorios con el mismo `plugin.id` son un
-        // vector de confused-deputy (issue #69) — el segundo podría reclamar la
-        // aprobación del primero. Se rechazan TODOS los colisionantes (fail-closed).
+        // Valid manifests are collected separately so they can be
+        // DEDUPLICATED by id before accepting them: two directories with
+        // the same `plugin.id` are a confused-deputy vector (issue #69) —
+        // the second could claim the first's approval. ALL colliding ones
+        // are rejected (fail-closed).
         let mut parsed: Vec<(Manifest, PathBuf)> = Vec::new();
         for entry in entries.flatten() {
             let dir = entry.path();
@@ -305,15 +316,15 @@ impl Catalog {
             }
             let toml_path = dir.join("plugin.toml");
             let Ok(src) = std::fs::read_to_string(&toml_path) else {
-                continue; // sin plugin.toml no es un plugin (no es error)
+                continue; // no plugin.toml means no plugin (not an error)
             };
             match Manifest::from_toml(&src) {
                 Ok(manifest) => parsed.push((manifest, dir)),
                 Err(error) => cat.errors.push(LoadError { dir, error }),
             }
         }
-        // Cuenta de ocurrencias por id: un id que aparece más de una vez es
-        // ambiguo y se rechaza en todos sus directorios.
+        // Occurrence count per id: an id that appears more than once is
+        // ambiguous and is rejected in all of its directories.
         let mut counts: HashMap<String, usize> = HashMap::new();
         for (manifest, _) in &parsed {
             *counts.entry(manifest.id.clone()).or_insert(0) += 1;
@@ -326,11 +337,11 @@ impl Catalog {
                     error: ManifestError::DuplicateId(id),
                 });
             } else {
-                // P2 decisión 3: los VALORES de `[config]` se resuelven y
-                // validan AQUÍ, al descubrir — fail-closed a nivel de
-                // catálogo (mismo trato que `DuplicateId`): un `config.toml`
-                // que no valida excluye el plugin ENTERO, nunca carga con
-                // valores a medias.
+                // P2 decision 3: `[config]` VALUES are resolved and
+                // validated HERE, at discovery — fail-closed at the
+                // catalog level (same treatment as `DuplicateId`): a
+                // `config.toml` that fails to validate excludes the WHOLE
+                // plugin, it never loads with half-way values.
                 let settings = match resolve_settings(&manifest, &dir) {
                     Ok(settings) => settings,
                     Err(error) => {
@@ -341,11 +352,12 @@ impl Catalog {
                         continue;
                     }
                 };
-                // El binario se lee UNA vez: de esos bytes salen el digest
-                // que ancla la aprobación (#241) y los paquetes WIT que
-                // nombra (ADR 0094). Un guest compilado contra otra versión
-                // se lista como roto con las dos versiones, en vez de
-                // cargarse y morir en wasmtime nombrando una interfaz.
+                // The binary is read ONCE: the digest that anchors the
+                // approval (#241) and the WIT packages it names (ADR 0094)
+                // both come from those bytes. A guest built against a
+                // different version is listed as broken with both
+                // versions, instead of loading and dying inside wasmtime
+                // naming an interface.
                 let bytes = match read_wasm(&dir) {
                     WasmRead::Absent => None,
                     WasmRead::Bytes(b) => Some(b),
@@ -360,13 +372,15 @@ impl Catalog {
                         continue;
                     }
                 };
-                // Un plugin con `config.toml` inválido Y binario desfasado
-                // reporta lo primero: los valores se resuelven antes, y una
-                // causa por entrada basta para que el humano actúe.
+                // A plugin with both an invalid `config.toml` AND a
+                // mismatched binary reports the former: the values are
+                // resolved first, and one cause per entry is enough for
+                // the human to act.
                 //
-                // Los paquetes que el binario nombra no se guardan: un plugin
-                // que llega a `plugins` ya demostró no tener mismatch, y el
-                // que lo tiene va a `errors` con las dos versiones.
+                // The packages the binary names are not stored: a plugin
+                // that reaches `plugins` has already proven there is no
+                // mismatch, and one that has one goes to `errors` with
+                // both versions.
                 let wit = bytes
                     .as_deref()
                     .map(crate::wit_packages)
@@ -403,8 +417,9 @@ impl Catalog {
         cat
     }
 
-    /// Agrupa los plugins por categoría, en orden estable — la base de la vista
-    /// ordenada del gestor (ADR 0022 D5). Solo categorías con algún plugin.
+    /// Groups plugins by category, in stable order — the basis of the
+    /// manager's ordered view (ADR 0022 D5). Only categories with some
+    /// plugin.
     #[must_use]
     pub fn by_category(&self) -> Vec<(Category, Vec<&PluginEntry>)> {
         const ORDER: [Category; 7] = [

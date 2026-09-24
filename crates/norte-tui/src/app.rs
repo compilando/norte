@@ -1358,7 +1358,7 @@ impl App {
             busy: None,
             menu: None,
             menu_ultimo: 0,
-            // Los cuatro primeros son los del preset `orthodox`.
+            // The first four are the `orthodox` preset's.
             next_slot: 5,
             render_now_ms: None,
             attr_catalogs: std::collections::HashMap::new(),
@@ -1551,7 +1551,7 @@ impl App {
         self.panes.insert_browser(id, pane);
     }
 
-    /// Enciende o apaga la fila `..` en TODOS los panes (`[ui] parent_entry`).
+    /// Turns the `..` row on or off in ALL panes (`[ui] parent_entry`).
     ///
     /// In all of them and not only the visible ones: a pane behind a tab is
     /// painted again exactly as it was left, and one half of the screen with
@@ -1684,7 +1684,7 @@ impl App {
         );
     }
 
-    /// El reloj del pintado.
+    /// The paint clock.
     #[must_use]
     pub fn now_ms(&self) -> i64 {
         self.render_now_ms.unwrap_or_else(|| {

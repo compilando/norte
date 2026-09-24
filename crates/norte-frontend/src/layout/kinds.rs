@@ -1,43 +1,44 @@
-//! Qué necesita saber el motor de un panel, y el registro que se lo dice.
+//! What the engine needs to know about a panel, and the registry that tells
+//! it.
 //!
-//! Lo que NO está aquí es cómo se pinta: eso es una tabla por frontend, porque
-//! el TUI pinta ratatui y la GUI pinta GPUI. El motor solo necesita tamaños
-//! mínimos, si toma foco, si toma teclas, si admite varias instancias y a qué
-//! roles puede optar.
+//! What is NOT here is how it is painted: that is a per-frontend table,
+//! because the TUI paints ratatui and the GUI paints GPUI. The engine only
+//! needs minimum sizes, whether it takes focus, whether it takes keys,
+//! whether it allows several instances and which roles it may hold.
 
 use super::{KindId, RoleId};
 
-/// Lo que el motor necesita saber de un kind.
+/// What the engine needs to know about a kind.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KindDecl {
-    /// Qué kind describe.
+    /// Which kind it describes.
     pub id: KindId,
-    /// Ancho y alto MÍNIMOS en celdas. Por debajo de esto,
-    /// [`super::resolve`] colapsa el `Split` que lo contiene.
+    /// MINIMUM width and height in cells. Below this, [`super::resolve`]
+    /// collapses the `Split` that contains it.
     pub min: (u16, u16),
-    /// ¿Puede tener el foco?
+    /// Can it take focus?
     pub focusable: bool,
-    /// ¿Consume teclas de su propio namespace?
+    /// Does it consume keys from its own namespace?
     pub takes_keys: bool,
-    /// ¿Pueden coexistir varias instancias?
+    /// Can several instances coexist?
     pub multi: bool,
-    /// A qué roles puede optar este kind.
+    /// Which roles this kind may hold.
     pub roles: &'static [RoleId],
 }
 
-/// Los roles que un `browser` puede tomar: los dos.
+/// The roles a `browser` may take: both of them.
 const ROLES_BROWSER: &[RoleId] = &[RoleId::Active, RoleId::Target];
-/// Ningún rol.
+/// No role.
 const SIN_ROLES: &[RoleId] = &[];
 
-/// El nombre de hueco de un panel aportado por un plugin (fase 3).
+/// The slot name of a panel contributed by a plugin (phase 3).
 ///
-/// `plugin:<id>:<kind>`, y el prefijo es la garantía: [`KindId`] es un
-/// `String` sin validar, así que lo único que impide que un plugin declare un
-/// panel llamado `browser` y secuestre el listado es que su nombre real nunca
-/// empieza por `plugin:`. Los dos frontends lo forman AQUÍ y no cada uno por
-/// su cuenta, que es como dos superficies acaban abriendo huecos distintos
-/// para el mismo panel.
+/// `plugin:<id>:<kind>`, and the prefix is the guarantee: [`KindId`] is an
+/// unvalidated `String`, so the only thing stopping a plugin from declaring
+/// a panel called `browser` and hijacking the listing is that its real name
+/// never starts with `plugin:`. Both frontends form it HERE and not each on
+/// its own, which is how two surfaces end up opening different slots for
+/// the same panel.
 ///
 /// ```
 /// use norte_frontend::layout::panel_kind_id;
@@ -50,25 +51,25 @@ pub fn panel_kind_id(plugin_id: &str, kind: &str) -> KindId {
     KindId::new(format!("plugin:{plugin_id}:{kind}"))
 }
 
-/// Los kinds que este binario sabe pintar.
+/// The kinds this binary knows how to paint.
 ///
-/// ABIERTO por construcción: [`KindRegistry::get`] devuelve `None` para lo que
-/// no conoce y eso **no es un error** — quien pinta dibuja una caja con el
-/// nombre y el layout conserva el nodo intacto. Es lo que permite que un
-/// frontend abra el layout del otro sin borrarle nada, y más adelante que un
-/// plugin aporte un kind.
+/// OPEN by construction: [`KindRegistry::get`] returns `None` for what it
+/// does not know and that is **not an error** — whoever paints draws a box
+/// with the name and the layout keeps the node intact. That is what lets a
+/// frontend open the other one's layout without erasing anything, and
+/// later lets a plugin contribute a kind.
 #[derive(Debug, Clone, Default)]
 pub struct KindRegistry {
     decls: Vec<KindDecl>,
 }
 
 impl KindRegistry {
-    /// Los cinco kinds que existen hoy, re-encuadrados: `browser`, `tasks`,
-    /// `viewer`, `compare` y `sync`.
+    /// The five kinds that exist today, reframed: `browser`, `tasks`,
+    /// `viewer`, `compare` and `sync`.
     ///
-    /// Los mínimos salen de lo que la pantalla de hoy necesita de verdad: un
-    /// `browser` por debajo de 20 columnas no pinta ni un nombre con su
-    /// tamaño, y `compare`/`sync` llevan dos lados y una cabecera.
+    /// The minimums come from what today's screen genuinely needs: a
+    /// `browser` under 20 columns does not even paint a name with its
+    /// size, and `compare`/`sync` carry two sides and a header.
     #[must_use]
     pub fn builtin() -> Self {
         let decl = |id: &str, min, focusable, takes_keys, multi, roles| KindDecl {
@@ -82,147 +83,156 @@ impl KindRegistry {
         Self {
             decls: vec![
                 decl("browser", (20, 5), true, true, true, ROLES_BROWSER),
-                // La franja de tareas: se mira, no se enfoca, y hay una.
+                // The tasks strip: it is looked at, not focused, and there
+                // is one.
                 decl("tasks", (20, 3), false, false, false, SIN_ROLES),
-                // La barra de estado: una fila, nadie la enfoca.
+                // The status bar: one row, nobody focuses it.
                 decl("status", (1, 1), false, false, false, SIN_ROLES),
-                // El sidebar de sitios (L3): se enfoca y toma teclas, pero NO
-                // opta a ningún rol — un sidebar jamás es el destino de una
-                // copia. Y hay uno: dos listas idénticas de discos no son un
-                // layout, son un fallo. El mínimo de 14 columnas es lo que
-                // ocupa `/boot 402M` con el marco alrededor.
+                // The places sidebar (L3): focusable and takes keys, but
+                // does NOT hold any role — a sidebar is never a copy's
+                // target. And there is one: two identical lists of drives
+                // are not a layout, they are a bug. The 14-column minimum
+                // is what `/boot 402M` takes with the frame around it.
                 decl("places", (14, 5), true, true, false, SIN_ROLES),
                 decl("viewer", (20, 5), true, true, false, SIN_ROLES),
                 decl("compare", (40, 8), true, true, false, SIN_ROLES),
                 decl("sync", (40, 8), true, true, false, SIN_ROLES),
-                // El panel de procesos: la franja `tasks` sigue existiendo y
-                // sigue siendo lo que trae `orthodox`. Este es el panel de
-                // verdad —se enfoca, se recorre y cancela la fila del cursor—
-                // y hay uno. El mínimo de 30x4 es lo que ocupa una fila con
-                // nombre, barra y porcentaje.
+                // The processes panel: the `tasks` strip still exists and
+                // is still what `orthodox` brings. This is the real
+                // panel — it is focused, browsed and cancels the cursor's
+                // row — and there is one. The 30x4 minimum is what one row
+                // with a name, a bar and a percentage takes.
                 decl("processes", (30, 4), true, true, false, SIN_ROLES),
-                // La hoja de atributos: sigue al rol `active` con el mismo
-                // vínculo que el visor acoplado. 24 columnas es la etiqueta
-                // más larga con su valor al lado.
+                // The attribute sheet: follows the `active` role with the
+                // same binding as the docked viewer. 24 columns is the
+                // longest label with its value next to it.
                 //
-                // NO toma teclas, y declararlo era la mitad de #243: la hoja
-                // sigue al cursor del listado, así que con el teclado dentro
-                // dejaría de seguir a nada. Se enfoca —el reparto la cuenta—
-                // pero no consume ninguna tecla.
+                // Does NOT take keys, and declaring that was half of #243:
+                // the sheet follows the listing's cursor, so with the
+                // keyboard inside it would stop following anything. It is
+                // focusable — layout counts it — but consumes no key.
                 decl("metadata", (24, 4), true, false, false, SIN_ROLES),
-                // El árbol de directorios (#136): se enfoca, toma teclas y hay
-                // UNO. No opta a ningún rol —un árbol no es el destino de una
-                // copia, igual que el sidebar—, y 16 columnas es lo que ocupa
-                // un nombre corto con dos niveles de sangrado y el marco.
+                // The directory tree (#136): focusable, takes keys and
+                // there is ONE. Holds no role — a tree is not a copy's
+                // target, same as the sidebar — and 16 columns is what a
+                // short name with two indent levels and the frame takes.
                 decl("tree", (16, 5), true, true, false, SIN_ROLES),
-                // El registro (#323): se enfoca, toma teclas —filtra por nivel
-                // y por texto— y hay UNO. No opta a ningún rol: nadie copia a
-                // un log. 30 columnas es lo que ocupa `13:36:50 WARN` con un
-                // mensaje corto y el marco; por debajo la hora y el nivel se
-                // comen la línea entera y no queda sitio para lo que dice.
+                // The log (#323): focusable, takes keys — filters by level
+                // and by text — and there is ONE. Holds no role: nobody
+                // copies into a log. 30 columns is what `13:36:50 WARN`
+                // takes with a short message and the frame; below that the
+                // time and level eat the whole line and there is no room
+                // left for what it says.
                 decl("log", (30, 4), true, true, false, SIN_ROLES),
-                // El mapa de disco (fase 4): se enfoca, toma teclas —se anda
-                // por los rectángulos y se entra en uno— y hay UNO. No opta a
-                // ningún rol: un mapa se mira y se recorre, y nadie copia
-                // dentro de un treemap.
+                // The disk map (phase 4): focusable, takes keys — you walk
+                // the rectangles and enter one — and there is ONE. Holds no
+                // role: a map is looked at and browsed, and nobody copies
+                // into a treemap.
                 //
-                // 24x6 es el mínimo con el que sigue siendo un MAPA. A lo
-                // ancho, 24 columnas es lo que ocupa una etiqueta como
-                // `documentos 1,2G` con el marco alrededor; por debajo los
-                // rectángulos dejan de caber con su nombre y lo que queda es
-                // un mosaico de colores sin leyenda. A lo alto, seis filas son
-                // dos tiras con su etiqueta más el marco: con menos solo cabe
-                // una tira, y una sola tira no reparte nada — es una barra.
+                // 24x6 is the minimum at which it is still a MAP.
+                // Sideways, 24 columns is what a label like `documents
+                // 1.2G` takes with the frame around it; below that the
+                // rectangles no longer fit with their name and what is
+                // left is a mosaic of colors with no legend. Vertically,
+                // six rows are two strips with their label plus the frame:
+                // with fewer, only one strip fits, and a single strip lays
+                // out nothing — it is a bar.
                 decl("disk-map", (24, 6), true, true, false, SIN_ROLES),
-                // La línea de tiempo del journal (fase 7): se enfoca, toma
-                // teclas —se anda por las filas y se deshace hasta uno— y hay
-                // UNA. No opta a ningún rol: nadie copia dentro de un
-                // historial.
+                // The journal's timeline (phase 7): focusable, takes keys
+                // — you walk the rows and undo up to one — and there is
+                // ONE. Holds no role: nobody copies into a history.
                 //
-                // 34x4 es el mínimo con el que una fila sigue diciendo algo:
-                // la hora, quién, el verbo y un nombre corto. Por debajo, el
-                // nombre desaparece entero y quedan la hora y el verbo, que
-                // no distinguen dos copias seguidas — y esta es una pantalla
-                // desde la que se DESHACE, así que una fila que no identifica
-                // lo que va a revertir es peor que no tenerla.
+                // 34x4 is the minimum at which a row still says something:
+                // the time, who, the verb and a short name. Below that the
+                // name disappears entirely and only the time and the verb
+                // remain, which do not distinguish two copies in a row —
+                // and this is a screen you UNDO from, so a row that does
+                // not identify what it is about to revert is worse than
+                // not having it.
                 decl("timeline", (34, 4), true, true, false, SIN_ROLES),
-                // El panel de terminal: se enfoca, toma teclas y hay UNO. No
-                // opta a ningún rol: nadie copia DENTRO de un terminal, y el
-                // destino de una copia es un directorio, no un shell.
+                // The terminal panel: focusable, takes keys and there is
+                // ONE. Holds no role: nobody copies INTO a terminal, and a
+                // copy's target is a directory, not a shell.
                 //
-                // `multi: false` y el plan decía lo contrario («dos terminales
-                // son dos terminales»). Lo que lo cambió: `KeyOwner` se compara
-                // por igualdad en ochenta y seis sitios y NINGUNA variante
-                // lleva carga, cosa que solo se sostiene porque los paneles con
-                // teclado son de uno en uno. Un terminal de varios obligaría a
-                // llevar dentro CUÁL tiene las teclas, y eso es un cambio en
-                // los ochenta y seis para una capacidad que la referencia
-                // —Krusader— tampoco da. El árbol, el registro, procesos, el
-                // mapa y la línea de tiempo son todos uno; éste también.
+                // `multi: false`, and the plan said the opposite ("two
+                // terminals are two terminals"). What changed it:
+                // `KeyOwner` is compared by equality in eighty-six places
+                // and NO variant carries a payload, which only holds
+                // because keyboard-holding panels are one at a time. A
+                // multi-instance terminal would require carrying WHICH one
+                // has the keys inside it, and that is a change to all
+                // eighty-six for a capability the reference — Krusader —
+                // does not give either. The tree, the log, processes, the
+                // map and the timeline are all singletons; this one too.
                 //
-                // «Toma teclas» significa aquí más que en cualquier otro kind:
-                // los demás consumen comandos del catálogo, y un terminal
-                // consume BYTES, o sea también los acordes que serían de
-                // norte. La salida es el MISMO `layout.terminal` que lo abrió
-                // —un acorde suelto, el único que el panel no le pasa al
-                // shell—, y no un comando aparte: uno que se llamara
-                // `layout.terminal-escape` habría sido un segundo binding en
-                // los siete presets para lo que la tecla de entrada ya dice.
+                // "Takes keys" means more here than for any other kind: the
+                // others consume catalogue commands, and a terminal
+                // consumes BYTES, i.e. also the chords that would be
+                // norte's. The exit is the SAME `layout.terminal` that
+                // opened it — a lone chord, the only one the panel does not
+                // pass to the shell — and not a separate command: one
+                // called `layout.terminal-escape` would have been a second
+                // binding in all seven presets for what the entry key
+                // already says.
                 //
-                // 20x4 es el mínimo con el que sigue siendo un shell: a lo
-                // ancho, un prompt corto y una orden con un argumento; a lo
-                // alto, el prompt, lo que se teclea y dos líneas de respuesta.
-                // Por debajo de eso cada orden borra la anterior y lo que
-                // queda no es un terminal, es una ventanita que parpadea.
+                // 20x4 is the minimum at which it is still a shell:
+                // sideways, a short prompt and a command with one argument;
+                // vertically, the prompt, what is typed and two lines of
+                // response. Below that each command erases the previous
+                // one and what remains is not a terminal, it is a little
+                // window that blinks.
                 decl("terminal", (20, 4), true, true, false, SIN_ROLES),
             ],
         }
     }
 
-    /// Todas las declaraciones, EN ORDEN DE REGISTRO: primero las de serie,
-    /// luego lo que se haya añadido.
+    /// All declarations, IN REGISTRATION ORDER: the built-in ones first,
+    /// then whatever was added.
     ///
-    /// El orden es parte del contrato y no un detalle: la barra de paneles
-    /// (#324) lo usa para pintar los de siempre en el mismo sitio y lo aportado
-    /// detrás, que es lo que permite aprender la posición con el dedo.
+    /// The order is part of the contract and not a detail: the panel bar
+    /// (#324) uses it to paint the usual ones in the same place and
+    /// contributed ones after, which is what lets the position be learned
+    /// by the finger.
     #[must_use]
     pub fn decls(&self) -> &[KindDecl] {
         &self.decls
     }
 
-    /// La declaración de `id`, o `None` si este binario no conoce ese kind.
+    /// `id`'s declaration, or `None` if this binary does not know that
+    /// kind.
     #[must_use]
     pub fn get(&self, id: &KindId) -> Option<&KindDecl> {
         self.decls.iter().find(|d| &d.id == id)
     }
 
-    /// Declara los paneles que aportan los plugins CONSENTIDOS (fase 3).
+    /// Declares the panels CONSENTED plugins contribute (phase 3).
     ///
-    /// Un panel se llama `plugin:<id>:<kind>`, y ese prefijo es lo que impide
-    /// que choque con uno de casa: `KindId` no valida nada —es un `String`—,
-    /// así que la garantía la da el NOMBRE, no el tipo. Un plugin llamado
-    /// `browser` no puede secuestrar el listado.
+    /// A panel is called `plugin:<id>:<kind>`, and that prefix is what
+    /// stops it from colliding with a built-in one: `KindId` validates
+    /// nothing — it is a `String` — so the guarantee comes from the NAME,
+    /// not the type. A plugin called `browser` cannot hijack the listing.
     ///
-    /// Solo los aprobados Y activados, con el mismo criterio que las columnas
-    /// (`validated_plugin_requests`): un panel de un plugin que el lector no
-    /// ha consentido no existe para el reparto, así que su hueco no se coloca
-    /// y su botón no sale en la barra.
+    /// Only the approved AND enabled ones, with the same criterion as
+    /// columns (`validated_plugin_requests`): a plugin's panel the reader
+    /// has not consented to does not exist for layout, so its slot is not
+    /// placed and its button does not appear in the bar.
     ///
-    /// REEMPLAZA lo aportado, no lo añade: retirar el consentimiento a un
-    /// plugin tiene que retirar su panel en la misma sesión. Añadiendo, un
-    /// plugin desactivado en el gestor conservaba su kind declarado hasta el
-    /// siguiente arranque —su hueco seguía colocándose y tomando foco—, que es
-    /// lo contrario de lo que promete el párrafo de arriba. Las de serie no se
-    /// tocan, y lo aportado se reconstruye entero en cada catálogo.
+    /// REPLACES what is contributed, does not add to it: withdrawing
+    /// consent from a plugin has to withdraw its panel in the same
+    /// session. Adding instead, a plugin disabled in the manager kept its
+    /// declared kind until the next startup — its slot kept being placed
+    /// and taking focus — which is the opposite of what the paragraph
+    /// above promises. The built-in ones are not touched, and what is
+    /// contributed is rebuilt whole on every catalogue.
     ///
-    /// Dentro de eso el orden se mantiene: `decls()` promete las de serie
-    /// primero y lo aportado detrás.
+    /// Within that the order is kept: `decls()` promises the built-in ones
+    /// first and contributed ones after.
     pub fn insert_panels(&mut self, plugins: &[norte_proto::methods::PluginInfo]) {
-        // El alfabeto de un nombre que va a un `KindId`: ASCII alfanumérico y
-        // `. _ -`, con tope. Deja fuera el espacio, los dos puntos —que son el
-        // separador del propio prefijo—, los controles, los saltos de línea y
-        // cualquier cosa de ancho doble o de derecha a izquierda.
-        let valido = |s: &str| {
+        // The alphabet of a name headed into a `KindId`: ASCII alphanumeric
+        // and `. _ -`, with a ceiling. Leaves out space, colons — which are
+        // the prefix's own separator — controls, line breaks and anything
+        // double-width or right-to-left.
+        let valid = |s: &str| {
             !s.is_empty()
                 && s.len() <= 64
                 && s.bytes()
@@ -231,40 +241,42 @@ impl KindRegistry {
         self.decls.retain(|d| !d.id.as_str().starts_with("plugin:"));
         for p in plugins.iter().filter(|p| p.approved && p.enabled) {
             for panel in &p.panels {
-                // El id y el kind son texto de un TERCERO y acaban en un
-                // `KindId`, que no valida nada: de ahí salen el nombre que se
-                // pinta y la clave que se guarda en la sesión. Un kind con un
-                // salto de línea, un carácter de ancho doble o una secuencia
-                // de escape rompe la barra y el fichero de disposición, así
-                // que lo que no encaje en el alfabeto no se declara — el panel
-                // desaparece, que es el fallo seguro.
-                if !valido(&p.id) || !valido(&panel.kind) {
+                // The id and the kind are a THIRD PARTY's text and end up
+                // in a `KindId`, which validates nothing: from there come
+                // the name that is painted and the key saved in the
+                // session. A kind with a line break, a double-width
+                // character or an escape sequence breaks the bar and the
+                // layout file, so whatever does not fit the alphabet is
+                // not declared — the panel disappears, which is the fail
+                // safe.
+                if !valid(&p.id) || !valid(&panel.kind) {
                     continue;
                 }
                 self.insert(KindDecl {
                     id: panel_kind_id(&p.id, &panel.kind),
-                    // Lo que el manifiesto pida, y si no pide nada, el mínimo
-                    // de un panel lateral cualquiera: por debajo de eso no
-                    // cabe ni una línea con su marco.
+                    // Whatever the manifest asks for, and if it asks for
+                    // nothing, the minimum of any side panel: below that
+                    // not even one line fits with its frame.
                     min: (panel.min_cols.unwrap_or(20), panel.min_rows.unwrap_or(4)),
-                    // Se enfoca y toma teclas: un panel que no pudiera recibir
-                    // una tecla no podría ofrecer nada que no fuera un clic, y
-                    // el guest recibe COMANDOS precisamente para eso.
+                    // Focusable and takes keys: a panel that could not
+                    // receive a key could not offer anything beyond a
+                    // click, and the guest receives COMMANDS for exactly
+                    // that.
                     focusable: true,
                     takes_keys: true,
-                    // Uno de cada: dos copias del mismo panel de git no son un
-                    // layout, son un fallo. Mismo criterio que los laterales
-                    // de casa.
+                    // One of each: two copies of the same git panel are
+                    // not a layout, they are a bug. Same criterion as the
+                    // built-in side panels.
                     multi: false,
-                    // Ningún rol: un panel de plugin no es el destino de una
-                    // copia, igual que el sidebar o el árbol.
+                    // No role: a plugin panel is not a copy's target, same
+                    // as the sidebar or the tree.
                     roles: SIN_ROLES,
                 });
             }
         }
     }
 
-    /// Añade o reemplaza una declaración.
+    /// Adds or replaces a declaration.
     pub fn insert(&mut self, decl: KindDecl) {
         if let Some(slot) = self.decls.iter_mut().find(|d| d.id == decl.id) {
             *slot = decl;
@@ -273,15 +285,15 @@ impl KindRegistry {
         }
     }
 
-    /// El mínimo de un kind, o `(1, 1)` si no se conoce: un kind desconocido
-    /// se pinta igual (caja con su nombre), así que no puede exigir sitio que
-    /// nadie sabe cuánto es.
+    /// A kind's minimum, or `(1, 1)` if it is not known: an unknown kind is
+    /// painted the same (a box with its name), so it cannot demand room
+    /// nobody knows the size of.
     #[must_use]
     pub fn min_of(&self, id: &KindId) -> (u16, u16) {
         self.get(id).map_or((1, 1), |d| d.min)
     }
 
-    /// ¿Puede este kind tomar el rol `role`? Un kind desconocido, jamás.
+    /// Can this kind hold role `role`? An unknown kind, never.
     #[must_use]
     pub fn holds_role(&self, id: &KindId, role: RoleId) -> bool {
         self.get(id).is_some_and(|d| d.roles.contains(&role))
@@ -292,103 +304,108 @@ impl KindRegistry {
 mod tests {
     use super::*;
 
-    /// Los dos kinds de la fase A. Ninguno opta a un rol: un panel de
-    /// procesos y una hoja de atributos jamás son el destino de una copia, y
-    /// dejarles `Target` es como una tecla de copiar acaba apuntando a una
-    /// caja que no es un directorio.
+    /// Phase A's two kinds. Neither holds a role: a processes panel and an
+    /// attribute sheet are never a copy's target, and leaving them
+    /// `Target` is how a copy key ends up pointing at a box that is not a
+    /// directory.
     ///
-    /// Y solo UNO de los dos toma teclas. La hoja sigue al cursor del
-    /// listado, así que con el teclado dentro dejaría de seguir a nada;
-    /// declararlo al revés era la mitad de #243 —la otra mitad era que nadie
-    /// leía el `KeyOwner` que se ponía—, y el resultado en pantalla era un
-    /// panel con borde de foco cuyas flechas movían la lista de al lado.
+    /// And only ONE of the two takes keys. The sheet follows the listing's
+    /// cursor, so with the keyboard inside it would stop following
+    /// anything; declaring it the other way round was half of #243 — the
+    /// other half was that nobody read the `KeyOwner` that got set — and
+    /// the result on screen was a panel with a focus border whose arrows
+    /// moved the list next to it.
     #[test]
     fn processes_y_metadata_se_enfocan_pero_no_son_destino() {
         let reg = KindRegistry::builtin();
         for id in ["processes", "metadata"] {
-            let d = reg.get(&KindId::new(id)).expect("declarado");
-            assert!(d.focusable, "{id} se enfoca");
-            assert!(!d.multi, "{id} es uno solo");
-            assert!(d.roles.is_empty(), "{id} no opta a rol");
+            let d = reg.get(&KindId::new(id)).expect("declared");
+            assert!(d.focusable, "{id} is focusable");
+            assert!(!d.multi, "{id} is one only");
+            assert!(d.roles.is_empty(), "{id} holds no role");
             assert!(!reg.holds_role(&KindId::new(id), RoleId::Target));
         }
         assert!(
             reg.get(&KindId::new("processes"))
-                .expect("declarado")
+                .expect("declared")
                 .takes_keys,
-            "el panel de procesos SÍ toma teclas: se recorre y cancela"
+            "the processes panel DOES take keys: browsed and cancels"
         );
         assert!(
             !reg.get(&KindId::new("metadata"))
-                .expect("declarado")
+                .expect("declared")
                 .takes_keys,
-            "la hoja de atributos NO: sigue al cursor del listado"
+            "the attribute sheet does NOT: it follows the listing's cursor"
         );
         assert_eq!(reg.min_of(&KindId::new("processes")), (30, 4));
         assert_eq!(reg.min_of(&KindId::new("metadata")), (24, 4));
     }
 
-    /// Un kind que el registro no conoce no revienta: devuelve `None` y quien
-    /// pinta dibuja la caja con el nombre. Es la regla 3 del modelo.
+    /// A kind the registry does not know does not blow up: it returns
+    /// `None` and whoever paints draws the box with the name. It is the
+    /// model's rule 3.
     #[test]
     fn un_kind_fuera_del_registro_no_es_un_error() {
         let reg = KindRegistry::builtin();
-        // El nombre dice lo que hace falta que sea: uno que NUNCA se registre.
-        // Aquí ponía `terminal`, y cuando el panel de terminal se registró
-        // este test dejó de probar lo que su nombre dice sin ponerse rojo.
-        let ninguno = KindId::new("un-kind-que-no-existe");
-        assert!(reg.get(&ninguno).is_none());
-        assert_eq!(reg.min_of(&ninguno), (1, 1));
-        assert!(!reg.holds_role(&ninguno, RoleId::Target));
+        // The name says what it needs to be: one that will NEVER be
+        // registered. This used to say `terminal`, and when the terminal
+        // panel got registered this test stopped testing what its name
+        // says without turning red.
+        let none = KindId::new("un-kind-que-no-existe");
+        assert!(reg.get(&none).is_none());
+        assert_eq!(reg.min_of(&none), (1, 1));
+        assert!(!reg.holds_role(&none, RoleId::Target));
     }
 
-    /// Un panel APORTADO no sale en la barra, aunque se enfoque.
+    /// A CONTRIBUTED panel does not appear in the bar, even if focusable.
     ///
-    /// El comando de un botón es `layout.<kind>`, y para uno aportado sería
-    /// `layout.plugin:git:status`, que no existe en ningún catálogo: la TUI lo
-    /// tiraba en silencio y la ventana contestaba «cmd-not-here». La misma
-    /// decisión con dos respuestas es justo lo que el ADR 0077 prohíbe, así
-    /// que hasta que exista el comando que lo abre y lo cierra, no hay botón.
+    /// A button's command is `layout.<kind>`, and for a contributed one it
+    /// would be `layout.plugin:git:status`, which does not exist in any
+    /// catalogue: the TUI silently dropped it and the window answered
+    /// "cmd-not-here". The same decision with two answers is exactly what
+    /// ADR 0077 forbids, so until the command that opens and closes it
+    /// exists, there is no button.
     #[test]
     fn un_panel_de_plugin_no_tiene_boton_en_la_barra() {
         let mut reg = KindRegistry::builtin();
         reg.insert_panels(&[panel_de_plugin("git", "status", None, true)]);
         let d = reg
             .get(&KindId::new("plugin:git:status"))
-            .expect("está declarado");
-        assert!(d.focusable, "se enfoca");
+            .expect("is declared");
+        assert!(d.focusable, "is focusable");
         assert!(
             !crate::panelbar::es_boton(d),
-            "y aun así no sale en la barra"
+            "and still does not appear in the bar"
         );
     }
 
-    /// Los mínimos son lo único que el motor consulta para colapsar, así que
-    /// declararlos mal se nota en toda la pantalla.
+    /// The minimums are the only thing the engine consults to collapse, so
+    /// declaring them wrong shows across the whole screen.
     #[test]
     fn el_browser_declara_su_minimo_y_puede_tomar_los_dos_roles() {
         let reg = KindRegistry::builtin();
-        let d = reg.get(&KindId::browser()).expect("browser está");
+        let d = reg.get(&KindId::browser()).expect("browser is there");
         assert_eq!(d.min, (20, 5));
         assert!(d.focusable && d.takes_keys && d.multi);
         assert_eq!(d.roles, &[RoleId::Active, RoleId::Target]);
     }
 
-    /// `tasks` es la franja de abajo: no toma foco, no toma teclas, y hay UNA.
+    /// `tasks` is the bottom strip: does not take focus, does not take
+    /// keys, and there is ONE.
     #[test]
     fn tasks_es_unico_y_no_toma_foco() {
         let reg = KindRegistry::builtin();
-        let d = reg.get(&KindId::new("tasks")).expect("tasks está");
+        let d = reg.get(&KindId::new("tasks")).expect("tasks is there");
         assert!(!d.focusable && !d.takes_keys && !d.multi);
         assert!(d.roles.is_empty());
     }
 
-    /// El sidebar no opta a ningún rol y no admite dos. Lo primero es lo que
-    /// impide que una copia acabe teniendo por destino una lista de discos.
+    /// The sidebar holds no role and does not allow two. The first is what
+    /// stops a copy from ending up targeting a list of drives.
     #[test]
     fn places_no_toma_roles_y_es_unico() {
         let reg = KindRegistry::builtin();
-        let d = reg.get(&KindId::new("places")).expect("places está");
+        let d = reg.get(&KindId::new("places")).expect("places is there");
         assert_eq!(d.min, (14, 5));
         assert!(d.focusable && d.takes_keys);
         assert!(!d.multi);
@@ -426,37 +443,41 @@ mod tests {
         }
     }
 
-    /// Un panel de un plugin SIN consentir no existe para el reparto.
+    /// A NON-consented plugin's panel does not exist for layout.
     ///
-    /// Mismo criterio que las columnas: el hueco no se coloca y su botón no
-    /// sale en la barra hasta que el lector aprueba y activa el plugin.
+    /// Same criterion as columns: the slot is not placed and its button
+    /// does not appear in the bar until the reader approves and enables
+    /// the plugin.
     #[test]
     fn un_panel_sin_consentir_no_aporta_kind() {
         let mut reg = KindRegistry::builtin();
         reg.insert_panels(&[panel_de_plugin("org.norte.git", "git", None, false)]);
         assert!(
             reg.get(&panel_kind_id("org.norte.git", "git")).is_none(),
-            "sin aprobar ni activar, no hay panel"
+            "not approved or enabled, no panel"
         );
     }
 
-    /// Consentido, el kind existe, lleva el prefijo que impide colisiones y
-    /// toma teclas.
+    /// Consented, the kind exists, carries the prefix that stops
+    /// collisions, and takes keys.
     #[test]
     fn un_panel_consentido_es_un_kind_con_su_prefijo() {
         let mut reg = KindRegistry::builtin();
         reg.insert_panels(&[panel_de_plugin("org.norte.git", "git", None, true)]);
         let decl = reg
             .get(&panel_kind_id("org.norte.git", "git"))
-            .expect("el panel está declarado");
+            .expect("the panel is declared");
         assert_eq!(decl.id.as_str(), "plugin:org.norte.git:git");
         assert!(decl.focusable && decl.takes_keys);
-        assert!(!decl.multi, "uno de cada panel, como los laterales de casa");
+        assert!(
+            !decl.multi,
+            "one of each panel, like the built-in side ones"
+        );
     }
 
-    /// El tamaño lo decide el MANIFIESTO cuando lo dice, y hay respaldo
-    /// cuando calla: un panel sin mínimos declarados no puede quedarse sin
-    /// ninguno, o el reparto lo colocaría en dos columnas.
+    /// The size is decided by the MANIFEST when it says so, and there is a
+    /// fallback when it does not: a panel with no declared minimums cannot
+    /// be left with none, or layout would place it in two columns.
     #[test]
     fn los_minimos_del_manifiesto_mandan_y_hay_respaldo() {
         let mut reg = KindRegistry::builtin();
@@ -466,51 +487,51 @@ mod tests {
         ]);
         assert_eq!(
             reg.get(&panel_kind_id("org.norte.git", "git"))
-                .expect("está")
+                .expect("is there")
                 .min,
             (40, 9)
         );
         assert_eq!(
             reg.get(&panel_kind_id("org.norte.otro", "x"))
-                .expect("está")
+                .expect("is there")
                 .min,
             (20, 4)
         );
     }
 
-    /// Lo aportado va DETRÁS de lo de serie.
+    /// Contributed ones go AFTER the built-in ones.
     ///
-    /// No es cosmético: la barra de paneles pinta en el orden del registro, y
-    /// que los de siempre estén donde siempre es lo que deja aprender la
-    /// posición de un botón con el dedo.
+    /// Not cosmetic: the panel bar paints in the registry's order, and the
+    /// usual ones being where they always are is what lets a button's
+    /// position be learned by the finger.
     #[test]
     fn lo_aportado_no_se_cuela_delante_de_lo_de_serie() {
-        let antes: Vec<String> = KindRegistry::builtin()
+        let before: Vec<String> = KindRegistry::builtin()
             .decls()
             .iter()
             .map(|d| d.id.as_str().to_owned())
             .collect();
         let mut reg = KindRegistry::builtin();
         reg.insert_panels(&[panel_de_plugin("org.norte.git", "git", None, true)]);
-        let despues: Vec<String> = reg
+        let after: Vec<String> = reg
             .decls()
             .iter()
             .map(|d| d.id.as_str().to_owned())
             .collect();
         assert_eq!(
-            &despues[..antes.len()],
-            &antes[..],
-            "los de serie, intactos"
+            &after[..before.len()],
+            &before[..],
+            "the built-in ones, untouched"
         );
         assert_eq!(
-            despues.last().map(String::as_str),
+            after.last().map(String::as_str),
             Some("plugin:org.norte.git:git")
         );
     }
 
-    /// `insert` REEMPLAZA: dos declaraciones del mismo kind harían que `get`
-    /// devolviera una y `min_of` la otra según el orden, que es la clase de
-    /// bug que solo aparece cuando alguien añade un kind.
+    /// `insert` REPLACES: two declarations of the same kind would make
+    /// `get` return one and `min_of` the other depending on order, which
+    /// is the kind of bug that only shows up when someone adds a kind.
     #[test]
     fn insertar_el_mismo_kind_dos_veces_reemplaza() {
         let mut reg = KindRegistry::builtin();

@@ -232,10 +232,10 @@ impl Estado {
     /// Closing never used to ask. `quit_needs_confirm`'s rustdoc already
     /// named a window's `confirm_quit_should_open` that did not exist.
     pub(super) fn pedir_salir(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let hay_trabajo = self.tasks.values().any(|t| !Self::terminal(t.vista.state));
+        let has_work = self.tasks.values().any(|t| !Self::terminal(t.vista.state));
         if !norte_frontend::settings::quit_needs_confirm(
             self.config.common.ui_confirm_quit,
-            hay_trabajo,
+            has_work,
         ) {
             self.nativo(crate::dto::NativeEffect::CloseWindow);
             return (self.aplicada(), Vec::new());
@@ -244,7 +244,7 @@ impl Estado {
         self.siguiente_modal += 1;
         // The body SAYS how much is running when there is any: a plain
         // "are you sure?" is not a question that can be answered.
-        let cuerpo = if hay_trabajo {
+        let body = if has_work {
             let n = self
                 .tasks
                 .values()
@@ -272,7 +272,7 @@ impl Estado {
                 asker: None,
                 deadline: None,
                 deadline_at_ms: None,
-                body: cuerpo,
+                body,
                 overflow_note: String::new(),
                 overflow_hostile: false,
                 choices: vec![
@@ -282,7 +282,7 @@ impl Estado {
                         // Closing with work running LOSES that work: the
                         // button says so with its shape, like the delete
                         // one.
-                        destructive: hay_trabajo,
+                        destructive: has_work,
                     },
                     DialogChoice {
                         id: "cancel".to_owned(),

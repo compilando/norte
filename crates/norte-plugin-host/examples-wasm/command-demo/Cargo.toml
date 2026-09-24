@@ -1,10 +1,11 @@
-# Guest WASM de ejemplo (M4-P2 T6): un command mínimo que demuestra la interfaz
-# `command::run` end-to-end + el enforcement host-side de `fs-read` (el guest
-# llama a `read-scoped` y el HOST decide según la capability declarada).
-# NO es miembro del workspace (ver `exclude` en el Cargo.toml raíz): compila a
-# wasm32-wasip2 con su propio lockfile y perfil.
-# Manifiesto AUTÓNOMO: empty `[workspace]` para que no herede el workspace del
-# host (compila a wasm32-wasip2 con su propio lockfile y perfil).
+# Example WASM guest (M4-P2 T6): a minimal command that demonstrates the
+# `command::run` interface end-to-end + `fs-read`'s host-side enforcement
+# (the guest calls `read-scoped` and the HOST decides based on the declared
+# capability).
+# NOT a workspace member (see `exclude` in the root Cargo.toml): compiles to
+# wasm32-wasip2 with its own lockfile and profile.
+# STANDALONE manifest: empty `[workspace]` so it does not inherit the host's
+# workspace (compiles to wasm32-wasip2 with its own lockfile and profile).
 [workspace]
 
 [package]
@@ -17,8 +18,8 @@ publish = false
 crate-type = ["cdylib"]
 
 [dependencies]
-# wit-bindgen GUEST-side: genera los bindings desde el MISMO WIT que el host
-# (symlink `wit` -> ../../wit). Comparte tren de Component Model con wasmtime 46.
+# wit-bindgen GUEST-side: generates bindings from the SAME WIT as the host
+# (symlink `wit` -> ../../wit). Shares Component Model release train with wasmtime 46.
 wit-bindgen = "0.46"
 
 [profile.release]

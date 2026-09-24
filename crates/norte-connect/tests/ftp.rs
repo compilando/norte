@@ -1,7 +1,8 @@
-//! Integración de `FtpConnector` contra libunftp **in-process** (sin Docker):
-//! política TLS de ADR 0015 F / issue #38 — `require` exige FTPS y valida el
-//! cert, `allow` degrada a plano CON aviso, `plain` es opt-in explícito — más
-//! login anónimo/password y rechazo de `auth = "key"`.
+//! `FtpConnector` integration against libunftp **in-process** (no Docker):
+//! ADR 0015 F / issue #38's TLS policy — `require` demands FTPS and
+//! validates the cert, `allow` degrades to plain WITH a warning, `plain` is
+//! an explicit opt-in — plus anonymous/password login and rejecting
+//! `auth = "key"`.
 
 use std::path::Path;
 use std::time::Duration;
@@ -10,10 +11,10 @@ use libunftp::ServerBuilder;
 use norte_connect::{AuthMethod, ConnectError, ConnectionSpec, FtpConnector, Secret, TlsMode};
 use unftp_sbe_fs::Filesystem;
 
-/// Cert self-signed efímero para 127.0.0.1 → (cert.pem, key.pem) en `dir`.
+/// Ephemeral self-signed cert for 127.0.0.1 → (cert.pem, key.pem) in `dir`.
 fn cert_de_test(dir: &Path) -> (std::path::PathBuf, std::path::PathBuf) {
     let cert = rcgen::generate_simple_self_signed(vec!["127.0.0.1".to_string()])
-        .expect("generar cert de test");
+        .expect("generate test cert");
     let cert_path = dir.join("cert.pem");
     let key_path = dir.join("key.pem");
     std::fs::write(&cert_path, cert.cert.pem()).unwrap();
@@ -21,11 +22,11 @@ fn cert_de_test(dir: &Path) -> (std::path::PathBuf, std::path::PathBuf) {
     (cert_path, key_path)
 }
 
-/// Arranca libunftp in-process (anónimo, backend tempdir) en puerto efímero.
-/// Con `ftps = Some((cert, key))` exige AUTH TLS antes del login.
+/// Starts libunftp in-process (anonymous, tempdir backend) on an ephemeral
+/// port. With `ftps = Some((cert, key))` it requires AUTH TLS before login.
 async fn servidor(base: &Path, ftps: Option<(std::path::PathBuf, std::path::PathBuf)>) -> u16 {
     let home = base.to_path_buf();
-    let probe = std::net::TcpListener::bind("127.0.0.1:0").expect("bind efímero");
+    let probe = std::net::TcpListener::bind("127.0.0.1:0").expect("ephemeral bind");
     let port = probe.local_addr().expect("addr").port();
     drop(probe);
 
@@ -38,13 +39,14 @@ async fn servidor(base: &Path, ftps: Option<(std::path::PathBuf, std::path::Path
     }
     let server = builder.build().expect("build server");
     tokio::spawn(async move {
-        // Panic con causa: si el puerto efímero se lo robó otro proceso en la
-        // ventana bind-then-drop, el diagnóstico real es este, no el timeout.
+        // Panic with a cause: if another process stole the ephemeral port in
+        // the bind-then-drop window, this is the real diagnosis, not the
+        // timeout.
         if let Err(e) = server.listen(format!("127.0.0.1:{port}")).await {
-            panic!("listen del ftp de test: {e}");
+            panic!("test ftp listen: {e}");
         }
     });
-    // Espera activa a que el listener esté vivo.
+    // Busy-wait until the listener is alive.
     for _ in 0..100 {
         if tokio::net::TcpStream::connect(("127.0.0.1", port))
             .await
@@ -54,17 +56,17 @@ async fn servidor(base: &Path, ftps: Option<(std::path::PathBuf, std::path::Path
         }
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
-    panic!("el servidor ftp in-process no llegó a escuchar");
+    panic!("the in-process ftp server never started listening");
 }
 
-/// Servidor FTP FALSO (TCP crudo): responde el saludo, `331` a USER y la
-/// línea `pass_reply` a PASS. Permite simular servidores hostiles/estrictos
-/// que libunftp no deja (echo de la password, 530...).
+/// FAKE FTP server (raw TCP): responds with the greeting, `331` to USER and
+/// the `pass_reply` line to PASS. Lets us simulate hostile/strict servers
+/// that libunftp does not allow (echoing the password, 530...).
 async fn servidor_falso(pass_reply: &'static str) -> u16 {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
         .await
-        .expect("bind del servidor falso");
+        .expect("fake server bind");
     let port = listener.local_addr().expect("addr").port();
     tokio::spawn(async move {
         while let Ok((stream, _)) = listener.accept().await {
@@ -106,20 +108,21 @@ fn secret_anon() -> Secret {
     Secret::new("anonymous".into())
 }
 
-/// `unwrap_err` no vale: el stream de suppaftp no implementa `Debug`.
+/// `unwrap_err` is no good: suppaftp's stream does not implement `Debug`.
 async fn connect_err(
     conn: &FtpConnector,
     spec: &ConnectionSpec,
     secret: Option<&Secret>,
 ) -> ConnectError {
     match conn.connect(spec, secret).await {
-        Ok(_) => panic!("esperaba un error de connect"),
+        Ok(_) => panic!("expected a connect error"),
         Err(e) => e,
     }
 }
 
-/// FTPS de verdad: `tls = "require"` + CA extra (self-signed del servidor).
-/// El login viaja YA cifrado y la sesión queda operativa (pwd responde).
+/// Real FTPS: `tls = "require"` + extra CA (the server's self-signed one).
+/// Login travels ALREADY encrypted and the session stays operational (pwd
+/// responds).
 #[tokio::test]
 async fn ftps_require_conecta_y_valida_cert() {
     let dir = tempfile::tempdir().unwrap();
@@ -132,36 +135,41 @@ async fn ftps_require_conecta_y_valida_cert() {
         .connect(&spec(port, TlsMode::Require), Some(&secret_anon()))
         .await
         .unwrap();
-    assert!(!out.tls_degraded, "require jamás degrada");
-    let pwd = out.stream.pwd().await.expect("sesión operativa tras FTPS");
+    assert!(!out.tls_degraded, "require never degrades");
+    let pwd = out
+        .stream
+        .pwd()
+        .await
+        .expect("session operational after FTPS");
     assert_eq!(pwd, "/");
 }
 
-/// `require` contra un cert que NO está en las raíces (ni en la CA extra):
-/// la validación rustls lo tumba — jamás se degrada ni se loguea en claro.
+/// `require` against a cert that is NOT in the roots (nor in the extra CA):
+/// rustls validation takes it down — never degrades or logs in the clear.
 #[tokio::test]
 async fn require_rechaza_cert_desconocido() {
     let dir = tempfile::tempdir().unwrap();
     let (cert, key) = cert_de_test(dir.path());
     let port = servidor(dir.path(), Some((cert, key))).await;
     let conn = FtpConnector {
-        extra_root_ca: None, // sin la CA del self-signed
+        extra_root_ca: None, // without the self-signed's CA
     };
     let err = connect_err(&conn, &spec(port, TlsMode::Require), Some(&secret_anon())).await;
-    assert!(matches!(err, ConnectError::Tls(_)), "fue {err:?}");
+    assert!(matches!(err, ConnectError::Tls(_)), "was {err:?}");
 }
 
-/// `require` contra un servidor SIN TLS: error, no fallback silencioso.
+/// `require` against a server WITHOUT TLS: error, no silent fallback.
 #[tokio::test]
 async fn require_contra_servidor_sin_tls_falla() {
     let dir = tempfile::tempdir().unwrap();
     let port = servidor(dir.path(), None).await;
     let conn = FtpConnector::default();
     let err = connect_err(&conn, &spec(port, TlsMode::Require), Some(&secret_anon())).await;
-    assert!(matches!(err, ConnectError::Tls(_)), "fue {err:?}");
+    assert!(matches!(err, ConnectError::Tls(_)), "was {err:?}");
 }
 
-/// `allow` degrada a plano (con aviso por tracing) si el servidor no da TLS.
+/// `allow` degrades to plain (with a tracing warning) if the server gives no
+/// TLS.
 #[tokio::test]
 async fn allow_degrada_a_plano_si_no_hay_tls() {
     let dir = tempfile::tempdir().unwrap();
@@ -171,15 +179,19 @@ async fn allow_degrada_a_plano_si_no_hay_tls() {
         .connect(&spec(port, TlsMode::Allow), Some(&secret_anon()))
         .await
         .unwrap();
-    // #44: la degradación se SEÑALIZA (el core la surfacea al usuario).
+    // #44: the degradation is SIGNALED (the core surfaces it to the user).
     assert!(
         out.tls_degraded,
-        "allow cayó a claro → debe marcar la degradación"
+        "allow fell back to plain → must flag the degradation"
     );
-    assert_eq!(out.stream.pwd().await.expect("sesión plana operativa"), "/");
+    assert_eq!(
+        out.stream.pwd().await.expect("plain session operational"),
+        "/"
+    );
 }
 
-/// `plain` es opt-in explícito: conecta en claro (con aviso por tracing).
+/// `plain` is an explicit opt-in: connects in the clear (with a tracing
+/// warning).
 #[tokio::test]
 async fn plain_es_optin_explicito() {
     let dir = tempfile::tempdir().unwrap();
@@ -189,12 +201,15 @@ async fn plain_es_optin_explicito() {
         .connect(&spec(port, TlsMode::Plain), Some(&secret_anon()))
         .await
         .unwrap();
-    // plain es claro por elección, NO una degradación (#44).
-    assert!(!out.tls_degraded, "plain no es una degradación");
-    assert_eq!(out.stream.pwd().await.expect("sesión plana operativa"), "/");
+    // plain is plain by choice, NOT a degradation (#44).
+    assert!(!out.tls_degraded, "plain is not a degradation");
+    assert_eq!(
+        out.stream.pwd().await.expect("plain session operational"),
+        "/"
+    );
 }
 
-/// Password incorrecta (530) → `AuthFailed { user, host }`, sin secreto.
+/// Wrong password (530) → `AuthFailed { user, host }`, no secret.
 #[tokio::test]
 async fn password_incorrecta_es_auth_failed() {
     let port = servidor_falso("530 Not logged in").await;
@@ -202,23 +217,23 @@ async fn password_incorrecta_es_auth_failed() {
     let err = connect_err(
         &conn,
         &spec(port, TlsMode::Plain),
-        Some(&Secret::new("mala".into())),
+        Some(&Secret::new("wrong".into())),
     )
     .await;
     let ConnectError::AuthFailed { user, host } = &err else {
-        panic!("esperaba AuthFailed, fue {err:?}");
+        panic!("expected AuthFailed, was {err:?}");
     };
     assert_eq!(user, "anonymous");
     assert_eq!(host, "127.0.0.1");
-    assert!(!format!("{err}").contains("mala"));
+    assert!(!format!("{err}").contains("wrong"));
 }
 
-/// Un servidor HOSTIL que ECOA la password en su respuesta a PASS: el echo
-/// jamás llega al error (que acabaría en logs — regla 10). El servidor ya
-/// conocía el secreto; el sink a proteger es el log local.
+/// A HOSTILE server that ECHOES the password in its response to PASS: the
+/// echo never reaches the error (which would end up in logs — rule 10). The
+/// server already knew the secret; the sink to protect is the local log.
 #[tokio::test]
 async fn echo_del_servidor_no_llega_al_error() {
-    let port = servidor_falso("500 password 'hunter2-ftp' rechazada por capricho").await;
+    let port = servidor_falso("500 password 'hunter2-ftp' rejected on a whim").await;
     let conn = FtpConnector::default();
     let err = connect_err(
         &conn,
@@ -229,44 +244,45 @@ async fn echo_del_servidor_no_llega_al_error() {
     let msg = format!("{err}");
     assert!(
         !msg.contains("hunter2-ftp"),
-        "el error interpola el body del servidor: {msg}"
+        "the error interpolates the server's body: {msg}"
     );
     assert!(
-        !msg.contains("capricho"),
-        "el error interpola el body del servidor: {msg}"
+        !msg.contains("whim"),
+        "the error interpolates the server's body: {msg}"
     );
 }
 
-/// `allow` + servidor CON TLS pero cert inválido: fail-closed (señal de MITM
-/// activo), NO degradar a plano con las mismas credenciales. La degradación
-/// legítima es solo cuando el servidor RECHAZA el comando AUTH.
+/// `allow` + server WITH TLS but an invalid cert: fail-closed (signal of an
+/// active MITM), do NOT degrade to plain with the same credentials. The
+/// legitimate degradation is only when the server REJECTS the AUTH command.
 #[tokio::test]
 async fn allow_con_cert_invalido_falla_cerrado() {
     let dir = tempfile::tempdir().unwrap();
     let (cert, key) = cert_de_test(dir.path());
     let port = servidor(dir.path(), Some((cert, key))).await;
     let conn = FtpConnector {
-        extra_root_ca: None, // el self-signed NO valida
+        extra_root_ca: None, // the self-signed one does NOT validate
     };
     let err = connect_err(&conn, &spec(port, TlsMode::Allow), Some(&secret_anon())).await;
     assert!(
         matches!(err, ConnectError::Tls(_)),
-        "debe fallar cerrado, no degradar: fue {err:?}"
+        "must fail closed, not degrade: was {err:?}"
     );
 }
 
-/// `extra_root_ca` corrupta = error LOCAL de config, antes de tocar la red
-/// (un typo en la CA no puede acabar mandando credenciales en claro).
+/// A corrupt `extra_root_ca` = LOCAL config error, before touching the
+/// network (a typo in the CA must not end up sending credentials in the
+/// clear).
 #[tokio::test]
 async fn ca_extra_corrupta_es_error_local() {
     let dir = tempfile::tempdir().unwrap();
     let ca = dir.path().join("rota.pem");
-    std::fs::write(&ca, "esto no es PEM").unwrap();
+    std::fs::write(&ca, "this is not PEM").unwrap();
     let conn = FtpConnector {
         extra_root_ca: Some(ca),
     };
-    // Puerto 1 cerrado: si tocara la red antes de validar la CA, el error
-    // sería Ftp (conexión), no Tls (config).
+    // Closed port 1: if it touched the network before validating the CA, the
+    // error would be Ftp (connection), not Tls (config).
     let spec = ConnectionSpec {
         url: "ftp://u@127.0.0.1:1".into(),
         auth: AuthMethod::Password,
@@ -275,10 +291,10 @@ async fn ca_extra_corrupta_es_error_local() {
         ..Default::default()
     };
     let err = connect_err(&conn, &spec, Some(&Secret::new("x".into()))).await;
-    assert!(matches!(err, ConnectError::Tls(_)), "fue {err:?}");
+    assert!(matches!(err, ConnectError::Tls(_)), "was {err:?}");
 }
 
-/// `auth = "agent"` en FTP = anónimo (convención guest), sin secreto.
+/// `auth = "agent"` on FTP = anonymous (guest convention), no secret.
 #[tokio::test]
 async fn agent_es_anonimo_sin_secreto() {
     let dir = tempfile::tempdir().unwrap();
@@ -292,15 +308,17 @@ async fn agent_es_anonimo_sin_secreto() {
         ..Default::default()
     };
     let mut out = conn.connect(&spec, None).await.unwrap();
-    assert_eq!(out.stream.pwd().await.expect("sesión anónima"), "/");
+    assert_eq!(out.stream.pwd().await.expect("anonymous session"), "/");
 }
 
-/// `auth = "key"` no existe en FTP: error de config local, sin tocar la red.
+/// `auth = "key"` does not exist in FTP: local config error, without
+/// touching the network.
 #[tokio::test]
 async fn auth_key_no_aplica_a_ftp() {
     let conn = FtpConnector::default();
     let spec = ConnectionSpec {
-        // Puerto 1 cerrado: si el connect tocara la red, el error sería Ftp.
+        // Closed port 1: if connect touched the network, the error would be
+        // Ftp.
         url: "ftp://u@127.0.0.1:1".into(),
         auth: AuthMethod::Key,
         key: Some("/no/importa".into()),
@@ -308,10 +326,11 @@ async fn auth_key_no_aplica_a_ftp() {
         ..Default::default()
     };
     let err = connect_err(&conn, &spec, None).await;
-    assert!(matches!(err, ConnectError::Config(_)), "fue {err:?}");
+    assert!(matches!(err, ConnectError::Config(_)), "was {err:?}");
 }
 
-/// El conector FTP no acepta sftp:// (y viceversa, cubierto en ssh.rs).
+/// The FTP connector does not accept sftp:// (and vice versa, covered in
+/// ssh.rs).
 #[tokio::test]
 async fn scheme_no_ftp_es_error() {
     let conn = FtpConnector::default();
@@ -323,5 +342,5 @@ async fn scheme_no_ftp_es_error() {
         ..Default::default()
     };
     let err = connect_err(&conn, &spec, None).await;
-    assert!(matches!(err, ConnectError::InvalidUrl(_)), "fue {err:?}");
+    assert!(matches!(err, ConnectError::InvalidUrl(_)), "was {err:?}");
 }

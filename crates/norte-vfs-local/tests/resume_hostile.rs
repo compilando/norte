@@ -1,15 +1,17 @@
-//! El staging ESTABLE del camino POR RUTA es un nombre PREDECIBLE (#298).
+//! The STABLE staging of the BY-PATH route is a PREDICTABLE name (#298).
 //!
-//! `.norte-partial.` más el sha256-128 del nombre final: lo calcula cualquiera
-//! que sepa a dónde vamos a copiar. Así que lo que hay al otro lado de ese
-//! nombre puede haberlo puesto otro, y reanudar sobre ello publica bajo el
-//! nombre legítimo un inodo ajeno —con su contenido, su dueño y sus permisos—
-//! o anexa nuestros bytes al fichero de una víctima.
+//! `.norte-partial.` plus the final name's sha256-128: anyone who knows
+//! where we're about to copy to can compute it. So whatever's on the
+//! other side of that name may have been put there by someone else, and
+//! resuming over it publishes under the legitimate name a foreign inode —
+//! with its content, its owner and its permissions — or appends our bytes
+//! to a victim's file.
 //!
-//! Es el mismo agujero que #297 cerró para el camino CONFINADO
-//! (`tests/confined.rs`), y aquí llevaba abierto desde ADR 0012 con menos
-//! defensas: la apertura era `append(true).create(true)`, que sigue enlaces,
-//! no mira el tipo, ni `st_nlink`, ni el dueño, y crea con `0o666`.
+//! It's the same hole #297 closed for the CONFINED path
+//! (`tests/confined.rs`), and here it had been open since ADR 0012 with
+//! fewer defenses: the open was `append(true).create(true)`, which
+//! follows links, checks neither the type, nor `st_nlink`, nor the owner,
+//! and creates with `0o666`.
 #![cfg(unix)]
 
 use std::os::unix::ffi::OsStrExt as _;
@@ -28,11 +30,12 @@ fn provider() -> (LocalProvider, VPath, std::path::PathBuf) {
 }
 
 fn child(base: &VPath, name: &[u8]) -> VPath {
-    base.join(Segment::new(name.to_vec()).expect("segmento válido"))
+    base.join(Segment::new(name.to_vec()).expect("valid segment"))
 }
 
-/// El nombre del staging, tal como lo calcula quien sepa el nombre de destino.
-fn nombre_de_staging(final_name: &[u8]) -> String {
+/// The staging's name, exactly as computed by anyone who knows the
+/// destination name.
+fn staging_name(final_name: &[u8]) -> String {
     use sha2::{Digest as _, Sha256};
     let d = Sha256::digest(final_name);
     let mut hex = String::new();
@@ -43,127 +46,130 @@ fn nombre_de_staging(final_name: &[u8]) -> String {
     format!(".norte-partial.{hex}")
 }
 
-/// Un FICHERO REGULAR plantado con el nombre del staging no se reanuda.
+/// A REGULAR FILE planted with the staging's name isn't resumed.
 ///
-/// Se le pone un hardlink para que «este inodo tiene otro nombre» sea
-/// observable sin depender del uid: el test corre como el mismo usuario que
-/// plantó el fichero, así que el dueño no distingue nada aquí.
+/// It's given a hardlink so "this inode has another name" is observable
+/// without depending on the uid: the test runs as the same user who
+/// planted the file, so the owner distinguishes nothing here.
 #[tokio::test]
-async fn un_staging_plantado_por_otro_no_se_reanuda_por_ruta() {
+async fn a_staging_planted_by_someone_else_is_not_resumed_by_path() {
     let (p, root, base) = provider();
-    let plantado = base.join(nombre_de_staging(b"grande.bin"));
-    std::fs::write(&plantado, b"CONTENIDO AJENO").expect("plantado");
-    std::fs::hard_link(&plantado, base.join("lo-mio.txt")).expect("hardlink");
+    let planted = base.join(staging_name(b"big.bin"));
+    std::fs::write(&planted, b"FOREIGN CONTENT").expect("planted");
+    std::fs::hard_link(&planted, base.join("mine.txt")).expect("hardlink");
 
-    let Err(err) = p.open_resumable(&child(&root, b"grande.bin")).await else {
-        panic!("reanudó sobre un fichero que no es suyo");
+    let Err(err) = p.open_resumable(&child(&root, b"big.bin")).await else {
+        panic!("resumed over a file that isn't ours");
     };
     assert!(
         matches!(err, Error::Conflict { .. }),
-        "tiene que ser un conflicto, no un error de E/S: {err:?}"
+        "it has to be a conflict, not an I/O error: {err:?}"
     );
     assert_eq!(
-        std::fs::read(&plantado).expect("sigue"),
-        b"CONTENIDO AJENO",
-        "y no se le anexó nada"
+        std::fs::read(&planted).expect("still there"),
+        b"FOREIGN CONTENT",
+        "and nothing got appended to it"
     );
 }
 
-/// Un SYMLINK con el nombre del staging tampoco: seguirlo anexa nuestros bytes
-/// al fichero de la víctima y luego el `commit` lo publica bajo el nombre
-/// legítimo.
+/// A SYMLINK with the staging's name doesn't work either: following it
+/// appends our bytes to the victim's file and then `commit` publishes it
+/// under the legitimate name.
 #[tokio::test]
-async fn un_symlink_con_el_nombre_del_staging_no_se_sigue() {
+async fn a_symlink_with_the_stagings_name_is_not_followed() {
     let (p, root, base) = provider();
-    let victima = base.join("victima.txt");
-    std::fs::write(&victima, b"DE LA VICTIMA").expect("víctima");
-    std::os::unix::fs::symlink(&victima, base.join(nombre_de_staging(b"grande.bin")))
-        .expect("symlink");
+    let victim = base.join("victim.txt");
+    std::fs::write(&victim, b"FROM THE VICTIM").expect("victim");
+    std::os::unix::fs::symlink(&victim, base.join(staging_name(b"big.bin"))).expect("symlink");
 
-    let Err(err) = p.open_resumable(&child(&root, b"grande.bin")).await else {
-        panic!("siguió un enlace hasta el fichero de otro");
+    let Err(err) = p.open_resumable(&child(&root, b"big.bin")).await else {
+        panic!("followed a link to someone else's file");
     };
     assert!(
         !matches!(err, Error::NotFound),
-        "el enlace existe: el error tiene que hablar de él, no de un ausente: {err:?}"
+        "the link exists: the error has to talk about it, not about something missing: {err:?}"
     );
     assert_eq!(
-        std::fs::read(&victima).expect("sigue"),
-        b"DE LA VICTIMA",
-        "y la víctima intacta"
+        std::fs::read(&victim).expect("still there"),
+        b"FROM THE VICTIM",
+        "and the victim untouched"
     );
 }
 
-/// Un FIFO con el nombre del staging no cuelga el abrir: sin `O_NONBLOCK` el
-/// `open` se queda esperando un lector PARA SIEMPRE dentro del pool de
-/// bloqueo, y el token de cancelación no puede interrumpir un `open` en curso.
+/// A FIFO with the staging's name doesn't hang the open: without
+/// `O_NONBLOCK` the `open` waits for a reader FOREVER inside the blocking
+/// pool, and the cancellation token can't interrupt an in-progress `open`.
 #[tokio::test]
-async fn un_fifo_con_el_nombre_del_staging_no_cuelga_el_abrir_por_ruta() {
+async fn a_fifo_with_the_stagings_name_does_not_hang_the_open_by_path() {
     let (p, root, base) = provider();
-    let fifo = base.join(nombre_de_staging(b"grande.bin"));
+    let fifo = base.join(staging_name(b"big.bin"));
     let c = std::ffi::CString::new(fifo.as_os_str().as_bytes()).expect("cstring");
-    // SAFETY: `c` es una CString viva y NUL-terminada; `mkfifo` no requiere
-    // privilegio y solo escribe en el sistema de ficheros.
+    // SAFETY: `c` is a live, NUL-terminated CString; `mkfifo` requires no
+    // privilege and only writes to the filesystem.
     let rc = unsafe { libc::mkfifo(c.as_ptr(), 0o666) };
     assert_eq!(rc, 0, "mkfifo: {}", std::io::Error::last_os_error());
 
     let r = tokio::time::timeout(
         std::time::Duration::from_secs(10),
-        p.open_resumable(&child(&root, b"grande.bin")),
+        p.open_resumable(&child(&root, b"big.bin")),
     )
     .await
-    .expect("el abrir tiene que volver, no colgarse");
-    assert!(r.is_err(), "un FIFO no es un staging");
+    .expect("the open has to return, not hang");
+    assert!(r.is_err(), "a FIFO is not a staging");
 }
 
-/// El staging se crea `0o600` y no `0o666`: mientras dure es nuestro y de
-/// nadie más.
+/// The staging is created `0o600` and not `0o666`: for as long as it
+/// lasts it's ours and nobody else's.
 #[tokio::test]
-async fn el_staging_por_ruta_se_crea_solo_para_nosotros() {
+async fn the_staging_by_path_is_created_only_for_us() {
     let (p, root, base) = provider();
     let (mut sink, _) = p
-        .open_resumable(&child(&root, b"grande.bin"))
+        .open_resumable(&child(&root, b"big.bin"))
         .await
-        .expect("abre");
-    sink.write(Bytes::from_static(b"abc")).await.expect("mitad");
-    sink.keep().await.expect("conserva");
+        .expect("opens");
+    sink.write(Bytes::from_static(b"abc")).await.expect("half");
+    sink.keep().await.expect("keeps");
 
-    let modo = std::fs::metadata(base.join(nombre_de_staging(b"grande.bin")))
+    let mode = std::fs::metadata(base.join(staging_name(b"big.bin")))
         .expect("staging")
         .permissions()
         .mode()
         & 0o777;
-    assert_eq!(modo, 0o600, "un parcial de otro no se escribe ni se lee");
+    assert_eq!(
+        mode, 0o600,
+        "someone else's partial is neither written nor read"
+    );
 }
 
-/// Y el camino normal sigue funcionando: un staging que creamos nosotros se
-/// reanuda. La defensa no puede costar la operación que existe para proteger.
+/// And the normal path still works: a staging we created gets resumed.
+/// The defense can't cost the operation it exists to protect.
 #[tokio::test]
-async fn un_staging_propio_si_se_reanuda_por_ruta() {
+async fn a_staging_of_our_own_is_resumed_by_path() {
     let (p, root, _base) = provider();
-    let destino = child(&root, b"grande.bin");
-    let (mut sink, ya) = p.open_resumable(&destino).await.expect("abre");
-    assert_eq!(ya, 0);
-    sink.write(Bytes::from_static(b"abc")).await.expect("mitad");
-    sink.keep().await.expect("conserva");
+    let dest = child(&root, b"big.bin");
+    let (mut sink, already) = p.open_resumable(&dest).await.expect("opens");
+    assert_eq!(already, 0);
+    sink.write(Bytes::from_static(b"abc")).await.expect("half");
+    sink.keep().await.expect("keeps");
 
-    let (_sink, ya) = p.open_resumable(&destino).await.expect("reabre lo suyo");
-    assert_eq!(ya, 3, "el nuestro pasa la comprobación y se continúa");
+    let (_sink, already) = p.open_resumable(&dest).await.expect("reopens its own");
+    assert_eq!(already, 3, "ours passes the check and gets continued");
 }
 
-/// Verificar el prefijo de un fichero que NO es el que se va a continuar no
-/// verifica nada: el digest de un parcial ajeno no se devuelve, y el engine
-/// degrada a `Length` en vez de creerse un prefijo que no es suyo.
+/// Verifying the prefix of a file that is NOT the one about to be
+/// continued verifies nothing: a foreign partial's digest isn't returned,
+/// and the engine degrades to `Length` instead of trusting a prefix that
+/// isn't its own.
 #[tokio::test]
-async fn el_digest_de_un_parcial_ajeno_no_se_devuelve() {
+async fn the_digest_of_a_foreign_partial_is_not_returned() {
     let (p, root, base) = provider();
-    let plantado = base.join(nombre_de_staging(b"grande.bin"));
-    std::fs::write(&plantado, b"CONTENIDO AJENO").expect("plantado");
-    std::fs::hard_link(&plantado, base.join("lo-mio.txt")).expect("hardlink");
+    let planted = base.join(staging_name(b"big.bin"));
+    std::fs::write(&planted, b"FOREIGN CONTENT").expect("planted");
+    std::fs::hard_link(&planted, base.join("mine.txt")).expect("hardlink");
 
     let d = p
-        .partial_digest(&child(&root, b"grande.bin"), 3)
+        .partial_digest(&child(&root, b"big.bin"), 3)
         .await
-        .expect("no es un error de E/S");
-    assert!(d.is_none(), "no es nuestro parcial: no hay digest que dar");
+        .expect("not an I/O error");
+    assert!(d.is_none(), "not our partial: there's no digest to give");
 }

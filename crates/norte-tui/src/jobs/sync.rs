@@ -556,7 +556,7 @@ mod sync_tests {
     /// as `include` — paths RELATIVE to the root, which is what the core's
     /// filter compares.
     #[test]
-    fn el_panel_siembra_include_con_lo_marcado() {
+    fn the_panel_seeds_include_with_whats_marked() {
         let mut app = app_with_rows(3);
         mark(&mut app, 1);
         mark(&mut app, 2);
@@ -573,7 +573,7 @@ mod sync_tests {
     /// With no marks the plan covers the WHOLE tree, and that's the ABSENCE
     /// of the field: an empty list would mean a zero-step plan.
     #[test]
-    fn sin_marcas_el_plan_cubre_el_arbol_entero() {
+    fn with_no_marks_the_plan_covers_the_whole_tree() {
         let mut app = app_with_rows(3);
         let params = app.request_sync(SyncMode::Update).expect("params");
         assert!(params.include.is_none());
@@ -583,7 +583,7 @@ mod sync_tests {
     /// anything: `Tab` changes it and both roots swap entirely. It's half of
     /// what the reader approves.
     #[test]
-    fn el_lado_activo_decide_el_sentido_y_nada_se_infiere() {
+    fn the_active_side_decides_the_direction_and_nothing_is_inferred() {
         let mut app = app_with_rows(1);
         let a = app.request_sync(SyncMode::Update).expect("params").clone();
         app.compare.as_mut().expect("panel").pane.swap_active_side();
@@ -598,7 +598,7 @@ mod sync_tests {
 
     /// The mode travels as is: `m` plans a mirror, which also DELETES.
     #[test]
-    fn el_modo_viaja_tal_cual() {
+    fn the_mode_travels_unchanged() {
         let mut app = app_with_rows(1);
         assert_eq!(
             app.request_sync(SyncMode::Mirror).expect("params").mode,
@@ -611,7 +611,7 @@ mod sync_tests {
     /// would show a plan nobody can approve. The phrase is actionable — it
     /// says to start with `--daemon` — not an "unsupported".
     #[test]
-    fn sin_journal_no_se_planifica_y_se_dice_como_arreglarlo() {
+    fn with_no_journal_it_does_not_plan_and_says_how_to_fix_it() {
         let mut app = app_with_rows(1);
         app.backend_journalled = false;
         assert!(app.request_sync(SyncMode::Update).is_none());
@@ -624,7 +624,7 @@ mod sync_tests {
     /// Both roots in the same place get refused here, without a round trip
     /// to the daemon — same as when comparing.
     #[test]
-    fn las_dos_raices_en_el_mismo_sitio_se_niegan_aqui() {
+    fn both_roots_in_the_same_place_are_refused_here() {
         let mut app = App::new(
             Pane::new(vp("file:///home"), Vec::new()),
             Pane::new(vp("file:///home"), Vec::new()),
@@ -638,7 +638,7 @@ mod sync_tests {
     /// nobody presses out of habit is required — the same criterion as the
     /// TOFU dialogs and approving an agent op.
     #[test]
-    fn enter_no_aprueba_una_sincronizacion() {
+    fn enter_does_not_approve_a_sync() {
         assert_eq!(
             sync_key(M::NONE, KeyCode::Enter, false, false, false),
             SyncKey::Ignore
@@ -652,7 +652,7 @@ mod sync_tests {
     /// The default key is NOT a function key with a modifier (#159: under
     /// tmux none arrives). Inside the diff panel they're bare letters.
     #[test]
-    fn las_teclas_del_panel_no_son_de_funcion_con_modificador() {
+    fn the_panels_keys_are_not_function_keys_with_a_modifier() {
         use crate::jobs::{CompareKey, compare_key};
         for (code, mode) in [
             (KeyCode::Char('s'), SyncMode::Update),
@@ -676,7 +676,7 @@ mod sync_tests {
     /// the question, and EVERYTHING else cancels it. Leaving it up while the
     /// cursor moves underneath is how a later `y` approves something else.
     #[test]
-    fn la_segunda_pregunta_reduce_el_teclado() {
+    fn the_second_question_shrinks_the_keyboard() {
         assert_eq!(
             sync_key(M::NONE, KeyCode::Char('y'), false, false, true),
             SyncKey::ConfirmYes
@@ -703,7 +703,7 @@ mod sync_tests {
     /// the Task's state. Without this, a downed daemon leaves the reader
     /// locked in the screen from which writes get approved.
     #[test]
-    fn el_segundo_esc_cierra_pase_lo_que_pase() {
+    fn the_second_esc_closes_no_matter_what() {
         assert_eq!(
             sync_key(M::NONE, KeyCode::Esc, true, false, false),
             SyncKey::CancelTask
@@ -718,7 +718,7 @@ mod sync_tests {
     /// one reaches the screen as its own id, and this panel is where what's
     /// about to be deleted gets read.
     #[test]
-    fn cada_cadena_del_panel_existe_en_ambos_locales() {
+    fn every_panel_string_exists_in_both_locales() {
         for key in [
             "sync-title",
             "sync-mode-update",
@@ -865,7 +865,7 @@ mod sync_tests {
     /// since that leaves `run != Running` the next `Esc` half-cancelled it
     /// thinking it was closing a failure.
     #[test]
-    fn aprobar_dos_veces_no_manda_el_plan_dos_veces() {
+    fn approving_twice_does_not_send_the_plan_twice() {
         let mut app = app_with_ready_plan();
         approve_sync(&mut app);
         assert!(
@@ -892,7 +892,7 @@ mod sync_tests {
     /// overwriting the line that says what can be undone with "the plan
     /// failed" destroys the only thing left written about it.
     #[test]
-    fn aprobar_un_plan_ya_aplicado_no_hace_nada() {
+    fn approving_an_already_applied_plan_does_nothing() {
         let mut app = app_with_ready_plan();
         {
             let view = app.sync.as_mut().expect("panel");
@@ -920,7 +920,7 @@ mod sync_tests {
     /// deleted..." armed on screen, waiting for a `y` that no longer knew
     /// what it was answering.
     #[test]
-    fn un_modificador_tambien_cancela_la_segunda_pregunta() {
+    fn a_modifier_also_cancels_the_second_question() {
         for (mods, code) in [
             (M::CONTROL, KeyCode::Char('r')),
             (M::ALT, KeyCode::Char('e')),
@@ -943,7 +943,7 @@ mod sync_tests {
     /// sync that motivated it stops is how a later `y` approves something
     /// else.
     #[test]
-    fn cancelar_suelta_la_segunda_pregunta() {
+    fn cancelling_drops_the_second_question() {
         let mut app = app_with_ready_plan();
         {
             let view = app.sync.as_mut().expect("panel");
@@ -964,7 +964,7 @@ mod sync_tests {
     /// The second `Esc` closes and CANCELS: remotely, the daemon would keep
     /// applying for a panel that no longer exists.
     #[test]
-    fn el_segundo_esc_cierra_y_cancela_la_task() {
+    fn the_second_esc_closes_and_cancels_the_task() {
         let mut app = app_with_ready_plan();
         app.sync.as_mut().expect("panel").cancel_requested = true;
         let (run, _tx, _prog) = run_sync(norte_proto::TaskState::Running, true);
@@ -979,7 +979,7 @@ mod sync_tests {
     /// A batch with the panel already closed cancels the Task instead of
     /// continuing to receive steps nobody is going to look at.
     #[test]
-    fn un_lote_con_el_panel_cerrado_cosecha_el_run() {
+    fn a_batch_with_the_panel_closed_harvests_the_run() {
         let mut app = app_with_rows(1);
         app.sync = None;
         let (run, _tx, _prog) = run_sync(norte_proto::TaskState::Running, false);
@@ -994,7 +994,7 @@ mod sync_tests {
     /// The plan's stream ending leaves `rx` at `None`: a closed channel
     /// would return `None` in a loop and the `select!` arm would spin.
     #[test]
-    fn el_fin_del_flujo_desarma_el_brazo_del_plan() {
+    fn the_streams_end_disarms_the_plans_arm() {
         let mut app = app_with_rows(1);
         view_at(&mut app, SyncMode::Update);
         let (run, _tx, prog) = run_sync(norte_proto::TaskState::Running, false);
@@ -1012,7 +1012,7 @@ mod sync_tests {
     /// A CANCELLED plan says cancelled, not "done": without `sync.plan_done`
     /// there's no `plan_hash`, so there's nothing to approve.
     #[test]
-    fn un_plan_cancelado_se_dice_cancelado() {
+    fn a_cancelled_plan_says_cancelled() {
         let mut app = app_with_rows(1);
         view_at(&mut app, SyncMode::Update);
         let (run, _tx, prog) = run_sync(norte_proto::TaskState::Running, false);
@@ -1033,7 +1033,7 @@ mod sync_tests {
     /// that returns `Err` instantly — a spin — and calling it "done" would
     /// be saying a half-finished sync ended well.
     #[tokio::test]
-    async fn un_emisor_caido_cosecha_la_aplicacion_como_fallo() {
+    async fn a_dropped_sender_harvests_the_application_as_a_failure() {
         let mut app = app_with_ready_plan();
         app.sync
             .as_mut()
@@ -1058,7 +1058,7 @@ mod sync_tests {
     /// journalled, and half a sync is a real state the reader has to be
     /// able to see.
     #[tokio::test]
-    async fn una_aplicacion_cancelada_pide_su_informe() {
+    async fn a_cancelled_application_asks_for_its_report() {
         let mut app = app_with_ready_plan();
         app.sync
             .as_mut()
@@ -1086,7 +1086,7 @@ mod sync_tests {
     /// application are never both at once — is what makes the single arm
     /// correct.
     #[test]
-    fn el_tick_distingue_las_dos_fases() {
+    fn the_tick_distinguishes_the_two_phases() {
         let (plan, _tx, _prog) = run_sync(norte_proto::TaskState::Running, false);
         assert!(plan.rx.is_some() && !plan.applying);
         let (applying, _tx2, _prog2) = run_sync(norte_proto::TaskState::Running, true);
@@ -1102,7 +1102,7 @@ mod sync_tests {
     /// a narrow selection into a whole-tree plan — under `Mirror`, into
     /// "delete from the destination everything the source doesn't have".
     #[test]
-    fn una_marca_que_es_la_raiz_se_niega() {
+    fn a_mark_that_is_the_root_is_refused() {
         let mut app = app_with_rows(1);
         {
             let view = app.compare.as_mut().expect("panel");
@@ -1132,7 +1132,7 @@ mod sync_tests {
     /// zero-step plan, which the panel paints as "both trees already
     /// match" — a lie on a screen that authorizes writes.
     #[test]
-    fn una_marca_fuera_de_las_dos_raices_se_niega() {
+    fn a_mark_outside_both_roots_is_refused() {
         let mut app = app_with_rows(1);
         {
             let view = app.compare.as_mut().expect("panel");

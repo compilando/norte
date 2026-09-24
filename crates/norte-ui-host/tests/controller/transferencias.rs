@@ -1,14 +1,14 @@
 use super::*;
 
 // ---------------------------------------------------------------------------
-// Copiar y mover (tarea 5.1 de la fase 5).
+// Copy and move (task 5.1 of phase 5).
 //
-// El renderer JAMÁS nombra un fichero: manda `pane.copy` y el host deriva el
-// origen de las marcas del hueco activo y el destino del hueco con el rol
-// `Target`. Ni una ruta cruza desde la webview.
+// The renderer NEVER names a file: it sends `pane.copy` and the host derives
+// the source from the active slot's marks and the destination from the slot
+// with the `Target` role. Not one path crosses from the webview.
 // ---------------------------------------------------------------------------
 
-/// El listado de UN hueco concreto de una foto.
+/// The listing of ONE specific slot in a snapshot.
 pub(super) fn listado_de(
     snap: &norte_ui_host::ViewSnapshot,
     slot_id: u32,
@@ -19,24 +19,24 @@ pub(super) fn listado_de(
             SlotView::Browser(b) if b.slot_id == slot_id => Some(b),
             _ => None,
         })
-        .unwrap_or_else(|| panic!("el hueco {slot_id} es un listado"))
+        .unwrap_or_else(|| panic!("slot {slot_id} is a listing"))
 }
 
-/// El montaje de dos paneles con destino aparte, EN CAJA.
+/// The setup of two panes with a separate destination, BOXED.
 ///
-/// Doce tests lo esperan, y el futuro de un `async fn` viaja entero en cada
-/// `await`: al crecer el snapshot pasó de los 16 KB que clippy tolera y los
-/// doce sitios se pusieron rojos a la vez. La caja los arregla de una, y en
-/// el sitio correcto —el ayudante— en lugar de repartir doce `Box::pin` por
-/// los tests que solo lo llaman.
+/// Twelve tests wait on it, and an `async fn`'s future travels whole across
+/// every `await`: as the snapshot grew it went over the 16 KB clippy
+/// tolerates, and all twelve call sites turned red at once. The box fixes
+/// them in one go, and in the right place — the helper — instead of
+/// scattering twelve `Box::pin`s across the tests that merely call it.
 pub(super) fn dos_paneles_con_destino_aparte(
     backend: Arc<Falso>,
 ) -> std::pin::Pin<Box<dyn std::future::Future<Output = (UiHost, norte_ui_host::ViewSnapshot)>>> {
     Box::pin(dos_paneles_con_destino_aparte_inner(backend))
 }
 
-/// Dos paneles, con el DESTINO ya en otro directorio: el escenario real de
-/// una copia. Devuelve la foto de después.
+/// Two panes, with the DESTINATION already in another directory: the real
+/// scenario for a copy. Returns the snapshot afterward.
 async fn dos_paneles_con_destino_aparte_inner(
     backend: Arc<Falso>,
 ) -> (UiHost, norte_ui_host::ViewSnapshot) {
@@ -47,42 +47,44 @@ async fn dos_paneles_con_destino_aparte_inner(
         .rows
         .iter()
         .find(|r| r.display_name == "docs")
-        .expect("el directorio está");
+        .expect("the directory is there");
     let (key, generation) = (docs.key, b2.generation);
     h.dispatch(UiAction::FocusSlot { slot_id: 2 })
         .await
-        .expect("host vivo");
+        .expect("host alive");
     h.dispatch(UiAction::Activate {
         slot_id: 2,
         key,
         generation,
     })
     .await
-    .expect("host vivo");
-    // La foto del aterrizaje: sin esperarla, F5 vería el destino todavía en
-    // el directorio de partida y el test probaría otra cosa.
+    .expect("host alive");
+    // The landing snapshot: without waiting for it, F5 would see the
+    // destination still in the starting directory and the test would be
+    // testing something else.
     //
-    // Se PIDE (`esperar_foto` manda `Resync`) en vez de quedarse escuchando:
-    // con un listado grande el aterrizaje viaja en PARCHES y la foto que lo
-    // contaría puede haber pasado ya, así que un `siguiente_foto` en bucle se
-    // quedaba esperando una que no vuelve a salir — colgado, no rojo.
-    let despues = esperar_foto(&h, &mut sub, "el destino aterriza en /casa/docs", |f| {
+    // It is ASKED FOR (`esperar_foto` sends `Resync`) instead of staying and
+    // listening: with a large listing, the landing travels in PATCHES and
+    // the snapshot that would count it may have already gone by, so a
+    // looped `siguiente_foto` would sit waiting for one that never comes
+    // out again — hung, not red.
+    let despues = esperar_foto(&h, &mut sub, "the destination lands in /casa/docs", |f| {
         listado_de(f, 2).path_display.ends_with("/casa/docs")
     })
     .await;
     h.dispatch(UiAction::FocusSlot { slot_id: 1 })
         .await
-        .expect("host vivo");
-    // El cursor del ORIGEN, sobre un fichero que no es el directorio destino:
-    // con el cursor en `docs` el origen y el destino se escriben igual, y una
-    // aserción sobre el texto del diálogo no distinguiría cuál de los dos
-    // está mirando.
+        .expect("host alive");
+    // The SOURCE's cursor, on a file that is not the destination directory:
+    // with the cursor on `docs`, source and destination are written the
+    // same, and an assertion on the dialog's text would not tell which of
+    // the two it is looking at.
     let b1 = listado_de(&despues, 1);
     let notas = b1
         .rows
         .iter()
         .find(|r| r.display_name == "notas.txt")
-        .expect("el fichero está");
+        .expect("the file is there");
     let (key, generation) = (notas.key, b1.generation);
     h.dispatch(UiAction::SelectRow {
         slot_id: 1,
@@ -90,27 +92,33 @@ async fn dos_paneles_con_destino_aparte_inner(
         generation,
     })
     .await
-    .expect("host vivo");
+    .expect("host alive");
     (h, despues)
 }
 
-/// El diálogo de copiar dice si NO CABE y si el destino no sabe confinar.
+/// The copy dialog says if it does NOT FIT and if the destination fails to
+/// confine.
 ///
-/// Las dos líneas son del terminal desde #149 y #164 y la ventana no tenía
-/// ninguna: te enterabas por una task fallida, o no te enterabas. Las dos
-/// preguntas son I/O, así que el diálogo se abre sin ellas y se rellenan
-/// cuando vuelven — el mismo reparto que hace el terminal en su bucle.
+/// The two lines have been in the terminal since #149 and #164 and the
+/// window had neither: you found out through a failed task, or you did not
+/// find out. Both questions are I/O, so the dialog opens without them and
+/// they get filled in when they come back — the same split the terminal
+/// does in its loop.
 ///
-/// Fallan DISTINTO, y es deliberado: el espacio se traga el fallo («no lo sé»
-/// se dice callando) y el confinamiento no, porque ahí el silencio SIGNIFICA
-/// «este destino sujeta sus escrituras» y tragárselo sería afirmarlo sin
-/// ADR 0149: el interruptor de la cola decide por dónde entra lo que se
-/// lance DESPUÉS, y eso llega hasta la petición del backend.
+/// They fail DIFFERENTLY, and it is deliberate: space swallows the failure
+/// ("I don't know" is said by staying silent) and confinement does not,
+/// because there silence MEANS "this destination holds onto its writes" and
+/// swallowing it would be asserting it without
+// TODO(translation): review — this doc comment appears interleaved with the
+// next function's; the tail "... without knowing so." is the orphaned
+// "/// saberlo." above `el_dialogo_de_copia_avisa_de_espacio_y_de_confinamiento`.
+/// ADR 0149: the queue switch decides where what gets launched AFTERWARD
+/// enters, and that reaches all the way to the backend request.
 #[tokio::test]
 async fn el_interruptor_de_la_cola_viaja_con_la_transferencia() {
     let (h, mut sub, backend) = Box::pin(dos_paneles_en_disco(Vec::new(), sin_confinar())).await;
     marca_los_ficheros(&h, &mut sub, 1).await;
-    // `ctrl+alt+q` en orthodox: el mismo camino que una tecla de verdad.
+    // `ctrl+alt+q` in orthodox: the same path as a real keystroke.
     h.dispatch(UiAction::Key(norte_ui_host::keys::KeyInput {
         key: "q".to_owned(),
         ctrl: true,
@@ -119,8 +127,8 @@ async fn el_interruptor_de_la_cola_viaja_con_la_transferencia() {
         meta: false,
     }))
     .await
-    .expect("host vivo");
-    h.dispatch(tecla("F5")).await.expect("host vivo");
+    .expect("host alive");
+    h.dispatch(tecla("F5")).await.expect("host alive");
     let id = siguientes_dialogos(&mut sub).await[0].id;
     h.dispatch(UiAction::Dialog {
         id,
@@ -128,27 +136,27 @@ async fn el_interruptor_de_la_cola_viaja_con_la_transferencia() {
         secret: None,
     })
     .await
-    .expect("host vivo");
+    .expect("host alive");
     asentar().await;
     assert!(
         *backend.encoladas.lock().expect("encoladas"),
-        "la copia salió pidiendo la cola"
+        "the copy went out asking for the queue"
     );
 }
 
-/// saberlo.
+/// knowing so.
 #[tokio::test]
 async fn el_dialogo_de_copia_avisa_de_espacio_y_de_confinamiento() {
     let (h, mut sub, _b) = Box::pin(dos_paneles_en_disco(volumen_lleno(), sin_confinar())).await;
     marca_los_ficheros(&h, &mut sub, 1).await;
 
-    h.dispatch(tecla("F5")).await.expect("host vivo");
+    h.dispatch(tecla("F5")).await.expect("host alive");
     let _ = siguientes_dialogos(&mut sub).await;
     asentar().await;
 
-    let avisos = foto_hasta(&h, &mut sub, "el diálogo con sus avisos", |s| {
-        // El ÚLTIMO, que es el que el renderer pinta: con uno solo coinciden,
-        // y así siguen coincidiendo el día que se apilen.
+    let avisos = foto_hasta(&h, &mut sub, "the dialog with its warnings", |s| {
+        // The LAST one, which is the one the renderer paints: with only one
+        // they coincide, and they keep coinciding the day they stack up.
         match &s.dialogs.last()?.dest_check {
             norte_ui_host::dto::DestCheckView::Done { warnings } if !warnings.is_empty() => {
                 Some(warnings.clone())
@@ -157,33 +165,34 @@ async fn el_dialogo_de_copia_avisa_de_espacio_y_de_confinamiento() {
         }
     })
     .await;
-    assert_eq!(avisos.len(), 2, "las dos líneas: {avisos:?}");
+    assert_eq!(avisos.len(), 2, "both lines: {avisos:?}");
     assert!(
         avisos[0].contains("libres"),
-        "la del espacio lleva los dos números: {avisos:?}"
+        "the space one carries both numbers: {avisos:?}"
     );
     assert!(
         avisos[1].contains("symlink"),
-        "la del confinamiento dice de qué protege: {avisos:?}"
+        "the confinement one says what it protects: {avisos:?}"
     );
 }
 
-/// Y un destino que SÍ cabe y SÍ confina no dice nada.
+/// And a destination that DOES fit and DOES confine says nothing.
 ///
-/// La mitad del contrato que se olvida: una línea en cada copia es ruido, y
-/// el ruido enseña a saltarse la línea justo el día que dice algo.
+/// The half of the contract that gets forgotten: a line on every copy is
+/// noise, and noise teaches people to skip the line exactly the day it says
+/// something.
 #[tokio::test]
 async fn un_destino_que_cabe_y_confina_no_dice_nada() {
     let (h, mut sub, backend) =
         Box::pin(dos_paneles_en_disco(volumen_de_sobra(), confinando())).await;
     marca_los_ficheros(&h, &mut sub, 1).await;
 
-    h.dispatch(tecla("F5")).await.expect("host vivo");
+    h.dispatch(tecla("F5")).await.expect("host alive");
     let dialogos = siguientes_dialogos(&mut sub).await;
-    assert_eq!(dialogos.len(), 1, "el diálogo se abre igual");
+    assert_eq!(dialogos.len(), 1, "the dialog opens just the same");
     asentar().await;
 
-    let d = foto_hasta(&h, &mut sub, "el destino ya comprobado", |s| {
+    let d = foto_hasta(&h, &mut sub, "the destination already checked", |s| {
         let d = s.dialogs.last()?;
         matches!(d.dest_check, norte_ui_host::dto::DestCheckView::Done { .. }).then(|| d.clone())
     })
@@ -193,37 +202,38 @@ async fn un_destino_que_cabe_y_confina_no_dice_nada() {
         norte_ui_host::dto::DestCheckView::Done {
             warnings: Vec::new()
         },
-        "nada que avisar, así que nada que decir"
+        "nothing to warn about, so nothing to say"
     );
-    // Y se PREGUNTÓ. Sin esto el test sigue verde si alguien borra el
-    // sondeo: callar por no tener nada que decir y callar por no haber
-    // mirado se pintan igual, que es justo lo que este campo separa.
+    // And it WAS ASKED. Without this the test stays green if someone deletes
+    // the probe: staying quiet for having nothing to say and staying quiet
+    // for never having checked look the same, which is exactly what this
+    // field tells apart.
     assert!(
         backend
             .volumenes_pedidos
             .load(std::sync::atomic::Ordering::SeqCst)
             > 0,
-        "el silencio es una RESPUESTA, no una omisión"
+        "silence is a RESPONSE, not an omission"
     );
 }
 
-/// Un volumen que no contesta no es un volumen lleno.
+/// A volume that does not answer is not a full volume.
 ///
-/// `free_bytes: None` significa «no contestó a tiempo», JAMÁS cero:
-/// confundirlos convierte cada montaje lento en una falsa alarma. La línea de
-/// confinamiento sí sale, que es la que no depende de esto.
+/// `free_bytes: None` means "did not answer in time", NEVER zero: confusing
+/// them turns every slow mount into a false alarm. The confinement line does
+/// come out, since it does not depend on this.
 #[tokio::test]
 async fn un_volumen_que_no_contesta_no_inventa_una_alarma() {
     let (h, mut sub, _b) = Box::pin(dos_paneles_en_disco(volumen_mudo(), sin_confinar())).await;
     marca_los_ficheros(&h, &mut sub, 1).await;
 
-    h.dispatch(tecla("F5")).await.expect("host vivo");
+    h.dispatch(tecla("F5")).await.expect("host alive");
     let _ = siguientes_dialogos(&mut sub).await;
     asentar().await;
 
-    let avisos = foto_hasta(&h, &mut sub, "el diálogo con su aviso", |s| {
-        // El ÚLTIMO, que es el que el renderer pinta: con uno solo coinciden,
-        // y así siguen coincidiendo el día que se apilen.
+    let avisos = foto_hasta(&h, &mut sub, "the dialog with its warning", |s| {
+        // The LAST one, which is the one the renderer paints: with only one
+        // they coincide, and they keep coinciding the day they stack up.
         match &s.dialogs.last()?.dest_check {
             norte_ui_host::dto::DestCheckView::Done { warnings } if !warnings.is_empty() => {
                 Some(warnings.clone())
@@ -235,7 +245,7 @@ async fn un_volumen_que_no_contesta_no_inventa_una_alarma() {
     assert_eq!(
         avisos.len(),
         1,
-        "solo la de confinar: del espacio no consta nada ({avisos:?})"
+        "only the confinement one: nothing is known about space ({avisos:?})"
     );
     assert!(avisos[0].contains("symlink"), "{avisos:?}");
 }
@@ -252,8 +262,8 @@ pub(super) fn volumen_de_disco(free: Option<u64>) -> Vec<norte_proto::methods::V
     }]
 }
 
-/// Un disco sin sitio: los ficheros del doble ocupan un byte cada uno, así
-/// que cero libres es «no cabe» sin necesidad de fabricar gigas.
+/// A disk with no room: the double's files each take up one byte, so zero
+/// free is "does not fit" with no need to fabricate gigabytes.
 pub(super) fn volumen_lleno() -> Vec<norte_proto::methods::Volume> {
     volumen_de_disco(Some(0))
 }
@@ -281,9 +291,9 @@ pub(super) fn confinando() -> norte_proto::Capabilities {
     }
 }
 
-/// Dos listados sobre `file://`, que es el único esquema que cuelga de un
-/// volumen de esta máquina: un `mem://` no tiene espacio libre que mirar, así
-/// que estos tests no se pueden escribir sobre el árbol de siempre.
+/// Two listings over `file://`, the only scheme that hangs off a volume on
+/// this machine: a `mem://` has no free space to look at, so these tests
+/// cannot be written over the usual tree.
 pub(super) async fn dos_paneles_en_disco(
     volumenes: Vec<norte_proto::methods::Volume>,
     caps_destino: norte_proto::Capabilities,
@@ -310,30 +320,30 @@ pub(super) async fn dos_paneles_en_disco(
         .rows
         .iter()
         .find(|r| r.display_name == "docs")
-        .expect("el directorio está");
+        .expect("the directory is there");
     h.dispatch(UiAction::FocusSlot { slot_id: 2 })
         .await
-        .expect("host vivo");
+        .expect("host alive");
     h.dispatch(UiAction::Activate {
         slot_id: 2,
         key: docs.key,
         generation: b2.generation,
     })
     .await
-    .expect("host vivo");
-    esperar_foto(&h, &mut sub, "el destino aterriza en docs", |f| {
+    .expect("host alive");
+    esperar_foto(&h, &mut sub, "the destination lands in docs", |f| {
         listado_de(f, 2).path_display.ends_with("/casa/docs")
     })
     .await;
     h.dispatch(UiAction::FocusSlot { slot_id: 1 })
         .await
-        .expect("host vivo");
+        .expect("host alive");
     (h, sub, backend)
 }
 
-/// Marca los FICHEROS de un hueco y deja el directorio fuera: con un
-/// directorio dentro no hay total que sumar (no dice cuánto ocupa) y la
-/// pregunta del espacio no llega a hacerse.
+/// Marks a slot's FILES and leaves the directory out: with a directory
+/// inside there is no total to add up (it does not say how much it takes
+/// up) and the space question never gets asked.
 pub(super) async fn marca_los_ficheros(
     h: &UiHost,
     sub: &mut norte_ui_host::UiSubscription,
@@ -347,7 +357,7 @@ pub(super) async fn marca_los_ficheros(
         .filter(|r| r.display_name == "uno" || r.display_name == "dos")
         .map(|r| r.key)
         .collect();
-    assert!(!claves.is_empty(), "hay ficheros que marcar");
+    assert!(!claves.is_empty(), "there are files to mark");
     for key in claves {
         h.dispatch(UiAction::ToggleMark {
             slot_id: slot,
@@ -355,12 +365,12 @@ pub(super) async fn marca_los_ficheros(
             generation: b.generation,
         })
         .await
-        .expect("host vivo");
+        .expect("host alive");
     }
 }
 
-/// Como [`host_con_layout`] con `orthodox`, pero arrancando donde se diga:
-/// los volúmenes solo responden por `file://`.
+/// Like [`host_con_layout`] with `orthodox`, but starting wherever is said:
+/// volumes only answer over `file://`.
 pub(super) async fn host_ortodoxo_en(
     backend: Arc<Falso>,
     inicio: &str,
@@ -386,39 +396,40 @@ pub(super) async fn host_ortodoxo_en(
         log_ring: None,
     })
     .await
-    .expect("arranca")
+    .expect("starts")
 }
 
-/// F5 no copia: abre la confirmación, y esa confirmación DICE a dónde va.
+/// F5 does not copy: it opens the confirmation, and that confirmation SAYS
+/// where it is going.
 ///
-/// En una ventana con dos listados el destino no es evidente —no hay «el
-/// otro panel» cuando hay tres—, así que el diálogo es el único sitio donde
-/// se puede leer antes de aceptar.
+/// In a window with two listings the destination is not obvious — there is
+/// no "the other pane" when there are three — so the dialog is the only
+/// place it can be read before accepting.
 #[tokio::test]
 async fn copiar_pide_confirmacion_y_dice_a_donde() {
     let backend = arbol();
     let (h, _snap) = dos_paneles_con_destino_aparte(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
-    h.dispatch(tecla("F5")).await.expect("host vivo");
+    h.dispatch(tecla("F5")).await.expect("host alive");
     let dialogos = siguientes_dialogos(&mut sub).await;
-    assert_eq!(dialogos.len(), 1, "se abre UN diálogo");
+    assert_eq!(dialogos.len(), 1, "ONE dialog opens");
     assert_eq!(dialogos[0].title_key, "modal-copy-title");
     let cuerpo = &dialogos[0].body;
     assert!(
         cuerpo.iter().any(|l| l.text.ends_with("/casa/notas.txt")),
-        "el cuerpo es lo que se transfiere: {cuerpo:?}"
+        "the body is what gets transferred: {cuerpo:?}"
     );
     let destino = dialogos[0]
         .destination
         .as_ref()
-        .expect("una transferencia dice a dónde va");
+        .expect("a transfer says where it is going");
     assert!(
         destino.text.ends_with("/casa/docs"),
-        "y el destino va en SU campo: {destino:?}"
+        "and the destination goes in ITS OWN field: {destino:?}"
     );
     assert!(
         cuerpo.iter().all(|l| !l.text.contains("/casa/docs")),
-        "no repetido entre las líneas del cuerpo: {cuerpo:?}"
+        "not repeated among the body's lines: {cuerpo:?}"
     );
     assert!(
         backend
@@ -426,61 +437,66 @@ async fn copiar_pide_confirmacion_y_dice_a_donde() {
             .lock()
             .expect("transferencias")
             .is_empty(),
-        "abrir el diálogo no copia nada"
+        "opening the dialog copies nothing"
     );
 }
 
-/// **Partir lee el tamaño en BINARIO** (#132, #290): `10M` son 10 MiB, que es
-/// lo que significa en un gestor de ficheros, y no diez millones.
+/// **Splitting reads the size in BINARY** (#132, #290): `10M` is 10 MiB,
+/// which is what it means in a file manager, not ten million.
 #[tokio::test]
 async fn partir_lee_el_tamano_en_binario() {
     let backend = Arc::new(arbol_como_falso());
     let (h, _snap) = host_con_layout(Arc::clone(&backend), "orthodox", (200, 60)).await;
     let mut sub = h.subscribe();
     separar_los_paneles(&h, &mut sub).await;
-    // El cursor, sobre un FICHERO: arranca en `docs/`, que además es el
-    // directorio destino, y ahí la comprobación de abajo no distinguiría nada.
-    h.dispatch(tecla("Down")).await.expect("host vivo");
+    // The cursor, on a FILE: it starts in `docs/`, which is also the
+    // destination directory, and there the check below would tell nothing
+    // apart.
+    h.dispatch(tecla("Down")).await.expect("host alive");
 
     ejecutar_por_paleta(&h, &mut sub, "pane.split-file").await;
-    let id = siguientes_dialogos(&mut sub).await.last().expect("hay").id;
+    let id = siguientes_dialogos(&mut sub)
+        .await
+        .last()
+        .expect("there is one")
+        .id;
     h.dispatch(UiAction::DialogInput {
         id,
         text: "10M".to_owned(),
     })
     .await
-    .expect("host vivo");
+    .expect("host alive");
     h.dispatch(UiAction::Dialog {
         id,
         choice: "confirm".to_owned(),
         secret: None,
     })
     .await
-    .expect("host vivo");
-    let ps = anotados(&backend, "el troceado encolado", 1, |f| {
+    .expect("host alive");
+    let ps = anotados(&backend, "the split queued", 1, |f| {
         f.partidos.lock().expect("partidos").clone()
     })
     .await;
     assert_eq!(ps.len(), 1);
-    assert_eq!(ps[0].part_bytes, 10 * 1024 * 1024, "MiB, no millones");
-    // Cuál sea la entrada bajo el cursor da igual —el listado ordena y el
-    // corpus mete un nombre hostil por medio—; lo que este test fija es de
-    // QUÉ panel sale cada cosa.
+    assert_eq!(ps[0].part_bytes, 10 * 1024 * 1024, "MiB, not millions");
+    // Whatever entry is under the cursor does not matter — the listing
+    // sorts and the corpus throws in a hostile name — what this test pins
+    // down is WHICH pane each thing comes out of.
     assert_eq!(
         ps[0].path.parent().map(|p| p.to_wire()).as_deref(),
         Some("mem:///casa"),
-        "el fichero sale del panel ACTIVO"
+        "the file comes out of the ACTIVE pane"
     );
     assert_eq!(
         ps[0].dest_dir.to_wire(),
         "mem:///casa/docs",
-        "y los trozos van al panel DESTINO: partir uno enorme donde ya está \
-         suele no caber"
+        "and the parts go to the DESTINATION pane: splitting a huge one where \
+         it already is usually does not fit"
     );
 }
 
-/// Un tamaño que no se entiende se rehúsa y no parte nada. El cero entra ahí:
-/// trozos de cero bytes no terminan nunca.
+/// A size that makes no sense is refused and splits nothing. Zero belongs
+/// here: zero-byte parts never finish.
 #[tokio::test]
 async fn partir_rehusa_un_tamano_que_no_vale() {
     let backend = Arc::new(arbol_como_falso());
@@ -489,13 +505,17 @@ async fn partir_rehusa_un_tamano_que_no_vale() {
     separar_los_paneles(&h, &mut sub).await;
 
     ejecutar_por_paleta(&h, &mut sub, "pane.split-file").await;
-    let id = siguientes_dialogos(&mut sub).await.last().expect("hay").id;
+    let id = siguientes_dialogos(&mut sub)
+        .await
+        .last()
+        .expect("there is one")
+        .id;
     h.dispatch(UiAction::DialogInput {
         id,
         text: "0".to_owned(),
     })
     .await
-    .expect("host vivo");
+    .expect("host alive");
     let ack = h
         .dispatch(UiAction::Dialog {
             id,
@@ -503,7 +523,7 @@ async fn partir_rehusa_un_tamano_que_no_vale() {
             secret: None,
         })
         .await
-        .expect("host vivo");
+        .expect("host alive");
     assert!(
         matches!(ack, ActionAck::Unavailable { ref reason_key } if reason_key == "msg-split-bad-size"),
         "{ack:?}"
@@ -512,8 +532,8 @@ async fn partir_rehusa_un_tamano_que_no_vale() {
     assert!(backend.partidos.lock().expect("partidos").is_empty());
 }
 
-/// **Juntar solo desde el PRIMER trozo** (#132, #290): empezar por el `.007`
-/// uniría media cosa, y el core solo busca hacia delante.
+/// **Joining only from the FIRST part** (#132, #290): starting from `.007`
+/// would join half a thing, and the core only looks forward.
 #[tokio::test]
 async fn juntar_exige_empezar_por_el_primer_trozo() {
     let mut f = Falso::default();
@@ -528,38 +548,38 @@ async fn juntar_exige_empezar_por_el_primer_trozo() {
     let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
 
-    // El cursor arranca en la primera fila: el `.001`.
+    // The cursor starts on the first row: the `.001`.
     ejecutar_por_paleta(&h, &mut sub, "pane.combine-files").await;
     {
-        let js = anotados(&backend, "la unión encolada", 1, |f| {
+        let js = anotados(&backend, "the join queued", 1, |f| {
             f.juntados.lock().expect("juntados").clone()
         })
         .await;
-        assert_eq!(js.len(), 1, "desde el .001 sí");
+        assert_eq!(js.len(), 1, "from the .001 it does");
         assert_eq!(
             js[0].dest.to_wire(),
             "mem:///casa/pelicula.mkv",
-            "el destino es el nombre SIN el sufijo de trozo"
+            "the destination is the name WITHOUT the part suffix"
         );
     }
 
-    // Bajar al `.007` y volver a pedirlo: ahí no.
-    h.dispatch(tecla("Down")).await.expect("host vivo");
+    // Move down to `.007` and ask for it again: not from there.
+    h.dispatch(tecla("Down")).await.expect("host alive");
     let ack = ejecutar_por_paleta_ack(&h, &mut sub, "pane.combine-files").await;
     assert!(
         matches!(ack, ActionAck::Unavailable { ref reason_key } if reason_key == "msg-combine-needs-first"),
-        "desde otro trozo no: {ack:?}"
+        "not from another part: {ack:?}"
     );
     assert_eq!(
         backend.juntados.lock().expect("juntados").len(),
         1,
-        "y no se pide nada nuevo"
+        "and nothing new is requested"
     );
 }
 
-/// **Empaquetar saca el FORMATO del nombre tecleado** (#132, #290), y la base
-/// es el directorio del panel: quien desempaquete espera ver lo que se veía en
-/// pantalla, no rutas absolutas.
+/// **Packing takes the FORMAT from the typed name** (#132, #290), and the
+/// base is the pane's directory: whoever unpacks expects to see what was on
+/// screen, not absolute paths.
 #[tokio::test]
 async fn empaquetar_saca_el_formato_del_nombre() {
     let backend = Arc::new(arbol_como_falso());
@@ -567,21 +587,25 @@ async fn empaquetar_saca_el_formato_del_nombre() {
     let mut sub = h.subscribe();
 
     ejecutar_por_paleta(&h, &mut sub, "pane.pack").await;
-    let id = siguientes_dialogos(&mut sub).await.last().expect("hay").id;
+    let id = siguientes_dialogos(&mut sub)
+        .await
+        .last()
+        .expect("there is one")
+        .id;
     h.dispatch(UiAction::DialogInput {
         id,
         text: "cosas.tar.gz".to_owned(),
     })
     .await
-    .expect("host vivo");
+    .expect("host alive");
     h.dispatch(UiAction::Dialog {
         id,
         choice: "confirm".to_owned(),
         secret: None,
     })
     .await
-    .expect("host vivo");
-    let ps = anotados(&backend, "el empaquetado encolado", 1, |f| {
+    .expect("host alive");
+    let ps = anotados(&backend, "the archiving queued", 1, |f| {
         f.empaquetados.lock().expect("empaquetados").clone()
     })
     .await;
@@ -599,8 +623,9 @@ async fn empaquetar_saca_el_formato_del_nombre() {
     );
 }
 
-/// Un nombre cuyo formato NO se sabe escribir se rehúsa, en vez de empaquetar
-/// en otra cosa. `.rar` es el caso real: se lee por delegación y no se escribe.
+/// A name whose format is NOT known how to write is refused, instead of
+/// archiving into something else. `.rar` is the real case: it is read by
+/// delegation and not written.
 #[tokio::test]
 async fn empaquetar_rehusa_un_formato_que_no_se_escribe() {
     let backend = Arc::new(arbol_como_falso());
@@ -608,13 +633,17 @@ async fn empaquetar_rehusa_un_formato_que_no_se_escribe() {
     let mut sub = h.subscribe();
 
     ejecutar_por_paleta(&h, &mut sub, "pane.pack").await;
-    let id = siguientes_dialogos(&mut sub).await.last().expect("hay").id;
+    let id = siguientes_dialogos(&mut sub)
+        .await
+        .last()
+        .expect("there is one")
+        .id;
     h.dispatch(UiAction::DialogInput {
         id,
         text: "cosas.rar".to_owned(),
     })
     .await
-    .expect("host vivo");
+    .expect("host alive");
     let ack = h
         .dispatch(UiAction::Dialog {
             id,
@@ -622,7 +651,7 @@ async fn empaquetar_rehusa_un_formato_que_no_se_escribe() {
             secret: None,
         })
         .await
-        .expect("host vivo");
+        .expect("host alive");
     assert!(
         matches!(ack, ActionAck::Unavailable { ref reason_key } if reason_key == "msg-pack-unknown-format"),
         "{ack:?}"
@@ -634,44 +663,44 @@ async fn empaquetar_rehusa_un_formato_que_no_se_escribe() {
             .lock()
             .expect("empaquetados")
             .is_empty(),
-        "y no se empaqueta nada"
+        "and nothing gets archived"
     );
 }
 
-/// Comprobar solo vale sobre un CONTENEDOR, y lo decide la misma función que
-/// usa `Enter` para entrar en uno: dos tablas de extensiones serían dos sitios
-/// donde una se olvida.
+/// Testing only applies to a CONTAINER, and it is decided by the same
+/// function `Enter` uses to enter one: two extension tables would be two
+/// places where one gets forgotten.
 #[tokio::test]
 async fn comprobar_un_archivo_exige_que_lo_sea() {
     let backend = Arc::new(arbol_como_falso());
     let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
 
-    // El cursor arranca sobre `docs/`, que es un directorio.
+    // The cursor starts on `docs/`, which is a directory.
     let ack = ejecutar_por_paleta_ack(&h, &mut sub, "pane.test-archive").await;
     assert!(
         matches!(ack, ActionAck::Unavailable { ref reason_key } if reason_key == "msg-unpack-not-archive"),
-        "un directorio no es un contenedor: {ack:?}"
+        "a directory is not a container: {ack:?}"
     );
     assert!(
         backend.comprobados.lock().expect("comprobados").is_empty(),
-        "y no se pide comprobar nada"
+        "and nothing gets asked to be tested"
     );
 }
 
-/// Un hueco que espera dice A DÓNDE va.
+/// A slot that is waiting says WHERE it is going.
 ///
-/// El cuerpo sigue enseñando el listado ANTERIOR hasta que llegue el nuevo —a
-/// propósito: si la conexión falla, el lector se queda donde estaba—, y sin
-/// el destino esa mezcla no se puede leer. La ventana solo ponía
-/// `aria-busy="true"`, sin una sola regla que lo pintara: contra un SFTP
-/// lento no daba señal ninguna.
+/// The body keeps showing the PREVIOUS listing until the new one arrives —on
+/// purpose: if the connection fails, the reader stays where they were — and
+/// without the destination that mix cannot be read. The window was only
+/// setting `aria-busy="true"`, with not one rule painting it: against a slow
+/// SFTP it gave no signal at all.
 #[tokio::test]
 async fn un_hueco_que_espera_dice_a_donde_va() {
     let mut f = Falso::default();
     f.arbol.clone_from(&arbol().arbol);
-    // Con retraso: sin él, el listado aterriza antes de que se pueda mirar el
-    // estado, y el test comprobaría el `Ready` de después.
+    // With a delay: without it, the listing lands before the state can be
+    // looked at, and the test would be checking the later `Ready`.
     f.retraso_ms = 50;
     let (h, snap) = host_arbol(Arc::new(f)).await;
     let mut sub = h.subscribe();
@@ -680,7 +709,7 @@ async fn un_hueco_que_espera_dice_a_donde_va() {
         .rows
         .iter()
         .find(|r| r.display_name == "docs")
-        .expect("el directorio está");
+        .expect("the directory is there");
 
     h.dispatch(UiAction::Activate {
         slot_id: 1,
@@ -688,9 +717,9 @@ async fn un_hueco_que_espera_dice_a_donde_va() {
         generation: b.generation,
     })
     .await
-    .expect("host vivo");
+    .expect("host alive");
 
-    let estado = foto_hasta(&h, &mut sub, "el hueco esperando", |s| {
+    let estado = foto_hasta(&h, &mut sub, "the waiting slot", |s| {
         match &listado_de(s, 1).state {
             norte_ui_host::dto::SlotState::Loading { target_display, .. }
                 if !target_display.is_empty() =>
@@ -703,39 +732,37 @@ async fn un_hueco_que_espera_dice_a_donde_va() {
     .await;
     assert!(
         estado.ends_with("/casa/docs"),
-        "dice a dónde va, no dónde está: {estado}"
+        "it says where it is going, not where it is: {estado}"
     );
 }
 
-/// La ventana pinta en SU idioma, no en el del proceso.
+/// The window paints in ITS OWN language, not the process's.
 ///
-/// `norte-ui-host` estaba limpio —sus llamadas pasan `self.lang`— y todas las
-/// fugas venían de helpers COMPARTIDOS que traducían con el global. La peor
-/// era la fecha: cada celda del listado salía en el idioma del proceso bajo
-/// una cabecera en el del host, y no se podía esquivar con configuración
-/// porque la ventana ignora `time-format`, así que la rama relativa está
-/// siempre viva.
+/// `norte-ui-host` was clean — its calls pass `self.lang` — and all the
+/// leaks came from SHARED helpers that translated using the global. The
+/// worst one was the date: every listing cell came out in the process's
+/// language under a header in the host's, and it could not be dodged with
+/// configuration because the window ignores `time-format`, so the relative
+/// branch is always alive.
 ///
-/// Los ajustes de la ventana salen ENTEROS en el idioma del host.
+/// The window's settings come out WHOLE in the host's language.
 ///
-/// Los títulos de sección ya iban con el suyo y el nombre y la descripción de
-/// cada opción con el del PROCESO, así que la pantalla salía a medias en dos
-/// idiomas. Se comprueba desde fuera —lo que cruza el puente— y no llamando
-/// al helper: lo que se arregló es que la ventana le pase su `lang`, y un
-/// test sobre el helper seguiría verde si dejara de pasárselo.
+/// Section titles already carried their own, and each option's name and
+/// description carried the PROCESS's, so the screen came out split between
+/// two languages. Checked from the outside — what crosses the bridge — and
+/// not by calling the helper: what got fixed is that the window passes it
+/// its `lang`, and a test on the helper would still stay green if it
+/// stopped passing it.
 #[tokio::test]
 async fn los_ajustes_salen_enteros_en_el_idioma_del_host() {
-    // El PROCESO en inglés y el host en español: lo que se escape sale en
-    // inglés y se ve aquí.
+    // The PROCESS in English and the host in Spanish: whatever leaks comes
+    // out in English and shows up here.
     let _ = norte_i18n::force(norte_i18n::Lang::En);
     let (h, _snap) = host_arbol(arbol()).await;
     let mut sub = h.subscribe();
 
     ejecutar_por_paleta(&h, &mut sub, "app.settings").await;
-    let ajustes = foto_hasta(&h, &mut sub, "la pantalla de ajustes", |s| {
-        s.settings.clone()
-    })
-    .await;
+    let ajustes = foto_hasta(&h, &mut sub, "the settings screen", |s| s.settings.clone()).await;
     let filas: Vec<norte_ui_host::dto::SettingRowView> = ajustes
         .sections
         .iter()
@@ -745,38 +772,41 @@ async fn los_ajustes_salen_enteros_en_el_idioma_del_host() {
         })
         .flatten()
         .collect();
-    assert!(!filas.is_empty(), "hay opciones que enseñar");
+    assert!(!filas.is_empty(), "there are options to show");
 
-    let en_español = norte_i18n::t_in(norte_i18n::Lang::Es, "setting-ui-theme-name");
-    let en_ingles = norte_i18n::t_in(norte_i18n::Lang::En, "setting-ui-theme-name");
-    assert_ne!(en_español, en_ingles, "la premisa: la clave se traduce");
+    let in_spanish = norte_i18n::t_in(norte_i18n::Lang::Es, "setting-ui-theme-name");
+    let in_english = norte_i18n::t_in(norte_i18n::Lang::En, "setting-ui-theme-name");
+    assert_ne!(
+        in_spanish, in_english,
+        "the premise: the key gets translated"
+    );
     let fila = filas
         .iter()
-        .find(|r| r.name == en_español || r.name == en_ingles)
-        .expect("la opción está en el catálogo");
+        .find(|r| r.name == in_spanish || r.name == in_english)
+        .expect("the option is in the catalogue");
     assert_eq!(
-        fila.name, en_español,
-        "la fila salió en el idioma del PROCESO, no en el del host"
+        fila.name, in_spanish,
+        "the row came out in the PROCESS's language, not the host's"
     );
 }
 
-/// Sin papelera, el borrado lo DICE y se hace permanente.
+/// With no trash, the delete SAYS so and becomes permanent.
 ///
-/// «⚠ SIN papelera: esto no se puede deshacer» era solo del terminal. La
-/// ventana compensaba con un botón destructivo, que dice que esa respuesta
-/// borra — no que no haya vuelta. Son dos cosas distintas, y la segunda es la
-/// que decide si alguien pulsa.
+/// "⚠ NO trash: this cannot be undone" was terminal-only. The window
+/// compensated with a destructive button, which says that response deletes —
+/// not that there is no going back. They are two different things, and the
+/// second one is what decides whether anyone presses it.
 ///
-/// La respuesta sale de la caché de capacidades del hueco, que llega con el
-/// listado: sin ella se supone que NO hay papelera, que es la dirección en la
-/// que equivocarse solo cuesta un susto.
+/// The answer comes from the slot's capabilities cache, which arrives with
+/// the listing: without it, it is assumed there is NO trash, which is the
+/// direction where being wrong only costs a scare.
 #[tokio::test]
 async fn sin_papelera_el_borrado_avisa_de_que_no_hay_vuelta() {
-    // El tercer caso es el que pierde datos: NO CONSTA. Las capacidades
-    // llegan detrás del listado y por su cuenta, así que hay una ventana
-    // entera —y toda la sesión, si la petición falla— en la que no hay
-    // respuesta. Tratar eso como «no hay papelera» borra de verdad en un
-    // sitio que sí la tiene.
+    // The third case is the one that loses data: NOT KNOWN. Capabilities
+    // arrive behind the listing and on their own schedule, so there is a
+    // whole window — and the whole session, if the request fails — with no
+    // answer. Treating that as "there is no trash" really deletes in a
+    // place that does have one.
     for (papelera, avisa) in [(Some(true), false), (Some(false), true), (None, false)] {
         let mut f = Falso::default();
         f.arbol.clone_from(&arbol().arbol);
@@ -793,68 +823,69 @@ async fn sin_papelera_el_borrado_avisa_de_que_no_hay_vuelta() {
                 },
             );
         } else {
-            // Ni siquiera contesta: el hueco se queda sin capacidades.
+            // It does not even answer: the slot is left with no
+            // capabilities.
             f.error_de_capacidades = true;
         }
         let (h, _snap) = host_arbol(Arc::new(f)).await;
         let mut sub = h.subscribe();
         asentar().await;
 
-        h.dispatch(tecla("F8")).await.expect("host vivo");
+        h.dispatch(tecla("F8")).await.expect("host alive");
         let d = siguientes_dialogos(&mut sub).await;
-        let borrado = d.last().expect("el diálogo de borrado");
+        let borrado = d.last().expect("the delete dialog");
         let norte_ui_host::dto::DestCheckView::Done { warnings } = &borrado.dest_check else {
-            panic!("un borrado no espera a nadie: {:?}", borrado.dest_check)
+            panic!("a delete waits on nobody: {:?}", borrado.dest_check)
         };
         assert_eq!(
             !warnings.is_empty(),
             avisa,
-            "con papelera={papelera:?} los avisos fueron {warnings:?}"
+            "with papelera={papelera:?} the warnings were {warnings:?}"
         );
         if avisa {
             assert!(warnings[0].contains('⚠'), "{warnings:?}");
             assert_eq!(
                 borrado.title_key, "modal-delete-permanent-title",
-                "y el título lo dice también: sin papelera, esto es permanente"
+                "and the title says so too: with no trash, this is permanent"
             );
         } else {
             assert_eq!(
                 borrado.title_key, "modal-delete-title",
-                "con papelera —o sin saberlo— esto NO es un borrado permanente"
+                "with trash — or not knowing — this is NOT a permanent delete"
             );
         }
     }
 }
 
-/// El diálogo de colisión NO pierde la insignia de un nombre alterado.
+/// The collision dialog does NOT lose the badge from an altered name.
 ///
-/// Se enmascaraba sobre `display_lossy()`, que YA había metido los U+FFFD:
-/// `display_name` recibía entonces UTF-8 impecable y declaraba el nombre
-/// FIEL. O sea que en la única pantalla donde se aprueba SOBRESCRIBIR un
-/// fichero, el nombre que difiere de los bytes se pintaba como si no
-/// difiriera.
+/// It was masking over `display_lossy()`, which had ALREADY put in the
+/// U+FFFD: `display_name` then received flawless UTF-8 and declared the name
+/// FAITHFUL. Meaning that on the only screen where OVERWRITING a file gets
+/// approved, the name that differs from the bytes was painted as if it did
+/// not differ.
 #[tokio::test]
 async fn el_dialogo_de_colision_marca_el_nombre_alterado() {
     let backend = arbol();
     let (h, _snap) = Box::pin(dos_paneles_con_destino_aparte(Arc::clone(&backend))).await;
     let mut sub = h.subscribe();
-    // El cursor, sobre la entrada cuyo nombre no es UTF-8.
+    // The cursor, on the entry whose name is not UTF-8.
     let foto = foto(&h, &mut sub).await;
     let b = listado_de(&foto, 1);
     let raro = b
         .rows
         .iter()
         .find(|r| r.hostile)
-        .expect("el árbol trae un nombre alterado");
+        .expect("the tree carries an altered name");
     h.dispatch(UiAction::SelectRow {
         slot_id: 1,
         key: raro.key,
         generation: b.generation,
     })
     .await
-    .expect("host vivo");
+    .expect("host alive");
 
-    h.dispatch(tecla("F5")).await.expect("host vivo");
+    h.dispatch(tecla("F5")).await.expect("host alive");
     let id = siguientes_dialogos(&mut sub).await[0].id;
     h.dispatch(UiAction::Dialog {
         id,
@@ -862,14 +893,14 @@ async fn el_dialogo_de_colision_marca_el_nombre_alterado() {
         secret: None,
     })
     .await
-    .expect("host vivo");
+    .expect("host alive");
     let _ = siguientes_tasks(&mut sub).await;
     let tx = backend
         .progreso
         .lock()
         .expect("progreso")
         .clone()
-        .expect("hay task");
+        .expect("there is a task");
     tx.send_modify(|p| {
         p.state = norte_proto::TaskState::Failed {
             error: norte_proto::Error::Conflict {
@@ -879,30 +910,30 @@ async fn el_dialogo_de_colision_marca_el_nombre_alterado() {
     });
 
     let dialogos = siguientes_dialogos(&mut sub).await;
-    let colision = dialogos.last().expect("el diálogo de colisión");
+    let colision = dialogos.last().expect("the collision dialog");
     let destino = colision
         .destination
         .as_ref()
-        .expect("dice sobre qué fichero pregunta");
+        .expect("says which file it is asking about");
     assert!(
         destino.hostile,
-        "lo pintado no son los bytes, y esto es lo que se aprueba: {destino:?}"
+        "what is painted is not the bytes, and this is what gets approved: {destino:?}"
     );
 }
 
-/// **Una transferencia que CHOCA tiene salida** (#274).
+/// **A transfer that COLLIDES has a way out** (#274).
 ///
-/// La ventana manda siempre `CollisionPolicy::Fail`, que es el default seguro,
-/// pero no tenía dónde tomar la decisión: quedaba una task fallida en el
-/// tablero y ningún camino hacia delante, mientras el TUI sí ofrece las
-/// cuatro. Se comprueba lo que de verdad importa: que la segunda transferencia
-/// SALE, con la política elegida y el mismo verbo.
+/// The window always sends `CollisionPolicy::Fail`, the safe default, but
+/// had nowhere to make the decision: a failed task was left on the board
+/// with no way forward, while the TUI does offer the four. What is checked
+/// is what really matters: that the second transfer GOES OUT, with the
+/// chosen policy and the same verb.
 #[tokio::test]
 async fn una_copia_que_choca_se_puede_reintentar_con_otra_politica() {
     let backend = arbol();
     let (h, _snap) = dos_paneles_con_destino_aparte(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
-    h.dispatch(tecla("F5")).await.expect("host vivo");
+    h.dispatch(tecla("F5")).await.expect("host alive");
     let id = siguientes_dialogos(&mut sub).await[0].id;
     h.dispatch(UiAction::Dialog {
         id,
@@ -910,16 +941,16 @@ async fn una_copia_que_choca_se_puede_reintentar_con_otra_politica() {
         secret: None,
     })
     .await
-    .expect("host vivo");
+    .expect("host alive");
     let _ = siguientes_tasks(&mut sub).await;
 
-    // El daemon dice que el destino ya existe.
+    // The daemon says the destination already exists.
     let tx = backend
         .progreso
         .lock()
         .expect("progreso")
         .clone()
-        .expect("hay task");
+        .expect("there is a task");
     tx.send_modify(|p| {
         p.state = norte_proto::TaskState::Failed {
             error: norte_proto::Error::Conflict {
@@ -928,24 +959,24 @@ async fn una_copia_que_choca_se_puede_reintentar_con_otra_politica() {
         };
     });
 
-    // Y ahora SÍ hay una pregunta que contestar.
+    // And now there IS a question to answer.
     let dialogos = siguientes_dialogos(&mut sub).await;
-    let colision = dialogos.last().expect("el diálogo de colisión");
+    let colision = dialogos.last().expect("the collision dialog");
     let opciones: Vec<&str> = colision.choices.iter().map(|c| c.id.as_str()).collect();
     assert_eq!(
         opciones,
         vec!["overwrite", "newer", "rename", "skip", "cancel"],
-        "las cuatro salidas del TUI, más cancelar"
+        "the TUI's four ways out, plus cancel"
     );
     assert!(
         colision
             .choices
             .iter()
             .any(|c| c.id == "overwrite" && c.destructive),
-        "sobrescribir se marca como destructivo: destruye lo que hay"
+        "overwrite is marked destructive: it destroys what is there"
     );
 
-    // Se abrió SOLO, así que la primera respuesta solo lo reconoce.
+    // It opened on its own, so the first response only acknowledges it.
     let cid = colision.id;
     h.dispatch(UiAction::Dialog {
         id: cid,
@@ -953,41 +984,38 @@ async fn una_copia_que_choca_se_puede_reintentar_con_otra_politica() {
         secret: None,
     })
     .await
-    .expect("host vivo");
+    .expect("host alive");
     h.dispatch(UiAction::Dialog {
         id: cid,
         choice: "overwrite".to_owned(),
         secret: None,
     })
     .await
-    .expect("host vivo");
-    let ts = anotados(&backend, "la original y el reintento", 2, |f| {
+    .expect("host alive");
+    let ts = anotados(&backend, "the original and the retry", 2, |f| {
         f.transferencias.lock().expect("transferencias").clone()
     })
     .await;
-    assert_eq!(ts.len(), 2, "la original y el reintento: {ts:?}");
+    assert_eq!(ts.len(), 2, "the original and the retry: {ts:?}");
     let (from, to, mover, colision) = &ts[1];
     assert_eq!(
         *colision,
         norte_proto::CollisionPolicy::Overwrite,
-        "el reintento va con la política que se eligió"
+        "the retry goes with the chosen policy"
     );
-    assert!(
-        !mover,
-        "y con el MISMO verbo: un reintento de copia no mueve"
-    );
-    assert_eq!(from.to_wire(), ts[0].0.to_wire(), "mismo origen");
-    assert_eq!(to.to_wire(), ts[0].1.to_wire(), "y mismo destino");
+    assert!(!mover, "and with the SAME verb: a copy retry does not move");
+    assert_eq!(from.to_wire(), ts[0].0.to_wire(), "same source");
+    assert_eq!(to.to_wire(), ts[0].1.to_wire(), "and same destination");
 }
 
-/// Cancelar la colisión no relanza nada: no elegir es una respuesta, y la task
-/// fallida se queda como estaba.
+/// Cancelling the collision relaunches nothing: not choosing is a response,
+/// and the failed task stays as it was.
 #[tokio::test]
 async fn cancelar_una_colision_no_reintenta() {
     let backend = arbol();
     let (h, _snap) = dos_paneles_con_destino_aparte(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
-    h.dispatch(tecla("F5")).await.expect("host vivo");
+    h.dispatch(tecla("F5")).await.expect("host alive");
     let id = siguientes_dialogos(&mut sub).await[0].id;
     h.dispatch(UiAction::Dialog {
         id,
@@ -995,14 +1023,14 @@ async fn cancelar_una_colision_no_reintenta() {
         secret: None,
     })
     .await
-    .expect("host vivo");
+    .expect("host alive");
     let _ = siguientes_tasks(&mut sub).await;
     let tx = backend
         .progreso
         .lock()
         .expect("progreso")
         .clone()
-        .expect("hay task");
+        .expect("there is a task");
     tx.send_modify(|p| {
         p.state = norte_proto::TaskState::Failed {
             error: norte_proto::Error::Conflict {
@@ -1010,18 +1038,22 @@ async fn cancelar_una_colision_no_reintenta() {
             },
         };
     });
-    let cid = siguientes_dialogos(&mut sub).await.last().expect("hay").id;
+    let cid = siguientes_dialogos(&mut sub)
+        .await
+        .last()
+        .expect("there is one")
+        .id;
 
-    // Cancelar está EXENTO del reconocimiento: quitarse de encima algo que uno
-    // no ha pedido sale a la primera.
+    // Cancel is EXEMPT from acknowledgment: shrugging off something one
+    // never asked for goes through on the first try.
     h.dispatch(UiAction::Dialog {
         id: cid,
         choice: "cancel".to_owned(),
         secret: None,
     })
     .await
-    .expect("host vivo");
-    anotados(&backend, "la transferencia original", 1, |f| {
+    .expect("host alive");
+    anotados(&backend, "the original transfer", 1, |f| {
         f.transferencias.lock().expect("transferencias").clone()
     })
     .await;
@@ -1029,18 +1061,18 @@ async fn cancelar_una_colision_no_reintenta() {
     assert_eq!(
         backend.transferencias.lock().expect("transferencias").len(),
         1,
-        "cancelar no relanza"
+        "cancel does not relaunch"
     );
 }
 
-/// Confirmada, la copia sale con el destino COMPUESTO en Rust: el directorio
-/// del hueco destino más el nombre de la entrada, byte a byte.
+/// Confirmed, the copy goes out with the destination COMPOSED in Rust: the
+/// destination slot's directory plus the entry's name, byte for byte.
 #[tokio::test]
 async fn copiar_compone_el_destino_en_rust() {
     let backend = arbol();
     let (h, _snap) = dos_paneles_con_destino_aparte(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
-    h.dispatch(tecla("F5")).await.expect("host vivo");
+    h.dispatch(tecla("F5")).await.expect("host alive");
     let id = siguientes_dialogos(&mut sub).await[0].id;
     h.dispatch(UiAction::Dialog {
         id,
@@ -1048,35 +1080,35 @@ async fn copiar_compone_el_destino_en_rust() {
         secret: None,
     })
     .await
-    .expect("host vivo");
-    let ts = anotados(&backend, "la transferencia encolada", 1, |f| {
+    .expect("host alive");
+    let ts = anotados(&backend, "the transfer queued", 1, |f| {
         f.transferencias.lock().expect("transferencias").clone()
     })
     .await;
-    assert_eq!(ts.len(), 1, "una entrada bajo el cursor, una task");
+    assert_eq!(ts.len(), 1, "one entry under the cursor, one task");
     let (from, to, mover, colision) = &ts[0];
     assert_eq!(
         *colision,
         norte_proto::CollisionPolicy::Fail,
-        "el default SEGURO del wire: un destino ocupado falla, no se pisa"
+        "the wire's SAFE default: a busy destination fails, it is not overwritten"
     );
-    assert!(!mover, "F5 copia");
+    assert!(!mover, "F5 copies");
     assert_eq!(from.to_wire(), "mem:///casa/notas.txt");
     assert_eq!(
         to.to_wire(),
         "mem:///casa/docs/notas.txt",
-        "el destino es el DIRECTORIO del otro hueco más el nombre del origen"
+        "the destination is the other slot's DIRECTORY plus the source's name"
     );
 }
 
-/// F6 usa el mismo camino, pero es otro verbo: en el wire son dos métodos,
-/// en el tablero dos clases de task y en el journal dos entradas.
+/// F6 uses the same path, but it is a different verb: on the wire it is two
+/// methods, on the board two task classes, and in the journal two entries.
 #[tokio::test]
 async fn mover_es_otro_verbo_y_lo_dice() {
     let backend = arbol();
     let (h, _snap) = dos_paneles_con_destino_aparte(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
-    h.dispatch(tecla("F6")).await.expect("host vivo");
+    h.dispatch(tecla("F6")).await.expect("host alive");
     let dialogos = siguientes_dialogos(&mut sub).await;
     assert_eq!(dialogos[0].title_key, "modal-move-title");
     let id = dialogos[0].id;
@@ -1086,36 +1118,36 @@ async fn mover_es_otro_verbo_y_lo_dice() {
         secret: None,
     })
     .await
-    .expect("host vivo");
-    let ts = anotados(&backend, "el movimiento encolado", 1, |f| {
+    .expect("host alive");
+    let ts = anotados(&backend, "the move queued", 1, |f| {
         f.transferencias.lock().expect("transferencias").clone()
     })
     .await;
-    assert!(ts[0].2, "F6 mueve");
+    assert!(ts[0].2, "F6 moves");
 }
 
-/// Con un solo listado no hay a dónde copiar **dentro de la ventana**, así que
-/// se pregunta fuera (#284) — y hasta que llegue la respuesta no se transfiere
-/// nada. Lo que este test sostiene es que no se INVENTA un destino: ni el
-/// propio directorio, ni el último que se usó.
+/// With a single listing there is nowhere to copy to **inside the window**,
+/// so it is asked outside (#284) — and until the answer arrives nothing
+/// gets transferred. What this test asserts is that a destination is not
+/// MADE UP: not the directory itself, not the last one used.
 ///
-/// Antes de #284 esto se rehusaba con `host-no-other-slot`. La cadena completa
-/// —efecto, respuesta y confirmación— la cubre
+/// Before #284 this was refused with `host-no-other-slot`. The full chain —
+/// effect, response and confirmation — is covered by
 /// `con_un_panel_el_destino_lo_elige_el_escritorio`.
 #[tokio::test]
 async fn sin_otro_hueco_el_destino_se_pregunta_fuera() {
     let backend = arbol();
     let (h, _snap) = host_con_layout(Arc::clone(&backend), "simple", (120, 40)).await;
     let mut nativos = h.native_effects();
-    let ack = h.dispatch(tecla("F5")).await.expect("host vivo");
+    let ack = h.dispatch(tecla("F5")).await.expect("host alive");
     assert!(
         matches!(ack, ActionAck::Applied { .. }),
-        "se acepta el gesto y se pregunta: {ack:?}"
+        "the gesture is accepted and it asks: {ack:?}"
     );
     let efecto = tokio::time::timeout(std::time::Duration::from_secs(2), nativos.recv())
         .await
-        .expect("sale el selector")
-        .expect("canal vivo");
+        .expect("the picker comes out")
+        .expect("channel alive");
     assert!(matches!(
         efecto,
         norte_ui_host::dto::NativeEffect::PickDirectory { .. }
@@ -1126,20 +1158,20 @@ async fn sin_otro_hueco_el_destino_se_pregunta_fuera() {
             .lock()
             .expect("transferencias")
             .is_empty(),
-        "y nada se mueve hasta que haya destino"
+        "and nothing moves until there is a destination"
     );
 }
 
-/// Los dos listados en el MISMO directorio: copiar ahí es copiar encima de
-/// uno mismo, y no se abre ningún diálogo que lo sugiera.
+/// Both listings in the SAME directory: copying there is copying onto
+/// itself, and no dialog opens suggesting it.
 #[tokio::test]
 async fn copiar_sobre_el_propio_directorio_se_rechaza() {
     let backend = arbol();
     let (h, _snap) = host_con_layout(Arc::clone(&backend), "orthodox", (120, 40)).await;
-    let ack = h.dispatch(tecla("F5")).await.expect("host vivo");
+    let ack = h.dispatch(tecla("F5")).await.expect("host alive");
     assert!(
         matches!(ack, ActionAck::Unavailable { .. }),
-        "el destino es el directorio de origen: {ack:?}"
+        "the destination is the source directory: {ack:?}"
     );
     assert!(
         backend
@@ -1150,13 +1182,13 @@ async fn copiar_sobre_el_propio_directorio_se_rechaza() {
     );
 }
 
-/// En solo lectura, F5 no abre nada: que la tecla exista en el preset no es
-/// permiso.
+/// In read-only, F5 opens nothing: the key existing in the preset is not
+/// permission.
 #[tokio::test]
 async fn en_solo_lectura_copiar_no_abre_nada() {
     let backend = arbol();
     let (h, _snap) = host_solo_lectura(Arc::clone(&backend)).await;
-    let ack = h.dispatch(tecla("F5")).await.expect("host vivo");
+    let ack = h.dispatch(tecla("F5")).await.expect("host alive");
     assert!(matches!(ack, ActionAck::Unavailable { .. }), "{ack:?}");
     asentar().await;
     assert!(
@@ -1168,8 +1200,8 @@ async fn en_solo_lectura_copiar_no_abre_nada() {
     );
 }
 
-/// Las marcas las CONSUME el envío, como en el TUI: una selección a medio
-/// consumir significaría cosas distintas según qué task terminó.
+/// The marks are CONSUMED by sending, like in the TUI: a half-consumed
+/// selection would mean different things depending on which task finished.
 #[tokio::test]
 async fn las_marcas_se_consumen_al_enviar() {
     let backend = arbol();
@@ -1191,9 +1223,9 @@ async fn las_marcas_se_consumen_al_enviar() {
             generation,
         })
         .await
-        .expect("host vivo");
+        .expect("host alive");
     }
-    h.dispatch(tecla("F5")).await.expect("host vivo");
+    h.dispatch(tecla("F5")).await.expect("host alive");
     let id = siguientes_dialogos(&mut sub).await[0].id;
     h.dispatch(UiAction::Dialog {
         id,
@@ -1201,33 +1233,29 @@ async fn las_marcas_se_consumen_al_enviar() {
         secret: None,
     })
     .await
-    .expect("host vivo");
-    anotados(&backend, "las dos tasks de las dos marcas", 2, |f| {
+    .expect("host alive");
+    anotados(&backend, "the two tasks from the two marks", 2, |f| {
         f.transferencias.lock().expect("transferencias").clone()
     })
     .await;
     assert_eq!(
         backend.transferencias.lock().expect("transferencias").len(),
         2,
-        "dos marcas, dos tasks"
+        "two marks, two tasks"
     );
-    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    h.dispatch(UiAction::Resync).await.expect("host alive");
     let foto = siguiente_foto(&mut sub).await;
-    assert_eq!(
-        listado_de(&foto, 1).marks,
-        0,
-        "las marcas las consumió el envío"
-    );
+    assert_eq!(listado_de(&foto, 1).marks, 0, "sending consumed the marks");
 }
 
-/// Al terminar la copia, el hueco DESTINO se vuelve a listar: la entrada
-/// nueva está ahí y una pantalla que no la enseña miente.
+/// When the copy finishes, the DESTINATION slot is re-listed: the new entry
+/// is there and a screen that does not show it lies.
 #[tokio::test]
 async fn al_terminar_una_copia_se_relista_el_destino() {
     let backend = arbol();
     let (h, _snap) = dos_paneles_con_destino_aparte(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
-    h.dispatch(tecla("F5")).await.expect("host vivo");
+    h.dispatch(tecla("F5")).await.expect("host alive");
     let id = siguientes_dialogos(&mut sub).await[0].id;
     h.dispatch(UiAction::Dialog {
         id,
@@ -1235,7 +1263,7 @@ async fn al_terminar_una_copia_se_relista_el_destino() {
         secret: None,
     })
     .await
-    .expect("host vivo");
+    .expect("host alive");
     siguientes_tasks(&mut sub).await;
     let antes = backend.listados();
 
@@ -1253,8 +1281,8 @@ async fn al_terminar_una_copia_se_relista_el_destino() {
     .await;
 }
 
-/// Una colisión no es una excepción del host: es el desenlace TIPADO de la
-/// task, y llega al tablero como tal.
+/// A collision is not an exception from the host: it is the task's TYPED
+/// outcome, and it reaches the board as such.
 #[tokio::test]
 async fn una_colision_llega_al_tablero_como_fallo() {
     let mut f = Falso::default();
@@ -1271,7 +1299,7 @@ async fn una_colision_llega_al_tablero_como_fallo() {
     let backend = Arc::new(f);
     let (h, _snap) = dos_paneles_con_destino_aparte(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
-    h.dispatch(tecla("F5")).await.expect("host vivo");
+    h.dispatch(tecla("F5")).await.expect("host alive");
     let id = siguientes_dialogos(&mut sub).await[0].id;
     h.dispatch(UiAction::Dialog {
         id,
@@ -1279,21 +1307,21 @@ async fn una_colision_llega_al_tablero_como_fallo() {
         secret: None,
     })
     .await
-    .expect("host vivo");
+    .expect("host alive");
     let tasks = siguientes_tasks(&mut sub).await;
     assert_eq!(
         tasks[0].state,
         norte_ui_host::dto::TaskStateView::Failed,
-        "el destino ya existía, y el tablero lo dice"
+        "the destination already existed, and the board says so"
     );
 }
 
-/// Una task que NACE terminal —el daemon la completó antes de que la llamada
-/// volviera— también relista el destino.
+/// A task that IS BORN terminal — the daemon completed it before the call
+/// returned — also re-lists the destination.
 ///
-/// Es la carrera de verdad: el canal de progreso no cambia nunca, así que
-/// nadie llega a mirarlo, y sin comprobar el estado AL REGISTRAR la copia
-/// quedaba hecha en el disco y ausente en la pantalla para siempre.
+/// It is the real race: the progress channel never changes, so nobody ever
+/// looks at it, and without checking the state ON REGISTERING the copy was
+/// left done on disk and absent on screen forever.
 #[tokio::test]
 async fn una_copia_que_nace_terminal_tambien_relista() {
     let mut f = Falso::default();
@@ -1306,7 +1334,7 @@ async fn una_copia_que_nace_terminal_tambien_relista() {
     let backend = Arc::new(f);
     let (h, _snap) = dos_paneles_con_destino_aparte(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
-    h.dispatch(tecla("F5")).await.expect("host vivo");
+    h.dispatch(tecla("F5")).await.expect("host alive");
     let id = siguientes_dialogos(&mut sub).await[0].id;
     let antes = backend.listados();
     h.dispatch(UiAction::Dialog {
@@ -1315,17 +1343,17 @@ async fn una_copia_que_nace_terminal_tambien_relista() {
         secret: None,
     })
     .await
-    .expect("host vivo");
+    .expect("host alive");
 
-    hasta(&backend, "el refresco de una copia ya terminada", |f| {
+    hasta(&backend, "the refresh from an already-finished copy", |f| {
         (f.listados() > antes).then_some(())
     })
     .await;
 }
 
-/// Un destino que no acepta escrituras rechaza al ENCOLAR, antes de que haya
-/// task: no hay fila en el tablero que mirar, así que lo dice la barra —con
-/// la frase tipada del error, no con un «algo falló»—.
+/// A destination that does not accept writes refuses ON QUEUEING, before
+/// there is a task: there is no row on the board to look at, so the bar
+/// says it — with the error's typed phrase, not with a "something failed".
 #[tokio::test]
 async fn un_destino_de_solo_lectura_lo_dice_al_encolar() {
     let mut f = Falso::default();
@@ -1338,7 +1366,7 @@ async fn un_destino_de_solo_lectura_lo_dice_al_encolar() {
     let backend = Arc::new(f);
     let (h, _snap) = dos_paneles_con_destino_aparte(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
-    h.dispatch(tecla("F5")).await.expect("host vivo");
+    h.dispatch(tecla("F5")).await.expect("host alive");
     let id = siguientes_dialogos(&mut sub).await[0].id;
     h.dispatch(UiAction::Dialog {
         id,
@@ -1346,31 +1374,31 @@ async fn un_destino_de_solo_lectura_lo_dice_al_encolar() {
         secret: None,
     })
     .await
-    .expect("host vivo");
+    .expect("host alive");
 
     for _ in 0..2_000 {
-        h.dispatch(UiAction::Resync).await.expect("host vivo");
+        h.dispatch(UiAction::Resync).await.expect("host alive");
         let foto = siguiente_foto(&mut sub).await;
         if let Some(m) = &foto.status.message {
             assert!(
                 !m.starts_with("err-"),
-                "la barra dice el error TRADUCIDO, no su clave: {m}"
+                "the bar says the TRANSLATED error, not its key: {m}"
             );
-            assert!(foto.tasks.is_empty(), "no llegó a haber task");
+            assert!(foto.tasks.is_empty(), "no task ever came to be");
             return;
         }
     }
-    panic!("un rechazo al encolar se perdió en silencio");
+    panic!("a queueing rejection got lost in silence");
 }
 
-/// Una transferencia en marcha se cancela por el mismo camino que cualquier
-/// otra task: el tablero es uno solo.
+/// A transfer in progress is cancelled through the same path as any other
+/// task: there is only one board.
 #[tokio::test]
 async fn una_copia_en_marcha_se_cancela() {
     let backend = arbol();
     let (h, _snap) = dos_paneles_con_destino_aparte(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
-    h.dispatch(tecla("F5")).await.expect("host vivo");
+    h.dispatch(tecla("F5")).await.expect("host alive");
     let id = siguientes_dialogos(&mut sub).await[0].id;
     h.dispatch(UiAction::Dialog {
         id,
@@ -1378,7 +1406,7 @@ async fn una_copia_en_marcha_se_cancela() {
         secret: None,
     })
     .await
-    .expect("host vivo");
+    .expect("host alive");
     let tasks = siguientes_tasks(&mut sub).await;
     assert_eq!(tasks.len(), 1);
     let ack = h
@@ -1386,17 +1414,17 @@ async fn una_copia_en_marcha_se_cancela() {
             task_id: tasks[0].task_id,
         })
         .await
-        .expect("host vivo");
+        .expect("host alive");
     assert!(matches!(ack, ActionAck::Applied { .. }), "{ack:?}");
     assert_eq!(backend.cancelaciones.load(Ordering::SeqCst), 1);
 }
 
-/// Un refresco JAMÁS pisa una navegación en vuelo.
+/// A refresh NEVER steps on a navigation in flight.
 ///
-/// El refresco reserva un testigo nuevo, así que la respuesta de la
-/// navegación llegaría con uno viejo y se descartaría: el panel se quedaría
-/// en el directorio del que el lector acababa de salir, sin decir nada. Una
-/// pantalla un poco vieja es aceptable; la aplicación moviéndose sola, no.
+/// The refresh reserves a new token, so the navigation's response would
+/// arrive with an old one and be discarded: the pane would be left in the
+/// directory the reader had just left, without saying anything. A slightly
+/// stale screen is acceptable; the application moving on its own is not.
 #[tokio::test]
 async fn un_refresco_no_pisa_una_navegacion_en_vuelo() {
     let mut f = Falso::default();
@@ -1408,10 +1436,10 @@ async fn un_refresco_no_pisa_una_navegacion_en_vuelo() {
     f.pon("mem:///casa/docs/hondo", vec![(b"z.md".to_vec(), false)]);
     f.arbol
         .get_mut("mem:///casa/docs")
-        .expect("está")
+        .expect("is there")
         .push((b"hondo".to_vec(), true));
-    // La respuesta del listado TARDA: es lo que abre la ventana en la que el
-    // refresco podría colarse.
+    // The listing's response TAKES A WHILE: that is what opens the window
+    // where the refresh could sneak in.
     f.retraso_ms = 120;
     f.estado_transferencia = Some(norte_proto::TaskState::Completed);
     let backend = Arc::new(f);
@@ -1422,17 +1450,17 @@ async fn un_refresco_no_pisa_una_navegacion_en_vuelo() {
         .rows
         .iter()
         .find(|r| r.display_name == "hondo")
-        .expect("el subdirectorio está");
+        .expect("the subdirectory is there");
     let (key, generation) = (hondo.key, b2.generation);
 
-    // Una copia hacia `casa/docs`, que termina nada más encolarse.
-    h.dispatch(tecla("F5")).await.expect("host vivo");
+    // A copy toward `casa/docs`, which finishes as soon as it is queued.
+    h.dispatch(tecla("F5")).await.expect("host alive");
     let id = siguientes_dialogos(&mut sub).await[0].id;
-    // Y, ANTES de confirmar, el destino se va a otro sitio: la navegación
-    // queda volando durante los 120 ms del falso.
+    // And, BEFORE confirming, the destination navigates elsewhere: the
+    // navigation is left in flight during the fake's 120 ms.
     h.dispatch(UiAction::FocusSlot { slot_id: 2 })
         .await
-        .expect("host vivo");
+        .expect("host alive");
     let antes = backend.listados();
     h.dispatch(UiAction::Activate {
         slot_id: 2,
@@ -1440,58 +1468,59 @@ async fn un_refresco_no_pisa_una_navegacion_en_vuelo() {
         generation,
     })
     .await
-    .expect("host vivo");
+    .expect("host alive");
     h.dispatch(UiAction::FocusSlot { slot_id: 1 })
         .await
-        .expect("host vivo");
+        .expect("host alive");
     h.dispatch(UiAction::Dialog {
         id,
         choice: "confirm".to_owned(),
         secret: None,
     })
     .await
-    .expect("host vivo");
+    .expect("host alive");
 
-    // La navegación llega a su destino y NADIE la devuelve a `casa/docs`. Se
-    // espera a que el listado de `hondo` se haya PEDIDO y a que no quede
-    // ninguna respuesta volando —incluido el refresco que dispara la copia
-    // terminada, que es el que podría pisarla—; solo entonces se mira la
-    // pantalla, UNA vez.
-    hasta(&backend, "el listado de hondo, ya servido", |f| {
+    // The navigation reaches its destination and NOBODY sends it back to
+    // `casa/docs`. It waits for `hondo`'s listing to have been REQUESTED and
+    // for no response to be left in flight — including the refresh the
+    // finished copy triggers, which is the one that could step on it —
+    // only then is the screen looked at, ONCE.
+    hasta(&backend, "hondo's listing, already served", |f| {
         (f.listados() > antes && f.en_calma()).then_some(())
     })
     .await;
     asentar().await;
-    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    h.dispatch(UiAction::Resync).await.expect("host alive");
     let foto = siguiente_foto(&mut sub).await;
     assert!(
         listado_de(&foto, 2).path_display.ends_with("/docs/hondo"),
-        "la navegación sobrevivió al refresco: {}",
+        "the navigation survived the refresh: {}",
         listado_de(&foto, 2).path_display
     );
 }
 
 // ---------------------------------------------------------------------------
-// Lo que las tres revisiones de la 5.1 encontraron.
+// What the three 5.1 reviews found.
 // ---------------------------------------------------------------------------
 
-/// Un nombre del corpus, por su id.
+/// A corpus name, by its id.
 pub(super) fn hostil(id: &str) -> Vec<u8> {
     norte_testkit::corpus::hostile_names()
         .into_iter()
         .find(|n| n.id == id)
-        .unwrap_or_else(|| panic!("el corpus tiene {id}"))
+        .unwrap_or_else(|| panic!("the corpus has {id}"))
         .bytes
 }
 
-/// Un directorio destino que se llama `a → mem_b.txt` NO puede simular dos
-/// rutas en la confirmación.
+/// A destination directory named `a → mem_b.txt` CANNOT simulate two paths
+/// in the confirmation.
 ///
-/// La flecha es legítima (U+2192), no es un peligro de terminal y por tanto
-/// no se enmascara ni se marca. Con el destino como primera línea del cuerpo
-/// y una flecha por etiqueta, quien lee `→ …/a → mem_b.txt` puede entender
-/// que sus ficheros van a `mem_b.txt`. Se etiqueta FUERA de banda: el destino
-/// tiene su propio campo. Fixture `arrow_join_spoof` del corpus canónico.
+/// The arrow is legitimate (U+2192), it is not a terminal hazard and is
+/// therefore neither masked nor marked. With the destination as the body's
+/// first line and an arrow as its label, whoever reads `→ …/a → mem_b.txt`
+/// could understand their files are going to `mem_b.txt`. It is labeled OUT
+/// OF BAND: the destination has its own field. Fixture `arrow_join_spoof`
+/// from the canonical corpus.
 #[tokio::test]
 async fn un_destino_con_una_flecha_no_simula_dos_rutas() {
     let trampa = hostil("arrow_join_spoof");
@@ -1501,46 +1530,46 @@ async fn un_destino_con_una_flecha_no_simula_dos_rutas() {
         vec![(trampa.clone(), true), (b"notas.txt".to_vec(), false)],
     );
     let vp = norte_proto::VPath::parse("mem:///casa")
-        .expect("raíz")
-        .join(norte_proto::Segment::new(trampa.clone()).expect("segmento"));
+        .expect("root")
+        .join(norte_proto::Segment::new(trampa.clone()).expect("segment"));
     f.pon(vp.to_wire().as_str(), vec![(b"a.md".to_vec(), false)]);
     let backend = Arc::new(f);
     let (h, snap) = host_con_layout(Arc::clone(&backend), "orthodox", (120, 40)).await;
     let mut sub = h.subscribe();
 
-    // El hueco destino entra en el directorio trampa.
+    // The destination slot enters the trap directory.
     let b2 = listado_de(&snap, 2);
     let fila = b2
         .rows
         .iter()
         .find(|r| r.display_name.contains('→'))
-        .expect("la trampa se pinta");
+        .expect("the trap is painted");
     let (key, generation) = (fila.key, b2.generation);
     h.dispatch(UiAction::FocusSlot { slot_id: 2 })
         .await
-        .expect("host vivo");
+        .expect("host alive");
     h.dispatch(UiAction::Activate {
         slot_id: 2,
         key,
         generation,
     })
     .await
-    .expect("host vivo");
+    .expect("host alive");
     let mut despues = siguiente_foto(&mut sub).await;
     while listado_de(&despues, 2).path_display == listado_de(&snap, 2).path_display {
         despues = siguiente_foto(&mut sub).await;
     }
     h.dispatch(UiAction::FocusSlot { slot_id: 1 })
         .await
-        .expect("host vivo");
-    // El cursor del ORIGEN, sobre el fichero: el directorio trampa también
-    // está listado aquí, y lo que se comprueba es el destino.
+        .expect("host alive");
+    // The SOURCE's cursor, on the file: the trap directory is also listed
+    // here, and what is checked is the destination.
     let b1 = listado_de(&despues, 1);
     let notas = b1
         .rows
         .iter()
         .find(|r| r.display_name == "notas.txt")
-        .expect("el fichero está");
+        .expect("the file is there");
     let (key, generation) = (notas.key, b1.generation);
     h.dispatch(UiAction::SelectRow {
         slot_id: 1,
@@ -1548,27 +1577,27 @@ async fn un_destino_con_una_flecha_no_simula_dos_rutas() {
         generation,
     })
     .await
-    .expect("host vivo");
+    .expect("host alive");
 
-    h.dispatch(tecla("F5")).await.expect("host vivo");
+    h.dispatch(tecla("F5")).await.expect("host alive");
     let d = siguientes_dialogos(&mut sub).await[0].clone();
-    let destino = d.destination.expect("dice a dónde va");
+    let destino = d.destination.expect("says where it is going");
     assert!(
         destino.text.contains('\u{2192}'),
-        "el nombre real lleva la flecha: {destino:?}"
+        "the real name carries the arrow: {destino:?}"
     );
-    assert_eq!(d.body.len(), 1, "una entrada, una línea: {:?}", d.body);
+    assert_eq!(d.body.len(), 1, "one entry, one line: {:?}", d.body);
     assert!(
         d.body[0].text.ends_with("/casa/notas.txt") && !d.body[0].text.contains('\u{2192}'),
-        "el cuerpo es SOLO el origen; el destino no aparece ahí: {:?}",
+        "the body is ONLY the source; the destination does not appear there: {:?}",
         d.body
     );
 }
 
-/// Un lote más grande de lo que cabe en el diálogo lo DICE.
+/// A batch bigger than what fits in the dialog SAYS so.
 ///
-/// Marcar cuarenta, ver dieciséis y confirmar es aprobar otra cosa: esta es
-/// la última pantalla donde todavía se puede decir que no.
+/// Marking forty, seeing sixteen and confirming is approving something
+/// else: this is the last screen where it can still be said no.
 #[tokio::test]
 async fn un_lote_recortado_lo_dice() {
     let mut nombres: Vec<(Vec<u8>, bool)> =
@@ -1590,7 +1619,7 @@ async fn un_lote_recortado_lo_dice() {
         .collect();
     assert!(
         claves.len() > 16,
-        "hay más de lo que cabe: {}",
+        "there are more than what fits: {}",
         claves.len()
     );
     for key in &claves {
@@ -1600,32 +1629,32 @@ async fn un_lote_recortado_lo_dice() {
             generation,
         })
         .await
-        .expect("host vivo");
+        .expect("host alive");
     }
-    // Se escucha DESPUÉS de marcar: cuarenta marcas son cuarenta parches, y
-    // el ayudante que espera un diálogo mira solo las primeras
-    // actualizaciones que le llegan.
+    // Listening starts AFTER marking: forty marks are forty patches, and the
+    // helper waiting for a dialog only looks at the first updates that
+    // reach it.
     let mut sub = h.subscribe();
-    h.dispatch(tecla("F5")).await.expect("host vivo");
+    h.dispatch(tecla("F5")).await.expect("host alive");
     let d = siguientes_dialogos(&mut sub).await[0].clone();
     assert!(
         d.body.len() < claves.len(),
-        "el cuerpo está acotado: {}",
+        "the body is capped: {}",
         d.body.len()
     );
     assert!(
         !d.overflow_note.is_empty(),
-        "y lo DICE, en su propio campo: {d:?}"
+        "and it SAYS so, in its own field: {d:?}"
     );
     assert!(
         !d.overflow_note.starts_with("dialog-"),
-        "traducido, no la clave Fluent: {}",
+        "translated, not the Fluent key: {}",
         d.overflow_note
     );
 }
 
-/// El cuerpo de una confirmación DICE qué línea se pinta distinta de lo que
-/// es. Es la única superficie donde se aprueba un nombre ajeno.
+/// A confirmation's body SAYS which line is painted differently from what
+/// it is. It is the only surface where a foreign name gets approved.
 #[tokio::test]
 async fn el_cuerpo_de_una_confirmacion_marca_lo_que_enmascara() {
     for id in ["control_newline", "control_escape", "arrow_join_spoof"] {
@@ -1646,7 +1675,7 @@ async fn el_cuerpo_de_una_confirmacion_marca_lo_que_enmascara() {
             .rows
             .iter()
             .find(|r| r.display_name != "docs")
-            .expect("está");
+            .expect("is there");
         let (key, generation) = (fila.key, b1.generation);
         h.dispatch(UiAction::SelectRow {
             slot_id: 1,
@@ -1654,37 +1683,37 @@ async fn el_cuerpo_de_una_confirmacion_marca_lo_que_enmascara() {
             generation,
         })
         .await
-        .expect("host vivo");
-        // F8 basta: el cuerpo del borrado y el de la transferencia se
-        // construyen con la MISMA función.
-        h.dispatch(tecla("F8")).await.expect("host vivo");
+        .expect("host alive");
+        // F8 is enough: the delete's body and the transfer's are built with
+        // the SAME function.
+        h.dispatch(tecla("F8")).await.expect("host alive");
         let d = siguientes_dialogos(&mut sub).await[0].clone();
         for l in &d.body {
-            sin_peligro(&l.text, id, "una línea del cuerpo de un diálogo");
+            sin_peligro(&l.text, id, "a line from a dialog's body");
         }
         assert_eq!(
             d.body.iter().any(|l| l.hostile),
             altera,
-            "[{id}] la marca del cuerpo dice exactamente lo que `display_name` dice: {:?}",
+            "[{id}] the body's mark says exactly what `display_name` says: {:?}",
             d.body
         );
     }
 }
 
-/// El destino se compone con los BYTES del origen, también cuando no son
-/// UTF-8. La ruta que cruza el wire no ha pasado por pantalla.
+/// The destination is composed from the source's BYTES, even when they are
+/// not UTF-8. The path that crosses the wire never went through the screen.
 #[tokio::test]
 async fn el_destino_se_compone_byte_a_byte() {
     let backend = arbol();
     let (h, snap) = dos_paneles_con_destino_aparte(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
-    // `caf\xC3(`: no es UTF-8, y en pantalla lleva un U+FFFD.
+    // `caf\xC3(`: not UTF-8, and on screen it carries a U+FFFD.
     let b1 = listado_de(&snap, 1);
     let fila = b1
         .rows
         .iter()
         .find(|r| r.hostile)
-        .expect("el árbol trae un nombre que no es UTF-8");
+        .expect("the tree carries a name that is not UTF-8");
     let (key, generation) = (fila.key, b1.generation);
     h.dispatch(UiAction::SelectRow {
         slot_id: 1,
@@ -1692,8 +1721,8 @@ async fn el_destino_se_compone_byte_a_byte() {
         generation,
     })
     .await
-    .expect("host vivo");
-    h.dispatch(tecla("F5")).await.expect("host vivo");
+    .expect("host alive");
+    h.dispatch(tecla("F5")).await.expect("host alive");
     let id = siguientes_dialogos(&mut sub).await[0].id;
     h.dispatch(UiAction::Dialog {
         id,
@@ -1701,41 +1730,41 @@ async fn el_destino_se_compone_byte_a_byte() {
         secret: None,
     })
     .await
-    .expect("host vivo");
-    let ts = anotados(&backend, "la transferencia encolada", 1, |f| {
+    .expect("host alive");
+    let ts = anotados(&backend, "the transfer queued", 1, |f| {
         f.transferencias.lock().expect("transferencias").clone()
     })
     .await;
     let (from, to, _, _) = &ts[0];
     assert!(
         from.to_wire().starts_with("mem:///casa/caf"),
-        "el origen es la entrada que no es UTF-8: {}",
+        "the source is the entry that is not UTF-8: {}",
         from.to_wire()
     );
     let nombre = from
         .to_wire()
         .strip_prefix("mem:///casa/")
-        .expect("cuelga de casa")
+        .expect("hangs off casa")
         .to_owned();
     assert_eq!(
         to.to_wire(),
         format!("mem:///casa/docs/{nombre}"),
-        "los bytes del nombre llegan intactos"
+        "the name's bytes arrive intact"
     );
     assert!(
         !to.to_wire().contains("%EF%BF%BD"),
-        "y sin el U+FFFD que la pantalla pinta: {}",
+        "and without the U+FFFD the screen paints: {}",
         to.to_wire()
     );
 }
 
-/// Mover relista TAMBIÉN el panel de origen: de ahí desaparecen entradas.
+/// Moving ALSO re-lists the source pane: entries disappear from it.
 #[tokio::test]
 async fn mover_relista_tambien_el_origen() {
     let backend = arbol();
     let (h, _snap) = dos_paneles_con_destino_aparte(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
-    h.dispatch(tecla("F6")).await.expect("host vivo");
+    h.dispatch(tecla("F6")).await.expect("host alive");
     let id = siguientes_dialogos(&mut sub).await[0].id;
     h.dispatch(UiAction::Dialog {
         id,
@@ -1743,7 +1772,7 @@ async fn mover_relista_tambien_el_origen() {
         secret: None,
     })
     .await
-    .expect("host vivo");
+    .expect("host alive");
     siguientes_tasks(&mut sub).await;
     let antes = backend.listados();
     let tx = backend
@@ -1751,23 +1780,23 @@ async fn mover_relista_tambien_el_origen() {
         .lock()
         .expect("progreso")
         .clone()
-        .expect("hay task");
+        .expect("there is a task");
     tx.send_modify(|p| p.state = norte_proto::TaskState::Completed);
 
-    // Los DOS: el origen (`casa`, de donde sale) y el destino (`casa/docs`, a
-    // donde llega).
-    hasta(&backend, "el relistado de los dos paneles", |f| {
+    // BOTH: the source (`casa`, where it leaves from) and the destination
+    // (`casa/docs`, where it arrives).
+    hasta(&backend, "both panes re-listed", |f| {
         (f.listados() >= antes + 2).then_some(())
     })
     .await;
 }
 
-/// Un refresco conserva el cursor POR RUTA, no por índice.
+/// A refresh keeps the cursor BY PATH, not by index.
 ///
-/// La memoria por directorio guarda un índice, y un índice no sobrevive a que
-/// la operación quite una entrada: quien miraba un fichero se encontraba el
-/// cursor en otro sin haber tocado una tecla, y la siguiente tecla podía ser
-/// F8.
+/// Per-directory memory stores an index, and an index does not survive the
+/// operation removing an entry: whoever was looking at one file would find
+/// the cursor on another without having touched a key, and the next key
+/// could be F8.
 #[tokio::test]
 async fn el_cursor_sobrevive_a_un_refresco() {
     let mut f = Falso::default();
@@ -1780,17 +1809,17 @@ async fn el_cursor_sobrevive_a_un_refresco() {
             (b"d.txt".to_vec(), false),
         ],
     );
-    // El borrado QUITA la entrada: sin eso el listado que llega es idéntico
-    // y el índice del cursor sigue nombrando el mismo fichero por accidente
-    // — un test verde que no prueba nada.
+    // Delete REMOVES the entry: without that the listing that arrives is
+    // identical and the cursor's index keeps naming the same file by
+    // accident — a green test proving nothing.
     f.borrar_de_verdad = true;
     let backend = Arc::new(f);
     let (h, snap) = host_arbol(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
     let b = listado(&snap);
-    // Ni la primera ni la ÚLTIMA: sobre la última, borrar una entrada por
-    // delante deja el índice viejo recortado justo sobre el mismo fichero, y
-    // el test pasaría sin ancla por pura coincidencia.
+    // Neither the first nor the LAST one: on the last, deleting an entry
+    // ahead of it leaves the old, trimmed index landing right on the same
+    // file, and the test would pass with no anchor by pure coincidence.
     let medio = &b.rows[2];
     let (key, generation, nombre) = (medio.key, b.generation, medio.display_name.clone());
     h.dispatch(UiAction::SelectRow {
@@ -1799,20 +1828,20 @@ async fn el_cursor_sobrevive_a_un_refresco() {
         generation,
     })
     .await
-    .expect("host vivo");
+    .expect("host alive");
 
-    // Se marca y se borra la PRIMERA, no la del cursor: el listado llega con
-    // una entrada menos por DELANTE, así que el índice viejo apunta a otro
-    // fichero mientras que la ruta sigue siendo la misma.
-    let primera = b.rows.first().expect("hay filas").key;
+    // The FIRST one is marked and deleted, not the cursor's: the listing
+    // arrives with one entry fewer AHEAD of it, so the old index points at a
+    // different file while the path stays the same.
+    let primera = b.rows.first().expect("there are rows").key;
     h.dispatch(UiAction::ToggleMark {
         slot_id: 1,
         key: primera,
         generation,
     })
     .await
-    .expect("host vivo");
-    h.dispatch(tecla("F8")).await.expect("host vivo");
+    .expect("host alive");
+    h.dispatch(tecla("F8")).await.expect("host alive");
     let id = siguientes_dialogos(&mut sub).await[0].id;
     h.dispatch(UiAction::Dialog {
         id,
@@ -1820,18 +1849,18 @@ async fn el_cursor_sobrevive_a_un_refresco() {
         secret: None,
     })
     .await
-    .expect("host vivo");
+    .expect("host alive");
     siguientes_tasks(&mut sub).await;
     let tx = backend
         .progreso
         .lock()
         .expect("progreso")
         .clone()
-        .expect("hay task");
+        .expect("there is a task");
     tx.send_modify(|p| p.state = norte_proto::TaskState::Completed);
 
     for _ in 0..2_000 {
-        h.dispatch(UiAction::Resync).await.expect("host vivo");
+        h.dispatch(UiAction::Resync).await.expect("host alive");
         let foto = siguiente_foto(&mut sub).await;
         let b = listado(&foto);
         if b.generation == generation {
@@ -1844,22 +1873,23 @@ async fn el_cursor_sobrevive_a_un_refresco() {
         assert_eq!(
             bajo.as_deref(),
             Some(nombre.as_str()),
-            "el cursor sigue sobre el MISMO fichero tras el refresco"
+            "the cursor is still on the SAME file after the refresh"
         );
         return;
     }
-    panic!("el refresco no llegó");
+    panic!("the refresh never arrived");
 }
 
-/// Con TRES listados, un destino designado a mano SOBREVIVE a un cambio de
-/// foco, y sin designar no se adivina ninguno.
+/// With THREE listings, a hand-designated destination SURVIVES a focus
+/// change, and with none designated, none is guessed.
 ///
-/// El host reasignaba el rol en cada `FocusSlot` con su propia regla —«el
-/// primero que no sea el activo»— pisando lo que una persona había elegido y
-/// desempatando solo cuando había varios candidatos. Mientras el destino era
-/// decoración eso se veía raro; desde que copiar y mover lo leen, es mandar
-/// ficheros a un sitio que nadie eligió. La regla es la compartida (ADR 0058
-/// D7), y con varios candidatos y ninguno elegido el rol se queda SIN FIJAR.
+/// The host was reassigning the role on every `FocusSlot` with its own rule
+/// — "the first one that is not active" — overriding what a person had
+/// chosen and only tie-breaking when there were several candidates. While
+/// the destination was decoration that looked odd; since copy and move read
+/// it, it means sending files to a place nobody chose. The rule is the
+/// shared one (ADR 0058 D7), and with several candidates and none chosen
+/// the role is left UNSET.
 #[tokio::test]
 async fn con_tres_listados_el_destino_no_se_adivina() {
     use norte_ui_host::dto::SlotRole;
@@ -1894,7 +1924,7 @@ id = 4
 kind = "status"
 "#;
     let arbol_layout: norte_frontend::layout::Node =
-        toml::from_str(TRES).expect("la disposición parsea");
+        toml::from_str(TRES).expect("the layout parses");
     let (h, snap) = UiHost::start(UiHostOptions {
         backend: arbol(),
         initial_dir: dir(),
@@ -1916,7 +1946,7 @@ kind = "status"
         log_ring: None,
     })
     .await
-    .expect("arranca");
+    .expect("starts");
     let rol = |l: &norte_ui_host::dto::LayoutView, id: u32| {
         l.placements
             .iter()
@@ -1926,18 +1956,18 @@ kind = "status"
     let _ = &snap;
     let mut sub = h.subscribe();
 
-    // Sin designar: F5 no adivina, PIDE que se elija.
-    let ack = h.dispatch(tecla("F5")).await.expect("host vivo");
+    // With none designated: F5 does not guess, it ASKS that one be chosen.
+    let ack = h.dispatch(tecla("F5")).await.expect("host alive");
     assert_eq!(
         ack,
         ActionAck::Unavailable {
             reason_key: "host-no-target-designated".to_owned()
         },
-        "con tres paneles el destino se elige, no se desempata: {ack:?}"
+        "with three panes the destination is chosen, not tie-broken: {ack:?}"
     );
 
-    // `layout.set-target` no lo ata ningún preset, así que se corre por la
-    // PALETA — que es la otra puerta del catálogo, y sirve igual.
+    // No preset binds `layout.set-target`, so it is run through the
+    // PALETTE — the catalogue's other door, and it works just as well.
     let mut puesto = false;
     for _ in 0..4 {
         h.dispatch(UiAction::Key(norte_ui_host::keys::KeyInput {
@@ -1948,12 +1978,12 @@ kind = "status"
             meta: false,
         }))
         .await
-        .expect("host vivo");
+        .expect("host alive");
         for c in ["s", "e", "t", "-", "t", "a", "r", "g", "e", "t"] {
-            h.dispatch(tecla_de(c)).await.expect("host vivo");
+            h.dispatch(tecla_de(c)).await.expect("host alive");
         }
-        h.dispatch(tecla("Enter")).await.expect("host vivo");
-        h.dispatch(UiAction::Resync).await.expect("host vivo");
+        h.dispatch(tecla("Enter")).await.expect("host alive");
+        h.dispatch(UiAction::Resync).await.expect("host alive");
         let foto = siguiente_foto(&mut sub).await;
         if rol(&foto.layout, 3) == Some(SlotRole::Target) {
             puesto = true;
@@ -1964,8 +1994,8 @@ kind = "status"
 
     h.dispatch(UiAction::FocusSlot { slot_id: 2 })
         .await
-        .expect("host vivo");
-    h.dispatch(UiAction::Resync).await.expect("host vivo");
+        .expect("host alive");
+    h.dispatch(UiAction::Resync).await.expect("host alive");
     let despues = siguiente_foto(&mut sub).await;
     assert_eq!(
         rol(&despues.layout, 3),
@@ -1974,12 +2004,12 @@ kind = "status"
     );
 }
 
-/// Las marcas que consume el envío son las del hueco de ORIGEN, aunque el
-/// foco se haya ido a otro entre la pregunta y la respuesta.
+/// The marks sending consumes are the SOURCE slot's, even if focus moved to
+/// another one between the question and the answer.
 ///
-/// `FocusSlot` no está vedada mientras hay un diálogo abierto: solo lo están
-/// las teclas. Un clic en el otro panel borraba las marcas del panel ajeno y
-/// dejaba intactas las que se acababan de enviar.
+/// `FocusSlot` is not barred while a dialog is open: only keys are. A click
+/// on the other pane was erasing the foreign pane's marks and leaving the
+/// ones that had just been sent intact.
 #[tokio::test]
 async fn las_marcas_que_se_consumen_son_las_del_origen() {
     let backend = arbol();
@@ -1999,52 +2029,49 @@ async fn las_marcas_que_se_consumen_son_las_del_origen() {
             generation,
         })
         .await
-        .expect("host vivo");
+        .expect("host alive");
     }
     let mut sub = h.subscribe();
-    h.dispatch(tecla("F5")).await.expect("host vivo");
+    h.dispatch(tecla("F5")).await.expect("host alive");
     let id = siguientes_dialogos(&mut sub).await[0].id;
 
-    // Y AHORA el foco se va al otro panel, sin cerrar el diálogo.
+    // And NOW focus moves to the other pane, without closing the dialog.
     h.dispatch(UiAction::FocusSlot { slot_id: 2 })
         .await
-        .expect("host vivo");
+        .expect("host alive");
     h.dispatch(UiAction::Dialog {
         id,
         choice: "confirm".to_owned(),
         secret: None,
     })
     .await
-    .expect("host vivo");
-    anotados(
-        &backend,
-        "la transferencia que consume las marcas",
-        1,
-        |f| f.transferencias.lock().expect("transferencias").clone(),
-    )
+    .expect("host alive");
+    anotados(&backend, "the transfer that consumes the marks", 1, |f| {
+        f.transferencias.lock().expect("transferencias").clone()
+    })
     .await;
 
-    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    h.dispatch(UiAction::Resync).await.expect("host alive");
     let foto = siguiente_foto(&mut sub).await;
     assert_eq!(
         listado_de(&foto, 1).marks,
         0,
-        "las marcas consumidas son las del hueco que las mandó"
+        "the consumed marks are the slot's that sent them"
     );
 }
 
-/// Un hueco OCULTO sobre el directorio afectado no se lista —lo que no se ve
-/// no se trae— pero queda marcado para recargar en cuanto vuelva.
+/// A HIDDEN slot on the affected directory is not listed — what is not seen
+/// is not fetched — but it is marked to reload as soon as it comes back.
 ///
-/// Sin esto, una pestaña de atrás sobre el directorio de destino enseñaba un
-/// listado anterior a la operación hasta que alguien navegara a mano, y una
-/// tecla sobre una de sus filas actuaba contra ese listado viejo.
+/// Without this, a background tab on the destination directory showed a
+/// listing from before the operation until someone navigated by hand, and a
+/// key on one of its rows acted against that stale listing.
 #[tokio::test]
 async fn un_hueco_oculto_afectado_queda_para_recargar() {
     let backend = arbol();
-    // Nace ANCHA, para que el segundo listado se liste de verdad y quede
-    // `Ready`. Si naciera escondido estaría `Loading` desde el principio y se
-    // recargaría al volver por ese motivo, no por este.
+    // Born WIDE, so the second listing really gets listed and ends up
+    // `Ready`. If it were born hidden it would be `Loading` from the start
+    // and would reload on return for that reason, not this one.
     let (h, snap) = host_con_layout(Arc::clone(&backend), "orthodox", (160, 40)).await;
     assert!(
         snap.slots
@@ -2052,17 +2079,17 @@ async fn un_hueco_oculto_afectado_queda_para_recargar() {
             .filter(|s| matches!(s, SlotView::Browser(_)))
             .count()
             >= 2,
-        "los dos listados se ven"
+        "both listings are visible"
     );
     let mut sub = h.subscribe();
-    // Y ahora se estrecha hasta que solo cabe uno.
+    // And now it narrows until only one fits.
     h.dispatch(UiAction::SetViewport {
         width: 30,
         height: 10,
     })
     .await
-    .expect("host vivo");
-    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    .expect("host alive");
+    h.dispatch(UiAction::Resync).await.expect("host alive");
     let estrecha = siguiente_foto(&mut sub).await;
     assert_eq!(
         estrecha
@@ -2071,9 +2098,9 @@ async fn un_hueco_oculto_afectado_queda_para_recargar() {
             .filter(|s| matches!(s, SlotView::Browser(_)))
             .count(),
         1,
-        "con 30 columnas solo cabe un listado"
+        "with 30 columns only one listing fits"
     );
-    h.dispatch(tecla("F8")).await.expect("host vivo");
+    h.dispatch(tecla("F8")).await.expect("host alive");
     let id = siguientes_dialogos(&mut sub).await[0].id;
     h.dispatch(UiAction::Dialog {
         id,
@@ -2081,7 +2108,7 @@ async fn un_hueco_oculto_afectado_queda_para_recargar() {
         secret: None,
     })
     .await
-    .expect("host vivo");
+    .expect("host alive");
     siguientes_tasks(&mut sub).await;
     let listados_antes = backend.listados();
     let tx = backend
@@ -2089,31 +2116,32 @@ async fn un_hueco_oculto_afectado_queda_para_recargar() {
         .lock()
         .expect("progreso")
         .clone()
-        .expect("hay task");
+        .expect("there is a task");
     tx.send_modify(|p| p.state = norte_proto::TaskState::Completed);
-    // El desenlace de la task llega por su propio canal: se deja correr antes
-    // de ensanchar, para que el hueco escondido ya esté marcado.
+    // The task's outcome arrives over its own channel: it is let run before
+    // widening, so the hidden slot is already marked.
     asentar().await;
 
-    // Se ensancha la ventana: el hueco que estaba escondido vuelve, y como
-    // quedó marcado CARGANDO, se lista.
+    // The window widens: the slot that was hidden comes back, and since it
+    // was left marked as LOADING, it gets listed.
     h.dispatch(UiAction::SetViewport {
         width: 160,
         height: 40,
     })
     .await
-    .expect("host vivo");
-    hasta(&backend, "el relistado del hueco que volvió", |f| {
+    .expect("host alive");
+    hasta(&backend, "the re-listing of the slot that came back", |f| {
         (f.listados() > listados_antes + 1).then_some(())
     })
     .await;
 }
 
-/// En solo lectura, la PALETA tampoco ofrece lo que muta.
+/// In read-only, the PALETTE also does not offer what mutates.
 ///
-/// Era la única puerta que no pasaba por el keymap efectivo: ofrecía copiar,
-/// mover y borrar, y la guarda de ejecución los rechazaba. Ofrecer lo que se
-/// va a rehusar es prometer algo que no se va a hacer.
+/// It was the only door that did not go through the effective keymap: it
+/// was offering copy, move and delete, and the execution guard was
+/// rejecting them. Offering what is going to be refused is promising
+/// something that will not happen.
 #[tokio::test]
 async fn en_solo_lectura_la_paleta_no_ofrece_lo_que_muta() {
     let (h, _snap) = host_solo_lectura(arbol()).await;
@@ -2126,7 +2154,7 @@ async fn en_solo_lectura_la_paleta_no_ofrece_lo_que_muta() {
         meta: false,
     }))
     .await
-    .expect("host vivo");
+    .expect("host alive");
     let p = siguiente_paleta(&mut sub).await.expect("la paleta abre");
     let solo_lectura =
         norte_ui_host::commands::implementados(norte_ui_host::commands::Efectos::SoloLectura);
@@ -2145,7 +2173,7 @@ async fn en_solo_lectura_la_paleta_no_ofrece_lo_que_muta() {
 #[tokio::test]
 async fn en_solo_lectura_copiar_dice_por_que() {
     let (h, _snap) = host_solo_lectura(arbol()).await;
-    let ack = h.dispatch(tecla("F5")).await.expect("host vivo");
+    let ack = h.dispatch(tecla("F5")).await.expect("host alive");
     let ActionAck::Unavailable { reason_key } = ack else {
         panic!("se esperaba no disponible: {ack:?}");
     };
@@ -2155,26 +2183,26 @@ async fn en_solo_lectura_copiar_dice_por_que() {
     );
 }
 
-/// Un refresco conserva las MARCAS, por ruta.
+/// A refresh keeps the MARKS, by path.
 ///
-/// `set_listing` las limpia porque las filas son otras — correcto para un
-/// `cd`, y un castigo para quien no se movió: el panel de DESTINO de una
-/// copia se relista cuando la copia termina, y se llevaba por delante una
-/// selección que su dueño había hecho a mano y que nadie había enviado.
+/// `set_listing` clears them because the rows are different — correct for a
+/// `cd`, and a punishment for whoever did not move: a copy's DESTINATION
+/// pane gets re-listed when the copy finishes, and it was sweeping away a
+/// selection its owner had made by hand and that nobody had sent.
 #[tokio::test]
 async fn las_marcas_sobreviven_a_un_refresco() {
     let backend = arbol();
     let (h, snap) = dos_paneles_con_destino_aparte(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
-    // Marcas en el panel de DESTINO: no son las que la copia consume, así que
-    // lo único que puede quitarlas es el relistado.
+    // Marks on the DESTINATION pane: they are not the ones the copy
+    // consumes, so the only thing that can remove them is the re-listing.
     let b2 = listado_de(&snap, 2);
     let generation2 = b2.generation;
     let claves: Vec<_> = b2.rows.iter().map(|r| r.key).collect();
-    assert!(!claves.is_empty(), "el destino tiene filas");
+    assert!(!claves.is_empty(), "the destination has rows");
     h.dispatch(UiAction::FocusSlot { slot_id: 2 })
         .await
-        .expect("host vivo");
+        .expect("host alive");
     for key in &claves {
         h.dispatch(UiAction::ToggleMark {
             slot_id: 2,
@@ -2182,13 +2210,13 @@ async fn las_marcas_sobreviven_a_un_refresco() {
             generation: generation2,
         })
         .await
-        .expect("host vivo");
+        .expect("host alive");
     }
     h.dispatch(UiAction::FocusSlot { slot_id: 1 })
         .await
-        .expect("host vivo");
+        .expect("host alive");
 
-    h.dispatch(tecla("F5")).await.expect("host vivo");
+    h.dispatch(tecla("F5")).await.expect("host alive");
     let id = siguientes_dialogos(&mut sub).await[0].id;
     h.dispatch(UiAction::Dialog {
         id,
@@ -2196,18 +2224,18 @@ async fn las_marcas_sobreviven_a_un_refresco() {
         secret: None,
     })
     .await
-    .expect("host vivo");
+    .expect("host alive");
     siguientes_tasks(&mut sub).await;
     let tx = backend
         .progreso
         .lock()
         .expect("progreso")
         .clone()
-        .expect("hay task");
+        .expect("there is a task");
     tx.send_modify(|p| p.state = norte_proto::TaskState::Completed);
 
     for _ in 0..2_000 {
-        h.dispatch(UiAction::Resync).await.expect("host vivo");
+        h.dispatch(UiAction::Resync).await.expect("host alive");
         let foto = siguiente_foto(&mut sub).await;
         let b = listado_de(&foto, 2);
         if b.generation == generation2 {
@@ -2216,21 +2244,22 @@ async fn las_marcas_sobreviven_a_un_refresco() {
         assert_eq!(
             b.marks,
             claves.len() as u64,
-            "el relistado del destino no se lleva por delante lo que su dueño \
-             había marcado"
+            "re-listing the destination does not sweep away what its owner \
+             had marked"
         );
         return;
     }
-    panic!("el refresco del destino no llegó");
+    panic!("the destination's refresh never arrived");
 }
 
-/// Un movimiento relista el panel de ORIGEN aunque el provider escriba el
-/// padre de sus entradas con OTRA ortografía del mismo directorio.
+/// A move re-lists the SOURCE pane even if the provider writes its entries'
+/// parent with a DIFFERENT spelling of the same directory.
 ///
-/// El padre de una entrada lo escribe el provider; el directorio del panel
-/// puede venir de la config, de la sesión o de un favorito. En macOS (NFD
-/// contra NFC) y contra un servidor sin distinción de caja son dos cadenas
-/// para el mismo sitio, y la comparación byte a byte no las junta (ADR 0061).
+/// An entry's parent is written by the provider; the pane's directory can
+/// come from config, from the session or from a favorite. On macOS (NFD
+/// against NFC) and against a case-insensitive server they are two strings
+/// for the same place, and byte-for-byte comparison does not join them (ADR
+/// 0061).
 #[tokio::test]
 async fn mover_relista_el_origen_aunque_el_provider_lo_escriba_distinto() {
     let mut f = Falso::default();
@@ -2239,39 +2268,39 @@ async fn mover_relista_el_origen_aunque_el_provider_lo_escriba_distinto() {
         vec![(b"docs".to_vec(), true), (b"notas.txt".to_vec(), false)],
     );
     f.pon("mem:///casa/docs", vec![(b"a.md".to_vec(), false)]);
-    // El provider cuelga sus entradas de `⟨mem⟩/CASA`, no de `⟨mem⟩/casa`.
+    // The provider hangs its entries off `⟨mem⟩/CASA`, not `⟨mem⟩/casa`.
     f.padre_distinto = true;
     let backend = Arc::new(f);
     let (h, snap) = host_con_layout(Arc::clone(&backend), "orthodox", (120, 40)).await;
     let mut sub = h.subscribe();
 
-    // El destino, en `docs`.
+    // The destination, in `docs`.
     let b2 = listado_de(&snap, 2);
     let docs = b2
         .rows
         .iter()
         .find(|r| r.display_name == "docs")
-        .expect("está");
+        .expect("is there");
     let (key, generation) = (docs.key, b2.generation);
     h.dispatch(UiAction::FocusSlot { slot_id: 2 })
         .await
-        .expect("host vivo");
+        .expect("host alive");
     h.dispatch(UiAction::Activate {
         slot_id: 2,
         key,
         generation,
     })
     .await
-    .expect("host vivo");
+    .expect("host alive");
     let mut despues = siguiente_foto(&mut sub).await;
     while listado_de(&despues, 2).path_display == listado_de(&snap, 2).path_display {
         despues = siguiente_foto(&mut sub).await;
     }
     h.dispatch(UiAction::FocusSlot { slot_id: 1 })
         .await
-        .expect("host vivo");
+        .expect("host alive");
 
-    h.dispatch(tecla("F6")).await.expect("host vivo");
+    h.dispatch(tecla("F6")).await.expect("host alive");
     let id = siguientes_dialogos(&mut sub).await[0].id;
     h.dispatch(UiAction::Dialog {
         id,
@@ -2279,7 +2308,7 @@ async fn mover_relista_el_origen_aunque_el_provider_lo_escriba_distinto() {
         secret: None,
     })
     .await
-    .expect("host vivo");
+    .expect("host alive");
     siguientes_tasks(&mut sub).await;
     let antes = backend.listados();
     let tx = backend
@@ -2287,23 +2316,23 @@ async fn mover_relista_el_origen_aunque_el_provider_lo_escriba_distinto() {
         .lock()
         .expect("progreso")
         .clone()
-        .expect("hay task");
+        .expect("there is a task");
     tx.send_modify(|p| p.state = norte_proto::TaskState::Completed);
 
-    // Los DOS paneles. Sin apuntar el directorio del HUECO de origen, el
-    // padre de la entrada (`⟨mem⟩/CASA`) no casaría con lo que el panel
-    // enseña (`⟨mem⟩/casa`) y el origen se quedaría sin relistar.
-    hasta(&backend, "el relistado de los dos paneles", |f| {
+    // BOTH panes. Without pinning the SOURCE slot's directory, the entry's
+    // parent (`⟨mem⟩/CASA`) would not match what the pane shows
+    // (`⟨mem⟩/casa`) and the source would be left without a re-listing.
+    hasta(&backend, "both panes re-listed", |f| {
         (f.listados() >= antes + 2).then_some(())
     })
     .await;
 }
 
 // ---------------------------------------------------------------------------
-// Un LOTE de transferencias: sus topes y su cuenta (#271).
+// A BATCH of transfers: its caps and its count (#271).
 // ---------------------------------------------------------------------------
 
-/// Marca las N primeras filas del hueco activo, una a una.
+/// Marks the active slot's first N rows, one by one.
 pub(super) async fn marca_todo(
     h: &UiHost,
     sub: &mut norte_ui_host::controller::UiSubscription,
@@ -2320,12 +2349,13 @@ pub(super) async fn marca_todo(
             generation,
         })
         .await
-        .expect("host vivo");
+        .expect("host alive");
     }
 }
 
-/// Un lote cuyos rechazos al encolar son TODOS: la barra dice UNA frase con la
-/// cuenta, no N frases de las que sobrevive la última (#271, punto 3).
+/// A batch whose queueing rejections are ALL of it: the bar says ONE phrase
+/// with the count, not N phrases of which only the last survives (#271,
+/// point 3).
 #[tokio::test]
 async fn los_rechazos_de_un_lote_se_dicen_una_sola_vez() {
     let mut f = Falso::default();
@@ -2344,7 +2374,7 @@ async fn los_rechazos_de_un_lote_se_dicen_una_sola_vez() {
     let (h, _snap) = dos_paneles_con_destino_aparte(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
     marca_todo(&h, &mut sub, 1).await;
-    h.dispatch(tecla("F5")).await.expect("host vivo");
+    h.dispatch(tecla("F5")).await.expect("host alive");
     let id = siguientes_dialogos(&mut sub).await[0].id;
     h.dispatch(UiAction::Dialog {
         id,
@@ -2352,21 +2382,24 @@ async fn los_rechazos_de_un_lote_se_dicen_una_sola_vez() {
         secret: None,
     })
     .await
-    .expect("host vivo");
+    .expect("host alive");
 
-    // El resumen dice CUÁNTAS, o sea que la cuenta existió: sin ella la barra
-    // llevaría la frase del último error y nada más.
-    let foto = esperar_foto(&h, &mut sub, "el lote se resume", |f| {
+    // The summary says HOW MANY, meaning the count existed: without it the
+    // bar would carry the last error's phrase and nothing else.
+    let foto = esperar_foto(&h, &mut sub, "the batch gets summarized", |f| {
         f.status.message.as_deref().is_some_and(|m| m.contains('4'))
     })
     .await;
-    let msg = foto.status.message.clone().expect("hay resumen");
-    assert!(msg.contains('4'), "el resumen no cuenta el lote: {msg}");
-    assert!(foto.tasks.is_empty(), "ninguna llegó a ser task");
+    let msg = foto.status.message.clone().expect("there is a summary");
+    assert!(
+        msg.contains('4'),
+        "the summary does not count the batch: {msg}"
+    );
+    assert!(foto.tasks.is_empty(), "none ever became a task");
 }
 
-/// Y con las tasks encoladas: el resumen cuenta los DESENLACES, y solo cuando
-/// el lote entero está resuelto (#271, punto 2).
+/// And with the tasks queued: the summary counts the OUTCOMES, and only once
+/// the whole batch is resolved (#271, point 2).
 #[tokio::test]
 async fn el_lote_dice_cuantas_terminaron_bien_y_cuantas_no() {
     let mut f = Falso::default();
@@ -2386,7 +2419,7 @@ async fn el_lote_dice_cuantas_terminaron_bien_y_cuantas_no() {
     let (h, _snap) = dos_paneles_con_destino_aparte(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
     marca_todo(&h, &mut sub, 1).await;
-    h.dispatch(tecla("F5")).await.expect("host vivo");
+    h.dispatch(tecla("F5")).await.expect("host alive");
     let id = siguientes_dialogos(&mut sub).await[0].id;
     h.dispatch(UiAction::Dialog {
         id,
@@ -2394,23 +2427,24 @@ async fn el_lote_dice_cuantas_terminaron_bien_y_cuantas_no() {
         secret: None,
     })
     .await
-    .expect("host vivo");
+    .expect("host alive");
 
     let foto = esperar_foto(&h, &mut sub, "el lote se resume", |f| {
         f.status.message.is_some()
     })
     .await;
-    let msg = foto.status.message.clone().expect("hay resumen");
+    let msg = foto.status.message.clone().expect("there is a summary");
     assert!(
         msg.contains('4') && msg.contains('0'),
-        "el resumen dice 4 pedidas y 0 mal: {msg}"
+        "the summary says 4 requested and 0 failed: {msg}"
     );
 }
 
-/// El tope de lote (#271, punto 4): `pane.copy` opera sobre las marcas y
-/// marcar no tiene techo. Sin este tope el lote se encolaba entero y el límite
-/// se descubría a mitad, cuando el daemon empezaba a rechazar por
-/// `MAX_LIVE_TASKS`: con la mitad hecha y nada que dijera dónde se cortó.
+/// The batch cap (#271, point 4): `pane.copy` operates on the marks, and
+/// marking has no ceiling. Without this cap the batch was queued whole and
+/// the limit was discovered halfway, when the daemon started rejecting over
+/// `MAX_LIVE_TASKS`: with half of it done and nothing saying where it cut
+/// off.
 #[tokio::test]
 async fn un_lote_por_encima_del_tope_se_rechaza_entero() {
     const CUANTAS: usize = norte_ui_host::MAX_TRANSFER_BATCH + 8;
@@ -2425,11 +2459,11 @@ async fn un_lote_por_encima_del_tope_se_rechaza_entero() {
     let backend = Arc::new(f);
     let (h, _snap) = host_con_layout(Arc::clone(&backend), "orthodox", (120, 40)).await;
     let mut sub = h.subscribe();
-    // El destino, a mano y no con el ayudante de dos paneles: con un listado
-    // de este tamaño el drenaje MUEVE la generación, y un `Activate` con la
-    // del arranque llega rancio. Se espera a que el listado esté entero y se
-    // lee la generación de ESA foto.
-    let asentado = esperar_foto(&h, &mut sub, "el drenaje termina", |f| {
+    // The destination, by hand and not with the two-pane helper: with a
+    // listing this size the drain MOVES the generation, and an `Activate`
+    // with the startup one arrives stale. It waits for the listing to be
+    // whole and reads THAT snapshot's generation.
+    let asentado = esperar_foto(&h, &mut sub, "the drain finishes", |f| {
         listado_de(f, 2).total_rows.unwrap_or(0) >= CUANTAS as u64 + 2
     })
     .await;
@@ -2438,33 +2472,34 @@ async fn un_lote_por_encima_del_tope_se_rechaza_entero() {
         .rows
         .iter()
         .find(|r| r.display_name == "docs")
-        .expect("el directorio está");
+        .expect("the directory is there");
     let (key, generation) = (docs.key, b2.generation);
     h.dispatch(UiAction::FocusSlot { slot_id: 2 })
         .await
-        .expect("host vivo");
+        .expect("host alive");
     h.dispatch(UiAction::Activate {
         slot_id: 2,
         key,
         generation,
     })
     .await
-    .expect("host vivo");
-    esperar_foto(&h, &mut sub, "el destino aterriza en /casa/docs", |f| {
+    .expect("host alive");
+    esperar_foto(&h, &mut sub, "the destination lands in /casa/docs", |f| {
         listado_de(f, 2).path_display.ends_with("/casa/docs")
     })
     .await;
     h.dispatch(UiAction::FocusSlot { slot_id: 1 })
         .await
-        .expect("host vivo");
-    // Y el origen entero cargado: `invert_marks` marca lo CARGADO, y con el
-    // drenaje a medias marcaría cien y el tope no se rozaría.
-    esperar_foto(&h, &mut sub, "el origen está entero", |f| {
+        .expect("host alive");
+    // And the source fully loaded: `invert_marks` marks what is LOADED, and
+    // with the drain halfway it would mark a hundred and the cap would not
+    // be touched.
+    esperar_foto(&h, &mut sub, "the source is whole", |f| {
         listado_de(f, 1).total_rows.unwrap_or(0) >= CUANTAS as u64 + 2
     })
     .await;
     ejecutar_por_paleta(&h, &mut sub, "mark.invert").await;
-    let ack = h.dispatch(tecla("F5")).await.expect("host vivo");
+    let ack = h.dispatch(tecla("F5")).await.expect("host alive");
     assert!(
         matches!(&ack, ActionAck::Unavailable { reason_key } if reason_key == "host-batch-too-large"),
         "{ack:?}"
@@ -2472,26 +2507,27 @@ async fn un_lote_por_encima_del_tope_se_rechaza_entero() {
     let foto = foto(&h, &mut sub).await;
     assert!(
         foto.dialogs.is_empty(),
-        "no se abre un diálogo que promete algo que no se va a hacer"
+        "no dialog opens promising something that will not happen"
     );
 }
 
-/// El corpus canónico contra el diálogo de APROBACIÓN (#277).
+/// The canonical corpus against the APPROVAL dialog (#277).
 ///
-/// Es la superficie donde más caro sale mentir: lo que se lee ahí es lo único
-/// que un humano tiene para decidir si un agente borra sus ficheros.
+/// It is the surface where lying costs the most: what is read there is the
+/// only thing a human has to decide whether an agent deletes their files.
 ///
-/// Las rutas llegan del daemon como TEXTO ya redactado, no como `VPath`, así
-/// que el test las pasa antes por `display_lossy` —que es lo que hace
-/// `norte_core::engine::span_path`, y no se puede llamar desde aquí porque el
-/// host no depende del core (ADR 0066)—. Ese paso ES lo que hace que el test
-/// signifique algo: alimentar bytes crudos encendería la bandera por un camino
-/// que en producción no ocurre.
+/// The paths arrive from the daemon as text already redacted, not as
+/// `VPath`, so the test passes them first through `display_lossy` — which is
+/// what `norte_core::engine::span_path` does, and cannot be called from here
+/// because the host does not depend on the core (ADR 0066). That step IS
+/// what makes the test mean something: feeding it raw bytes would light the
+/// flag through a path that does not happen in production.
 #[tokio::test]
 async fn el_corpus_hostil_cruza_el_dialogo_de_aprobacion() {
-    // Las cuatro que el lossy del daemon ALTERA, y `zwsp_twin` como CONTRASTE:
-    // a ésa el lossy no la toca —es UTF-8 válido— y su bandera se tiene que
-    // encender por el otro camino, el del enmascarado.
+    // The four the daemon's lossy conversion ALTERS, and `zwsp_twin` as
+    // CONTRAST: the lossy conversion does not touch that one — it is valid
+    // UTF-8 — and its flag has to turn on through the other path, the
+    // masking one.
     let casos = [
         "lossy_collapse_ff",
         "lossy_collapse_fe",
@@ -2504,12 +2540,12 @@ async fn el_corpus_hostil_cruza_el_dialogo_de_aprobacion() {
         let n = corpus
             .iter()
             .find(|n| n.id == id)
-            .unwrap_or_else(|| panic!("la fixture {id} está en el corpus"));
+            .unwrap_or_else(|| panic!("fixture {id} is in the corpus"));
         let p = norte_proto::VPath::parse("mem:///casa")
-            .expect("raíz")
-            .join(norte_proto::Segment::new(n.bytes.clone()).expect("segmento"));
-        // El paso del daemon: `span_path` es esto para cualquier autoridad sin
-        // userinfo, que es el caso de un `mem://`.
+            .expect("root")
+            .join(norte_proto::Segment::new(n.bytes.clone()).expect("segment"));
+        // The daemon's step: `span_path` is this for any authority with no
+        // userinfo, which is the case for a `mem://`.
         let redactada = p.display_lossy().clone();
 
         let falso = arbol_como_falso();
@@ -2526,77 +2562,80 @@ async fn el_corpus_hostil_cruza_el_dialogo_de_aprobacion() {
             ttl_ms: 30_000,
             detail: norte_proto::methods::ApprovalDetail::default(),
         })
-        .expect("el host escucha");
+        .expect("the host is listening");
 
         let dialogos = siguientes_dialogos(&mut sub).await;
         let d = &dialogos[0];
-        let linea = d.body.first().expect("la ruta está");
-        sin_peligro(&linea.text, id, "una ruta del diálogo de aprobación");
+        let linea = d.body.first().expect("the path is there");
+        sin_peligro(&linea.text, id, "a path from the approval dialog");
         assert!(
             linea.hostile,
-            "[{id}] la línea se pinta distinta de lo que hay y NO lo dice: {:?}",
+            "[{id}] the line is painted differently from what there is and does NOT say so: {:?}",
             linea.text
         );
-        // Y el plazo va en SU campo, nunca entre las rutas: entre ellas lo
-        // podría suplantar un nombre de fichero (`approval_ttl_line_spoof`).
+        // And the deadline goes in ITS OWN field, never among the paths:
+        // among them a file name could impersonate it (`approval_ttl_line_spoof`).
         assert!(
             d.deadline.is_some(),
-            "[{id}] el plazo tiene que tener campo propio"
+            "[{id}] the deadline has to have its own field"
         );
         assert!(
             d.body.iter().all(|l| Some(&l.text) != d.deadline.as_ref()),
-            "[{id}] el plazo se coló entre las rutas: {:?}",
+            "[{id}] the deadline snuck in among the paths: {:?}",
             d.body
         );
     }
 }
 
-/// El directorio de un plugin roto es BYTES, y llegaba ya convertido (#265).
+/// A broken plugin's directory is BYTES, and it was arriving already
+/// converted (#265).
 ///
-/// `PluginLoadError.dir` es un `String` que el core producía con un
-/// `to_string_lossy` SIN marcar, así que un directorio llamado `caf\xff`
-/// —fixture `lossy_collapse_ff` del corpus— cruzaba el wire ya con su
-/// `U+FFFD`. Y `display_name` no lo recupera: pone `lossy` solo cuando
-/// `from_utf8` falla y `masked` solo ante un peligro de terminal, y `U+FFFD`
-/// no es ninguna de las dos cosas —es Specials—. La fila se declaraba fiel.
+/// `PluginLoadError.dir` is a `String` the core was producing with a
+/// `to_string_lossy` with NO mark, so a directory named `caf\xff` — fixture
+/// `lossy_collapse_ff` from the corpus — crossed the wire already carrying
+/// its `U+FFFD`. And `display_name` cannot recover it: it puts `lossy` only
+/// when `from_utf8` fails and `masked` only in the face of a terminal
+/// hazard, and `U+FFFD` is neither of those two things — it is Specials.
+/// The row declared itself faithful.
 ///
-/// El test es un PAR, porque una sola fila no distingue el arreglo de la
-/// heurística que había antes:
+/// The test is a PAIR, because a single row does not tell the fix apart
+/// from the heuristic that came before:
 ///
-/// - `caf\xff` (bytes de verdad no-UTF-8) → la fila se MARCA. La heurística
-///   vieja también lo marcaba, así que esta mitad sola no prueba nada.
-/// - `caf\u{FFFD}` (un directorio que se llama ASÍ, en UTF-8 válido) → la fila
-///   NO se marca. Es el falso positivo de la heurística —«la cadena lleva un
-///   reemplazo, luego alguien convirtió»— y es la mitad que solo pasa con los
-///   bytes delante.
+/// - `caf\xff` (real non-UTF-8 bytes) → the row gets MARKED. The old
+///   heuristic also marked it, so this half alone proves nothing.
+/// - `caf\u{FFFD}` (a directory actually NAMED that, in valid UTF-8) → the
+///   row is NOT marked. It is the heuristic's false positive — "the string
+///   carries a replacement, so someone converted it" — and it is the half
+///   that only passes with the bytes on hand.
 ///
-/// Lo que este arreglo NO hace: distinguir `caf\xff` de `caf\xfe` al pintar.
-/// `display_name` mapea todo byte inválido al mismo `U+FFFD`, así que las dos
-/// siguen pintándose igual. Lo que se recupera es la MARCA, no la ortografía.
+/// What this fix does NOT do: tell `caf\xff` apart from `caf\xfe` when
+/// painting. `display_name` maps every invalid byte to the same `U+FFFD`,
+/// so the two keep being painted the same. What is recovered is the MARK,
+/// not the spelling.
 #[tokio::test]
 async fn un_directorio_de_plugin_no_utf8_llega_marcado_y_sin_falso_positivo() {
     let crudos = norte_testkit::corpus::hostile_names()
         .into_iter()
         .find(|n| n.id == "lossy_collapse_ff")
-        .expect("la fixture está")
+        .expect("the fixture is there")
         .bytes;
     assert!(
         std::str::from_utf8(&crudos).is_err(),
-        "la premisa: son bytes que NO son UTF-8"
+        "the premise: they are bytes that are NOT UTF-8"
     );
-    // Y el gemelo legítimo: un nombre que ES `U+FFFD` en disco, en UTF-8
-    // válido. Nadie lo convirtió, así que marcarlo sería mentir.
+    // And the legitimate twin: a name that IS `U+FFFD` on disk, in valid
+    // UTF-8. Nobody converted it, so marking it would be lying.
     let honesto = "caf\u{FFFD}".as_bytes().to_vec();
     assert!(std::str::from_utf8(&honesto).is_ok());
 
     let mut backend = arbol_con_plugins(Vec::new(), &[]);
     {
-        let f = std::sync::Arc::get_mut(&mut backend).expect("única referencia");
+        let f = std::sync::Arc::get_mut(&mut backend).expect("single reference");
         for bytes in [&crudos, &honesto] {
-            // Lo que el core manda: la cadena YA convertida, y los bytes al
-            // lado. Las dos filas se distinguen por su texto; lo que NO se
-            // puede distinguir por el texto es cuál de las dos se convirtió,
-            // que es justo la pregunta.
+            // What the core sends: the string ALREADY converted, with the
+            // bytes alongside. The two rows are told apart by their text;
+            // what CANNOT be told apart by the text is which of the two got
+            // converted, which is exactly the question.
             let convertida = String::from_utf8_lossy(bytes).into_owned();
             f.errores_de_carga
                 .push((convertida.clone(), "el manifiesto no parsea".to_owned()));
@@ -2605,82 +2644,85 @@ async fn un_directorio_de_plugin_no_utf8_llega_marcado_y_sin_falso_positivo() {
     }
     let (h, _snap) = host_arbol(std::sync::Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
-    h.dispatch(tecla("F12")).await.expect("host vivo");
-    let _ = siguiente_extensiones(&mut sub).await.expect("abre");
+    h.dispatch(tecla("F12")).await.expect("host alive");
+    let _ = siguiente_extensiones(&mut sub).await.expect("opens");
     let v = extensiones_cargadas(&mut sub).await;
 
-    // Las dos cadenas colapsan a una sola clave, así que el falso llega a
-    // mandar UNA fila: lo que se afirma es su bandera, que con los bytes del
-    // nombre honesto tiene que ser FALSA.
-    assert_eq!(v.errors.len(), 2, "las dos filas llegan: {:?}", v.errors);
+    // The two strings collapse into a single key, so the fake ends up
+    // sending ONE row: what is asserted is its flag, which with the honest
+    // name's bytes has to be FALSE.
+    assert_eq!(v.errors.len(), 2, "both rows arrive: {:?}", v.errors);
 
-    // La de bytes crudos: se marca, y con los bytes delante se marca por el
-    // motivo correcto —`display_name` vio que no eran UTF-8— y no por la
-    // heurística.
+    // The one with raw bytes: it gets marked, and with the bytes on hand it
+    // gets marked for the right reason — `display_name` saw they were not
+    // UTF-8 — and not by the heuristic.
     let convertida = v
         .errors
         .iter()
         .find(|e| e.dir == String::from_utf8_lossy(&crudos))
-        .expect("la fila de bytes crudos está");
+        .expect("the raw-bytes row is there");
     assert!(
         convertida.hostile,
-        "lo pintado difiere de lo que hay y NO lo dice: {:?}",
+        "what is painted differs from what there is and does NOT say so: {:?}",
         convertida.dir
     );
 
-    // Y la honesta: NO se marca. Ésta es la mitad que solo pasa con los bytes
-    // delante; con la heurística de la cadena salía marcada de más.
+    // And the honest one: NOT marked. This is the half that only passes
+    // with the bytes on hand; with the string's heuristic it came out
+    // over-marked.
     let fila_limpia = v
         .errors
         .iter()
         .find(|e| e.dir == "caf\u{FFFD}")
-        .expect("la fila honesta está");
+        .expect("the honest row is there");
     assert!(
         !fila_limpia.hostile,
-        "un directorio que SE LLAMA `caf\u{FFFD}` no se convirtió: marcarlo es \
-         el falso positivo que los bytes existen para quitar"
+        "a directory that IS NAMED `caf\u{FFFD}` was not converted: marking it \
+         is the false positive the bytes exist to remove"
     );
     for c in fila_limpia.dir.chars() {
         assert!(
             !norte_encoding::is_terminal_hazard(c),
-            "un peligro cruzó sin enmascarar: {:?}",
+            "a hazard crossed unmasked: {:?}",
             fila_limpia.dir
         );
     }
 }
 
-/// Y la otra mitad, aislada: SIN bytes —un peer 0.52— la heurística marca esa
-/// misma fila honesta, y ése es el falso positivo que #265 quita.
+/// And the other half, isolated: WITHOUT bytes — a 0.52 peer — the heuristic
+/// marks that same honest row, and that is the false positive #265 removes.
 #[tokio::test]
 async fn sin_los_bytes_un_nombre_honesto_con_reemplazo_sale_marcado_de_mas() {
     let honesto = "caf\u{FFFD}".to_owned();
     let mut backend = arbol_con_plugins(Vec::new(), &[]);
     std::sync::Arc::get_mut(&mut backend)
-        .expect("única referencia")
+        .expect("single reference")
         .errores_de_carga = vec![(honesto, "el manifiesto no parsea".to_owned())];
-    // Deliberadamente SIN `bytes_de_carga`: es un daemon 0.52.
+    // Deliberately WITHOUT `bytes_de_carga`: it is a 0.52 daemon.
     let (h, _snap) = host_arbol(std::sync::Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
-    h.dispatch(tecla("F12")).await.expect("host vivo");
-    let _ = siguiente_extensiones(&mut sub).await.expect("abre");
+    h.dispatch(tecla("F12")).await.expect("host alive");
+    let _ = siguiente_extensiones(&mut sub).await.expect("opens");
     let v = extensiones_cargadas(&mut sub).await;
     assert!(
         v.errors[0].hostile,
-        "contra un peer viejo la heurística es lo único que hay, y marca de \
-         más antes que de menos"
+        "against an old peer the heuristic is all there is, and it marks \
+         too much rather than too little"
     );
 }
 
-/// #268 — dos marcas que son UN nombre en el destino se rechazan enteras.
+/// #268 — two marks that are ONE name at the destination are rejected as a
+/// whole.
 ///
-/// En un ext4 `README.txt` y `readme.txt` son dos ficheros; en NTFS o APFS son
-/// uno. Encolar las dos deja que una gane —cuál, no es determinista— y que la
-/// otra falle sin explicación sobre un miembro arbitrario de la pareja.
+/// On an ext4, `README.txt` and `readme.txt` are two files; on NTFS or APFS
+/// they are one. Queueing both lets one win — which one is not
+/// deterministic — and the other fail with no explanation, on an arbitrary
+/// member of the pair.
 ///
-/// El test corre las TRES parejas del corpus canónico, que son tres pliegues
-/// distintos: caja ASCII, normalización NFC/NFD, y el pliegue completo de un
-/// ext4 `+F`. Un arreglo que solo mirase la caja pasaría el primero y fallaría
-/// los otros dos.
+/// The test runs the THREE pairs from the canonical corpus, which are three
+/// different folds: ASCII case, NFC/NFD normalization, and an ext4 `+F`'s
+/// full fold. A fix that only looked at case would pass the first and fail
+/// the other two.
 #[tokio::test]
 async fn dos_marcas_que_pliegan_al_mismo_nombre_no_se_encolan() {
     let corpus = norte_testkit::corpus::hostile_names();
@@ -2688,7 +2730,7 @@ async fn dos_marcas_que_pliegan_al_mismo_nombre_no_se_encolan() {
         corpus
             .iter()
             .find(|n| n.id == id)
-            .unwrap_or_else(|| panic!("la fixture {id} está"))
+            .unwrap_or_else(|| panic!("fixture {id} is there"))
             .bytes
             .clone()
     };
@@ -2699,7 +2741,7 @@ async fn dos_marcas_que_pliegan_al_mismo_nombre_no_se_encolan() {
     ];
     for (a, b) in parejas {
         let (uno, otro) = (bytes_de(a), bytes_de(b));
-        assert_ne!(uno, otro, "[{a}/{b}] la premisa: son bytes distintos");
+        assert_ne!(uno, otro, "[{a}/{b}] the premise: they are different bytes");
 
         let mut f = Falso::default();
         f.pon(
@@ -2712,8 +2754,9 @@ async fn dos_marcas_que_pliegan_al_mismo_nombre_no_se_encolan() {
             ],
         );
         f.pon("mem:///casa/docs", vec![(b"x.md".to_vec(), false)]);
-        // El DESTINO pliega: un APFS, un NTFS o un ext4 `+F`. Sin este mando
-        // el caso no se podía escribir, que es lo que la issue decía.
+        // The DESTINATION folds: an APFS, an NTFS or an ext4 `+F`. Without
+        // this flag the case could not be written, which is what the issue
+        // said.
         f.capacidades.insert(
             "mem:///casa/docs".to_owned(),
             norte_proto::Capabilities {
@@ -2724,11 +2767,11 @@ async fn dos_marcas_que_pliegan_al_mismo_nombre_no_se_encolan() {
         let backend = Arc::new(f);
         let (h, _snap) = dos_paneles_con_destino_aparte(Arc::clone(&backend)).await;
         let mut sub = h.subscribe();
-        // Que el pliegue del destino haya llegado: se pide al aterrizar, no
-        // delante del diálogo, así que hay que esperarlo.
-        esperar_foto(&h, &mut sub, "el destino dice cómo pliega", |_| true).await;
+        // That the destination's fold has arrived: it is requested on
+        // landing, not in front of the dialog, so it has to be waited for.
+        esperar_foto(&h, &mut sub, "the destination says how it folds", |_| true).await;
         marca_todo(&h, &mut sub, 1).await;
-        let ack = h.dispatch(tecla("F5")).await.expect("host vivo");
+        let ack = h.dispatch(tecla("F5")).await.expect("host alive");
 
         assert!(
             matches!(&ack, ActionAck::Unavailable { reason_key } if reason_key == "host-batch-folds-to-one"),
@@ -2740,13 +2783,14 @@ async fn dos_marcas_que_pliegan_al_mismo_nombre_no_se_encolan() {
                 .lock()
                 .expect("transferencias")
                 .is_empty(),
-            "[{a}/{b}] no se encoló ni una: el lote se rechaza ENTERO"
+            "[{a}/{b}] not one was queued: the batch is rejected AS A WHOLE"
         );
     }
 }
 
-/// Y en un destino que NO pliega, las mismas dos marcas son dos ficheros y el
-/// lote sale. La comprobación no puede costar la operación legítima.
+/// And at a destination that does NOT fold, the same two marks are two files
+/// and the batch goes out. The check must not cost the legitimate
+/// operation.
 #[tokio::test]
 async fn dos_gemelos_de_caja_hacia_un_destino_sensible_si_se_encolan() {
     let corpus = norte_testkit::corpus::hostile_names();
@@ -2754,7 +2798,7 @@ async fn dos_gemelos_de_caja_hacia_un_destino_sensible_si_se_encolan() {
         corpus
             .iter()
             .find(|n| n.id == id)
-            .expect("la fixture está")
+            .expect("the fixture is there")
             .bytes
             .clone()
     };
@@ -2769,26 +2813,26 @@ async fn dos_gemelos_de_caja_hacia_un_destino_sensible_si_se_encolan() {
         ],
     );
     f.pon("mem:///casa/docs", vec![(b"x.md".to_vec(), false)]);
-    // Sin mando = ext4 corriente, que distingue la caja.
+    // No flag = a regular ext4, which distinguishes case.
     let backend = Arc::new(f);
     let (h, _snap) = dos_paneles_con_destino_aparte(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
-    esperar_foto(&h, &mut sub, "el destino dice cómo pliega", |_| true).await;
+    esperar_foto(&h, &mut sub, "the destination says how it folds", |_| true).await;
     marca_todo(&h, &mut sub, 1).await;
-    let ack = h.dispatch(tecla("F5")).await.expect("host vivo");
+    let ack = h.dispatch(tecla("F5")).await.expect("host alive");
     assert!(
         matches!(&ack, ActionAck::Applied { .. }),
-        "un ext4 distingue la caja: son dos ficheros y el lote es legítimo: {ack:?}"
+        "an ext4 distinguishes case: they are two files and the batch is legitimate: {ack:?}"
     );
 }
 
-/// #311: calcular sumas en la ventana. La Task se encola con lo marcado, y
-/// cuando su INFORME llega se abre un diálogo con una fila por fichero y la
-/// opción de copiar la lista.
+/// #311: computing checksums in the window. The Task is queued with what is
+/// marked, and when its REPORT arrives a dialog opens with one row per file
+/// and the option to copy the list.
 #[tokio::test]
 async fn calcular_sumas_abre_el_dialogo_con_sus_filas() {
     let backend = arbol();
-    // El informe que el falso daemon devolverá: un digest para `notas.txt`.
+    // The report the fake daemon will return: one digest for `notas.txt`.
     *backend.sumas_informe.lock().expect("informe") =
         norte_proto::methods::FsChecksumReportResult {
             entries: vec![norte_proto::methods::ChecksumEntry {
@@ -2810,30 +2854,30 @@ async fn calcular_sumas_abre_el_dialogo_con_sus_filas() {
         meta: false,
     }))
     .await
-    .expect("host vivo");
+    .expect("host alive");
 
     let dialogos = siguientes_dialogos(&mut sub).await;
-    assert_eq!(dialogos.len(), 1, "se abre UN diálogo con las sumas");
-    assert_eq!(dialogos[0].body.len(), 1, "una fila por fichero");
+    assert_eq!(dialogos.len(), 1, "ONE dialog opens with the checksums");
+    assert_eq!(dialogos[0].body.len(), 1, "one row per file");
     assert!(
         dialogos[0].body[0].text.contains("ababab"),
-        "con su digest recortado: {:?}",
+        "with its digest truncated: {:?}",
         dialogos[0].body[0].text
     );
     assert!(
         dialogos[0].choices.iter().any(|c| c.id == "confirm"),
-        "y con la opción de COPIAR, que es lo único que se hace con una lista de digests"
+        "and with the COPY option, which is the only thing done with a list of digests"
     );
     assert_eq!(
         backend.sumas_pedidas.lock().expect("sumas").len(),
         1,
-        "se pidió UN lote"
+        "ONE batch was requested"
     );
 }
 
-/// Un informe PARCIAL —una Task cancelada deja `pending` por encima de cero—
-/// no se compara con nada: acusar a ficheros que nadie llegó a leer es el peor
-/// error posible en la herramienta que existe para comprobar.
+/// A PARTIAL report — a cancelled Task leaves `pending` above zero — is
+/// compared to nothing: accusing files nobody ever read is the worst
+/// possible mistake in the tool that exists to check.
 #[tokio::test]
 async fn un_informe_a_medias_no_abre_veredicto() {
     let backend = arbol();
@@ -2841,7 +2885,7 @@ async fn un_informe_a_medias_no_abre_veredicto() {
         norte_proto::methods::FsChecksumReportResult {
             entries: Vec::new(),
             algo: norte_proto::methods::ChecksumAlgo::Sha256,
-            // Lo que deja una cancelación: la Task terminó y queda trabajo.
+            // What a cancellation leaves: the Task ended and work remains.
             pending: 3,
         };
     let (host, _snap) = host_arbol(Arc::clone(&backend)).await;
@@ -2855,10 +2899,10 @@ async fn un_informe_a_medias_no_abre_veredicto() {
         meta: false,
     }))
     .await
-    .expect("host vivo");
-    // Se espera a que el informe HAYA vuelto: lo que se afirma es que con él
-    // en la mano no se abre nada, no que todavía no hubiera llegado.
-    hasta(&backend, "el informe de sumas pedido", |f| {
+    .expect("host alive");
+    // It waits for the report to HAVE come back: what is asserted is that
+    // with it in hand nothing opens, not that it had not arrived yet.
+    hasta(&backend, "the checksum report requested", |f| {
         (!f.sumas_informes_pedidos
             .lock()
             .expect("informes")
@@ -2870,7 +2914,7 @@ async fn un_informe_a_medias_no_abre_veredicto() {
     let f = foto(&host, &mut sub).await;
     assert!(
         f.dialogs.is_empty(),
-        "un informe a medias no abre ningún veredicto: {:?}",
+        "a partial report opens no verdict: {:?}",
         f.dialogs
     );
 }
@@ -2886,25 +2930,26 @@ pub(super) fn alt_a() -> UiAction {
     })
 }
 
-/// #314: la ventana cambia permisos. El diálogo lleva campo de texto —el modo
-/// en octal—, dice sobre cuántas entradas va, y confirmar encola la Task con
-/// el modo que se tecleó.
+/// #314: the window changes permissions. The dialog carries a text field —
+/// the mode, in octal — says how many entries it applies to, and confirming
+/// queues the Task with the mode that was typed.
 ///
-/// La regla de qué es un modo válido es la COMPARTIDA
-/// (`norte_frontend::chmod::parse_mode`), la misma que usa la terminal: dos
-/// lecturas distintas de `755` en dos frontends serían dos permisos distintos.
+/// The rule for what a valid mode is is the SHARED one
+/// (`norte_frontend::chmod::parse_mode`), the same one the terminal uses:
+/// two different readings of `755` in two frontends would be two different
+/// permissions.
 #[tokio::test]
 async fn cambiar_permisos_teclea_y_encola() {
     let backend = arbol();
     let (host, _snap) = host_arbol(Arc::clone(&backend)).await;
     let mut sub = host.subscribe();
 
-    host.dispatch(alt_a()).await.expect("host vivo");
+    host.dispatch(alt_a()).await.expect("host alive");
     let dialogos = siguientes_dialogos(&mut sub).await;
     let id = dialogos[0].id;
     assert!(
         dialogos[0].input.is_some(),
-        "el diálogo de permisos dice que aquí se teclea"
+        "the permissions dialog says typing happens here"
     );
 
     host.dispatch(UiAction::DialogInput {
@@ -2912,7 +2957,7 @@ async fn cambiar_permisos_teclea_y_encola() {
         text: "0750".to_owned(),
     })
     .await
-    .expect("host vivo");
+    .expect("host alive");
     let _ = siguientes_dialogos(&mut sub).await;
     host.dispatch(UiAction::Dialog {
         id,
@@ -2920,24 +2965,24 @@ async fn cambiar_permisos_teclea_y_encola() {
         secret: None,
     })
     .await
-    .expect("host vivo");
-    let lotes = anotados(&backend, "el lote de permisos encolado", 1, |f| {
+    .expect("host alive");
+    let lotes = anotados(&backend, "the permissions batch queued", 1, |f| {
         f.permisos.lock().expect("permisos").clone()
     })
     .await;
-    assert_eq!(lotes.len(), 1, "se encoló UN lote");
-    assert_eq!(lotes[0].1, 0o750, "en OCTAL: 750, no 750 decimal");
-    assert_eq!(lotes[0].0.len(), 1, "sobre lo que hay bajo el cursor");
+    assert_eq!(lotes.len(), 1, "ONE batch was queued");
+    assert_eq!(lotes[0].1, 0o750, "in OCTAL: 750, not decimal 750");
+    assert_eq!(lotes[0].0.len(), 1, "on what is under the cursor");
 }
 
-/// Un modo que no vale no encola nada, y se dice.
+/// A mode that is not valid queues nothing, and it is said.
 #[tokio::test]
 async fn un_modo_invalido_no_cambia_nada() {
     let backend = arbol();
     let (host, _snap) = host_arbol(Arc::clone(&backend)).await;
     let mut sub = host.subscribe();
 
-    host.dispatch(alt_a()).await.expect("host vivo");
+    host.dispatch(alt_a()).await.expect("host alive");
     let dialogos = siguientes_dialogos(&mut sub).await;
     let id = dialogos[0].id;
     host.dispatch(UiAction::DialogInput {
@@ -2945,7 +2990,7 @@ async fn un_modo_invalido_no_cambia_nada() {
         text: "899".to_owned(),
     })
     .await
-    .expect("host vivo");
+    .expect("host alive");
     let _ = siguientes_dialogos(&mut sub).await;
     let ack = host
         .dispatch(UiAction::Dialog {
@@ -2954,14 +2999,14 @@ async fn un_modo_invalido_no_cambia_nada() {
             secret: None,
         })
         .await
-        .expect("host vivo");
+        .expect("host alive");
     assert!(
         matches!(&ack, ActionAck::Unavailable { .. }),
-        "un 899 no es octal y se dice: {ack:?}"
+        "899 is not octal and it is said: {ack:?}"
     );
     asentar().await;
     assert!(
         backend.permisos.lock().expect("permisos").is_empty(),
-        "y no se encoló nada"
+        "and nothing was queued"
     );
 }

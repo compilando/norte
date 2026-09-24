@@ -1,49 +1,48 @@
-//! Navegación TC (spec 2026-07-18): lógica PURA del quick search — sin
-//! terminal, sin `App`. El match es UX de tipeo sobre el nombre lossy
-//! normalizado a NFC y case-plegado (trampa macOS NFD, CLAUDE.md); la
-//! IDENTIDAD de las entradas sigue siendo el `VPath` en bytes — operar usa
-//! siempre `entries[índice_real]`.
+//! TC navigation (spec 2026-07-18): PURE quick-search logic — no terminal, no
+//! `App`. The match is typing UX over the lossy name normalized to NFC and
+//! case-folded (the macOS NFD trap, CLAUDE.md); the IDENTITY of the entries
+//! is still the `VPath` in bytes — operating always uses
+//! `entries[real_index]`.
 //!
-//! Compartido por los frontends (TUI y GUI): la mecánica del quick search no
-//! cambia de naturaleza por el backend de render.
+//! Shared by both frontends (TUI and GUI): the quick search's mechanics do
+//! not change nature with the render backend.
 
 use norte_proto::{Entry, VPath};
 use unicode_normalization::UnicodeNormalization;
 
-/// Modo del quick search (`[ui] quick_search`, default filtro).
+/// Quick-search mode (`[ui] quick_search`, default filter).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Mode {
-    /// El listado se reduce a los matches.
+    /// The listing shrinks to the matches.
     #[default]
     Filter,
-    /// El cursor salta entre matches; el listado no cambia.
+    /// The cursor jumps between matches; the listing does not change.
     Jump,
 }
 
-/// Nombre → clave de comparación: lossy del último segmento, NFC,
-/// lowercase, y NFC OTRA VEZ.
+/// Name → comparison key: lossy of the last segment, NFC, lowercase, and NFC
+/// AGAIN.
 ///
-/// La segunda NFC no es redundante: minusculizar puede sacar el resultado
-/// de NFC cuando la precompuesta solo existe en minúscula (J+U+030C no
-/// compone, pero su minúscula j+U+030C compone a ǰ U+01F0) — sin
-/// re-normalizar, la aguja compuesta y el nombre descompuesto no casarían
-/// (equivalencia canónica rota, review encoding MEDIA-1).
+/// The second NFC is not redundant: lowercasing can knock the result out of
+/// NFC when the precomposed form only exists in lowercase (J+U+030C does not
+/// compose, but its lowercase j+U+030C composes to ǰ U+01F0) — without
+/// re-normalizing, the composed needle and the decomposed name would not
+/// match (broken canonical equivalence, encoding review MEDIA-1).
 ///
-/// Solo equivalencia CANÓNICA (NFC): half-width katakana, ligaduras y demás
-/// equivalencias de COMPATIBILIDAD (NFKC) quedan FUERA a sabiendas — «ﬁ» no
-/// casa con «fi»; normalizarlas cambiaría de familia de equivalencia.
+/// Only CANONICAL equivalence (NFC): half-width katakana, ligatures and
+/// other COMPATIBILITY equivalences (NFKC) are knowingly left OUT — "ﬁ"
+/// does not match "fi"; normalizing them would switch equivalence families.
 ///
-/// Coste: el fold por entrada se CACHEA en `QuickSearch::folds` (#77) —
-/// un recompute completo por mutación del listado (`new` / `refresh`),
-/// no por keystroke; los keystrokes (`push_char`/`backspace`)
-/// solo pliegan la query. `to_lowercase` es case-folding simple de Rust,
-/// NO full Unicode case-folding — consciente, suficiente para substring
-/// UX de tipeo.
+/// Cost: the per-entry fold is CACHED in `QuickSearch::folds` (#77) — a
+/// full recompute per listing mutation (`new` / `refresh`), not per
+/// keystroke; keystrokes (`push_char`/`backspace`) only fold the query.
+/// `to_lowercase` is Rust's simple case-folding, NOT full Unicode
+/// case-folding — deliberate, enough for typing-UX substring matching.
 ///
-/// `pub` (H1 T4): la palette de comandos de la TUI pliega texto que NO es
-/// un nombre de `Entry` (comando+descripción) con el MISMO criterio de
-/// normalización que el quick search — un solo pipeline de fold para todo
-/// filtro substring del frontend, jamás una copia divergente.
+/// `pub` (H1 T4): the TUI's command palette folds text that is NOT an
+/// `Entry` name (command+description) under the SAME normalization
+/// criterion as the quick search — one single fold pipeline for every
+/// substring filter in the frontend, never a diverging copy.
 #[must_use]
 pub fn fold(name: &[u8]) -> String {
     String::from_utf8_lossy(name)
@@ -53,27 +52,26 @@ pub fn fold(name: &[u8]) -> String {
         .collect()
 }
 
-/// [`fold`] con la reinterpretación de nombres del pane (#98/F1): un nombre
-/// NO-UTF8 bajo `Some(enc)` se pliega sobre el texto DECODIFICADO
-/// ([`decode_name`](norte_encoding::decode_name), la regla de
-/// `display_name_with`) — teclear «п» encuentra la entrada que el pane pinta
-/// «Папка». Sin reinterpretación (o nombre UTF-8 válido): el fold lossy de
-/// siempre.
+/// [`fold`] with the pane's name reinterpretation (#98/F1): a NON-UTF8 name
+/// under `Some(enc)` is folded over the DECODED text
+/// ([`decode_name`](norte_encoding::decode_name), `display_name_with`'s
+/// rule) — typing "п" finds the entry the pane paints as "Папка". With no
+/// reinterpretation (or a valid UTF-8 name): the usual lossy fold.
 ///
-/// UN solo pipeline (F1 del audit): la rama enc DELEGA en [`fold`] — el
-/// doble-NFC (caso J+U+030C) queda pineado para ambos caminos por la misma
-/// fixture; duplicarlo aquí era un mutante irrematable hasta que el ciclo
-/// gane un encoding con combinantes (windows-1258).
+/// ONE single pipeline (audit F1): the `enc` branch DELEGATES to [`fold`] —
+/// the double-NFC (the J+U+030C case) is pinned for both paths by the same
+/// fixture; duplicating it here was an unkillable mutant until the cycle
+/// gains an encoding with combining marks (windows-1258).
 ///
-/// Divergencia CONSCIENTE con el texto pintado (F3 del audit): se pliega el
-/// decodificado SIN enmascarar — un hazard enmascarado a `�` en pantalla no
-/// casa tecleando `�` (misma asimetría pre-existente del camino lossy con
-/// controles embebidos en UTF-8 válido). Los folds jamás se pintan.
+/// DELIBERATE divergence from the painted text (audit F3): the decoded
+/// text is folded WITHOUT masking — a hazard masked to `�` on screen does
+/// not match typing `�` (the same pre-existing asymmetry of the lossy path
+/// with controls embedded in valid UTF-8). Folds are never painted.
 ///
-/// `pub` para que el marcado por patrón (#103) pliegue EXACTAMENTE igual que
-/// el quick search — un solo pipeline, jamás una copia divergente, y el
-/// claim de diseño ("un solo fold compartido") queda enlazable desde fuera
-/// del crate en vez de solo prometido en prosa.
+/// `pub` so pattern-based marking (#103) folds EXACTLY like the quick
+/// search — one single pipeline, never a diverging copy, and the design
+/// claim ("one shared fold") becomes linkable from outside the crate
+/// instead of only promised in prose.
 #[must_use]
 pub fn fold_with(name: &[u8], enc: Option<norte_encoding::NameEncoding>) -> String {
     match (enc, std::str::from_utf8(name)) {
@@ -82,7 +80,7 @@ pub fn fold_with(name: &[u8], enc: Option<norte_encoding::NameEncoding>) -> Stri
     }
 }
 
-/// Folds precomputados de `entries` (índice-paralelo). Ver [`fold_with`].
+/// Precomputed folds of `entries` (index-parallel). See [`fold_with`].
 fn fold_names(entries: &[Entry], enc: Option<norte_encoding::NameEncoding>) -> Vec<String> {
     entries
         .iter()
@@ -90,7 +88,7 @@ fn fold_names(entries: &[Entry], enc: Option<norte_encoding::NameEncoding>) -> V
         .collect()
 }
 
-/// Matching sobre folds YA precomputados (camino caliente del keystroke).
+/// Matching over ALREADY precomputed folds (the keystroke hot path).
 fn matches_folded(query_folded: &str, folds: &[String]) -> Vec<usize> {
     folds
         .iter()
@@ -100,17 +98,17 @@ fn matches_folded(query_folded: &str, folds: &[String]) -> Vec<usize> {
         .collect()
 }
 
-/// Índices de `entries` cuyo nombre contiene `query` (misma normalización
-/// en ambos lados, ver `fold`). `query` en bytes crudos (viene del input
-/// tal cual).
+/// Indices of `entries` whose name contains `query` (same normalization on
+/// both sides, see `fold`). `query` in raw bytes (comes straight from the
+/// input).
 ///
-/// Conveniencia SIN cache: pliega `entries` entero en cada llamada (en
-/// streaming — pico de memoria de UN fold, no N). El estado cacheado
-/// (camino caliente del keystroke) vive dentro de [`QuickSearch`] — esta
-/// función es para el caller ocasional (tests, un solo cálculo puntual),
-/// no para el bucle de tipeo. NO aplica la reinterpretación de nombres
-/// (#57): para casar contra el texto reinterpretado usa [`QuickSearch`]
-/// (que recibe el encoding del pane).
+/// A convenience with NO cache: it folds the whole of `entries` on every
+/// call (streaming — peak memory of ONE fold, not N). The cached state (the
+/// keystroke hot path) lives inside [`QuickSearch`] — this function is for
+/// the occasional caller (tests, a single one-off computation), not for the
+/// typing loop. It does NOT apply name reinterpretation (#57): to match
+/// against the reinterpreted text use [`QuickSearch`] (which receives the
+/// pane's encoding).
 #[must_use]
 pub fn matches(query: &[u8], entries: &[Entry]) -> Vec<usize> {
     let q = fold(query);
@@ -125,30 +123,29 @@ pub fn matches(query: &[u8], entries: &[Entry]) -> Vec<usize> {
         .collect()
 }
 
-/// Estado vivo del quick search de UN pane.
+/// Live quick-search state for ONE pane.
 #[derive(Debug)]
 pub struct QuickSearch {
     query: Vec<u8>,
     mode: Mode,
-    /// Claves de comparación por entrada (índice-paralelas a `entries`),
-    /// recomputadas UNA vez por mutación del listado (`new`/`refresh`), no
-    /// por keystroke (#77).
+    /// Comparison keys per entry (index-parallel to `entries`), recomputed
+    /// ONCE per listing mutation (`new`/`refresh`), not per keystroke (#77).
     folds: Vec<String>,
-    /// Índices REALES en `entries` que casan (query vacía = todos).
+    /// REAL indices into `entries` that match (empty query = all).
     visible: Vec<usize>,
-    /// Posición de la selección DENTRO de `visible`.
+    /// Selection position INSIDE `visible`.
     pos: usize,
-    /// Reinterpretación de nombres vigente al plegar (#98/F1): los folds se
-    /// computan sobre el texto que el usuario VE. Cambiarla exige re-plegar
-    /// ([`QuickSearch::set_name_encoding`]).
+    /// Name reinterpretation in effect when folding (#98/F1): folds are
+    /// computed over the text the user SEES. Changing it requires
+    /// re-folding ([`QuickSearch::set_name_encoding`]).
     enc: Option<norte_encoding::NameEncoding>,
 }
 
 impl QuickSearch {
-    /// Arranca un quick search vacío en el modo dado sobre `entries`: query
-    /// vacía, `visible` se calcula ya mismo (query vacía = todo visible).
-    /// `enc` = la reinterpretación de nombres del pane (#57), para que el
-    /// filtro case contra el texto PINTADO.
+    /// Starts an empty quick search in the given mode over `entries`: empty
+    /// query, `visible` is computed right away (empty query = everything
+    /// visible). `enc` = the pane's name reinterpretation (#57), so the
+    /// filter matches against the PAINTED text.
     #[must_use]
     pub fn new(mode: Mode, entries: &[Entry], enc: Option<norte_encoding::NameEncoding>) -> Self {
         let mut q = Self {
@@ -163,9 +160,9 @@ impl QuickSearch {
         q
     }
 
-    /// Cambia la reinterpretación de nombres y RE-PLIEGA el cache (#98/F1):
-    /// el único otro punto de invalidación además de `new`/`refresh`.
-    /// Mismo contrato de selección que [`QuickSearch::refresh`].
+    /// Changes the name reinterpretation and RE-FOLDS the cache (#98/F1):
+    /// the only other invalidation point besides `new`/`refresh`. Same
+    /// selection contract as [`QuickSearch::refresh`].
     pub fn set_name_encoding(
         &mut self,
         enc: Option<norte_encoding::NameEncoding>,
@@ -176,8 +173,8 @@ impl QuickSearch {
         self.refresh(entries, prev_selected);
     }
 
-    /// Recalcula `visible` a partir de la query actual sobre `self.folds`
-    /// (el cache YA vigente — no toca `entries`).
+    /// Recomputes `visible` from the current query over `self.folds` (the
+    /// cache ALREADY in effect — does not touch `entries`).
     fn recompute(&mut self) {
         self.visible = if self.query.is_empty() {
             (0..self.folds.len()).collect()
@@ -186,8 +183,8 @@ impl QuickSearch {
         };
     }
 
-    /// Añade un carácter tecleado a la query y recalcula. Solo pliega la
-    /// query — el fold de las entradas ya está cacheado en `self.folds`.
+    /// Adds a typed character to the query and recomputes. Only folds the
+    /// query — the entries' fold is already cached in `self.folds`.
     pub fn push_char(&mut self, c: char) {
         let mut buf = [0u8; 4];
         self.query
@@ -196,15 +193,15 @@ impl QuickSearch {
         self.pos = 0;
     }
 
-    /// Retira el último byte tecleado (borra por char UTF-8 completo) y
-    /// recalcula. Query vacía tras el borrado = todo visible.
+    /// Removes the last typed byte (deletes a whole UTF-8 char) and
+    /// recomputes. An empty query after the delete = everything visible.
     pub fn backspace(&mut self) {
         if self.query.is_empty() {
             return;
         }
-        // Retrocede hasta el inicio del último char UTF-8 (o hasta el
-        // último byte si la query no es UTF-8 válida — no debería pasar
-        // porque solo se alimenta vía `push_char`, pero no panica igual).
+        // Backs up to the start of the last UTF-8 char (or to the last byte
+        // if the query is not valid UTF-8 — should not happen since it is
+        // only fed via `push_char`, but it does not panic either way).
         let mut cut = self.query.len() - 1;
         while cut > 0 && (self.query[cut] & 0b1100_0000) == 0b1000_0000 {
             cut -= 1;
@@ -214,22 +211,22 @@ impl QuickSearch {
         self.pos = 0;
     }
 
-    /// Recalcula `visible` sobre el `entries` YA mutado (lote nuevo del
-    /// fill, o un re-sort completo — `Pane::extend_listing` re-sortea el
-    /// listado entero en cada lote) conservando la selección por
-    /// IDENTIDAD, no por índice: un índice recordado de ANTES del sort
-    /// puede apuntar a otra entrada tras él.
+    /// Recomputes `visible` over the ALREADY mutated `entries` (a new batch
+    /// from the fill, or a full re-sort — `Pane::extend_listing` re-sorts
+    /// the whole listing on every batch), keeping the selection by
+    /// IDENTITY, not by index: an index remembered from BEFORE the sort can
+    /// point at a different entry after it.
     ///
-    /// `prev_selected` es el `VPath` de la entrada seleccionada ANTES de
-    /// la mutación — el caller lo captura vía
-    /// `entries[selected_entry_index()?].path.clone()` antes de mutar
-    /// `entries`. Se re-busca ese path dentro del nuevo `visible`; si
-    /// murió (ya no casa / fue removido) o no había selección previa,
-    /// clampa dentro del nuevo rango.
+    /// `prev_selected` is the `VPath` of the entry selected BEFORE the
+    /// mutation — the caller captures it via
+    /// `entries[selected_entry_index()?].path.clone()` before mutating
+    /// `entries`. That path is looked up again inside the new `visible`;
+    /// if it died (no longer matches / was removed) or there was no
+    /// previous selection, it clamps within the new range.
     ///
-    /// Además renueva el cache `folds` — junto a `new`, es el ÚNICO punto
-    /// de invalidación (#77): los índices de `visible` refieren al
-    /// `entries` del último `new`/`refresh`.
+    /// It also renews the `folds` cache — along with `new`, it is the ONLY
+    /// invalidation point (#77): `visible`'s indices refer to the `entries`
+    /// of the last `new`/`refresh`.
     pub fn refresh(&mut self, entries: &[Entry], prev_selected: Option<&VPath>) {
         self.folds = fold_names(entries, self.enc);
         self.recompute();
@@ -242,7 +239,7 @@ impl QuickSearch {
         self.clamp_pos();
     }
 
-    /// Clampa `pos` dentro de `[0, visible.len())`, sin panicar si está vacío.
+    /// Clamps `pos` within `[0, visible.len())`, without panicking if empty.
     fn clamp_pos(&mut self) {
         if self.visible.is_empty() {
             self.pos = 0;
@@ -251,19 +248,20 @@ impl QuickSearch {
         }
     }
 
-    /// Mueve la selección una posición hacia abajo (clamp al final).
+    /// Moves the selection one position down (clamped at the end).
     pub fn down(&mut self) {
         if self.pos + 1 < self.visible.len() {
             self.pos += 1;
         }
     }
 
-    /// Mueve la selección una posición hacia arriba (clamp al inicio).
+    /// Moves the selection one position up (clamped at the start).
     pub fn up(&mut self) {
         self.pos = self.pos.saturating_sub(1);
     }
 
-    /// Modo salto: avanza al siguiente match con wrap; noop si no hay matches.
+    /// Jump mode: advances to the next match with wrap; a no-op if there
+    /// are no matches.
     pub fn next_match(&mut self) {
         if self.visible.is_empty() {
             return;
@@ -271,25 +269,25 @@ impl QuickSearch {
         self.pos = (self.pos + 1) % self.visible.len();
     }
 
-    /// Índices reales visibles (todos si la query está vacía).
+    /// Visible real indices (all of them if the query is empty).
     #[must_use]
     pub fn visible(&self) -> &[usize] {
         &self.visible
     }
 
-    /// Índice real de la entrada seleccionada, si hay alguna visible.
+    /// Real index of the selected entry, if there is one visible.
     #[must_use]
     pub fn selected_entry_index(&self) -> Option<usize> {
         self.visible.get(self.pos).copied()
     }
 
-    /// Query para pintar en pantalla (lossy — el usuario la tecleó, no
-    /// forma parte de la identidad de ninguna entrada). Enmascarada con
-    /// [`norte_encoding::is_terminal_hazard`] (review encoding BAJA): sin
-    /// bracketed paste un IME/paste hostil llega como stream de `push_char`
-    /// y pintaría bidi/invisibles crudos en el borde — el filtrado en sí
-    /// (`matches`/`fold`) sigue operando sobre `self.query` SIN sanear, solo
-    /// el texto que se pinta pasa por aquí.
+    /// Query to paint on screen (lossy — the user typed it, it is not part
+    /// of any entry's identity). Masked with
+    /// [`norte_encoding::is_terminal_hazard`] (encoding review LOW): with no
+    /// bracketed paste, a hostile IME/paste arrives as a `push_char` stream
+    /// and would paint raw bidi/invisibles at the edge — the filtering
+    /// itself (`matches`/`fold`) still operates on `self.query` WITHOUT
+    /// sanitizing, only the text that gets painted goes through here.
     #[must_use]
     pub fn query_display(&self) -> String {
         String::from_utf8_lossy(&self.query)
@@ -304,7 +302,7 @@ impl QuickSearch {
             .collect()
     }
 
-    /// Modo activo (Filter o Jump).
+    /// Active mode (Filter or Jump).
     #[must_use]
     pub fn mode(&self) -> Mode {
         self.mode
@@ -316,8 +314,8 @@ mod tests {
     use super::*;
     use norte_proto::{Entry, EntryKind, VPath};
 
-    // Entry NO deriva Default y `mtime_ms` es el nombre real del campo
-    // (no `mtime`) — ver crates/norte-proto/src/entry.rs.
+    // Entry does NOT derive Default and `mtime_ms` is the field's real name
+    // (not `mtime`) — see crates/norte-proto/src/entry.rs.
     fn e(wire: &str) -> Entry {
         Entry {
             attrs: std::collections::BTreeMap::new(),
@@ -329,66 +327,66 @@ mod tests {
     }
 
     #[test]
-    fn filtro_substring_case_insensitive() {
+    fn case_insensitive_substring_filter() {
         let entries = vec![
-            e("mem:///Proyectos"),
+            e("mem:///Projects"),
             e("mem:///readme.md"),
             e("mem:///PROBE"),
         ];
         let m = matches(b"pro", &entries);
-        assert_eq!(m, vec![0, 2], "Proyectos y PROBE casan; readme no");
+        assert_eq!(m, vec![0, 2], "Projects and PROBE match; readme does not");
     }
 
     #[test]
-    fn filtro_nfc_casa_con_nfd() {
-        // "año" en NFC como aguja; entrada con nombre en NFD (a + n + ̃ + o).
+    fn nfc_filter_matches_nfd() {
+        // "año" in NFC as the needle; entry with the name in NFD (a + n + ̃ + o).
         let nfd = "an\u{0303}o.txt";
         let entries = vec![e(&format!("mem:///{nfd}"))];
         assert_eq!(
             matches("año".as_bytes(), &entries),
             vec![0],
-            "NFD casa con aguja NFC"
+            "NFD matches the NFC needle"
         );
     }
 
     #[test]
-    fn fold_re_normaliza_nfc_tras_el_lowercase() {
-        // Encoding MEDIA-1: J + U+030C (combining caron) NO tiene forma
-        // precompuesta MAYÚSCULA, pero su minúscula ǰ (U+01F0) SÍ existe.
-        // Un fold que no re-normaliza NFC tras minusculizar deja
-        // "j\u{030C}" (descompuesto) y la aguja "ǰ" (compuesta) no casa:
-        // se pierde la equivalencia canónica.
+    fn fold_renormalizes_nfc_after_lowercasing() {
+        // Encoding MEDIA-1: J + U+030C (combining caron) has NO precomposed
+        // UPPERCASE form, but its lowercase ǰ (U+01F0) DOES exist. A fold
+        // that does not re-normalize to NFC after lowercasing leaves
+        // "j\u{030C}" (decomposed) and the "ǰ" needle (composed) does not
+        // match: canonical equivalence is lost.
         let entries = vec![e("mem:///J%CC%8C.txt")];
         assert_eq!(
             matches("ǰ".as_bytes(), &entries),
             vec![0],
-            "la aguja precompuesta ǰ (U+01F0) casa con J+U+030C"
+            "the precomposed needle ǰ (U+01F0) matches J+U+030C"
         );
     }
 
     #[test]
-    fn bytes_no_utf8_no_rompen_y_no_casan_en_falso() {
+    fn non_utf8_bytes_do_not_break_or_false_match() {
         let entries = vec![e("mem:///%FF%FE"), e("mem:///normal.txt")];
         assert_eq!(matches(b"norm", &entries), vec![1]);
-        // La entrada hostil sigue filtrable por lo que su lossy muestra (�)
-        // — contrato testeado, no solo "no panica".
+        // The hostile entry stays filterable by what its lossy shows (�) —
+        // a tested contract, not just "does not panic".
         assert_eq!(matches("\u{FFFD}".as_bytes(), &entries), vec![0]);
     }
 
     #[test]
-    fn estado_filtro_navega_y_confirma() {
+    fn filter_state_navigates_and_confirms() {
         let entries = vec![e("mem:///a1"), e("mem:///b"), e("mem:///a2")];
         let mut q = QuickSearch::new(Mode::Filter, &entries, None);
         q.push_char('a');
         assert_eq!(q.visible(), &[0, 2]);
         q.down();
-        assert_eq!(q.selected_entry_index(), Some(2), "segundo match");
+        assert_eq!(q.selected_entry_index(), Some(2), "second match");
         q.backspace();
-        assert_eq!(q.visible(), &[0, 1, 2], "query vacía = todo visible");
+        assert_eq!(q.visible(), &[0, 1, 2], "empty query = everything visible");
     }
 
     #[test]
-    fn modo_salto_tab_con_wrap() {
+    fn jump_mode_tab_wraps() {
         let entries = vec![e("mem:///ab"), e("mem:///zz"), e("mem:///ac")];
         let mut q = QuickSearch::new(Mode::Jump, &entries, None);
         q.push_char('a');
@@ -400,46 +398,50 @@ mod tests {
     }
 
     #[test]
-    fn reaplicar_tras_lote_nuevo_conserva_seleccion_si_sobrevive() {
+    fn refresh_after_new_batch_keeps_selection_if_it_survives() {
         let mut entries = vec![e("mem:///a1")];
         let mut q = QuickSearch::new(Mode::Filter, &entries, None);
         q.push_char('a');
         let prev = q.selected_entry_index().map(|i| entries[i].path.clone());
-        entries.push(e("mem:///a2")); // llega un lote del fill
+        entries.push(e("mem:///a2")); // a batch from the fill arrives
         q.refresh(&entries, prev.as_ref());
         assert_eq!(q.visible(), &[0, 1]);
-        assert_eq!(q.selected_entry_index(), Some(0), "la selección no salta");
+        assert_eq!(
+            q.selected_entry_index(),
+            Some(0),
+            "the selection does not jump"
+        );
     }
 
     #[test]
-    fn refresh_sobrevive_a_un_resort() {
-        // review MAJOR: la selección se conserva por IDENTIDAD (VPath), no
-        // por índice — `Pane::extend_listing` re-sortea el listado completo
-        // en cada lote (app.rs), así que un índice recordado apunta a OTRA
-        // entrada tras el sort.
+    fn refresh_survives_a_resort() {
+        // review MAJOR: the selection is kept by IDENTITY (VPath), not by
+        // index — `Pane::extend_listing` re-sorts the whole listing on
+        // every batch (app.rs), so a remembered index points at a
+        // DIFFERENT entry after the sort.
         let mut entries = vec![e("mem:///a1"), e("mem:///a2")];
         let mut q = QuickSearch::new(Mode::Filter, &entries, None);
         q.push_char('a');
-        q.down(); // selecciona a2 (índice real 1)
+        q.down(); // selects a2 (real index 1)
         assert_eq!(q.selected_entry_index(), Some(1));
         let prev = q.selected_entry_index().map(|i| entries[i].path.clone());
 
-        // El lote re-sortea: a2 pasa a índice real 0, a1 a índice real 1.
+        // The batch re-sorts: a2 moves to real index 0, a1 to real index 1.
         entries.swap(0, 1);
         q.refresh(&entries, prev.as_ref());
 
         assert_eq!(
             q.selected_entry_index().map(|i| entries[i].path.clone()),
             prev,
-            "la selección sigue en el MISMO path tras el resort, no en el mismo índice"
+            "the selection stays on the SAME path after the resort, not the same index"
         );
     }
 
     #[test]
-    fn query_display_enmascara_hazards() {
-        // review encoding BAJA: un RLO (U+202E) tecleado/pegado no debe salir
-        // crudo en el eco `/{query}` — se empuja char a char, como llegaría de
-        // un stream de input real (sin bracketed paste).
+    fn query_display_masks_hazards() {
+        // encoding review LOW: an RLO (U+202E) typed/pasted must not come
+        // out raw in the `/{query}` echo — it is pushed char by char, as it
+        // would arrive from a real input stream (no bracketed paste).
         let entries = vec![e("mem:///normal.txt")];
         let mut q = QuickSearch::new(Mode::Filter, &entries, None);
         for c in "a\u{202E}b".chars() {
@@ -448,37 +450,34 @@ mod tests {
         let display = q.query_display();
         assert!(
             !display.chars().any(norte_encoding::is_terminal_hazard),
-            "query_display dejó un hazard crudo: {display:?}"
+            "query_display left a raw hazard: {display:?}"
         );
     }
 
     #[test]
-    fn push_char_usa_los_folds_del_ultimo_refresh() {
-        // El cache de folds (#77) debe renovarse en refresh: una entrada que
-        // llega en un lote POSTERIOR tiene que casar con el siguiente keystroke.
+    fn push_char_uses_the_last_refreshs_folds() {
+        // The folds cache (#77) has to be renewed on refresh: an entry that
+        // arrives in a LATER batch has to match the next keystroke.
         let mut entries = vec![e("mem:///zzz")];
         let mut q = QuickSearch::new(Mode::Filter, &entries, None);
-        entries.push(e("mem:///nuevo.txt")); // lote del fill
+        entries.push(e("mem:///new.txt")); // a batch from the fill
         q.refresh(&entries, None);
         q.push_char('n');
-        assert_eq!(
-            q.visible(),
-            &[1],
-            "el fold de la entrada nueva está en el cache"
-        );
+        assert_eq!(q.visible(), &[1], "the new entry's fold is in the cache");
     }
 
     #[test]
-    fn el_cache_pliega_igual_que_matches_sobre_el_corpus_hostil() {
-        // Pin anti-divergencia (review encoding #77): el camino cacheado
-        // (new/refresh→push_char) y el sin cache (`matches`) deben dar
-        // EXACTAMENTE lo mismo sobre el corpus hostil — un fast-path futuro
-        // que optimice solo el cache pasaría el corpus (que entra por
-        // `matches`) mientras rompe el bucle de tipeo real.
+    fn the_cache_folds_the_same_as_matches_over_the_hostile_corpus() {
+        // Anti-divergence pin (encoding review #77): the cached path
+        // (new/refresh→push_char) and the uncached one (`matches`) have to
+        // give EXACTLY the same result over the hostile corpus — a future
+        // fast-path that optimizes only the cache would pass the corpus
+        // (which goes through `matches`) while breaking the real typing
+        // loop.
         let entries = vec![
             e("mem:///an%CC%83o.txt"), // NFD
-            e("mem:///J%CC%8C.txt"),   // sin precompuesta mayúscula
-            e("mem:///%FF%FE"),        // no-UTF8
+            e("mem:///J%CC%8C.txt"),   // no uppercase precomposed form
+            e("mem:///%FF%FE"),        // non-UTF8
         ];
         for needle in ["año", "ǰ", "\u{FFFD}"] {
             let mut q = QuickSearch::new(Mode::Filter, &entries, None);
@@ -488,54 +487,54 @@ mod tests {
             assert_eq!(
                 q.visible(),
                 matches(needle.as_bytes(), &entries).as_slice(),
-                "cache y camino directo divergen para {needle:?}"
+                "the cache and the direct path diverge for {needle:?}"
             );
         }
     }
 }
 
-/// El historial de directorios de UN pane, y el rastro que lo recorre.
+/// ONE pane's directory history, and the trail that walks it.
 ///
-/// Vivía en `norte-tui`. No tenía nada de terminal: es la misma pregunta
-/// —¿de dónde vengo y a dónde vuelvo?— para cualquier superficie que
-/// navegue, y una segunda copia en el host gráfico habría sido exactamente
-/// la clase de divergencia que este crate existe para evitar (ADR 0066, D14).
+/// It used to live in `norte-tui`. There was nothing terminal-specific about
+/// it: it is the same question — where do I come from and where do I go
+/// back to? — for any surface that navigates, and a second copy in the
+/// graphical host would have been exactly the kind of divergence this crate
+/// exists to prevent (ADR 0066, D14).
 use std::collections::VecDeque;
 
-/// Tope de directorios retenidos en el historial de un pane cuando la
-/// configuración no dice otro (`[ui] history_size`, spec 2026-09-15 D4).
+/// Cap on directories retained in a pane's history when the configuration
+/// does not say otherwise (`[ui] history_size`, spec 2026-09-15 D4).
 pub const HISTORY_DEFAULT: usize = 30;
 
-/// El tope más bajo que admite `[ui] history_size`: por debajo, `nav.back`
-/// deja de ser un rastro y pasa a ser «el anterior».
+/// The lowest cap `[ui] history_size` accepts: below it, `nav.back` stops
+/// being a trail and becomes "the previous one".
 pub const HISTORY_MIN: usize = 5;
 
-/// El tope más alto: el que la sesión ya guarda por hueco visible
-/// ([`crate::session::HISTORY_CAP`]). Uno mayor se perdería al reiniciar sin
-/// que nada lo dijera.
+/// The highest cap: the one the session already stores per visible slot
+/// ([`crate::session::HISTORY_CAP`]). A larger one would be lost on restart
+/// with nothing saying so.
 pub const HISTORY_MAX: usize = crate::session::HISTORY_CAP;
 
-/// Historial de directorios visitados por UN pane. Cada `cd` EXITOSO
-/// empuja el dir ANTERIOR (main.rs, brazos `Cd::Filling`/`Cd::Replaced`);
-/// `Alt+↓` lo recorre en un popup (T5). Vive en memoria del proceso, no en
-/// `norte.toml` — a propósito, fuera de alcance de la spec (§Fuera de
-/// alcance).
+/// History of directories ONE pane has visited. Every SUCCESSFUL `cd`
+/// pushes the PREVIOUS dir (main.rs, the `Cd::Filling`/`Cd::Replaced` arms);
+/// `Alt+↓` walks it in a popup (T5). It lives in the process's memory, not
+/// in `norte.toml` — deliberately, out of the spec's scope (§Out of scope).
 ///
-/// INVARIANTE del rastro: `back.len() + fwd.len() <= cap`, con `cap` entre
-/// [`HISTORY_MIN`] y [`HISTORY_MAX`] ([`History::set_capacity`]).
+/// Trail INVARIANT: `back.len() + fwd.len() <= cap`, with `cap` between
+/// [`HISTORY_MIN`] and [`HISTORY_MAX`] ([`History::set_capacity`]).
 ///
-/// Es lo que acota la memoria del rastro, y no cada pila por su cuenta.
-/// [`History::record`] es el único método que hace CRECER la suma, y la
-/// acota: trunca `back` al tope y vacía `fwd`. Los dos pasos la conservan
-/// exactamente — mueven un elemento de una pila a la otra — y
-/// [`History::remove`] solo la reduce. Por eso [`History::step_forward`]
-/// puede empujar a `back` SIN comprobar el tope: el hueco que deja el `pop`
-/// de `fwd` es el que ocupa. Romper el invariante (p.ej. hacer que `record`
-/// deje de vaciar `fwd`) haría crecer el rastro sin fin por el único camino
-/// que no lo comprueba.
+/// This is what bounds the trail's memory, and not each stack on its own.
+/// [`History::record`] is the only method that GROWS the sum, and it bounds
+/// it: it truncates `back` to the cap and empties `fwd`. Both steps
+/// preserve it exactly — they move one element from one stack to the
+/// other — and [`History::remove`] only shrinks it. That is why
+/// [`History::step_forward`] can push onto `back` WITHOUT checking the
+/// cap: the room `fwd`'s `pop` leaves is the room it takes up. Breaking the
+/// invariant (e.g. making `record` stop emptying `fwd`) would grow the
+/// trail without end through the one path that does not check it.
 #[derive(Debug)]
 pub struct History {
-    /// Más reciente al frente.
+    /// Most recent at the front.
     deque: VecDeque<VPath>,
     /// The trail behind the reader: where `nav.back` goes, newest last.
     ///
@@ -548,13 +547,13 @@ pub struct History {
     /// Where `nav.forward` goes: the branch a `nav.back` stepped off, newest
     /// last. Cleared by any navigation the user initiates.
     fwd: Vec<VPath>,
-    /// Cuántos directorios guarda el MRU, y la suma del rastro (`back + fwd`).
-    /// Entre [`HISTORY_MIN`] y [`HISTORY_MAX`].
+    /// How many directories the MRU keeps, and the trail's sum
+    /// (`back + fwd`). Between [`HISTORY_MIN`] and [`HISTORY_MAX`].
     cap: usize,
-    /// El punto de salto (Krusader `Ctrl+J`, spec 2026-09-15 D5): un sitio
-    /// marcado A PROPÓSITO, al que `nav.jump-back` vuelve. No es parte del
-    /// rastro —un paso atrás no lo mueve, una navegación nueva no lo borra—, y
-    /// por eso va aparte.
+    /// The jump point (Krusader `Ctrl+J`, spec 2026-09-15 D5): a site
+    /// marked ON PURPOSE, that `nav.jump-back` returns to. It is not part
+    /// of the trail — a step back does not move it, a new navigation does
+    /// not clear it — and that is why it is kept apart.
     jump: Option<VPath>,
 }
 
@@ -565,7 +564,7 @@ impl Default for History {
 }
 
 impl History {
-    /// Un historial vacío que guarda hasta `cap` directorios, acotado a
+    /// An empty history that keeps up to `cap` directories, bounded to
     /// [`HISTORY_MIN`]`..=`[`HISTORY_MAX`].
     #[must_use]
     pub fn with_capacity(cap: usize) -> Self {
@@ -578,70 +577,70 @@ impl History {
         }
     }
 
-    /// El tope vigente.
+    /// The cap currently in effect.
     #[must_use]
     pub fn capacity(&self) -> usize {
         self.cap
     }
 
-    /// Cambia el tope (una recarga de `[ui] history_size`).
+    /// Changes the cap (a `[ui] history_size` reload).
     ///
-    /// Al BAJAR se tira lo más lejano del lector, nunca lo que acaba de andar:
-    /// el extremo viejo del MRU y del rastro de vuelta, y la punta lejana de la
-    /// rama de delante. Al subir no se inventa nada.
+    /// LOWERING it drops what is farthest from the reader, never what was
+    /// just walked: the old end of the MRU and of the back trail, and the
+    /// far tip of the forward branch. Raising it does not invent anything.
     pub fn set_capacity(&mut self, cap: usize) {
         self.cap = cap.clamp(HISTORY_MIN, HISTORY_MAX);
-        self.acota();
+        self.clamp();
     }
 
-    /// Restituye el invariante tras un cambio de tope o una siembra.
-    fn acota(&mut self) {
+    /// Restores the invariant after a cap change or a seed.
+    fn clamp(&mut self) {
         self.deque.truncate(self.cap);
         if self.back.len() > self.cap {
-            let sobran = self.back.len() - self.cap;
-            self.back.drain(..sobran);
+            let overflow = self.back.len() - self.cap;
+            self.back.drain(..overflow);
         }
-        // `fwd` va del más viejo al más reciente y `step_forward` saca el
-        // ÚLTIMO, así que el principio es lo más lejano hacia delante: lo que
-        // antes dejaría de estar a mano. El rastro de vuelta tiene preferencia:
-        // si llena el tope él solo, la rama de delante se va entera, que es lo
-        // mismo que haría la siguiente navegación.
-        let exceso = (self.back.len() + self.fwd.len()).saturating_sub(self.cap);
-        self.fwd.drain(..exceso.min(self.fwd.len()));
+        // `fwd` goes from oldest to most recent and `step_forward` pops the
+        // LAST one, so the start is the farthest forward: what used to be
+        // the first out of reach. The back trail has priority: if it fills
+        // the cap on its own, the forward branch goes away entirely, which
+        // is the same thing the next navigation would do.
+        let excess = (self.back.len() + self.fwd.len()).saturating_sub(self.cap);
+        self.fwd.drain(..excess.min(self.fwd.len()));
     }
 
-    /// Fija el punto de salto en `path` (`nav.set-jump-point`).
+    /// Sets the jump point to `path` (`nav.set-jump-point`).
     pub fn set_jump(&mut self, path: VPath) {
         self.jump = Some(path);
     }
 
-    /// Siembra el punto de salto desde una sesión guardada.
+    /// Seeds the jump point from a saved session.
     pub fn seed_jump(&mut self, path: Option<VPath>) {
         self.jump = path;
     }
 
-    /// El punto de salto, si lo hay.
+    /// The jump point, if there is one.
     #[must_use]
     pub fn jump(&self) -> Option<&VPath> {
         self.jump.as_ref()
     }
 
-    /// Vacía el MRU y el rastro (`dialog.clear`). El punto de salto y el tope
-    /// se quedan: se marcaron o se configuraron, no se anduvieron.
+    /// Empties the MRU and the trail (`dialog.clear`). The jump point and
+    /// the cap stay: they were marked or configured, not walked.
     pub fn clear(&mut self) {
         self.deque.clear();
         self.back.clear();
         self.fwd.clear();
     }
 
-    /// Empuja `path` al frente. Dedup CONSECUTIVO: si `path` ya es el más
-    /// reciente, no-op — evita repetir el mismo dir en cd's redundantes
-    /// (p.ej. refrescar el pane). Un mismo dir en posiciones NO
-    /// consecutivas del historial sí puede repetirse (visitarlo, irse,
-    /// volver): es historial de sesión, no un conjunto. El dedup compara
-    /// `VPath` byte-exacto SIN normalizar (la identidad jamás se
-    /// normaliza); twins NFC/NFD conviven como filas distintas — decisión
-    /// consciente.
+    /// Pushes `path` to the front. CONSECUTIVE dedup: if `path` is already
+    /// the most recent one, a no-op — this avoids repeating the same dir on
+    /// redundant cd's (e.g. refreshing the pane). The same dir in
+    /// NON-consecutive positions of the history CAN repeat (visit it,
+    /// leave, come back): it is session history, not a set. The dedup
+    /// compares `VPath` byte-exact WITHOUT normalizing (identity is never
+    /// normalized); NFC/NFD twins coexist as distinct rows — a deliberate
+    /// decision.
     pub fn push(&mut self, path: VPath) {
         if self.deque.front() == Some(&path) {
             return;
@@ -650,41 +649,42 @@ impl History {
         self.deque.truncate(self.cap);
     }
 
-    /// El rastro de vuelta, del más viejo al más reciente: lo que la sesión
-    /// guarda para que `nav.back` siga funcionando tras un reinicio.
+    /// The back trail, from oldest to most recent: what the session saves
+    /// so `nav.back` keeps working after a restart.
     #[must_use]
     pub fn trail(&self) -> &[VPath] {
         &self.back
     }
 
-    /// La rama de la que se salió con un `nav.back`, del más viejo al más
-    /// reciente.
+    /// The branch stepped off with a `nav.back`, from oldest to most
+    /// recent.
     #[must_use]
     pub fn forward_trail(&self) -> &[VPath] {
         &self.fwd
     }
 
-    /// Siembra los dos rastros desde una sesión guardada.
+    /// Seeds both trails from a saved session.
     ///
-    /// El MRU se reconstruye DEL rastro y no se guarda aparte: es lo que el
-    /// popup lista, se deriva de por dónde se ha pasado, y guardarlo por
-    /// separado sería una segunda copia de la misma historia que puede
-    /// contradecir a la primera. Se empuja del más viejo al más reciente para
-    /// que el orden del popup salga igual que si se hubiera andado.
+    /// The MRU is rebuilt FROM the trail and not saved separately: it is
+    /// what the popup lists, it is derived from where things have been, and
+    /// saving it separately would be a second copy of the same history that
+    /// can contradict the first. It is pushed from oldest to most recent so
+    /// the popup's order comes out the same as if it had been walked.
     pub fn seed(&mut self, back: Vec<VPath>, fwd: Vec<VPath>) {
         for p in &back {
             self.push(p.clone());
         }
         self.back = back;
         self.fwd = fwd;
-        // Una sesión escrita con un tope mayor que el de ahora trae más de lo
-        // que cabe: se recorta igual que al bajar el tope en caliente.
-        self.acota();
+        // A session written with a cap higher than the current one brings
+        // more than fits: it is trimmed just like lowering the cap live
+        // would.
+        self.clamp();
     }
 
-    /// Retira TODAS las ocurrencias de `path` (p.ej. tras un `cd` fallido
-    /// con `NotFound` al navegar desde el popup — la spec dice "se
-    /// RETIRA si el cd falla con `NotFound`").
+    /// Removes ALL occurrences of `path` (e.g. after a `cd` that failed
+    /// with `NotFound` while navigating from the popup — the spec says "it
+    /// is REMOVED if the cd fails with `NotFound`").
     ///
     /// Prunes the TRAIL as well as the MRU. "This directory is gone" is one
     /// fact, not two: left on the trail, a path the popup just retired would
@@ -696,14 +696,14 @@ impl History {
         self.deque.retain(|p| p != path);
         self.back.retain(|p| p != path);
         self.fwd.retain(|p| p != path);
-        // Un punto de salto a un sitio que ya no está es la misma tecla que
-        // solo puede fallar.
+        // A jump point to a place that is no longer there is the same key
+        // that can only fail.
         if self.jump.as_ref() == Some(path) {
             self.jump = None;
         }
     }
 
-    /// Entradas, más reciente primero.
+    /// Entries, most recent first.
     #[must_use]
     pub fn entries(&self) -> &VecDeque<VPath> {
         &self.deque
@@ -784,172 +784,184 @@ impl History {
     }
 }
 
-/// A dónde va un panel cuya sesión se acaba de cerrar (`pane.disconnect`).
+/// Where a pane goes whose session just closed (`pane.disconnect`).
 ///
-/// El RASTRO hacia atrás, del más reciente al más viejo, saltándose todo lo
-/// que sea de la MISMA sesión: volver a `sftp://servidor/otra-carpeta` sería
-/// reabrir la conexión que se acaba de cerrar, que es exactamente lo que el
-/// gesto pidió no tener. La misma sesión es scheme Y authority — otro
-/// servidor del mismo scheme es otra conexión, y volver ahí es legítimo.
+/// The TRAIL walked backward, from most recent to oldest, skipping
+/// everything that belongs to the SAME session: going back to
+/// `sftp://server/another-folder` would reopen the connection that just
+/// closed, which is exactly what the gesture asked not to have. The same
+/// session is scheme AND authority — another server on the same scheme is
+/// another connection, and going back there is legitimate.
 ///
-/// **El scheme se compara SIN su prefijo de formato** (ADR 0028): un
-/// `zip+sftp://servidor/x.zip!/…` del rastro se sirve por la misma conexión
-/// que `sftp://servidor/…`, y el core evicta las dos claves a la vez al
-/// cerrarla (`sessions`, la barrida de `…+{key}`). Comparando el scheme crudo,
-/// `"zip+sftp" != "sftp"` y el panel aterrizaba justo dentro de la máquina que
-/// se acababa de soltar — abriendo una conexión NUEVA, con su reautenticación,
-/// que es literalmente lo que esta función existe para evitar.
+/// **The scheme is compared WITHOUT its format prefix** (ADR 0028): a
+/// `zip+sftp://server/x.zip!/…` from the trail is served by the same
+/// connection as `sftp://server/…`, and the core evicts both keys at once
+/// when closing it (`sessions`, the `…+{key}` sweep). Comparing the raw
+/// scheme, `"zip+sftp" != "sftp"` and the pane would land right back inside
+/// the machine that had just been let go — opening a NEW connection, with
+/// its reauthentication, which is literally what this function exists to
+/// prevent.
 ///
-/// Lo que esto NO hace es canonicalizar alias: el core deduplica autoridades
-/// contra `connections.toml` (#47) y un frontend no tiene esa tabla, así que
-/// `sftp://work/a` y `sftp://user@host/a` se ven como dos máquinas aunque sean
-/// una. El coste de equivocarse ahí es reconectar, no perder nada.
+/// What this does NOT do is canonicalize aliases: the core deduplicates
+/// authorities against `connections.toml` (#47) and a frontend does not
+/// have that table, so `sftp://work/a` and `sftp://user@host/a` look like
+/// two machines even if they are one. The cost of getting that wrong is
+/// reconnecting, not losing anything.
 ///
-/// `None` cuando no queda nada ajeno —el panel nació remoto, o todo su
-/// rastro es de esa máquina—: el llamante cae entonces a
-/// [`crate::shell::home_vpath`]. Lo que no puede pasar es que el panel se
-/// quede mirando lo que ya no se lee.
+/// `None` when nothing foreign is left — the pane was born remote, or its
+/// whole trail belongs to that machine —: the caller then falls back to
+/// [`crate::shell::home_vpath`]. What cannot happen is the pane being left
+/// staring at something that can no longer be read.
 ///
-/// Compartida por los dos frontends A PROPÓSITO: la decisión es la misma
-/// mire quien la mire, y cuando vivía dos veces la TUI se iba a casa
-/// mientras la ventana volvía sobre su rastro.
+/// Shared by both frontends ON PURPOSE: the decision is the same no matter
+/// who looks at it, and back when it lived twice the TUI would go home
+/// while the window walked back its trail.
 ///
 /// ```
 /// use norte_frontend::nav::regreso_tras_desconectar;
 /// use norte_proto::VPath;
 /// let vp = |s: &str| VPath::parse(s).expect("wire");
-/// let rastro = [vp("file:///home/o"), vp("sftp://srv/a")];
+/// let trail = [vp("file:///home/o"), vp("sftp://srv/a")];
 /// assert_eq!(
-///     regreso_tras_desconectar(&vp("sftp://srv/a"), &rastro),
+///     regreso_tras_desconectar(&vp("sftp://srv/a"), &trail),
 ///     Some(vp("file:///home/o")),
 /// );
 /// ```
 #[must_use]
-pub fn regreso_tras_desconectar(cerrada: &VPath, rastro: &[VPath]) -> Option<VPath> {
-    let de_la_sesion = |p: &VPath| {
-        scheme_de_sesion(p.scheme()) == scheme_de_sesion(cerrada.scheme())
-            && p.authority() == cerrada.authority()
+pub fn regreso_tras_desconectar(closed: &VPath, trail: &[VPath]) -> Option<VPath> {
+    let is_same_session = |p: &VPath| {
+        session_scheme(p.scheme()) == session_scheme(closed.scheme())
+            && p.authority() == closed.authority()
     };
-    rastro.iter().rev().find(|p| !de_la_sesion(p)).cloned()
+    trail.iter().rev().find(|p| !is_same_session(p)).cloned()
 }
 
-/// El scheme que sirve una ruta, sin el prefijo de formato de archivo: el
-/// `sftp` de `zip+sftp`, el `file` de `tar+gz+file`.
+/// The scheme that serves a path, without the archive format prefix: the
+/// `sftp` of `zip+sftp`, the `file` of `tar+gz+file`.
 ///
-/// Es la mitad de la clave de sesión del core que un frontend puede calcular
-/// sin su tabla de conexiones.
-fn scheme_de_sesion(scheme: &str) -> &str {
+/// It is half of the core's session key, the half a frontend can compute
+/// without its connections table.
+fn session_scheme(scheme: &str) -> &str {
     match norte_proto::scheme_archive_format(scheme) {
-        // El formato y el scheme interior van pegados por un `+`, que también
-        // se salta: `scheme_archive_format` devuelve el prefijo sin él.
-        Some(formato) => &scheme[formato.len() + 1..],
+        // The format and the inner scheme are glued by a `+`, which is also
+        // skipped: `scheme_archive_format` returns the prefix without it.
+        Some(format) => &scheme[format.len() + 1..],
         None => scheme,
     }
 }
 
-// ── Azúcar de navegación por archivos comprimidos (ADR 0018) ──────────────
+// ── Navigation sugar for compressed archives (ADR 0018) ───────────────────
 //
-// `archive_root_for` vivía en `main.rs`, privada del binario. La necesita
-// también `App::help_facts` (H3d): el hecho «esta entrada se ENTRA» es el
-// predicado del brazo `nav.enter` del dispatch, y la ayuda tiene que
-// contestarlo con la MISMA función o acabará atenuando `nav.enter` sobre un
-// `.zip` que la app abre sin problemas.
+// `archive_root_for` used to live in `main.rs`, private to the binary.
+// `App::help_facts` (H3d) needs it too: the fact "this entry gets ENTERED"
+// is the predicate of the dispatch's `nav.enter` arm, and the help has to
+// answer it with the SAME function or it will end up dimming `nav.enter`
+// over a `.zip` the app opens without a problem.
 
-/// Si una navegación se REGISTRA en el rastro del pane, o es el rastro
-/// reproduciéndose a sí mismo.
+/// Whether a navigation gets RECORDED in the pane's trail, or is the trail
+/// replaying itself.
 ///
-/// Sin esta distinción `nav.back` se alimenta de su propio rastro: volver de
-/// B a A registraría "estuve en B", así que el siguiente back devuelve a B y
-/// el lector oscila entre dos directorios — el defecto exacto que el rastro
-/// existe para evitar, un nivel más arriba.
+/// Without this distinction `nav.back` would feed off its own trail: going
+/// back from B to A would record "was at B", so the next back returns to B
+/// and the reader oscillates between two directories — the exact defect the
+/// trail exists to prevent, one level up.
 ///
-/// Vive aquí, y no junto al `cd` de un frontend, porque el modal TOFU de un
-/// frontend lo TRANSPORTA: el reintento tras confiar en la host key debe reanudar la
-/// MISMA navegación que el TOFU interrumpió, y la lib no puede referirse a
-/// un tipo declarado en `main.rs`.
-/// A dónde tiene que ir el OTRO panel cuando la navegación va en espejo, o
-/// `None` si no hay nada que hacer.
+/// Lives here, and not next to a frontend's `cd`, because a frontend's TOFU
+/// modal TRANSPORTS it: the retry after trusting the host key has to resume
+/// the SAME navigation the TOFU interrupted, and the lib cannot refer to a
+/// type declared in `main.rs`.
+// TODO(translation): review — the paragraph above ends abruptly and the doc
+// comment for `destino_en_espejo` appears to have been merged into this one
+// in the original Spanish (a stale merge, same class of issue as modal.rs);
+// translated as-is, without restructuring.
+/// Where the OTHER pane has to go when the navigation is mirrored, or `None`
+/// if there is nothing to do.
 ///
-/// Vive aquí, y no en cada frontend, por lo mismo que [`Trail::Seed`]: el
-/// espejo de un disparo (`pane.mirror`) ya se escribió dos veces —una en el
-/// terminal y otra en la ventana— y las dos versiones no dicen lo mismo. Un
-/// modo que repite CADA navegación no puede permitirse esa diferencia, porque
-/// no se nota en un gesto: se nota en el tercer `cd`, cuando los dos paneles
-/// ya no están donde el lector cree.
+/// Lives here, and not in each frontend, for the same reason as
+/// [`Trail::Seed`]: a mirrored shot (`pane.mirror`) was already written
+/// twice — once in the terminal and once in the window — and the two
+/// versions did not say the same thing. A mode that repeats EVERY
+/// navigation cannot afford that difference, because it does not show in
+/// one gesture: it shows on the third `cd`, when the two panes are no
+/// longer where the reader thinks.
 ///
-/// Lo que se espeja es el DESTINO de la navegación que acaba de ocurrir, no lo
-/// que el panel de origen enseña: mientras un `cd` está en vuelo, `dir()`
-/// responde todavía por el sitio que se abandona, y espejar eso mandaría al
-/// otro panel justo de donde el lector acaba de salir. Ésa es la regla que la
-/// ventana tenía escrita y el terminal no.
+/// What gets mirrored is the DESTINATION of the navigation that just
+/// happened, not what the source pane shows: while a `cd` is in flight,
+/// `dir()` still answers with the place being left, and mirroring that
+/// would send the other pane right to where the reader just came from.
+/// That is the rule the window had written down and the terminal did not.
 ///
-/// `None` en los dos casos en que mover el otro panel sería peor que no
-/// hacerlo: ya está ahí —un `cd` redundante lo re-lista y le desliza el
-/// listado bajo el cursor para nada— o el destino es el mismo sitio. Un panel
-/// que enseña HALLAZGOS es la excepción: su `dir()` es la raíz por la que se
-/// buscó, no lo que se está mirando, así que ahí sí se navega.
+/// `None` in the two cases where moving the other pane would be worse than
+/// not doing it: it is already there — a redundant `cd` re-lists it and
+/// slides its listing out from under the cursor for nothing — or the
+/// destination is the same place. A pane showing SEARCH RESULTS is the
+/// exception: its `dir()` is the root that was searched from, not what is
+/// being looked at, so there it does navigate.
 ///
 /// ```
 /// use norte_frontend::nav::destino_en_espejo;
 /// use norte_proto::VPath;
 ///
-/// let casa = VPath::parse("mem:///casa").unwrap();
+/// let home = VPath::parse("mem:///casa").unwrap();
 /// let docs = VPath::parse("mem:///casa/docs").unwrap();
-/// // El otro panel está en otro sitio: se le manda al destino.
-/// assert_eq!(destino_en_espejo(&docs, &casa, false), Some(docs.clone()));
-/// // Ya está ahí: no se le re-lista por nada.
+/// // The other pane is somewhere else: it is sent to the destination.
+/// assert_eq!(destino_en_espejo(&docs, &home, false), Some(docs.clone()));
+/// // Already there: it does not get re-listed for nothing.
 /// assert_eq!(destino_en_espejo(&docs, &docs, false), None);
-/// // Salvo que lo que enseñe sean hallazgos, que no son una ubicación.
+/// // Unless what it shows is search results, which are not a location.
 /// assert_eq!(destino_en_espejo(&docs, &docs, true), Some(docs));
 /// ```
 #[must_use]
 pub fn destino_en_espejo(
-    destino: &norte_proto::VPath,
-    otro_dir: &norte_proto::VPath,
-    otro_es_virtual: bool,
+    dest: &norte_proto::VPath,
+    other_dir: &norte_proto::VPath,
+    other_is_virtual: bool,
 ) -> Option<norte_proto::VPath> {
-    (otro_dir != destino || otro_es_virtual).then(|| destino.clone())
+    (other_dir != dest || other_is_virtual).then(|| dest.clone())
 }
 
-/// Cómo entra una navegación en el rastro del panel.
+/// How a navigation enters the pane's trail.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Trail {
-    /// El usuario pidió este movimiento: entra en la MRU y en el rastro, y
-    /// poda la rama de forward.
+    /// The user requested this move: it enters the MRU and the trail, and
+    /// prunes the forward branch.
     Record,
-    /// `nav.back`/`nav.forward` están reproduciendo, y ESTE es el paso que
-    /// están dando. El rastro ya lo sabe, así que la navegación no se
-    /// registra; el paso viaja dentro porque un `Replay` sin saber en qué
-    /// sentido va no se puede deshacer, y quien tenga que rebobinarlo puede
-    /// no ser quien lo empezó: el TOFU suspende la navegación y la respuesta
-    /// al modal la termina, minutos después y desde otro sitio del código.
+    /// `nav.back`/`nav.forward` are replaying, and THIS is the step they are
+    /// taking. The trail already knows it, so the navigation is not
+    /// recorded; the step travels inside because a `Replay` that does not
+    /// know which direction it is going cannot be undone, and whoever has
+    /// to rewind it may not be who started it: the TOFU suspends the
+    /// navigation and the modal's answer finishes it, minutes later and
+    /// from another spot in the code.
     ///
-    /// Va DENTRO de la variante, y no en un campo aparte junto a ella, para
-    /// que «registrar» y «tener sentido» no puedan contradecirse: un
-    /// `Record` con sentido, o un `Replay` sin él, serían estados que alguien
-    /// tendría que acordarse de no construir.
+    /// It goes INSIDE the variant, not in a separate field next to it, so
+    /// that "recording" and "making sense" cannot contradict each other: a
+    /// `Record` that makes sense, or a `Replay` that does not, would be
+    /// states someone would have to remember not to construct.
     Replay(TrailStep),
-    /// Alguien COLOCA el hueco donde toca, y no es un paso que el lector diera.
+    /// Someone PLACES the slot where it belongs, and it is not a step the
+    /// reader took.
     ///
-    /// Hoy la siembra de `[profile.start]` al entrar en un perfil. No entra en
-    /// el rastro —un «atrás» que lleva al directorio del perfil anterior
-    /// ofrece volver a un sitio del que nunca se vino— y no hay nada que
-    /// rebobinar si el listado falla, porque no se abandonó ningún sitio al
-    /// que devolver al lector.
+    /// Today, seeding `[profile.start]` when entering a profile. It does not
+    /// enter the trail — a "back" leading to the previous profile's
+    /// directory offers a return to a place never come from — and there is
+    /// nothing to rewind if the listing fails, because no place the reader
+    /// should be returned to was ever abandoned.
     ///
-    /// Existe como variante y no como un `Record` que da igual porque los dos
-    /// frontends tienen que hacer lo MISMO: el terminal siembra construyendo
-    /// el pane de cero, sin rastro; la ventana pasa por su `navegar_hueco`,
-    /// que registra. Sin una forma de decir «esto no es un paso», las dos
-    /// superficies acababan con historiales distintos (ADR 0077).
+    /// It exists as a variant and not as a `Record` that does not matter
+    /// because both frontends have to do the SAME thing: the terminal seeds
+    /// by building the pane from scratch, with no trail; the window goes
+    /// through its `navegar_hueco`, which records. With no way to say "this
+    /// is not a step", the two surfaces ended up with different histories
+    /// (ADR 0077).
     Seed,
 }
 
 impl Trail {
-    /// El paso del rastro que esta navegación está dando, si es que está
-    /// dando alguno. `None` para un [`Trail::Record`]: no salió del rastro,
-    /// así que no hay nada que rebobinar si acaba mal. `None` también para
-    /// [`Trail::Seed`], por lo mismo.
+    /// The trail step this navigation is taking, if it is taking one at
+    /// all. `None` for a [`Trail::Record`]: it did not leave the trail, so
+    /// there is nothing to rewind if it ends badly. `None` also for
+    /// [`Trail::Seed`], for the same reason.
     #[must_use]
     pub fn step(self) -> Option<TrailStep> {
         match self {
@@ -963,10 +975,10 @@ impl Trail {
 /// same operation mirrored, so they share one body rather than two arms that
 /// must be kept in step by hand.
 ///
-/// Vive aquí por el mismo motivo que [`Trail`], que lo transporta: el modal
-/// TOFU (el modal TOFU de un frontend) suspende una navegación que puede ser un
-/// paso del rastro, y quien responda al modal necesita saber en qué sentido
-/// iba para deshacerlo si la respuesta acaba abandonándola.
+/// Lives here for the same reason as [`Trail`], which carries it: a
+/// frontend's TOFU modal suspends a navigation that can be a trail step, and
+/// whoever answers the modal needs to know which direction it was going in
+/// order to undo it if the answer ends up abandoning it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TrailStep {
     /// `nav.back`.
@@ -987,20 +999,21 @@ impl TrailStep {
     }
 }
 
-/// A dónde NAVEGA `nav.enter` sobre esta entrada, si es que navega.
+/// Where `nav.enter` NAVIGATES to over this entry, if it navigates at all.
 ///
-/// Tres cosas se pueden abrir entrando: un directorio, un enlace —M0 no lo
-/// sigue para decidir el destino de una copia, pero Enter sí lo intenta, que
-/// es lo que hace un gestor ortodoxo— y un CONTENEDOR, que se navega por
-/// dentro ([`archive_root_for`]). Cualquier otra cosa es un fichero, y con un
-/// fichero Enter hace otra cosa: abrirlo.
+/// Three things can be opened by entering: a directory, a symlink — M0 does
+/// not follow it to decide a copy's destination, but Enter does try, which
+/// is what an orthodox file manager does — and a CONTAINER, which is
+/// navigated from inside ([`archive_root_for`]). Anything else is a file,
+/// and with a file Enter does something else: opens it.
 ///
-/// Vive aquí porque la contestaban los dos frontends por su cuenta y con
-/// respuestas DISTINTAS: el terminal entraba en un `.zip` y seguía un enlace,
-/// y la ventana miraba `kind != Dir` y se lo daba al escritorio — con un
-/// comentario que afirmaba estar haciendo «la misma decisión que el TUI»
-/// (ADR 0077). La fila `..` no entra aquí: subir no es una propiedad de la
-/// entrada, y lo pregunta quien sabe que el cursor está sobre esa fila.
+/// Lives here because both frontends used to answer it on their own and
+/// with DIFFERENT answers: the terminal entered a `.zip` and followed a
+/// symlink, and the window looked at `kind != Dir` and handed it to the
+/// desktop — with a comment claiming to be making "the same decision as the
+/// TUI" (ADR 0077). The `..` row does not go through here: going up is not
+/// a property of the entry, and it is asked by whoever knows the cursor is
+/// on that row.
 ///
 /// ```
 /// use norte_proto::{Entry, EntryKind, VPath};
@@ -1011,9 +1024,9 @@ impl TrailStep {
 ///     mtime_ms: None,
 ///     attrs: std::collections::BTreeMap::new(),
 /// };
-/// // Un contenedor se navega por dentro…
+/// // A container is navigated from inside…
 /// assert!(norte_frontend::nav::enter_target(&zip).is_some());
-/// // …y un fichero normal no se navega: Enter lo abre.
+/// // …and a normal file is not navigated: Enter opens it.
 /// let txt = Entry { path: VPath::parse("file:///casa/a.txt").unwrap(), ..zip };
 /// assert!(norte_frontend::nav::enter_target(&txt).is_none());
 /// ```
@@ -1026,17 +1039,18 @@ pub fn enter_target(e: &norte_proto::Entry) -> Option<norte_proto::VPath> {
     archive_root_for(e)
 }
 
-/// Si la entrada es un contenedor navegable (`.<formato>` de la whitelist de
-/// proto, extensión ASCII case-insensitive), la raíz de su interior (ADR
-/// 0018). El mapa extensión→formato es azúcar de presentación; la validación
-/// real es del core. Un SYMLINK a un archivo no entra como contenedor en v1
-/// (decisión consciente: exigiría resolver el target por stat del core).
+/// If the entry is a navigable container (`.<format>` from proto's
+/// whitelist, ASCII case-insensitive extension), the root of its interior
+/// (ADR 0018). The extension→format map is presentation sugar; the real
+/// validation belongs to the core. A SYMLINK to an archive does not count
+/// as a container in v1 (a deliberate decision: it would require resolving
+/// the target via the core's stat).
 ///
-/// Vive aquí y no en un frontend porque la responden DOS: el TUI para decidir
-/// si `Enter` entra, y la ventana para decidir si `pane.unpack` y
-/// `pane.test-archive` están disponibles. Dos tablas de extensiones son dos
-/// sitios donde una se olvida, y entonces la misma entrada se navega en una
-/// superficie y no en la otra (ADR 0066, decisión D14).
+/// Lives here and not in a frontend because TWO of them answer it: the TUI
+/// to decide whether `Enter` enters, and the window to decide whether
+/// `pane.unpack` and `pane.test-archive` are available. Two extension
+/// tables are two places for one to be forgotten, and then the same entry
+/// navigates on one surface and not on the other (ADR 0066, decision D14).
 ///
 /// ```
 /// use norte_proto::{Entry, EntryKind, VPath};
@@ -1047,20 +1061,20 @@ pub fn enter_target(e: &norte_proto::Entry) -> Option<norte_proto::VPath> {
 ///     size: None,
 ///     mtime_ms: None,
 /// };
-/// // La extensión no distingue mayúsculas…
+/// // The extension is case-insensitive…
 /// assert!(norte_frontend::nav::archive_root_for(&e).is_some());
-/// // …y un directorio no es un contenedor por mucho que se llame así.
+/// // …and a directory is not a container no matter what it is called.
 /// let d = Entry { kind: EntryKind::Dir, ..e };
 /// assert!(norte_frontend::nav::archive_root_for(&d).is_none());
 /// ```
 #[must_use]
 pub fn archive_root_for(e: &norte_proto::Entry) -> Option<norte_proto::VPath> {
     use norte_proto::{EntryKind, VPath};
-    // Extensiones cuyo sufijo no coincide con el token del formato (#55):
-    // `tar+gz` no tiene un `.tar+gz` real en el mundo, la gente escribe
-    // `.tgz`/`.tar.gz`. Se comprueban ANTES del genérico `.{formato}` — un
-    // `.tar.gz` no casaría de todos modos con `.tar` (termina en `.gz`), así
-    // que el orden es defensivo, no estrictamente necesario hoy.
+    // Extensions whose suffix does not match the format's token (#55):
+    // `tar+gz` has no real `.tar+gz` in the world, people write
+    // `.tgz`/`.tar.gz`. They are checked BEFORE the generic `.{format}` — a
+    // `.tar.gz` would not match `.tar` anyway (it ends in `.gz`), so the
+    // order is defensive, not strictly necessary today.
     const EXT_ALIASES: &[(&[u8], &str)] = &[(b".tar.gz", "tar+gz"), (b".tgz", "tar+gz")];
     fn ends_ci(name: &[u8], suffix: &[u8]) -> bool {
         name.len() >= suffix.len() && name[name.len() - suffix.len()..].eq_ignore_ascii_case(suffix)
@@ -1079,29 +1093,30 @@ pub fn archive_root_for(e: &norte_proto::Entry) -> Option<norte_proto::VPath> {
                 .find(|f| ends_ci(name, format!(".{f}").as_bytes()))
                 .copied()
         })?;
-    // Falla (exterior con `!`, ya compuesto…): no es navegable — Enter no-op.
+    // Fails (already composed with an outer `!`, etc.): not navigable —
+    // Enter is a no-op.
     VPath::archive_compose(format, &e.path, &[]).ok()
 }
 
-/// El formato de archivo que sugiere un NOMBRE, entre los que se saben
-/// ESCRIBIR (#132).
+/// The archive format a NAME suggests, among the ones norte knows how to
+/// WRITE (#132).
 ///
-/// Azúcar de presentación, igual que [`archive_root_for`]: lo que decide es el
-/// campo explícito del wire, y esto solo traduce lo que el lector acaba de
-/// teclear. `rar` no está —se delega y solo para leer (ADR 0056)—, así que un
-/// `.rar` cae en `None` y el diálogo lo dice en vez de empaquetar un zip con
-/// nombre de rar.
+/// Presentation sugar, same as [`archive_root_for`]: what decides is the
+/// wire's explicit field, and this only translates what the reader just
+/// typed. `rar` is not here — it is delegated and read-only (ADR 0056) —
+/// so a `.rar` falls to `None` and the dialog says so instead of packing a
+/// zip with a rar-shaped name.
 ///
-/// Compartida por el mismo motivo que su vecina: el TUI y la ventana ofrecen
-/// el mismo diálogo, y dos tablas de extensiones acabarían empaquetando en
-/// formatos distintos ante el mismo nombre.
+/// Shared for the same reason as its neighbor: the TUI and the window offer
+/// the same dialog, and two extension tables would end up packing into
+/// different formats for the same name.
 ///
 /// ```
 /// use norte_proto::methods::ArchiveFormat;
 /// use norte_frontend::nav::format_by_name;
 /// assert_eq!(format_by_name(b"cosas.TGZ"), Some(ArchiveFormat::TarGz));
 /// assert_eq!(format_by_name(b"cosas.zip"), Some(ArchiveFormat::Zip));
-/// // Lo que no se sabe escribir no se inventa.
+/// // What norte cannot write is not made up.
 /// assert_eq!(format_by_name(b"cosas.rar"), None);
 /// ```
 #[must_use]
@@ -1122,23 +1137,23 @@ pub fn format_by_name(name: &[u8]) -> Option<norte_proto::methods::ArchiveFormat
     None
 }
 
-/// Un tamaño con sufijo (`4096`, `10M`, `1G`) en bytes, o `None` si no se
-/// entiende (#132).
+/// A size with a suffix (`4096`, `10M`, `1G`) in bytes, or `None` if it
+/// cannot be understood (#132).
 ///
-/// Sufijos BINARIOS, que es lo que significan en un gestor de ficheros: `M` es
-/// 1 MiB y no un millón. Sin sufijo son bytes. El cero no vale: partir en
-/// trozos de cero bytes no termina nunca.
+/// BINARY suffixes, which is what they mean in a file manager: `M` is 1 MiB,
+/// not a million. With no suffix they are bytes. Zero is not valid:
+/// splitting into zero-byte chunks never finishes.
 ///
-/// Compartida por lo mismo que sus vecinas: el TUI y la ventana piden el mismo
-/// tamaño en el mismo diálogo, y dos maneras de leer `10M` son dos ficheros
-/// partidos distinto ante lo mismo que se tecleó.
+/// Shared for the same reason as its neighbors: the TUI and the window ask
+/// for the same size in the same dialog, and two ways of reading `10M`
+/// would split the same typed value into differently-sized files.
 ///
 /// ```
 /// use norte_frontend::nav::parse_size;
 /// assert_eq!(parse_size("4096"), Some(4096));
-/// assert_eq!(parse_size("10M"), Some(10 * 1024 * 1024), "binario, no decimal");
-/// assert_eq!(parse_size("0"), None, "un trozo de cero bytes no acaba nunca");
-/// assert_eq!(parse_size("diez"), None);
+/// assert_eq!(parse_size("10M"), Some(10 * 1024 * 1024), "binary, not decimal");
+/// assert_eq!(parse_size("0"), None, "a zero-byte chunk never finishes");
+/// assert_eq!(parse_size("ten"), None);
 /// ```
 #[must_use]
 pub fn parse_size(s: &str) -> Option<u64> {
@@ -1156,11 +1171,11 @@ pub fn parse_size(s: &str) -> Option<u64> {
     n.checked_mul(mult).filter(|v| *v > 0)
 }
 
-/// El nombre BASE de un fichero partido, dado el PRIMER trozo (#132).
+/// The BASE name of a split file, given its FIRST chunk (#132).
 ///
-/// Solo desde el `.001`: empezar por el `.007` uniría media cosa, y el core
-/// solo sabe buscar hacia delante. `None` si el nombre no acaba en `.001` o si
-/// lo que queda no es un nombre legal.
+/// Only from `.001`: starting from `.007` would join half a thing, and the
+/// core only knows how to search forward. `None` if the name does not end
+/// in `.001` or if what is left is not a legal name.
 ///
 /// ```
 /// use norte_frontend::nav::base_de_trozos;
@@ -1168,16 +1183,16 @@ pub fn parse_size(s: &str) -> Option<u64> {
 ///     base_de_trozos(b"pelicula.mkv.001").map(|s| s.as_bytes().to_vec()),
 ///     Some(b"pelicula.mkv".to_vec())
 /// );
-/// // Desde otro trozo, no: uniría media cosa.
+/// // From another chunk, no: it would join half a thing.
 /// assert!(base_de_trozos(b"pelicula.mkv.007").is_none());
 /// ```
 #[must_use]
-pub fn base_de_trozos(nombre: &[u8]) -> Option<norte_proto::Segment> {
-    let base = nombre
+pub fn base_de_trozos(name: &[u8]) -> Option<norte_proto::Segment> {
+    let base = name
         .len()
         .checked_sub(4)
-        .filter(|n| nombre[*n] == b'.' && &nombre[n + 1..] == b"001")
-        .map(|n| nombre[..n].to_vec())?;
+        .filter(|n| name[*n] == b'.' && &name[n + 1..] == b"001")
+        .map(|n| name[..n].to_vec())?;
     norte_proto::Segment::new(base).ok()
 }
 
@@ -1190,56 +1205,56 @@ mod history_tests {
     }
 
     #[test]
-    fn historial_push_dedup_tope_y_retirada() {
+    fn history_push_dedup_cap_and_removal() {
         let mut h = History::default();
         for i in 0..40 {
             h.push(vp(&format!("mem:///d{i}")));
         }
-        assert_eq!(h.entries().len(), 30, "tope");
-        assert_eq!(h.entries()[0], vp("mem:///d39"), "más reciente primero");
+        assert_eq!(h.entries().len(), 30, "cap");
+        assert_eq!(h.entries()[0], vp("mem:///d39"), "most recent first");
         h.push(vp("mem:///d39"));
-        assert_eq!(h.entries().len(), 30, "dedup consecutivo");
+        assert_eq!(h.entries().len(), 30, "consecutive dedup");
         h.remove(&vp("mem:///d39"));
         assert!(
             !h.entries().contains(&vp("mem:///d39")),
-            "retirada tras NotFound"
+            "removed after NotFound"
         );
     }
 
-    /// review MINOR-3: el rustdoc de `push` promete que un mismo dir en
-    /// posiciones NO consecutivas SÍ puede repetirse, y `remove` retira
-    /// TODAS las ocurrencias — pínchalo con un caso A→B→A explícito.
+    /// review MINOR-3: `push`'s rustdoc promises that the same dir in
+    /// NON-consecutive positions CAN repeat, and `remove` removes ALL
+    /// occurrences — pin it with an explicit A→B→A case.
     #[test]
-    fn historial_permite_repetidos_no_consecutivos_y_remove_retira_todas() {
+    fn history_allows_nonconsecutive_repeats_and_remove_removes_all() {
         let mut h = History::default();
         h.push(vp("mem:///a"));
         h.push(vp("mem:///b"));
-        h.push(vp("mem:///a")); // NO consecutivo con el primer "a" (hay "b" en medio)
+        h.push(vp("mem:///a")); // NOT consecutive with the first "a" ("b" is in between)
         let count_to = |h: &History| h.entries().iter().filter(|p| **p == vp("mem:///a")).count();
         assert_eq!(
             count_to(&h),
             2,
-            "repetido no consecutivo: dos apariciones de a"
+            "non-consecutive repeat: two occurrences of a"
         );
         h.remove(&vp("mem:///a"));
-        assert_eq!(count_to(&h), 0, "remove retira TODAS las ocurrencias");
+        assert_eq!(count_to(&h), 0, "remove removes ALL occurrences");
     }
 
     #[test]
-    fn el_rastro_no_oscila_entre_dos_directorios() {
-        // El defecto que este rastro existe para no tener: recorrer la MRU
-        // como si fuera un rastro lleva de A a B, de vuelta a A, y de vuelta
-        // a B — el lector se queda atrapado entre dos dirs sin salida.
+    fn the_trail_does_not_oscillate_between_two_directories() {
+        // The defect this trail exists not to have: walking the MRU as if
+        // it were a trail goes from A to B, back to A, and back to B — the
+        // reader gets stuck between two dirs with no way out.
         let mut h = History::default();
-        h.record(vp("mem:///a")); // salimos de A hacia B
-        h.record(vp("mem:///b")); // salimos de B hacia C (estamos en C)
+        h.record(vp("mem:///a")); // leaving A for B
+        h.record(vp("mem:///b")); // leaving B for C (now at C)
         assert_eq!(h.step_back(vp("mem:///c")), Some(vp("mem:///b")));
         assert_eq!(h.step_back(vp("mem:///b")), Some(vp("mem:///a")));
-        assert_eq!(h.step_back(vp("mem:///a")), None, "el rastro se acaba");
+        assert_eq!(h.step_back(vp("mem:///a")), None, "the trail runs out");
     }
 
     #[test]
-    fn adelante_deshace_atras_y_una_navegacion_nueva_lo_borra() {
+    fn forward_undoes_back_and_a_new_navigation_clears_it() {
         let mut h = History::default();
         h.record(vp("mem:///a"));
         h.record(vp("mem:///b"));
@@ -1247,19 +1262,19 @@ mod history_tests {
         assert_eq!(h.step_forward(vp("mem:///b")), Some(vp("mem:///c")));
         assert_eq!(h.step_forward(vp("mem:///c")), None);
 
-        // Volver atrás y NAVEGAR a otro sitio corta la rama de delante: es
-        // la semántica del navegador, y lo contrario ofrecería un «adelante»
-        // hacia una historia que el lector ya abandonó.
+        // Going back and NAVIGATING somewhere else cuts the forward branch:
+        // it is the browser's semantics, and the opposite would offer a
+        // "forward" into a history the reader has already abandoned.
         assert_eq!(h.step_back(vp("mem:///c")), Some(vp("mem:///b")));
         h.record(vp("mem:///b"));
-        assert_eq!(h.step_forward(vp("mem:///z")), None, "rama podada");
+        assert_eq!(h.step_forward(vp("mem:///z")), None, "branch pruned");
     }
 
     #[test]
-    fn el_rastro_no_toca_la_mru_del_popup() {
-        // Son dos preguntas distintas: «¿dónde he estado?» (la MRU que pinta
-        // el popup) y «¿dónde estaba hace un momento?» (el rastro). Ir atrás
-        // no es visitar un sitio nuevo.
+    fn the_trail_does_not_touch_the_popups_mru() {
+        // Two different questions: "where have I been" (the MRU the popup
+        // paints) and "where was I a moment ago" (the trail). Going back is
+        // not visiting somewhere new.
         let mut h = History::default();
         h.record(vp("mem:///a"));
         h.record(vp("mem:///b"));
@@ -1267,50 +1282,54 @@ mod history_tests {
         let _ = h.step_back(vp("mem:///c"));
         let _ = h.step_forward(vp("mem:///b"));
         let after: Vec<VPath> = h.entries().iter().cloned().collect();
-        assert_eq!(before, after, "la MRU es asunto aparte");
+        assert_eq!(before, after, "the MRU is a separate matter");
     }
 
-    /// «Este directorio ya no está» es UN hecho: `remove` lo aplica a la MRU
-    /// y al rastro a la vez. Sin esto el popup retiraba la entrada y
-    /// `nav.back` seguía apuntando al mismo dir muerto.
+    /// "This directory is gone" is ONE fact: `remove` applies it to the MRU
+    /// and the trail at once. Without this the popup would drop the entry
+    /// and `nav.back` would keep pointing at the same dead dir.
     #[test]
-    fn remove_poda_el_rastro_y_no_solo_la_mru() {
+    fn remove_prunes_the_trail_and_not_just_the_mru() {
         let mut h = History::default();
         h.record(vp("mem:///a"));
         h.record(vp("mem:///b"));
-        // Y también la rama de delante: el mismo dir puede estar en las dos.
+        // And also the forward branch: the same dir can be in both.
         assert_eq!(h.step_back(vp("mem:///c")), Some(vp("mem:///b")));
         assert_eq!(h.fwd_len(), 1);
 
         h.remove(&vp("mem:///b"));
-        assert_eq!(h.back_len(), 1, "b sale del rastro de atrás");
-        assert!(!h.entries().contains(&vp("mem:///b")), "y de la MRU");
+        assert_eq!(h.back_len(), 1, "b leaves the back trail");
+        assert!(!h.entries().contains(&vp("mem:///b")), "and the MRU");
         assert_eq!(
             h.step_back(vp("mem:///c")),
             Some(vp("mem:///a")),
-            "atrás salta al siguiente vivo, no al dir retirado"
+            "back jumps to the next living one, not the removed dir"
         );
 
         h.remove(&vp("mem:///c"));
-        assert_eq!(h.fwd_len(), 0, "y de la rama de delante");
+        assert_eq!(h.fwd_len(), 0, "and the forward branch");
     }
 
     #[test]
-    fn el_rastro_esta_acotado_como_la_mru() {
+    fn the_trail_is_bounded_like_the_mru() {
         let mut h = History::with_capacity(HISTORY_MAX);
         for i in 0..(HISTORY_MAX + 20) {
             h.record(vp(&format!("mem:///d{i}")));
         }
-        assert_eq!(h.back_len(), HISTORY_MAX, "el rastro no crece sin fin");
+        assert_eq!(
+            h.back_len(),
+            HISTORY_MAX,
+            "the trail does not grow without end"
+        );
     }
 
-    /// El tope de arriba solo mueve `record`. El invariante que documenta el
-    /// tipo —y del que depende `step_forward` para empujar a `back` sin
-    /// comprobar nada— es sobre la SUMA de las dos pilas, así que hay que
-    /// alternar las tres operaciones más allá del tope: ir hasta el fondo del
-    /// rastro, volver hasta el final, y navegar de nuevo desde ahí.
+    /// The cap above only moves `record`. The invariant the type documents
+    /// — the one `step_forward` relies on to push onto `back` without
+    /// checking anything — is about the SUM of the two stacks, so the three
+    /// operations have to be alternated past the cap: walk to the bottom of
+    /// the trail, come all the way back, and navigate again from there.
     #[test]
-    fn el_tope_aguanta_alternando_las_tres_operaciones() {
+    fn the_cap_holds_while_alternating_the_three_operations() {
         let mut h = History::with_capacity(HISTORY_MAX);
         let total = |h: &History| h.back_len() + h.fwd_len();
 
@@ -1318,88 +1337,94 @@ mod history_tests {
         for i in 0..(HISTORY_MAX * 2) {
             h.record(cur.clone());
             cur = vp(&format!("mem:///d{i}"));
-            assert!(total(&h) <= HISTORY_MAX, "record no desborda la suma");
+            assert!(total(&h) <= HISTORY_MAX, "record does not overflow the sum");
         }
-        assert_eq!(h.back_len(), HISTORY_MAX, "el rastro está lleno");
+        assert_eq!(h.back_len(), HISTORY_MAX, "the trail is full");
 
-        // Hasta el fondo: cada paso mueve un dir de una pila a la otra.
+        // To the bottom: each step moves one dir from one stack to the other.
         let mut steps = 0;
         while let Some(target) = h.step_back(cur.clone()) {
             cur = target;
             steps += 1;
-            assert!(total(&h) <= HISTORY_MAX, "atrás no desborda la suma");
+            assert!(total(&h) <= HISTORY_MAX, "back does not overflow the sum");
         }
-        assert_eq!(steps, HISTORY_MAX, "se recorrió el rastro entero");
-        assert_eq!(h.fwd_len(), HISTORY_MAX, "toda la memoria está delante");
+        assert_eq!(steps, HISTORY_MAX, "the whole trail was walked");
+        assert_eq!(h.fwd_len(), HISTORY_MAX, "all the memory is ahead");
 
-        // Y de vuelta: aquí es donde `step_forward` empuja a `back` sin
-        // comprobar el tope. Sin el invariante, `back` acabaría por encima.
+        // And back: this is where `step_forward` pushes onto `back` without
+        // checking the cap. Without the invariant, `back` would end up over
+        // it.
         while let Some(target) = h.step_forward(cur.clone()) {
             cur = target;
-            assert!(total(&h) <= HISTORY_MAX, "adelante no desborda la suma");
+            assert!(
+                total(&h) <= HISTORY_MAX,
+                "forward does not overflow the sum"
+            );
         }
-        assert_eq!(h.back_len(), HISTORY_MAX, "el rastro vuelve a estar lleno");
+        assert_eq!(h.back_len(), HISTORY_MAX, "the trail is full again");
 
-        // Una navegación nueva desde el tope tampoco lo desborda.
+        // A new navigation from the cap does not overflow it either.
         h.record(cur);
         assert!(total(&h) <= HISTORY_MAX);
-        assert_eq!(h.fwd_len(), 0, "y poda la rama de delante");
+        assert_eq!(h.fwd_len(), 0, "and it prunes the forward branch");
     }
 
-    /// El rastro se camina del más reciente al más viejo y se devuelve el
-    /// primero que NO sea de la sesión que se cierra.
+    /// The trail is walked from most recent to oldest and the first one that
+    /// is NOT from the session being closed is returned.
     #[test]
-    fn el_regreso_salta_todo_lo_de_la_maquina_cerrada() {
-        let rastro = [vp("file:///home/o"), vp("sftp://srv/a"), vp("sftp://srv/b")];
+    fn the_return_skips_everything_from_the_closed_machine() {
+        let trail = [vp("file:///home/o"), vp("sftp://srv/a"), vp("sftp://srv/b")];
         assert_eq!(
-            regreso_tras_desconectar(&vp("sftp://srv/b"), &rastro),
+            regreso_tras_desconectar(&vp("sftp://srv/b"), &trail),
             Some(vp("file:///home/o")),
         );
     }
 
-    /// Un archivo SOBRE la máquina que se cierra es esa misma máquina: lo
-    /// sirve la misma conexión (el core evicta las dos claves a la vez), así
-    /// que aterrizar ahí abriría una conexión nueva con su reautenticación —
-    /// justo lo que el gesto pidió no tener. Comparando el scheme crudo,
-    /// `zip+sftp` no casaba con `sftp` y el panel caía dentro.
+    /// An archive ON the machine being closed is that same machine: it is
+    /// served by the same connection (the core evicts both keys at once),
+    /// so landing there would open a new connection with its
+    /// reauthentication — exactly what the gesture asked not to have.
+    /// Comparing the raw scheme, `zip+sftp` did not match `sftp` and the
+    /// pane fell right inside.
     #[test]
-    fn un_archivo_de_esa_maquina_sigue_siendo_esa_maquina() {
-        let rastro = [
+    fn an_archive_on_that_machine_is_still_that_machine() {
+        let trail = [
             vp("file:///home/o"),
             vp("zip+sftp://srv/x.zip%21/dentro"),
             vp("sftp://srv/a"),
         ];
         assert_eq!(
-            regreso_tras_desconectar(&vp("sftp://srv/b"), &rastro),
+            regreso_tras_desconectar(&vp("sftp://srv/b"), &trail),
             Some(vp("file:///home/o")),
         );
-        // Y al revés: cerrar desde DENTRO del archivo tampoco vuelve al
-        // exterior de la misma máquina.
+        // And the other way round: closing from INSIDE the archive does not
+        // return to the outside of the same machine either.
         assert_eq!(
-            regreso_tras_desconectar(&vp("zip+sftp://srv/x.zip%21/dentro"), &rastro),
+            regreso_tras_desconectar(&vp("zip+sftp://srv/x.zip%21/dentro"), &trail),
             Some(vp("file:///home/o")),
         );
     }
 
-    /// La misma sesión es scheme Y authority: otro servidor por sftp es otra
-    /// conexión, y volver ahí no reabre la que se cerró.
+    /// The same session is scheme AND authority: another server over sftp is
+    /// another connection, and going back there does not reopen the one
+    /// that closed.
     #[test]
-    fn otro_servidor_del_mismo_scheme_si_vale() {
-        let rastro = [vp("sftp://otro/x"), vp("sftp://srv/a")];
+    fn another_server_of_the_same_scheme_is_valid() {
+        let trail = [vp("sftp://otro/x"), vp("sftp://srv/a")];
         assert_eq!(
-            regreso_tras_desconectar(&vp("sftp://srv/a"), &rastro),
+            regreso_tras_desconectar(&vp("sftp://srv/a"), &trail),
             Some(vp("sftp://otro/x")),
         );
     }
 
-    /// Un panel que nació remoto —o cuyo rastro entero es de esa máquina— no
-    /// tiene a dónde volver: lo decide el llamante, que cae a casa.
+    /// A pane born remote — or whose whole trail belongs to that machine —
+    /// has nowhere to go back to: the caller decides, and falls back home.
     #[test]
-    fn sin_nada_ajeno_en_el_rastro_no_hay_regreso() {
+    fn with_nothing_foreign_in_the_trail_there_is_no_return() {
         assert_eq!(regreso_tras_desconectar(&vp("sftp://srv/a"), &[]), None);
-        let todo_suyo = [vp("sftp://srv/a"), vp("sftp://srv/b")];
+        let all_its_own = [vp("sftp://srv/a"), vp("sftp://srv/b")];
         assert_eq!(
-            regreso_tras_desconectar(&vp("sftp://srv/b"), &todo_suyo),
+            regreso_tras_desconectar(&vp("sftp://srv/b"), &all_its_own),
             None,
         );
     }

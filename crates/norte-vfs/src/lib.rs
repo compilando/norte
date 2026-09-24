@@ -1,20 +1,20 @@
-//! Contrato central del VFS de norte: el trait `Provider` y sus tipos.
+//! norte's VFS central contract: the `Provider` trait and its types.
 //!
-//! Todo backend de almacenamiento (local, sftp, s3, archive, memoria) implementa
-//! este trait y pasa la misma suite contractual (`provider_contract!`, o
-//! `readonly_provider_contract!` si declara `READ_ONLY` — ADR 0018).
-//! Los providers no se conocen entre sí; las operaciones compuestas viven en
+//! Every storage backend (local, sftp, s3, archive, memory) implements
+//! this trait and passes the same contract suite (`provider_contract!`, or
+//! `readonly_provider_contract!` if it declares `READ_ONLY` — ADR 0018).
+//! Providers don't know about each other; composite operations live in
 //! `norte-core` (spec §5).
 #![forbid(unsafe_code)]
 
 mod contract;
 mod contract_ro;
 pub mod deadline;
-/// Conversión entre `VPath` y rutas NATIVAS del sistema.
+/// Conversion between `VPath` and the system's NATIVE paths.
 ///
-/// Reglas de forma, no acceso a disco: por eso viven aquí y no en el provider
-/// local, que es el único crate con `unsafe` y al que un frontend
-/// daemon-only no debe arrastrar (ADR 0066, #254).
+/// Shape rules, not disk access: that's why they live here and not in the
+/// local provider, which is the only crate with `unsafe` and which a
+/// daemon-only frontend must not be dragged into (ADR 0066, #254).
 pub mod native;
 mod options;
 mod provider;
@@ -30,25 +30,24 @@ pub use provider::{
 };
 pub use sink::ByteSink;
 
-/// Re-exports internos para la expansión de [`provider_contract!`].
-/// NO es API: puede cambiar sin aviso.
+/// Internal re-exports for [`provider_contract!`]'s expansion.
+/// NOT API: it can change without notice.
 #[doc(hidden)]
 pub mod __private {
     pub use bytes;
     pub use futures;
     pub use norte_proto;
 
-    /// Aserciones del contrato de attrs (#108 bloque 2), COMPARTIDAS por las
-    /// dos macros de contrato — duplicarlas dejaría que una divergencia
-    /// (p. ej. una variante nueva de `AttrType` en un solo matcher) debilite
-    /// una suite en silencio.
+    /// Attr contract assertions (#108 block 2), SHARED by the two contract
+    /// macros — duplicating them would let a divergence (e.g. a new
+    /// `AttrType` variant in only one matcher) silently weaken a suite.
     pub mod contract_attrs {
         use norte_proto::{
             ATTR_BYTES_MAX, ATTR_TEXT_MAX, ATTRS_MAX_ADVERTISED, AttrInfo, AttrType, AttrValue,
             Entry, is_valid_attr_id,
         };
 
-        /// ¿La variante del valor casa con el tipo declarado?
+        /// Does the value's variant match the declared type?
         #[must_use]
         pub fn attr_type_matches(ty: AttrType, v: &AttrValue) -> bool {
             matches!(
@@ -62,28 +61,31 @@ pub mod __private {
             )
         }
 
-        /// Catálogo sano: acotado, ids válidos, sin duplicados.
+        /// Sane catalogue: bounded, valid ids, no duplicates.
         ///
         /// # Panics
-        /// Si el catálogo viola cualquiera de las tres condiciones.
+        /// If the catalogue violates any of the three conditions.
         pub fn assert_catalog_sane(catalog: &[AttrInfo]) {
-            assert!(catalog.len() <= ATTRS_MAX_ADVERTISED, "catálogo sobre tope");
+            assert!(
+                catalog.len() <= ATTRS_MAX_ADVERTISED,
+                "catalogue over the ceiling"
+            );
             let mut seen = std::collections::BTreeSet::new();
             for info in catalog {
                 assert!(
                     is_valid_attr_id(&info.id),
-                    "id inválido en catálogo: {:?}",
+                    "invalid id in the catalogue: {:?}",
                     info.id
                 );
-                assert!(seen.insert(info.id.clone()), "id duplicado: {:?}", info.id);
+                assert!(seen.insert(info.id.clone()), "duplicate id: {:?}", info.id);
             }
         }
 
-        /// Contrato por entrada: solo ids pedidos, todos anunciados, tipo
-        /// declarado ⟺ variante producida, Text/Bytes dentro de tope (bytes).
+        /// Per-entry contract: only requested ids, all advertised, declared
+        /// type ⟺ produced variant, Text/Bytes within the byte ceiling.
         ///
         /// # Panics
-        /// Si alguna celda de `entry.attrs` viola el contrato.
+        /// If any cell of `entry.attrs` violates the contract.
         pub fn assert_attrs_contract(
             catalog: &[AttrInfo],
             requested: &crate::AttrRequest,
@@ -92,24 +94,24 @@ pub mod __private {
             for (id, v) in &entry.attrs {
                 assert!(
                     requested.wants(id),
-                    "attr NO pedido en {:?}: {id:?}",
+                    "attr NOT requested in {:?}: {id:?}",
                     entry.path.display_lossy()
                 );
                 let info = catalog
                     .iter()
                     .find(|a| &a.id == id)
-                    .unwrap_or_else(|| panic!("attr no anunciado: {id:?}"));
+                    .unwrap_or_else(|| panic!("attr not advertised: {id:?}"));
                 assert!(
                     attr_type_matches(info.ty, v),
-                    "tipo declarado {:?} no casa con {v:?} para {id:?}",
+                    "declared type {:?} does not match {v:?} for {id:?}",
                     info.ty
                 );
                 match v {
                     AttrValue::Text(s) => {
-                        assert!(s.len() <= ATTR_TEXT_MAX, "Text sobre tope: {id:?}");
+                        assert!(s.len() <= ATTR_TEXT_MAX, "Text over the ceiling: {id:?}");
                     }
                     AttrValue::Bytes(b) => {
-                        assert!(b.len() <= ATTR_BYTES_MAX, "Bytes sobre tope: {id:?}");
+                        assert!(b.len() <= ATTR_BYTES_MAX, "Bytes over the ceiling: {id:?}");
                     }
                     _ => {}
                 }
@@ -118,21 +120,23 @@ pub mod __private {
     }
 }
 
-/// Cómo pliega nombres una UBICACIÓN, según lo que sus capacidades declaran.
+/// How a LOCATION folds names, according to what its capabilities declare.
 ///
-/// Vive aquí —y no en `norte-compare`, de donde vino— porque es la regla que
-/// dice qué SIGNIFICAN las banderas del [`Provider`] cuyo contrato define este
-/// crate, y porque la preguntan tres capas que no se ven entre sí: el motor de
-/// comparación, el core cuando decide si dos rutas son el mismo nodo, y la
-/// ventana cuando comprueba si dos marcas de un lote colisionarían en el
-/// destino (#268). Tres copias de tres líneas es como se separan.
+/// Lives here — and not in `norte-compare`, where it came from — because
+/// it's the rule that says what the [`Provider`] flags whose contract this
+/// crate defines MEAN, and because three layers that can't see each other
+/// ask it: the comparison engine, the core when deciding whether two paths
+/// are the same node, and the window when checking whether two marks in a
+/// batch would collide at the destination (#268). Three copies of three
+/// lines is how they're kept apart.
 ///
-/// `CASE_SENSITIVE` gana sobre nada, y `FULL_FOLD` gana sobre `CASE_SENSITIVE`:
-/// un ext4 con `+F` declara los dos y pliega, que es lo que el orden dice.
+/// `CASE_SENSITIVE` wins over nothing, and `FULL_FOLD` wins over
+/// `CASE_SENSITIVE`: an ext4 with `+F` declares both and folds, which is
+/// what the order says.
 ///
-/// Se pregunta por UBICACIÓN, jamás por provider (#215): un pincho FAT montado
-/// bajo el mismo `file://` que un `/home` sensible a la caja da otra respuesta,
-/// y contestar por el provider es contestar por el sitio equivocado.
+/// Asked BY LOCATION, never by provider (#215): a FAT thumb drive mounted
+/// under the same `file://` as a case-sensitive `/home` gives a different
+/// answer, and answering by provider is answering for the wrong place.
 ///
 /// ```
 /// use norte_encoding::FoldMode;

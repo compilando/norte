@@ -257,11 +257,11 @@ mod tests {
     /// then probing again would be paying two round trips for data that
     /// already arrived.
     #[test]
-    fn las_caps_se_cachean_por_localizacion() {
+    fn caps_are_cached_by_location() {
         let mut app = app_dos_panes();
         let mem = vp("mem:///");
         assert!(app.caps(&mem).is_none(), "nothing gets made up unseeded");
-        app.insert_caps(&mem, caps_de_test());
+        app.insert_caps(&mem, test_caps());
         assert!(app.caps(&mem).is_some());
         assert!(
             app.caps(&vp("sftp://example.org/")).is_none(),
@@ -277,7 +277,7 @@ mod tests {
     /// scheme-only key wasn't failing — by luck, not by design, and
     /// `App::caps` is a general accessor that invites reading any flag.
     #[test]
-    fn dos_authorities_del_mismo_scheme_no_se_responden() {
+    fn two_authorities_of_the_same_scheme_dont_answer_for_each_other() {
         let a = vp("sftp://a.org/");
         let b = vp("sftp://b.org/");
         let mut app = App::new(
@@ -307,7 +307,7 @@ mod tests {
     /// says whether it's a compressed archive). What it cannot do is claim
     /// it can be written to.
     #[test]
-    fn sin_caps_todavia_el_solo_lectura_lo_decide_el_scheme() {
+    fn without_caps_yet_the_scheme_decides_read_only() {
         let app = app_dos_panes();
         assert!(!app.pane_read_only(0), "mem:// isn't read-only");
 
@@ -323,7 +323,7 @@ mod tests {
     /// `READ_ONLY` over a scheme that isn't syntactically one (a read-only
     /// remote mount) gets vetoed just the same.
     #[test]
-    fn con_caps_manda_el_flag_read_only() {
+    fn once_caps_arrive_the_read_only_flag_rules() {
         let mut app = app_dos_panes();
         let dir = app.panes[0].dir().clone();
         app.insert_caps(
@@ -334,7 +334,7 @@ mod tests {
             },
         );
         assert!(app.pane_read_only(0));
-        app.insert_caps(&dir, caps_de_test());
+        app.insert_caps(&dir, test_caps());
         assert!(!app.pane_read_only(0), "without the flag, writable");
     }
 
@@ -344,7 +344,7 @@ mod tests {
     /// File or a Symlink. Re-deriving them here would dim rows the app
     /// would run.
     #[test]
-    fn los_hechos_de_la_ayuda_siguen_a_los_predicados_del_dispatch() {
+    fn help_facts_follow_the_dispatch_predicates() {
         let mut app = app_dos_panes();
         // The cursor is on a plain File: it isn't entered, it's viewed.
         let f = app.help_facts();
@@ -372,7 +372,7 @@ mod tests {
         );
 
         // And the focused pane's scheme degradation reaches the fact.
-        app.note_degraded(degradacion_de_test("mem", "no-host"));
+        app.note_degraded(test_degraded("mem", "no-host"));
         assert!(app.help_facts().degraded);
     }
 
@@ -387,7 +387,7 @@ mod tests {
     /// trap, "describing" by reading through "operating"'s door, and the
     /// help was dimming a key that goes up perfectly well.
     #[test]
-    fn con_el_cursor_en_la_fila_de_subir_la_ayuda_ofrece_entrar() {
+    fn with_the_cursor_on_the_up_row_the_help_offers_enter() {
         let mut app = App::new(
             Pane::new(vp("mem:///home"), vec![file("a")]),
             pane_con(&["b"]),
@@ -419,7 +419,7 @@ mod tests {
     /// `renombrar_es_una_sola_entrada_y_la_de_ia_es_otra`. The fact belongs
     /// to the caller precisely because both answers are correct.)
     #[test]
-    fn con_varias_marcas_la_ayuda_no_atenua_renombrar() {
+    fn with_several_marks_the_help_does_not_dim_rename() {
         use norte_help::ChordResolver as _;
 
         let mut app = App::new(pane_con(&["a", "b", "c"]), pane_con(&["z"]));
@@ -453,7 +453,7 @@ mod tests {
     /// Freezing the facts on opening the help: the resolver the view uses
     /// starts answering with the facts from THAT moment.
     #[test]
-    fn congelar_los_hechos_reescribe_el_resolver_de_la_ayuda() {
+    fn freezing_the_facts_rewrites_the_help_resolver() {
         use norte_help::ChordResolver as _;
 
         let mut app = app_en("zip+file:///a.zip/!", "zip+file:///b.zip/!");

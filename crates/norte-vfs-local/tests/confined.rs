@@ -1,10 +1,11 @@
-//! Escrituras que no pueden salirse de su raíz (#164, ADR 0054).
+//! Writes that can't escape their root (#164, ADR 0054).
 //!
-//! El caso que da nombre al issue —un symlink en un componente INTERMEDIO que
-//! redirige un `Copy` o un `CreateDir` fuera del destino— y las dos maneras de
-//! resolverlo que este provider tiene: `openat2(RESOLVE_BENEATH)` y, donde ese
-//! syscall no está, el paseo componente a componente. Las dos se ejercitan en
-//! la misma máquina: la segunda con la costura que desactiva la primera.
+//! The case that names the issue — a symlink in an INTERMEDIATE component
+//! that redirects a `Copy` or a `CreateDir` outside the destination — and
+//! the two ways this provider has to resolve it: `openat2(RESOLVE_BENEATH)`
+//! and, where that syscall isn't available, the component-by-component
+//! walk. Both are exercised on the same machine: the second with the seam
+//! that disables the first.
 
 #![cfg(unix)]
 
@@ -16,27 +17,27 @@ use norte_vfs::Provider;
 use norte_vfs_local::LocalProvider;
 
 fn seg(b: &[u8]) -> Segment {
-    Segment::new(b.to_vec()).expect("segmento válido")
+    Segment::new(b.to_vec()).expect("valid segment")
 }
 
 fn child(base: &VPath, name: &[u8]) -> VPath {
     base.join(seg(name))
 }
 
-/// Provider enraizado en un tempdir, con `dest/` dentro y `fuera/` de hermano.
-fn escenario() -> (LocalProvider, VPath, std::path::PathBuf, std::path::PathBuf) {
+/// Provider rooted in a tempdir, with `dest/` inside and a sibling `outside/`.
+fn scenario() -> (LocalProvider, VPath, std::path::PathBuf, std::path::PathBuf) {
     let dir = tempfile::tempdir().expect("tempdir");
     let base = dir.path().to_path_buf();
-    let dentro = base.join("dest");
-    let fuera = base.join("fuera");
-    std::fs::create_dir(&dentro).expect("dest");
-    std::fs::create_dir(&fuera).expect("fuera");
+    let inside = base.join("dest");
+    let outside = base.join("outside");
+    std::fs::create_dir(&inside).expect("dest");
+    std::fs::create_dir(&outside).expect("outside");
     let p = LocalProvider::rooted(base).with_guard(Box::new(dir));
-    let raiz = child(&LocalProvider::root(), b"dest");
-    (p, raiz, dentro, fuera)
+    let root_path = child(&LocalProvider::root(), b"dest");
+    (p, root_path, inside, outside)
 }
 
-async fn escribe(
+async fn write_to(
     root: &dyn norte_vfs::ConfinedRoot,
     rel: &[Segment],
     bytes: &[u8],
@@ -46,17 +47,17 @@ async fn escribe(
     sink.commit().await
 }
 
-/// EL test de #164: el componente intermedio es un symlink hacia fuera, y la
-/// escritura no aterriza allí.
+/// THE test for #164: the intermediate component is a symlink pointing
+/// outside, and the write doesn't land there.
 #[tokio::test]
-async fn un_symlink_intermedio_no_redirige_la_escritura_fuera_de_la_raiz() {
-    let (p, raiz, dentro, fuera) = escenario();
-    std::os::unix::fs::symlink(&fuera, dentro.join("sub")).expect("symlink hostil");
+async fn an_intermediate_symlink_does_not_redirect_the_write_outside_the_root() {
+    let (p, root_path, inside, outside) = scenario();
+    std::os::unix::fs::symlink(&outside, inside.join("sub")).expect("hostile symlink");
 
-    let root = p.open_root(&raiz).await.expect("raíz confinada");
-    let err = escribe(root.as_ref(), &[seg(b"sub"), seg(b"botin.txt")], b"x")
+    let root = p.open_root(&root_path).await.expect("confined root");
+    let err = write_to(root.as_ref(), &[seg(b"sub"), seg(b"loot.txt")], b"x")
         .await
-        .expect_err("tiene que negarse");
+        .expect_err("has to refuse");
 
     assert!(
         matches!(
@@ -65,25 +66,25 @@ async fn un_symlink_intermedio_no_redirige_la_escritura_fuera_de_la_raiz() {
                 conflict: ConflictKind::EscapesRoot
             }
         ),
-        "respondió {err:?}"
+        "answered {err:?}"
     );
     assert!(
-        !fuera.join("botin.txt").exists(),
-        "y sobre todo: no escribió fuera"
+        !outside.join("loot.txt").exists(),
+        "and above all: it did not write outside"
     );
 }
 
-/// `CreateDir` tiene el mismo agujero y la misma respuesta.
+/// `CreateDir` has the same hole and the same answer.
 #[tokio::test]
-async fn un_symlink_intermedio_tampoco_redirige_un_mkdir() {
-    let (p, raiz, dentro, fuera) = escenario();
-    std::os::unix::fs::symlink(&fuera, dentro.join("sub")).expect("symlink hostil");
+async fn an_intermediate_symlink_does_not_redirect_a_mkdir_either() {
+    let (p, root_path, inside, outside) = scenario();
+    std::os::unix::fs::symlink(&outside, inside.join("sub")).expect("hostile symlink");
 
-    let root = p.open_root(&raiz).await.expect("raíz confinada");
+    let root = p.open_root(&root_path).await.expect("confined root");
     let err = root
-        .mkdir(&[seg(b"sub"), seg(b"nuevo")])
+        .mkdir(&[seg(b"sub"), seg(b"new")])
         .await
-        .expect_err("tiene que negarse");
+        .expect_err("has to refuse");
 
     assert!(
         matches!(
@@ -92,70 +93,71 @@ async fn un_symlink_intermedio_tampoco_redirige_un_mkdir() {
                 conflict: ConflictKind::EscapesRoot
             }
         ),
-        "respondió {err:?}"
+        "answered {err:?}"
     );
-    assert!(!fuera.join("nuevo").exists(), "no creó fuera");
+    assert!(!outside.join("new").exists(), "did not create outside");
 }
 
-/// Lo que se prohíbe es SALIRSE, no que haya symlinks: uno RELATIVO que apunta
-/// a otro sitio DENTRO de la raíz se sigue. Prohibirlo rompería un `dst/data ->
-/// almacen` corriente sin ganar seguridad ninguna.
+/// What's forbidden is ESCAPING, not having symlinks: a RELATIVE one
+/// pointing somewhere else INSIDE the root is followed. Forbidding it
+/// would break an ordinary `dst/data -> storage` without gaining any
+/// security.
 #[tokio::test]
-async fn un_symlink_relativo_que_no_sale_de_la_raiz_se_sigue() {
-    let (p, raiz, dentro, _fuera) = escenario();
-    std::fs::create_dir(dentro.join("real")).expect("real");
-    std::os::unix::fs::symlink("real", dentro.join("sub")).expect("symlink interno");
+async fn a_relative_symlink_that_does_not_escape_the_root_is_followed() {
+    let (p, root_path, inside, _outside) = scenario();
+    std::fs::create_dir(inside.join("real")).expect("real");
+    std::os::unix::fs::symlink("real", inside.join("sub")).expect("internal symlink");
 
-    let root = p.open_root(&raiz).await.expect("raíz confinada");
-    escribe(root.as_ref(), &[seg(b"sub"), seg(b"ok.txt")], b"hola")
+    let root = p.open_root(&root_path).await.expect("confined root");
+    write_to(root.as_ref(), &[seg(b"sub"), seg(b"ok.txt")], b"hi")
         .await
-        .expect("un symlink interno no es un escape");
+        .expect("an internal symlink is not an escape");
 
     assert_eq!(
-        std::fs::read(dentro.join("real/ok.txt")).expect("leer"),
-        b"hola"
+        std::fs::read(inside.join("real/ok.txt")).expect("read"),
+        b"hi"
     );
 }
 
-/// Lo corriente sigue funcionando.
+/// The ordinary case still works.
 #[tokio::test]
-async fn una_escritura_anidada_normal_funciona() {
-    let (p, raiz, dentro, _fuera) = escenario();
-    let root = p.open_root(&raiz).await.expect("raíz confinada");
+async fn a_normal_nested_write_works() {
+    let (p, root_path, inside, _outside) = scenario();
+    let root = p.open_root(&root_path).await.expect("confined root");
 
     root.mkdir(&[seg(b"sub")]).await.expect("mkdir");
-    escribe(root.as_ref(), &[seg(b"sub"), seg(b"ok.txt")], b"hola")
+    write_to(root.as_ref(), &[seg(b"sub"), seg(b"ok.txt")], b"hi")
         .await
         .expect("write");
 
     assert_eq!(
-        std::fs::read(dentro.join("sub/ok.txt")).expect("leer"),
-        b"hola"
+        std::fs::read(inside.join("sub/ok.txt")).expect("read"),
+        b"hi"
     );
     let e = root
         .stat(&[seg(b"sub"), seg(b"ok.txt")])
         .await
         .expect("stat");
     assert_eq!(e.kind, norte_proto::EntryKind::File);
-    assert_eq!(e.size, Some(4));
+    assert_eq!(e.size, Some(2));
 }
 
-/// El paseo de emulación (kernel <5.6, seccomp, macOS) da los MISMOS
-/// veredictos que el syscall. Se fuerza con la costura de test, para que las
-/// dos ramas se ejerciten en la misma máquina.
+/// The emulation walk (kernel <5.6, seccomp, macOS) gives the SAME
+/// verdicts as the syscall. Forced with the test seam, so both branches
+/// get exercised on the same machine.
 #[tokio::test]
-async fn el_paseo_de_emulacion_da_los_mismos_veredictos() {
-    let _forzado = LocalProvider::force_component_walk_for_test();
-    let (p, raiz, dentro, fuera) = escenario();
-    std::os::unix::fs::symlink(&fuera, dentro.join("sub")).expect("symlink hostil");
-    std::fs::create_dir(dentro.join("real")).expect("real");
-    std::os::unix::fs::symlink("real", dentro.join("dentro")).expect("symlink interno");
+async fn the_emulation_walk_gives_the_same_verdicts() {
+    let _forced = LocalProvider::force_component_walk_for_test();
+    let (p, root_path, inside, outside) = scenario();
+    std::os::unix::fs::symlink(&outside, inside.join("sub")).expect("hostile symlink");
+    std::fs::create_dir(inside.join("real")).expect("real");
+    std::os::unix::fs::symlink("real", inside.join("inside_link")).expect("internal symlink");
 
-    let root = p.open_root(&raiz).await.expect("raíz confinada");
+    let root = p.open_root(&root_path).await.expect("confined root");
 
-    let err = escribe(root.as_ref(), &[seg(b"sub"), seg(b"botin.txt")], b"x")
+    let err = write_to(root.as_ref(), &[seg(b"sub"), seg(b"loot.txt")], b"x")
         .await
-        .expect_err("el paseo también se niega");
+        .expect_err("the walk also refuses");
     assert!(
         matches!(
             err,
@@ -163,113 +165,119 @@ async fn el_paseo_de_emulacion_da_los_mismos_veredictos() {
                 conflict: ConflictKind::EscapesRoot
             }
         ),
-        "respondió {err:?}"
+        "answered {err:?}"
     );
-    assert!(!fuera.join("botin.txt").exists());
+    assert!(!outside.join("loot.txt").exists());
 
-    escribe(root.as_ref(), &[seg(b"dentro"), seg(b"ok.txt")], b"hola")
+    write_to(root.as_ref(), &[seg(b"inside_link"), seg(b"ok.txt")], b"hi")
         .await
-        .expect("y sigue el symlink que no sale");
+        .expect("and follows the symlink that does not escape");
     assert_eq!(
-        std::fs::read(dentro.join("real/ok.txt")).expect("leer"),
-        b"hola"
+        std::fs::read(inside.join("real/ok.txt")).expect("read"),
+        b"hi"
     );
 }
 
-/// La PUBLICACIÓN va confinada igual que la escritura: el staging se crea con
-/// `openat` en el directorio ya resuelto y se publica con `renameat` en ese
-/// mismo descriptor, así que un symlink colado entre medias no manda el rename
-/// a otro sitio.
+/// PUBLICATION is confined just like the write: the staging is created
+/// with `openat` in the already-resolved directory and published with
+/// `renameat` on that same descriptor, so a symlink slipped in midway
+/// doesn't send the rename somewhere else.
 #[tokio::test]
-async fn la_publicacion_no_la_desvia_un_symlink_colado_a_medias() {
-    let (p, raiz, dentro, fuera) = escenario();
-    let root = p.open_root(&raiz).await.expect("raíz confinada");
+async fn publication_is_not_diverted_by_a_symlink_slipped_in_midway() {
+    let (p, root_path, inside, outside) = scenario();
+    let root = p.open_root(&root_path).await.expect("confined root");
 
     let mut sink = root.write(&[seg(b"f.txt")]).await.expect("write");
-    sink.write(Bytes::from_static(b"contenido"))
+    sink.write(Bytes::from_static(b"content"))
         .await
         .expect("chunk");
-    // Carrera: alguien sustituye el destino por un symlink ANTES del commit.
-    std::os::unix::fs::symlink(fuera.join("otro.txt"), dentro.join("f.txt"))
-        .expect("symlink hostil");
-    let err = sink.commit().await.expect_err("el publish no lo pisa");
+    // Race: someone replaces the destination with a symlink BEFORE the commit.
+    std::os::unix::fs::symlink(outside.join("other.txt"), inside.join("f.txt"))
+        .expect("hostile symlink");
+    let err = sink
+        .commit()
+        .await
+        .expect_err("the publish does not overwrite it");
 
-    assert!(matches!(err, Error::Conflict { .. }), "respondió {err:?}");
+    assert!(matches!(err, Error::Conflict { .. }), "answered {err:?}");
     assert!(
-        !fuera.join("otro.txt").exists(),
-        "y no escribió al otro lado"
+        !outside.join("other.txt").exists(),
+        "and it did not write on the other side"
     );
 }
 
-/// Cancelar deja el destino limpio o un `.norte-partial`, jamás un parcial sin
-/// marcar (la promesa de siempre, también por este camino).
+/// Cancelling leaves the destination clean or a `.norte-partial`, never an
+/// unmarked partial (the usual promise, on this path too).
 #[tokio::test]
-async fn un_abort_no_deja_un_parcial_sin_marcar() {
-    let (p, raiz, dentro, _fuera) = escenario();
-    let root = p.open_root(&raiz).await.expect("raíz confinada");
+async fn an_abort_leaves_no_unmarked_partial() {
+    let (p, root_path, inside, _outside) = scenario();
+    let root = p.open_root(&root_path).await.expect("confined root");
 
     let mut sink = root.write(&[seg(b"g.txt")]).await.expect("write");
-    sink.write(Bytes::from_static(b"a medias"))
+    sink.write(Bytes::from_static(b"halfway"))
         .await
         .expect("chunk");
     sink.abort().await.expect("abort");
 
-    let restos: Vec<_> = std::fs::read_dir(&dentro)
-        .expect("listar")
-        .map(|e| e.expect("entrada").file_name())
+    let leftover: Vec<_> = std::fs::read_dir(&inside)
+        .expect("list")
+        .map(|e| e.expect("entry").file_name())
         .collect();
-    assert!(restos.is_empty(), "el abort barre su staging: {restos:?}");
+    assert!(
+        leftover.is_empty(),
+        "abort sweeps its staging: {leftover:?}"
+    );
 }
 
-/// Una raíz que no existe no se abre.
+/// A root that doesn't exist isn't opened.
 #[tokio::test]
-async fn una_raiz_que_no_existe_no_se_abre() {
-    let (p, _raiz, _dentro, _fuera) = escenario();
-    // `Box<dyn ConfinedRoot>` no lleva `Debug`, así que `expect_err` no sirve.
+async fn a_root_that_does_not_exist_is_not_opened() {
+    let (p, _root_path, _inside, _outside) = scenario();
+    // `Box<dyn ConfinedRoot>` carries no `Debug`, so `expect_err` won't do.
     let Err(err) = p
-        .open_root(&child(&LocalProvider::root(), b"no-existe"))
+        .open_root(&child(&LocalProvider::root(), b"does-not-exist"))
         .await
     else {
-        panic!("no hay raíz que abrir y aun así se abrió")
+        panic!("there is no root to open and it still got opened")
     };
     assert_eq!(err, Error::NotFound);
 }
 
-/// Y quien la abre lo DECLARA por esa ubicación.
+/// And whoever opens it DECLARES it for that location.
 #[tokio::test]
-async fn confinar_se_anuncia_en_las_capabilities_de_la_ubicacion() {
-    let (p, raiz, _dentro, _fuera) = escenario();
+async fn confinement_is_announced_in_the_locations_capabilities() {
+    let (p, root_path, _inside, _outside) = scenario();
     assert!(
-        p.capabilities_at(&raiz)
+        p.capabilities_at(&root_path)
             .await
-            .expect("responde")
+            .expect("answers")
             .flags
             .contains(norte_proto::CapabilityFlags::CONFINED_WRITES),
-        "en Linux y macOS se confina, y se dice"
+        "on Linux and macOS it's confined, and it's said"
     );
     assert!(
         !p.capabilities()
             .flags
             .contains(norte_proto::CapabilityFlags::CONFINED_WRITES),
-        "y jamás sin ubicación: depende del mount y del kernel"
+        "and never without a location: it depends on the mount and the kernel"
     );
 }
 
-/// Un symlink ABSOLUTO se rechaza aunque apunte dentro de la raíz: es lo que
-/// hace `RESOLVE_BENEATH`, y el paseo de emulación tiene que decir lo mismo o
-/// el confinamiento dependería de la versión del kernel.
+/// An ABSOLUTE symlink is rejected even if it points inside the root:
+/// that's what `RESOLVE_BENEATH` does, and the emulation walk has to say
+/// the same thing or confinement would depend on the kernel version.
 #[tokio::test]
-async fn un_symlink_absoluto_se_rechaza_aunque_apunte_dentro() {
-    for forzar_paseo in [false, true] {
-        let _forzado = forzar_paseo.then(LocalProvider::force_component_walk_for_test);
-        let (p, raiz, dentro, _fuera) = escenario();
-        std::fs::create_dir(dentro.join("real")).expect("real");
-        std::os::unix::fs::symlink(dentro.join("real"), dentro.join("abs")).expect("symlink abs");
+async fn an_absolute_symlink_is_rejected_even_if_it_points_inside() {
+    for force_walk in [false, true] {
+        let _forced = force_walk.then(LocalProvider::force_component_walk_for_test);
+        let (p, root_path, inside, _outside) = scenario();
+        std::fs::create_dir(inside.join("real")).expect("real");
+        std::os::unix::fs::symlink(inside.join("real"), inside.join("abs")).expect("abs symlink");
 
-        let root = p.open_root(&raiz).await.expect("raíz confinada");
-        let err = escribe(root.as_ref(), &[seg(b"abs"), seg(b"x.txt")], b"x")
+        let root = p.open_root(&root_path).await.expect("confined root");
+        let err = write_to(root.as_ref(), &[seg(b"abs"), seg(b"x.txt")], b"x")
             .await
-            .expect_err("absoluto se rechaza");
+            .expect_err("absolute is rejected");
 
         assert!(
             matches!(
@@ -278,31 +286,32 @@ async fn un_symlink_absoluto_se_rechaza_aunque_apunte_dentro() {
                     conflict: ConflictKind::EscapesRoot
                 }
             ),
-            "paseo={forzar_paseo}: respondió {err:?}"
+            "walk={force_walk}: answered {err:?}"
         );
         assert!(
-            !dentro.join("real/x.txt").exists(),
-            "paseo={forzar_paseo}: y no escribió"
+            !inside.join("real/x.txt").exists(),
+            "walk={force_walk}: and it did not write"
         );
     }
 }
 
-/// Copiar un symlink es CREAR uno en el destino, y esa creación se confina
-/// igual que las otras dos: el componente intermedio hostil no se la lleva.
+/// Copying a symlink is CREATING one at the destination, and that
+/// creation is confined just like the other two: the hostile intermediate
+/// component doesn't get to carry it away.
 #[tokio::test]
-async fn un_symlink_no_se_crea_al_otro_lado_de_un_componente_hostil() {
-    let (p, raiz, dentro, fuera) = escenario();
-    std::os::unix::fs::symlink(&fuera, dentro.join("sub")).expect("symlink hostil");
+async fn a_symlink_is_not_created_on_the_other_side_of_a_hostile_component() {
+    let (p, root_path, inside, outside) = scenario();
+    std::os::unix::fs::symlink(&outside, inside.join("sub")).expect("hostile symlink");
 
-    let root = p.open_root(&raiz).await.expect("raíz confinada");
+    let root = p.open_root(&root_path).await.expect("confined root");
     let err = root
         .symlink(
-            &[seg(b"sub"), seg(b"enlace")],
+            &[seg(b"sub"), seg(b"link")],
             b"/etc/passwd",
             norte_vfs::SymlinkKind::Unknown,
         )
         .await
-        .expect_err("tiene que negarse");
+        .expect_err("has to refuse");
 
     assert!(
         matches!(
@@ -311,46 +320,47 @@ async fn un_symlink_no_se_crea_al_otro_lado_de_un_componente_hostil() {
                 conflict: ConflictKind::EscapesRoot
             }
         ),
-        "respondió {err:?}"
+        "answered {err:?}"
     );
     assert!(
-        fuera.join("enlace").symlink_metadata().is_err(),
-        "no plantó el enlace fuera"
+        outside.join("link").symlink_metadata().is_err(),
+        "did not plant the link outside"
     );
 }
 
-/// Y dentro de la raíz se crea tal cual, con los BYTES del target sin tocar:
-/// lo confinado es dónde CAE el enlace, no a dónde apunta.
+/// And inside the root it's created as is, with the target's BYTES
+/// untouched: what's confined is WHERE the link lands, not where it
+/// points.
 #[tokio::test]
-async fn un_symlink_dentro_de_la_raiz_conserva_su_target_crudo() {
-    let (p, raiz, dentro, _fuera) = escenario();
-    let root = p.open_root(&raiz).await.expect("raíz confinada");
+async fn a_symlink_inside_the_root_keeps_its_raw_target() {
+    let (p, root_path, inside, _outside) = scenario();
+    let root = p.open_root(&root_path).await.expect("confined root");
 
     root.mkdir(&[seg(b"sub")]).await.expect("mkdir");
     root.symlink(
-        &[seg(b"sub"), seg(b"enlace")],
+        &[seg(b"sub"), seg(b"link")],
         b"../caf\xe9",
         norte_vfs::SymlinkKind::Unknown,
     )
     .await
     .expect("symlink");
 
-    let leido = std::fs::read_link(dentro.join("sub/enlace")).expect("read_link");
+    let read = std::fs::read_link(inside.join("sub/link")).expect("read_link");
     assert_eq!(
-        leido.as_os_str().as_bytes(),
+        read.as_os_str().as_bytes(),
         b"../caf\xe9",
-        "los bytes del target salen tal cual, sin pasar por UTF-8"
+        "the target's bytes come out as is, never going through UTF-8"
     );
 
-    // Y un nombre ya ocupado es conflicto, no un enlace pisado.
+    // And a name already taken is a conflict, not an overwritten link.
     let err = root
         .symlink(
-            &[seg(b"sub"), seg(b"enlace")],
-            b"otro",
+            &[seg(b"sub"), seg(b"link")],
+            b"other",
             norte_vfs::SymlinkKind::Unknown,
         )
         .await
-        .expect_err("ocupado");
+        .expect_err("occupied");
     assert!(
         matches!(
             err,
@@ -358,23 +368,24 @@ async fn un_symlink_dentro_de_la_raiz_conserva_su_target_crudo() {
                 conflict: ConflictKind::Exists
             }
         ),
-        "respondió {err:?}"
+        "answered {err:?}"
     );
 }
 
-/// El contrato de `Provider::write` sobre la raíz confinada: un destino ya
-/// ocupado se sabe AL ABRIR, no después de haber transferido el fichero.
+/// `Provider::write`'s contract over the confined root: an already
+/// occupied destination is known AT OPEN TIME, not after having
+/// transferred the file.
 #[tokio::test]
-async fn un_destino_ocupado_es_conflicto_al_abrir_el_sink() {
-    let (p, raiz, dentro, _fuera) = escenario();
-    std::fs::write(dentro.join("ya.txt"), b"lo que hab\xEDa").expect("ocupante");
+async fn an_occupied_destination_is_a_conflict_when_opening_the_sink() {
+    let (p, root_path, inside, _outside) = scenario();
+    std::fs::write(inside.join("already.txt"), b"what was there").expect("occupant");
 
-    let root = p.open_root(&raiz).await.expect("raíz confinada");
+    let root = p.open_root(&root_path).await.expect("confined root");
     let err = root
-        .write(&[seg(b"ya.txt")])
+        .write(&[seg(b"already.txt")])
         .await
         .err()
-        .expect("el sink no llega a abrirse");
+        .expect("the sink never gets to open");
 
     assert!(
         matches!(
@@ -383,41 +394,42 @@ async fn un_destino_ocupado_es_conflicto_al_abrir_el_sink() {
                 conflict: ConflictKind::Exists
             }
         ),
-        "respondió {err:?}"
+        "answered {err:?}"
     );
     assert_eq!(
-        std::fs::read(dentro.join("ya.txt")).expect("leer"),
-        b"lo que hab\xEDa",
-        "y no tocó lo que había"
+        std::fs::read(inside.join("already.txt")).expect("read"),
+        b"what was there",
+        "and it did not touch what was there"
     );
 }
 
-/// El paseo de emulación resolvía un componente en dos syscalls: `lstat` para
-/// preguntar si era symlink y, si no lo era, un `openat` SIN `O_NOFOLLOW`.
-/// Entre las dos cabe una sustitución, y el `openat` seguía el enlace que
-/// acababa de aparecer sin comprobar dónde caía.
+/// The emulation walk used to resolve a component in two syscalls: `lstat`
+/// to ask if it was a symlink and, if not, an `openat` WITHOUT
+/// `O_NOFOLLOW`. A substitution fits between the two, and the `openat`
+/// used to follow the link that had just appeared without checking where
+/// it landed.
 ///
-/// El test no gana la carrera a mano —no se puede, es de nanosegundos—: pone
-/// el árbol en el estado que la carrera PRODUCE (el componente ya es un
-/// symlink cuando se resuelve) y comprueba el veredicto, que es lo que el
-/// `openat` sin `O_NOFOLLOW` contestaba mal. Con `openat2` la primera rama ni
-/// se ejecuta, así que se fuerza el paseo.
+/// The test doesn't win the race by hand — it can't, it's nanoseconds —:
+/// it puts the tree in the state the race PRODUCES (the component is
+/// already a symlink by the time it's resolved) and checks the verdict,
+/// which is what the `openat` without `O_NOFOLLOW` used to answer wrong.
+/// With `openat2` the first branch doesn't even run, so the walk is forced.
 #[tokio::test]
 #[cfg(target_os = "linux")]
-async fn el_paseo_no_sigue_un_componente_que_se_volvio_symlink_bajo_sus_pies() {
-    let _forzado = LocalProvider::force_component_walk_for_test();
-    let (p, raiz, dentro, fuera) = escenario();
-    // Un directorio de verdad en medio, que es lo que el `lstat` de la carrera
-    // habría visto…
-    std::fs::create_dir(dentro.join("sub")).expect("sub real");
-    let root = p.open_root(&raiz).await.expect("raíz confinada");
-    // …y que para cuando se abre ya es un puente a `fuera`.
-    std::fs::remove_dir(dentro.join("sub")).expect("quitar sub");
-    std::os::unix::fs::symlink(&fuera, dentro.join("sub")).expect("symlink hostil");
+async fn the_walk_does_not_follow_a_component_that_became_a_symlink_under_its_feet() {
+    let _forced = LocalProvider::force_component_walk_for_test();
+    let (p, root_path, inside, outside) = scenario();
+    // A real directory in the middle, which is what the race's `lstat`
+    // would have seen…
+    std::fs::create_dir(inside.join("sub")).expect("real sub");
+    let root = p.open_root(&root_path).await.expect("confined root");
+    // …and by the time it's opened it's already a bridge to `outside`.
+    std::fs::remove_dir(inside.join("sub")).expect("remove sub");
+    std::os::unix::fs::symlink(&outside, inside.join("sub")).expect("hostile symlink");
 
-    let err = escribe(root.as_ref(), &[seg(b"sub"), seg(b"botin.txt")], b"x")
+    let err = write_to(root.as_ref(), &[seg(b"sub"), seg(b"loot.txt")], b"x")
         .await
-        .expect_err("el paseo tiene que negarse");
+        .expect_err("the walk has to refuse");
 
     assert!(
         matches!(
@@ -426,80 +438,79 @@ async fn el_paseo_no_sigue_un_componente_que_se_volvio_symlink_bajo_sus_pies() {
                 conflict: ConflictKind::EscapesRoot
             }
         ),
-        "respondió {err:?}"
+        "answered {err:?}"
     );
     assert!(
-        !fuera.join("botin.txt").exists(),
-        "y sobre todo: no escribió fuera"
+        !outside.join("loot.txt").exists(),
+        "and above all: it did not write outside"
     );
 }
 
-/// La raíz se abre RESOLVIENDO una ruta, symlinks incluidos —un
-/// `~/copias -> /mnt/disco/copias` es un destino legítimo y negarlo rompería
-/// árboles de verdad—. Eso deja una ventana: si entre validar la ruta y abrirla
-/// alguien la sustituye por un enlace, lo que se abre es otro árbol y todo lo
-/// que venga después va perfectamente confinado al sitio equivocado.
+/// The root is opened by RESOLVING a path, symlinks included — a
+/// `~/backups -> /mnt/disk/backups` is a legitimate destination and
+/// refusing it would break real trees. That leaves a window: if between
+/// validating the path and opening it someone replaces it with a link,
+/// what gets opened is another tree and everything that comes after is
+/// perfectly confined to the wrong place.
 ///
-/// Lo que el core compara para descartarlo es la IDENTIDAD, y esto comprueba
-/// que los dos lados de esa comparación existen y se distinguen: la del nodo
-/// abierto (`root_id`) y la que un `lstat` de la ruta da cuando es un enlace.
+/// What the core compares to rule this out is IDENTITY, and this checks
+/// that both sides of that comparison exist and are distinguishable: the
+/// opened node's (`root_id`) and the one an `lstat` of the path gives when
+/// it's a link.
 #[tokio::test]
-async fn la_identidad_de_la_raiz_delata_una_ruta_sustituida_por_un_enlace() {
+async fn the_roots_identity_gives_away_a_path_replaced_by_a_link() {
     use norte_vfs::FollowLinks;
 
-    let (p, _raiz, dentro, fuera) = escenario();
-    // `dest/puente` es un enlace a `fuera`, que es lo que produciría el
-    // cambiazo. Abrir por ahí da la raíz de `fuera`…
-    std::os::unix::fs::symlink(&fuera, dentro.join("puente")).expect("symlink");
-    let via_enlace = child(&child(&LocalProvider::root(), b"dest"), b"puente");
+    let (p, _root_path, inside, outside) = scenario();
+    // `dest/bridge` is a link to `outside`, which is what the switcheroo
+    // would produce. Opening through it gives `outside`'s root…
+    std::os::unix::fs::symlink(&outside, inside.join("bridge")).expect("symlink");
+    let via_link = child(&child(&LocalProvider::root(), b"dest"), b"bridge");
 
-    let root = p.open_root(&via_enlace).await.expect("se abre: lo sigue");
-    let abierta = root.root_id().await.expect("id de la raíz abierta");
+    let root = p.open_root(&via_link).await.expect("opens: follows it");
+    let opened = root.root_id().await.expect("opened root's id");
 
-    // …y el `lstat` de la ruta da la del ENLACE, que es otra cosa.
-    let en_ruta = p
-        .node_id(&via_enlace, FollowLinks::No)
+    // …and the path's `lstat` gives the LINK's, which is something else.
+    let on_path = p
+        .node_id(&via_link, FollowLinks::No)
         .await
         .expect("node_id");
-    assert!(
-        abierta.is_some() && en_ruta.is_some(),
-        "los dos lados existen"
-    );
+    assert!(opened.is_some() && on_path.is_some(), "both sides exist");
     assert_ne!(
-        abierta, en_ruta,
-        "una ruta que es un enlace no tiene la identidad del árbol que abre"
+        opened, on_path,
+        "a path that is a link does not have the identity of the tree it opens"
     );
 
-    // Y sobre un directorio de verdad, las dos identidades son la MISMA: la
-    // comprobación no puede dar falsos positivos en el caso corriente.
-    let directo = child(&LocalProvider::root(), b"dest");
-    let root = p.open_root(&directo).await.expect("raíz");
+    // And over a real directory, both identities are the SAME: the check
+    // can't give false positives in the ordinary case.
+    let direct = child(&LocalProvider::root(), b"dest");
+    let root = p.open_root(&direct).await.expect("root");
     assert_eq!(
         root.root_id().await.expect("id"),
-        p.node_id(&directo, FollowLinks::No).await.expect("node_id"),
-        "un directorio de verdad casa consigo mismo"
+        p.node_id(&direct, FollowLinks::No).await.expect("node_id"),
+        "a real directory matches itself"
     );
 }
 
-/// #218 — la mitad DESTRUCTIVA también va por el descriptor.
+/// #218 — the DESTRUCTIVE half also goes through the descriptor.
 ///
-/// `Overwrite` y `Newer` borran antes de escribir, y ese borrado iba por ruta
-/// mientras el write iba confinado. Con `sub` sustituido por un puente hacia
-/// fuera, el `unlink` se llevaba un fichero de OTRO árbol y solo entonces el
-/// write se negaba: un fichero destruido, nada escrito en su lugar, y una
-/// entrada de journal nombrando un sitio que no era.
+/// `Overwrite` and `Newer` delete before writing, and that deletion used
+/// to go by path while the write went confined. With `sub` replaced by a
+/// bridge to the outside, the `unlink` used to take a file from ANOTHER
+/// tree and only then would the write refuse: a destroyed file, nothing
+/// written in its place, and a journal entry naming a place that wasn't it.
 #[tokio::test]
-async fn un_symlink_intermedio_no_redirige_un_borrado_fuera_de_la_raiz() {
-    let (p, raiz, dentro, fuera) = escenario();
-    let victima = fuera.join("victima.txt");
-    std::fs::write(&victima, b"no me borres").expect("victima");
-    std::os::unix::fs::symlink(&fuera, dentro.join("sub")).expect("symlink hostil");
+async fn an_intermediate_symlink_does_not_redirect_a_delete_outside_the_root() {
+    let (p, root_path, inside, outside) = scenario();
+    let victim = outside.join("victim.txt");
+    std::fs::write(&victim, b"don't delete me").expect("victim");
+    std::os::unix::fs::symlink(&outside, inside.join("sub")).expect("hostile symlink");
 
-    let root = p.open_root(&raiz).await.expect("raíz confinada");
+    let root = p.open_root(&root_path).await.expect("confined root");
     let err = root
-        .remove(&[seg(b"sub"), seg(b"victima.txt")])
+        .remove(&[seg(b"sub"), seg(b"victim.txt")])
         .await
-        .expect_err("tiene que negarse");
+        .expect_err("has to refuse");
 
     assert!(
         matches!(
@@ -508,140 +519,146 @@ async fn un_symlink_intermedio_no_redirige_un_borrado_fuera_de_la_raiz() {
                 conflict: ConflictKind::EscapesRoot
             }
         ),
-        "respondió {err:?}"
+        "answered {err:?}"
     );
-    assert!(victima.exists(), "y sobre todo: no borró fuera");
+    assert!(victim.exists(), "and above all: it did not delete outside");
 }
 
-/// Y dentro de la raíz borra, que es para lo que existe.
+/// And inside the root it deletes, which is what it exists for.
 #[tokio::test]
-async fn el_borrado_confinado_borra_lo_que_hay_dentro() {
-    let (p, raiz, dentro, _fuera) = escenario();
-    let hoja = dentro.join("hoja.txt");
-    std::fs::write(&hoja, b"x").expect("hoja");
+async fn confined_removal_removes_whats_inside() {
+    let (p, root_path, inside, _outside) = scenario();
+    let leaf = inside.join("leaf.txt");
+    std::fs::write(&leaf, b"x").expect("leaf");
 
-    let root = p.open_root(&raiz).await.expect("raíz confinada");
-    root.remove(&[seg(b"hoja.txt")]).await.expect("borra");
-    assert!(!hoja.exists());
+    let root = p.open_root(&root_path).await.expect("confined root");
+    root.remove(&[seg(b"leaf.txt")]).await.expect("removes");
+    assert!(!leaf.exists());
 }
 
-/// Un DIRECTORIO no se borra por aquí: reemplazar un dir por una hoja es
-/// `TypeMismatch`, que es una respuesta y no una política. `unlinkat` sin
-/// `AT_REMOVEDIR` contesta `EISDIR` sin haber tocado nada, que es justo eso.
+/// A DIRECTORY isn't removed through here: replacing a dir with a leaf is
+/// `TypeMismatch`, which is an answer and not a policy. `unlinkat` without
+/// `AT_REMOVEDIR` answers `EISDIR` without having touched anything, which
+/// is exactly that.
 #[tokio::test]
-async fn el_borrado_confinado_no_se_lleva_un_directorio() {
-    let (p, raiz, dentro, _fuera) = escenario();
-    let sub = dentro.join("undir");
-    std::fs::create_dir(&sub).expect("undir");
-    std::fs::write(sub.join("dentro.txt"), b"x").expect("contenido");
+async fn confined_removal_does_not_take_a_directory() {
+    let (p, root_path, inside, _outside) = scenario();
+    let sub = inside.join("a_dir");
+    std::fs::create_dir(&sub).expect("a_dir");
+    std::fs::write(sub.join("inside.txt"), b"x").expect("content");
 
-    let root = p.open_root(&raiz).await.expect("raíz confinada");
+    let root = p.open_root(&root_path).await.expect("confined root");
     let err = root
-        .remove(&[seg(b"undir")])
+        .remove(&[seg(b"a_dir")])
         .await
-        .expect_err("un dir no es una hoja");
+        .expect_err("a dir is not a leaf");
     assert!(
         !matches!(err, Error::NotFound),
-        "el error tiene que decir que es un dir, no que no está: {err:?}"
+        "the error has to say it's a dir, not that it's missing: {err:?}"
     );
-    assert!(sub.exists(), "y el directorio sigue ahí con su contenido");
+    assert!(
+        sub.exists(),
+        "and the directory is still there with its content"
+    );
 }
 
 // ---------------------------------------------------------------------------
-// Reanudar bajo una raíz confinada (#297).
+// Resuming under a confined root (#297).
 // ---------------------------------------------------------------------------
 
-/// Una raíz confinada REANUDA: su staging lleva el nombre estable, así que un
-/// `open_resumable` posterior lo reencuentra y continúa tras sus bytes.
+/// A confined root RESUMES: its staging carries the stable name, so a
+/// later `open_resumable` finds it again and continues after its bytes.
 ///
-/// Hasta #219 una hoja iba SIN confinar y por tanto sí reanudaba; confinarla la
-/// dejó sin resume justo donde más importa —un fichero grande y solo por un
-/// enlace que se corta— y eso era una regresión, no una decisión.
+/// Until #219 a leaf went WITHOUT confinement and therefore did resume;
+/// confining it left it without resume right where it matters most — a
+/// large file cut off by just one dropped link — and that was a
+/// regression, not a decision.
 #[tokio::test]
-async fn una_raiz_confinada_reanuda_su_propio_parcial() {
-    let (p, raiz, dentro, _fuera) = escenario();
-    let root = p.open_root(&raiz).await.expect("raíz confinada");
+async fn a_confined_root_resumes_its_own_partial() {
+    let (p, root_path, inside, _outside) = scenario();
+    let root = p.open_root(&root_path).await.expect("confined root");
     assert!(
         root.resumes(),
-        "y lo DICE, que es de lo que depende el `keep`"
+        "and it SAYS so, which is what `keep` depends on"
     );
 
-    // Primera mitad, y se CONSERVA.
-    let (mut sink, ya) = root
-        .open_resumable(&[seg(b"grande.bin")])
+    // First half, and it's KEPT.
+    let (mut sink, already) = root
+        .open_resumable(&[seg(b"big.bin")])
         .await
-        .expect("abre");
-    assert_eq!(ya, 0, "no había nada que continuar");
+        .expect("opens");
+    assert_eq!(already, 0, "there was nothing to continue");
     sink.write(Bytes::from_static(b"12345"))
         .await
-        .expect("mitad");
-    sink.keep().await.expect("conserva");
+        .expect("half");
+    sink.keep().await.expect("keeps");
 
-    // Segunda: el parcial se reencuentra y dice cuántos bytes ya hay.
-    let (mut sink, ya) = root
-        .open_resumable(&[seg(b"grande.bin")])
+    // Second: the partial is found again and it says how many bytes there
+    // already are.
+    let (mut sink, already) = root
+        .open_resumable(&[seg(b"big.bin")])
         .await
-        .expect("reabre");
-    assert_eq!(ya, 5, "el staging estable se reencontró");
+        .expect("reopens");
+    assert_eq!(already, 5, "the stable staging was found again");
     sink.write(Bytes::from_static(b"67890"))
         .await
-        .expect("resto");
-    sink.commit().await.expect("publica");
+        .expect("rest");
+    sink.commit().await.expect("publishes");
 
     assert_eq!(
-        std::fs::read(dentro.join("grande.bin")).expect("publicado"),
+        std::fs::read(inside.join("big.bin")).expect("published"),
         b"1234567890",
-        "y el fichero es la suma de las dos mitades, en orden"
+        "and the file is the sum of the two halves, in order"
     );
-    // Y no queda parcial detrás.
-    let sobra: Vec<_> = std::fs::read_dir(&dentro)
-        .expect("listar")
+    // And no partial is left behind.
+    let leftover: Vec<_> = std::fs::read_dir(&inside)
+        .expect("list")
         .filter_map(Result::ok)
         .filter(|e| e.file_name().as_bytes().starts_with(b".norte-partial"))
         .collect();
     assert!(
-        sobra.is_empty(),
-        "el publish se llevó el staging: {sobra:?}"
+        leftover.is_empty(),
+        "the publish took the staging with it: {leftover:?}"
     );
 }
 
-/// Un `abort` sobre un staging estable SÍ lo borra: abortar es «no quiero
-/// esto», y conservarlo dejaría un parcial que nadie pidió.
+/// An `abort` over a stable staging DOES delete it: aborting is "I don't
+/// want this", and keeping it would leave a partial nobody asked for.
 #[tokio::test]
-async fn abortar_un_parcial_estable_lo_borra() {
-    let (p, raiz, dentro, _fuera) = escenario();
-    let root = p.open_root(&raiz).await.expect("raíz confinada");
+async fn aborting_a_stable_partial_deletes_it() {
+    let (p, root_path, inside, _outside) = scenario();
+    let root = p.open_root(&root_path).await.expect("confined root");
     let (mut sink, _) = root
-        .open_resumable(&[seg(b"grande.bin")])
+        .open_resumable(&[seg(b"big.bin")])
         .await
-        .expect("abre");
+        .expect("opens");
     sink.write(Bytes::from_static(b"12345"))
         .await
-        .expect("mitad");
-    sink.abort().await.expect("aborta");
+        .expect("half");
+    sink.abort().await.expect("aborts");
 
-    let sobra: Vec<_> = std::fs::read_dir(&dentro)
-        .expect("listar")
+    let leftover: Vec<_> = std::fs::read_dir(&inside)
+        .expect("list")
         .filter_map(Result::ok)
         .filter(|e| e.file_name().as_bytes().starts_with(b".norte-partial"))
         .collect();
-    assert!(sobra.is_empty(), "abortar no deja parcial: {sobra:?}");
+    assert!(
+        leftover.is_empty(),
+        "aborting leaves no partial: {leftover:?}"
+    );
 }
 
-/// Y el resume NO se sale de la raíz: el staging se abre con `O_NOFOLLOW` en
-/// el directorio ya resuelto, así que un componente intermedio hostil no puede
-/// llevárselo — igual que la escritura normal.
+/// And resume does NOT escape the root either: the staging is opened with
+/// `O_NOFOLLOW` in the already-resolved directory, so a hostile
+/// intermediate component can't carry it away — same as the normal write.
 #[tokio::test]
-async fn el_resume_tampoco_se_sale_por_un_symlink_intermedio() {
-    let (p, raiz, dentro, fuera) = escenario();
-    std::os::unix::fs::symlink(&fuera, dentro.join("sub")).expect("symlink hostil");
+async fn resume_does_not_escape_via_an_intermediate_symlink_either() {
+    let (p, root_path, inside, outside) = scenario();
+    std::os::unix::fs::symlink(&outside, inside.join("sub")).expect("hostile symlink");
 
-    let root = p.open_root(&raiz).await.expect("raíz confinada");
-    let Err(err) = root
-        .open_resumable(&[seg(b"sub"), seg(b"grande.bin")])
-        .await
-    else {
-        panic!("tiene que negarse");
+    let root = p.open_root(&root_path).await.expect("confined root");
+    let Err(err) = root.open_resumable(&[seg(b"sub"), seg(b"big.bin")]).await else {
+        panic!("has to refuse");
     };
 
     assert!(
@@ -651,32 +668,32 @@ async fn el_resume_tampoco_se_sale_por_un_symlink_intermedio() {
                 conflict: ConflictKind::EscapesRoot
             }
         ),
-        "respondió {err:?}"
+        "answered {err:?}"
     );
-    let sobra: Vec<_> = std::fs::read_dir(&fuera)
-        .expect("listar")
+    let leftover: Vec<_> = std::fs::read_dir(&outside)
+        .expect("list")
         .filter_map(Result::ok)
         .collect();
-    assert!(sobra.is_empty(), "no dejó nada fuera: {sobra:?}");
+    assert!(leftover.is_empty(), "left nothing outside: {leftover:?}");
 }
 
-/// #296 — el `rmdir` confinado, gemelo del `mkdir`.
+/// #296 — the confined `rmdir`, twin of `mkdir`.
 ///
-/// Lo pide el borrado en post-orden de un `Mirror`, que llega a cada
-/// directorio ya vacío. Separado de `remove` por la misma razón por la que
-/// `unlinkat` tiene `AT_REMOVEDIR`: son dos efectos distintos.
+/// A `Mirror`'s post-order deletion asks for it, reaching each directory
+/// once it's already empty. Separate from `remove` for the same reason
+/// `unlinkat` has `AT_REMOVEDIR`: they're two distinct effects.
 #[tokio::test]
-async fn el_rmdir_confinado_no_se_sale_de_la_raiz() {
-    let (p, raiz, dentro, fuera) = escenario();
-    let victima = fuera.join("carpeta");
-    std::fs::create_dir(&victima).expect("victima");
-    std::os::unix::fs::symlink(&fuera, dentro.join("sub")).expect("symlink hostil");
+async fn confined_rmdir_does_not_escape_the_root() {
+    let (p, root_path, inside, outside) = scenario();
+    let victim = outside.join("folder");
+    std::fs::create_dir(&victim).expect("victim");
+    std::os::unix::fs::symlink(&outside, inside.join("sub")).expect("hostile symlink");
 
-    let root = p.open_root(&raiz).await.expect("raíz confinada");
+    let root = p.open_root(&root_path).await.expect("confined root");
     let err = root
-        .rmdir(&[seg(b"sub"), seg(b"carpeta")])
+        .rmdir(&[seg(b"sub"), seg(b"folder")])
         .await
-        .expect_err("tiene que negarse");
+        .expect_err("has to refuse");
 
     assert!(
         matches!(
@@ -685,39 +702,46 @@ async fn el_rmdir_confinado_no_se_sale_de_la_raiz() {
                 conflict: ConflictKind::EscapesRoot
             }
         ),
-        "respondió {err:?}"
+        "answered {err:?}"
     );
-    assert!(victima.exists(), "y no borró el directorio de fuera");
+    assert!(
+        victim.exists(),
+        "and it did not delete the outside directory"
+    );
 }
 
-/// Y dentro borra el directorio VACÍO, que es para lo que existe. Uno con
-/// contenido NO: eso es un error, no una política.
+/// And inside it deletes the EMPTY directory, which is what it exists for.
+/// One with content, NOT: that's an error, not a policy.
 #[tokio::test]
-async fn el_rmdir_confinado_borra_lo_vacio_y_rehusa_lo_lleno() {
-    let (p, raiz, dentro, _fuera) = escenario();
-    std::fs::create_dir(dentro.join("vacio")).expect("vacio");
-    std::fs::create_dir(dentro.join("lleno")).expect("lleno");
-    std::fs::write(dentro.join("lleno/x.txt"), b"x").expect("contenido");
+async fn confined_rmdir_removes_the_empty_and_refuses_the_full() {
+    let (p, root_path, inside, _outside) = scenario();
+    std::fs::create_dir(inside.join("empty")).expect("empty");
+    std::fs::create_dir(inside.join("full")).expect("full");
+    std::fs::write(inside.join("full/x.txt"), b"x").expect("content");
 
-    let root = p.open_root(&raiz).await.expect("raíz confinada");
-    root.rmdir(&[seg(b"vacio")]).await.expect("borra el vacío");
-    assert!(!dentro.join("vacio").exists());
+    let root = p.open_root(&root_path).await.expect("confined root");
+    root.rmdir(&[seg(b"empty")])
+        .await
+        .expect("deletes the empty one");
+    assert!(!inside.join("empty").exists());
 
     let err = root
-        .rmdir(&[seg(b"lleno")])
+        .rmdir(&[seg(b"full")])
         .await
-        .expect_err("uno con contenido no");
+        .expect_err("one with content, no");
     assert!(!matches!(err, Error::NotFound), "{err:?}");
-    assert!(dentro.join("lleno/x.txt").exists(), "y no se llevó nada");
+    assert!(inside.join("full/x.txt").exists(), "and took nothing");
 }
 
 // ---------------------------------------------------------------------------
-// El staging estable es un nombre PREDECIBLE, así que lo que hay al otro lado
-// puede haberlo puesto otro. Los tres casos que `O_NOFOLLOW` no cubre.
+// The stable staging is a PREDICTABLE name, so what's on the other side may
+// have been put there by someone else. The three cases `O_NOFOLLOW` doesn't
+// cover.
 // ---------------------------------------------------------------------------
 
-/// El nombre del staging, tal como lo calcula quien sepa el nombre de destino.
-fn nombre_de_staging(final_name: &[u8]) -> String {
+/// The staging's name, exactly as computed by anyone who knows the
+/// destination name.
+fn staging_name(final_name: &[u8]) -> String {
     use sha2::{Digest as _, Sha256};
     let d = Sha256::digest(final_name);
     let mut hex = String::new();
@@ -728,279 +752,288 @@ fn nombre_de_staging(final_name: &[u8]) -> String {
     format!(".norte-partial.{hex}")
 }
 
-/// Un FICHERO REGULAR plantado con el nombre del staging NO se reanuda.
+/// A REGULAR FILE planted with the staging's name is NOT resumed.
 ///
-/// `O_NOFOLLOW` descarta un enlace y nada más. Reanudar sobre el fichero de
-/// otro publica bajo el nombre legítimo un inodo que no es nuestro: con su
-/// contenido delante de los nuestros, con su dueño y con sus permisos, y con
-/// el descriptor de escritura del atacante todavía abierto encima.
+/// `O_NOFOLLOW` rules out a link and nothing more. Resuming over someone
+/// else's file publishes under the legitimate name an inode that isn't
+/// ours: with its content ahead of ours, with its owner and its
+/// permissions, and with the attacker's write descriptor still open on
+/// top.
 #[tokio::test]
-async fn un_staging_plantado_por_otro_no_se_reanuda() {
-    let (p, raiz, dentro, _fuera) = escenario();
-    let plantado = dentro.join(nombre_de_staging(b"grande.bin"));
-    std::fs::write(&plantado, b"CONTENIDO AJENO").expect("plantado");
+async fn a_staging_planted_by_someone_else_is_not_resumed() {
+    let (p, root_path, inside, _outside) = scenario();
+    let planted = inside.join(staging_name(b"big.bin"));
+    std::fs::write(&planted, b"FOREIGN CONTENT").expect("planted");
 
-    let root = p.open_root(&raiz).await.expect("raíz confinada");
-    // Se planta un HARDLINK, que es lo que hace observable «este inodo tiene
-    // otro nombre» sin depender del uid (el test corre como el mismo usuario).
-    let otro_nombre = dentro.join("lo-mio.txt");
-    std::fs::hard_link(&plantado, &otro_nombre).expect("hardlink");
+    let root = p.open_root(&root_path).await.expect("confined root");
+    // A HARDLINK is planted, which is what makes "this inode has another
+    // name" observable without depending on the uid (the test runs as the
+    // same user).
+    let other_name = inside.join("mine.txt");
+    std::fs::hard_link(&planted, &other_name).expect("hardlink");
 
-    let Err(err) = root.open_resumable(&[seg(b"grande.bin")]).await else {
-        panic!("reanudó sobre un fichero que no es suyo");
+    let Err(err) = root.open_resumable(&[seg(b"big.bin")]).await else {
+        panic!("resumed over a file that isn't ours");
     };
     assert!(
         matches!(err, Error::Conflict { .. }),
-        "tiene que ser un conflicto, no un error de E/S: {err:?}"
+        "it has to be a conflict, not an I/O error: {err:?}"
     );
     assert_eq!(
-        std::fs::read(&plantado).expect("sigue"),
-        b"CONTENIDO AJENO",
-        "y no se le anexó nada"
+        std::fs::read(&planted).expect("still there"),
+        b"FOREIGN CONTENT",
+        "and nothing got appended to it"
     );
 }
 
-/// Un FIFO con el nombre del staging tampoco: sin `O_NONBLOCK` el `openat`
-/// se queda colgado PARA SIEMPRE dentro del pool de bloqueo, y el token de
-/// cancelación no puede interrumpir un `openat` en curso.
+/// A FIFO with the staging's name doesn't work either: without
+/// `O_NONBLOCK` the `openat` stays hung FOREVER inside the blocking pool,
+/// and the cancellation token can't interrupt an in-progress `openat`.
 #[tokio::test]
-async fn un_fifo_con_el_nombre_del_staging_no_cuelga_el_abrir() {
-    let (p, raiz, dentro, _fuera) = escenario();
-    let fifo = dentro.join(nombre_de_staging(b"grande.bin"));
+async fn a_fifo_with_the_stagings_name_does_not_hang_the_open() {
+    let (p, root_path, inside, _outside) = scenario();
+    let fifo = inside.join(staging_name(b"big.bin"));
     let c = std::ffi::CString::new(fifo.as_os_str().as_bytes()).expect("cstring");
-    // SAFETY: `c` es una CString viva y NUL-terminada; `mkfifo` no requiere
-    // privilegio y solo escribe en el sistema de ficheros.
+    // SAFETY: `c` is a live, NUL-terminated CString; `mkfifo` requires no
+    // privilege and only writes to the filesystem.
     let rc = unsafe { libc::mkfifo(c.as_ptr(), 0o666) };
     assert_eq!(rc, 0, "mkfifo: {}", std::io::Error::last_os_error());
 
-    let root = p.open_root(&raiz).await.expect("raíz confinada");
-    // Con un plazo: lo que este test comprueba es que NO se cuelga.
+    let root = p.open_root(&root_path).await.expect("confined root");
+    // With a deadline: what this test checks is that it does NOT hang.
     let r = tokio::time::timeout(
         std::time::Duration::from_secs(10),
-        root.open_resumable(&[seg(b"grande.bin")]),
+        root.open_resumable(&[seg(b"big.bin")]),
     )
     .await
-    .expect("el abrir tiene que volver, no colgarse");
+    .expect("the open has to return, not hang");
     let Err(_err) = r else {
-        panic!("un FIFO no es un staging");
+        panic!("a FIFO is not a staging");
     };
-    // Cuál sea el error da igual y no se fija: con `O_NONBLOCK`, un FIFO sin
-    // lector contesta `ENXIO` y ni siquiera se llega al `fstat`. Lo que este
-    // test afirma es que VUELVE — sin la bandera, el `openat` se queda dentro
-    // del pool de bloqueo esperando un lector que no va a llegar, y ahí no hay
-    // token de cancelación que valga.
+    // Whatever the error is doesn't matter and isn't pinned down: with
+    // `O_NONBLOCK`, a FIFO with no reader answers `ENXIO` and doesn't even
+    // reach the `fstat`. What this test asserts is that it RETURNS —
+    // without the flag, the `openat` stays inside the blocking pool
+    // waiting for a reader that's never going to show up, and there no
+    // cancellation token is worth anything.
 }
 
-/// Y el camino normal sigue funcionando: un staging que creamos nosotros se
-/// reanuda. La defensa no puede costar la operación que existe para proteger.
+/// And the normal path still works: a staging we created gets resumed.
+/// The defense can't cost the operation it exists to protect.
 #[tokio::test]
-async fn un_staging_propio_si_se_reanuda_tras_la_comprobacion() {
-    let (p, raiz, _dentro, _fuera) = escenario();
-    let root = p.open_root(&raiz).await.expect("raíz confinada");
-    let (mut sink, ya) = root
-        .open_resumable(&[seg(b"grande.bin")])
+async fn a_staging_of_our_own_is_resumed_after_the_check() {
+    let (p, root_path, _inside, _outside) = scenario();
+    let root = p.open_root(&root_path).await.expect("confined root");
+    let (mut sink, already) = root
+        .open_resumable(&[seg(b"big.bin")])
         .await
-        .expect("abre");
-    assert_eq!(ya, 0);
-    sink.write(Bytes::from_static(b"abc")).await.expect("mitad");
-    sink.keep().await.expect("conserva");
+        .expect("opens");
+    assert_eq!(already, 0);
+    sink.write(Bytes::from_static(b"abc")).await.expect("half");
+    sink.keep().await.expect("keeps");
 
-    let (_sink, ya) = root
-        .open_resumable(&[seg(b"grande.bin")])
+    let (_sink, already) = root
+        .open_resumable(&[seg(b"big.bin")])
         .await
-        .expect("reabre lo suyo");
-    assert_eq!(ya, 3, "el nuestro pasa la comprobación y se continúa");
+        .expect("reopens its own");
+    assert_eq!(already, 3, "ours passes the check and gets continued");
 }
 
 // ---------------------------------------------------------------------------
-// El digest del parcial, POR EL DESCRIPTOR (#297 revisión).
+// The partial's digest, VIA THE DESCRIPTOR (#297 revision).
 //
-// Es la única verificación de los bytes que se reanudan (`VerifyPolicy::Hash`),
-// así que tiene que mirar el MISMO fichero que `open_resumable` continuaría y
-// con las mismas comprobaciones. Un digest de otro fichero no verifica nada.
+// It's the only verification of the bytes being resumed
+// (`VerifyPolicy::Hash`), so it has to look at the SAME file
+// `open_resumable` would continue and with the same checks. Another
+// file's digest verifies nothing.
 // ---------------------------------------------------------------------------
 
-/// SHA-256 de `bytes`, para comparar con lo que contesta la raíz.
+/// SHA-256 of `bytes`, to compare against what the root answers.
 fn sha256(bytes: &[u8]) -> [u8; 32] {
     use sha2::{Digest as _, Sha256};
     Sha256::digest(bytes).into()
 }
 
-/// El parcial que dejamos nosotros da el digest de sus primeros `len` bytes.
+/// The partial we left ourselves gives the digest of its first `len` bytes.
 #[tokio::test]
-async fn el_digest_del_parcial_propio_es_el_de_su_prefijo() {
-    let (p, raiz, _dentro, _fuera) = escenario();
-    let root = p.open_root(&raiz).await.expect("raíz confinada");
+async fn the_digest_of_our_own_partial_is_that_of_its_prefix() {
+    let (p, root_path, _inside, _outside) = scenario();
+    let root = p.open_root(&root_path).await.expect("confined root");
     let (mut sink, _) = root
-        .open_resumable(&[seg(b"grande.bin")])
+        .open_resumable(&[seg(b"big.bin")])
         .await
-        .expect("abre");
+        .expect("opens");
     sink.write(Bytes::from_static(b"abcdef"))
         .await
-        .expect("mitad");
-    sink.keep().await.expect("conserva");
+        .expect("half");
+    sink.keep().await.expect("keeps");
 
     let d = root
-        .partial_digest(&[seg(b"grande.bin")], 3)
+        .partial_digest(&[seg(b"big.bin")], 3)
         .await
         .expect("digest");
     assert_eq!(d, Some(sha256(b"abc")));
 }
 
-/// Sin parcial no hay digest, y no es un error: el caller degrada a `Length`.
+/// With no partial there's no digest, and it isn't an error: the caller
+/// degrades to `Length`.
 #[tokio::test]
-async fn sin_parcial_no_hay_digest() {
-    let (p, raiz, _dentro, _fuera) = escenario();
-    let root = p.open_root(&raiz).await.expect("raíz confinada");
+async fn without_a_partial_there_is_no_digest() {
+    let (p, root_path, _inside, _outside) = scenario();
+    let root = p.open_root(&root_path).await.expect("confined root");
     let d = root
-        .partial_digest(&[seg(b"grande.bin")], 3)
+        .partial_digest(&[seg(b"big.bin")], 3)
         .await
-        .expect("no es un error");
+        .expect("not an error");
     assert_eq!(d, None);
 }
 
-/// Pedir más bytes de los que tiene el parcial no es un digest de ese
-/// prefijo: sería el de uno más corto, y compararlo daría un falso «igual».
+/// Asking for more bytes than the partial has isn't a digest of that
+/// prefix: it would be that of a shorter one, and comparing it would give
+/// a false "match".
 #[tokio::test]
-async fn un_parcial_mas_corto_que_lo_pedido_no_da_digest() {
-    let (p, raiz, dentro, _fuera) = escenario();
-    std::fs::write(dentro.join(nombre_de_staging(b"grande.bin")), b"ab").expect("parcial");
-    let root = p.open_root(&raiz).await.expect("raíz confinada");
+async fn a_partial_shorter_than_requested_gives_no_digest() {
+    let (p, root_path, inside, _outside) = scenario();
+    std::fs::write(inside.join(staging_name(b"big.bin")), b"ab").expect("partial");
+    let root = p.open_root(&root_path).await.expect("confined root");
     let d = root
-        .partial_digest(&[seg(b"grande.bin")], 3)
+        .partial_digest(&[seg(b"big.bin")], 3)
         .await
         .expect("digest");
     assert_eq!(d, None);
 }
 
-/// Un symlink con el nombre del staging no se sigue: su digest sería el del
-/// fichero al que apunta, que puede estar fuera de la raíz.
+/// A symlink with the staging's name isn't followed: its digest would be
+/// that of the file it points at, which may be outside the root.
 #[tokio::test]
-async fn el_digest_no_sigue_un_symlink_con_el_nombre_del_staging() {
-    let (p, raiz, dentro, fuera) = escenario();
-    let victima = fuera.join("secreto");
-    std::fs::write(&victima, b"abcdef").expect("víctima");
-    std::os::unix::fs::symlink(&victima, dentro.join(nombre_de_staging(b"grande.bin")))
-        .expect("symlink hostil");
-    let root = p.open_root(&raiz).await.expect("raíz confinada");
-    let d = root.partial_digest(&[seg(b"grande.bin")], 3).await;
+async fn the_digest_does_not_follow_a_symlink_with_the_stagings_name() {
+    let (p, root_path, inside, outside) = scenario();
+    let victim = outside.join("secret");
+    std::fs::write(&victim, b"abcdef").expect("victim");
+    std::os::unix::fs::symlink(&victim, inside.join(staging_name(b"big.bin")))
+        .expect("hostile symlink");
+    let root = p.open_root(&root_path).await.expect("confined root");
+    let d = root.partial_digest(&[seg(b"big.bin")], 3).await;
     assert!(
         !matches!(d, Ok(Some(_))),
-        "el digest de lo que hay al otro lado no se devuelve: {d:?}"
+        "the digest of what's on the other side is not returned: {d:?}"
     );
 }
 
-/// Un inodo con otro nombre (hardlink) no es un parcial nuestro: es la misma
-/// comprobación de un solo enlace que hace `open_resumable`.
+/// An inode with another name (hardlink) isn't a partial of ours: it's
+/// the same single-link check `open_resumable` does.
 #[tokio::test]
-async fn el_digest_de_un_parcial_con_otro_enlace_no_se_devuelve() {
-    let (p, raiz, dentro, fuera) = escenario();
-    let ajeno = fuera.join("ajeno");
-    std::fs::write(&ajeno, b"abcdef").expect("ajeno");
-    std::fs::hard_link(&ajeno, dentro.join(nombre_de_staging(b"grande.bin"))).expect("hardlink");
-    let root = p.open_root(&raiz).await.expect("raíz confinada");
+async fn the_digest_of_a_partial_with_another_link_is_not_returned() {
+    let (p, root_path, inside, outside) = scenario();
+    let foreign = outside.join("foreign");
+    std::fs::write(&foreign, b"abcdef").expect("foreign");
+    std::fs::hard_link(&foreign, inside.join(staging_name(b"big.bin"))).expect("hardlink");
+    let root = p.open_root(&root_path).await.expect("confined root");
     let d = root
-        .partial_digest(&[seg(b"grande.bin")], 3)
+        .partial_digest(&[seg(b"big.bin")], 3)
         .await
-        .expect("no es un error");
+        .expect("not an error");
     assert_eq!(d, None);
 }
 
-/// Un componente intermedio que es un symlink hacia fuera no da el digest del
-/// parcial que haya al otro lado: es el caso que motivó hacerlo por
-/// descriptor.
+/// An intermediate component that's a symlink to the outside doesn't give
+/// the digest of whatever partial is on the other side: it's the case
+/// that motivated doing this by descriptor.
 #[tokio::test]
-async fn el_digest_no_cruza_un_symlink_intermedio() {
-    let (p, raiz, dentro, fuera) = escenario();
-    std::fs::write(fuera.join(nombre_de_staging(b"grande.bin")), b"abcdef").expect("parcial fuera");
-    std::os::unix::fs::symlink(&fuera, dentro.join("sub")).expect("symlink hostil");
-    let root = p.open_root(&raiz).await.expect("raíz confinada");
+async fn the_digest_does_not_cross_an_intermediate_symlink() {
+    let (p, root_path, inside, outside) = scenario();
+    std::fs::write(outside.join(staging_name(b"big.bin")), b"abcdef").expect("outside partial");
+    std::os::unix::fs::symlink(&outside, inside.join("sub")).expect("hostile symlink");
+    let root = p.open_root(&root_path).await.expect("confined root");
     let d = root
-        .partial_digest(&[seg(b"sub"), seg(b"grande.bin")], 3)
+        .partial_digest(&[seg(b"sub"), seg(b"big.bin")], 3)
         .await;
     assert!(
         !matches!(d, Ok(Some(_))),
-        "el parcial de fuera no se verifica como si fuera el nuestro: {d:?}"
+        "the outside partial is not verified as if it were ours: {d:?}"
     );
 }
 
-/// **La identidad por el descriptor dice lo mismo que la identidad por ruta**
+/// **Identity via the descriptor says the same thing as identity via path**
 /// (#369, ADR 0152).
 ///
-/// Son dos lecturas distintas del mismo nodo —`fstatat` sobre el fd de la raíz
-/// aquí, `symlink_metadata` allí— y el deshacer compara una contra la otra: la
-/// copia anota por el descriptor, el undo lee por ruta. Si alguna vez dejaran
-/// de coincidir, TODO deshacer de una copia local se bloquearía, y el único
-/// síntoma sería un undo que dice que ahí hay otra cosa.
+/// They're two distinct readings of the same node — `fstatat` over the
+/// root's fd here, `symlink_metadata` there — and undo compares one
+/// against the other: the copy notes it via the descriptor, undo reads it
+/// via path. If they ever stopped agreeing, EVERY undo of a local copy
+/// would get blocked, and the only symptom would be an undo claiming
+/// there's something else there.
 ///
-/// Que describa el LINK y no su destino va en el mismo test porque es la otra
-/// mitad de la misma promesa: `stat` de esta interfaz tampoco lo sigue.
+/// That it describes the LINK and not its target lives in the same test
+/// because it's the other half of the same promise: this interface's
+/// `stat` doesn't follow it either.
 #[tokio::test]
-async fn la_identidad_por_el_descriptor_es_la_misma_que_por_ruta() {
+async fn identity_via_the_descriptor_is_the_same_as_via_path() {
     use norte_vfs::FollowLinks;
 
-    let (p, raiz, dentro, _fuera) = escenario();
-    std::fs::write(dentro.join("f"), b"contenido").expect("f");
-    std::os::unix::fs::symlink("f", dentro.join("enlace")).expect("enlace");
+    let (p, root_path, inside, _outside) = scenario();
+    std::fs::write(inside.join("f"), b"content").expect("f");
+    std::os::unix::fs::symlink("f", inside.join("link")).expect("link");
 
-    let root = p.open_root(&raiz).await.expect("raíz");
+    let root = p.open_root(&root_path).await.expect("root");
 
-    for nombre in [&b"f"[..], b"enlace"] {
-        let por_fd = root.node_id(&[seg(nombre)]).await.expect("node_id por fd");
-        let por_ruta = p
-            .node_id(&child(&raiz, nombre), FollowLinks::No)
+    for name in [&b"f"[..], b"link"] {
+        let via_fd = root.node_id(&[seg(name)]).await.expect("node_id via fd");
+        let via_path = p
+            .node_id(&child(&root_path, name), FollowLinks::No)
             .await
-            .expect("node_id por ruta");
+            .expect("node_id via path");
         assert_eq!(
-            por_fd,
-            por_ruta,
-            "las dos lecturas de {} tienen que dar el mismo nodo",
-            String::from_utf8_lossy(nombre)
+            via_fd,
+            via_path,
+            "both readings of {} have to give the same node",
+            String::from_utf8_lossy(name)
         );
-        assert!(por_fd.is_some(), "el provider local SÍ tiene identidad");
+        assert!(via_fd.is_some(), "the local provider DOES have identity");
     }
 
-    // Y el enlace no es su destino: seguirlo daría la identidad de `f`.
+    // And the link is not its target: following it would give `f`'s identity.
     assert_ne!(
-        root.node_id(&[seg(b"enlace")]).await.expect("enlace"),
+        root.node_id(&[seg(b"link")]).await.expect("link"),
         root.node_id(&[seg(b"f")]).await.expect("f"),
-        "describe el LINK, jamás su destino"
+        "describes the LINK, never its target"
     );
 }
 
-/// **Y sigue contestando cuando la raíz ya no está donde estaba** (#369).
+/// **And it keeps answering when the root is no longer where it was**
+/// (#369).
 ///
-/// Ésta es la razón entera de que el método exista. Un descriptor sobrevive a
-/// un `rename` —por eso una copia seguía llenando una carpeta ya borrada— así
-/// que preguntar por él sigue funcionando cuando preguntar por la ruta ya no.
-/// Sin esto, las entradas de journal que más necesitan identidad son
-/// justamente las que se quedan sin ella.
+/// This is the whole reason the method exists. A descriptor survives a
+/// `rename` — that's why a copy kept filling an already-deleted folder —
+/// so asking about it keeps working when asking about the path no longer
+/// does. Without this, the journal entries that need identity the most
+/// are exactly the ones left without it.
 #[tokio::test]
-async fn la_identidad_por_el_descriptor_sobrevive_a_que_muevan_la_raiz() {
+async fn identity_via_the_descriptor_survives_the_root_being_moved() {
     use norte_vfs::FollowLinks;
 
-    let (p, raiz, dentro, _fuera) = escenario();
-    let root = p.open_root(&raiz).await.expect("raíz");
-    escribe(&*root, &[seg(b"f")], b"escrito por el descriptor")
+    let (p, root_path, inside, _outside) = scenario();
+    let root = p.open_root(&root_path).await.expect("root");
+    write_to(&*root, &[seg(b"f")], b"written via the descriptor")
         .await
-        .expect("escribe");
-    let antes = root.node_id(&[seg(b"f")]).await.expect("antes");
+        .expect("writes");
+    let before = root.node_id(&[seg(b"f")]).await.expect("before");
 
-    // Lo que hace el borrado de norte: mover la carpeta a otro sitio.
-    std::fs::rename(&dentro, dentro.with_file_name("papelera")).expect("a la papelera");
+    // What norte's deletion does: move the folder somewhere else.
+    std::fs::rename(&inside, inside.with_file_name("trash")).expect("to the trash");
 
-    // Por ruta ya no hay nada…
+    // By path there's nothing left…
     assert!(
         matches!(
-            p.node_id(&child(&raiz, b"f"), FollowLinks::No).await,
+            p.node_id(&child(&root_path, b"f"), FollowLinks::No).await,
             Err(Error::NotFound)
         ),
-        "la ruta ya no lleva ahí, que es la premisa"
+        "the path no longer leads there, which is the premise"
     );
-    // …y por el descriptor sigue estando, con la misma identidad.
+    // …and via the descriptor it's still there, with the same identity.
     assert_eq!(
-        root.node_id(&[seg(b"f")]).await.expect("después"),
-        antes,
-        "el descriptor sigue viendo su nodo aunque la carpeta se llame otra cosa"
+        root.node_id(&[seg(b"f")]).await.expect("after"),
+        before,
+        "the descriptor still sees its node even though the folder is called something else"
     );
 }

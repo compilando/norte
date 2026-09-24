@@ -1,16 +1,15 @@
-//! Lo que el PAQUETE promete, clavado (#256).
+//! What the PACKAGE promises, pinned (#256).
 //!
-//! Estas comprobaciones leen la configuración del bundler y la entrada de
-//! escritorio, no el runtime, y ese es el punto: un paquete roto no se ve en
-//! ninguna prueba de comportamiento. Se ve al instalarlo en una máquina limpia
-//! —que es cuando ya es tarde— o se ve aquí.
+//! These checks read the bundler's configuration and the desktop entry, not
+//! the runtime, and that is the point: a broken package is not seen in any
+//! behavior test. It is seen when installed on a clean machine — which is
+//! when it is already too late — or it is seen here.
 //!
-//! El empaquetado se ejercitó por primera vez el 2026-08-25 y salieron cuatro
-//! cosas de golpe: la descripción decía «Spike vertical del renderer de
-//! Tauri», la categoría era `Utility` a secas, no había `MimeType` (o sea que
-//! «abrir carpeta con…» no ofrecía norte) y el `Exec` entregaba una URL a un
-//! binario que espera una ruta. Todas son de esta clase: invisibles hasta que
-//! alguien instala.
+//! Packaging was first exercised on 2026-08-25 and four things came out at
+//! once: the description said "Vertical spike of the Tauri renderer", the
+//! category was plain `Utility`, there was no `MimeType` (i.e. "open folder
+//! with…" did not offer norte) and `Exec` handed over a URL to a binary that
+//! expects a path. All of this kind: invisible until someone installs.
 
 use std::path::PathBuf;
 
@@ -21,16 +20,16 @@ fn raiz() -> PathBuf {
 fn conf() -> serde_json::Value {
     let p = raiz().join("tauri.conf.json");
     let raw = std::fs::read_to_string(&p)
-        .unwrap_or_else(|e| panic!("no se pudo leer {}: {e}", p.display()));
-    serde_json::from_str(&raw).expect("JSON válido")
+        .unwrap_or_else(|e| panic!("could not read {}: {e}", p.display()));
+    serde_json::from_str(&raw).expect("valid JSON")
 }
 
 fn desktop() -> String {
     let p = raiz().join("norte.desktop");
-    std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("no se pudo leer {}: {e}", p.display()))
+    std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("could not read {}: {e}", p.display()))
 }
 
-/// Una clave de la entrada de escritorio, sin comentarios ni espacios.
+/// A desktop entry key, without comments or spaces.
 fn clave(texto: &str, k: &str) -> Option<String> {
     texto
         .lines()
@@ -40,54 +39,60 @@ fn clave(texto: &str, k: &str) -> Option<String> {
         .map(str::to_owned)
 }
 
-/// **El paquete trae el DAEMON y el CLI, no solo la ventana.**
+/// **The package brings the DAEMON and the CLI, not just the window.**
 ///
-/// Sin ellos, en una instalación limpia la ventana no tiene a quién pedirle un
-/// listado: `norte-gui` busca a `norte` como HERMANO de su propio ejecutable, y
-/// si no está no hay daemon que arrancar. Era la pregunta abierta de #256.
+/// Without them, on a clean install the window has nobody to ask for a
+/// listing: `norte-gui` looks for `norte` as its own executable's SIBLING,
+/// and if it is not there, there is no daemon to start. It was #256's open
+/// question.
 #[test]
 fn el_paquete_trae_el_daemon_y_el_cli() {
     let cfg = conf();
     let externos: Vec<&str> = cfg["bundle"]["externalBin"]
         .as_array()
-        .expect("hay binarios externos")
+        .expect("there are external binaries")
         .iter()
         .filter_map(serde_json::Value::as_str)
         .collect();
     assert!(
         externos.iter().any(|b| b.ends_with("/norte")),
-        "el daemon viaja con la ventana: {externos:?}"
+        "the daemon travels with the window: {externos:?}"
     );
     assert!(
         externos.iter().any(|b| b.ends_with("/ntc")),
-        "y el cliente de terminal: {externos:?}"
+        "and the terminal client: {externos:?}"
     );
 }
 
-/// **La descripción larga describe norte, no el andamio con el que se probó.**
+/// **The long description describes norte, not the scaffolding it was tested
+/// with.**
 ///
-/// Es lo que se lee en el gestor de paquetes, y decía «Spike vertical del
-/// renderer de Tauri sobre norte-ui-host» — una frase de bitácora interna
-/// delante de quien está decidiendo si instalar esto.
-/// **El identificador no dice `spike`.**
+/// It is what shows up in the package manager, and it used to say "Vertical
+/// spike of the Tauri renderer over norte-ui-host" — an internal-log sentence
+/// in front of whoever is deciding whether to install this.
+/// **The identifier does not say `spike`.**
 ///
-/// Es el id de aplicación: nombra el directorio de datos de la webview, la
-/// entrada de escritorio y el paquete. Mientras decía `dev.norte.gui.spike`,
-/// cualquiera que mirara qué hay instalado leía que esto es un experimento —
-/// y lo era, hasta que el go/no-go se cerró (ADR 0087).
+/// It is the application id: it names the webview's data directory, the
+/// desktop entry and the package. While it said `dev.norte.gui.spike`,
+/// anyone looking at what is installed read that this is an experiment — and
+/// it was, until the go/no-go closed (ADR 0087).
 ///
-/// Cambiarlo TIENE precio y por eso se hizo ahora: una instalación con el id
-/// viejo no se actualiza encima, se queda al lado. En alfa el precio es cero;
-/// después de la primera versión estable habría sido una migración.
+/// Changing it DOES have a cost and that is why it was done now: an install
+/// with the old id does not update on top, it stays alongside. In alpha the
+/// cost is zero; after the first stable release it would have been a
+/// migration.
 #[test]
 fn el_identificador_no_dice_spike() {
     let cfg = conf();
-    let id = cfg["identifier"].as_str().expect("hay identifier");
+    let id = cfg["identifier"].as_str().expect("there is an identifier");
     assert!(
         !id.contains("spike"),
-        "el id de aplicación sigue diciendo que esto es un experimento: {id}"
+        "the application id still says this is an experiment: {id}"
     );
-    assert_eq!(id, "dev.norte.gui", "y es el que el paquete promete");
+    assert_eq!(
+        id, "dev.norte.gui",
+        "and it is the one the package promises"
+    );
 }
 
 #[test]
@@ -95,56 +100,59 @@ fn la_descripcion_no_habla_de_un_spike() {
     let cfg = conf();
     let larga = cfg["bundle"]["longDescription"]
         .as_str()
-        .expect("hay descripción larga")
+        .expect("there is a long description")
         .to_lowercase();
     assert!(
         !larga.contains("spike"),
-        "la descripción del paquete no es una nota de desarrollo: {larga:?}"
+        "the package's description is not a development note: {larga:?}"
     );
-    assert!(larga.contains("ficheros"), "y dice qué es esto: {larga:?}");
+    assert!(
+        larga.contains("ficheros"),
+        "and it says what this is: {larga:?}"
+    );
 }
 
-/// **`Exec` entrega una RUTA, no una URL.**
+/// **`Exec` hands over a PATH, not a URL.**
 ///
-/// `%U` da `file:///casa`, y el binario lo mete en un `PathBuf`: eso es una
-/// ruta RELATIVA que no existe, así que la ventana abriría sobre un error en
-/// vez de sobre la carpeta que el escritorio acaba de nombrar. `%f` da la ruta
-/// local, que es lo que `norte-gui [DIR]` sabe leer.
+/// `%U` gives `file:///casa`, and the binary puts it into a `PathBuf`: that
+/// is a RELATIVE path that does not exist, so the window would open on an
+/// error instead of on the folder the desktop just named. `%f` gives the
+/// local path, which is what `norte-gui [DIR]` knows how to read.
 #[test]
 fn el_exec_entrega_una_ruta_y_no_una_url() {
     let d = desktop();
-    let exec = clave(&d, "Exec").expect("hay Exec");
+    let exec = clave(&d, "Exec").expect("there is an Exec");
     assert!(
         !exec.contains("%U") && !exec.contains("%u"),
-        "una URL no es una ruta: {exec:?}"
+        "a URL is not a path: {exec:?}"
     );
     assert!(
         exec.contains("%f") || exec.contains("%F"),
-        "y se le pasa la carpeta: {exec:?}"
+        "and the folder is passed to it: {exec:?}"
     );
 }
 
-/// **Se ofrece para abrir carpetas.**
+/// **It offers itself to open folders.**
 ///
-/// Sin `MimeType=inode/directory`, «abrir con…» sobre una carpeta no lista
-/// norte. Para un gestor de ficheros eso es la integración entera con el
-/// escritorio, y su ausencia no se nota en nada más.
+/// Without `MimeType=inode/directory`, "open with…" on a folder does not list
+/// norte. For a file manager that is the entire desktop integration, and its
+/// absence shows up nowhere else.
 #[test]
 fn el_escritorio_lo_ofrece_para_abrir_carpetas() {
     let d = desktop();
     let mime = clave(&d, "MimeType").unwrap_or_default();
     assert!(
         mime.contains("inode/directory"),
-        "un gestor de ficheros abre directorios: {mime:?}"
+        "a file manager opens directories: {mime:?}"
     );
     let cats = clave(&d, "Categories").unwrap_or_default();
     assert!(
         cats.contains("FileManager"),
-        "y se declara como lo que es: {cats:?}"
+        "and it declares itself as what it is: {cats:?}"
     );
-    // UNA categoría principal. Con dos, la aplicación puede salir DOS VECES en
-    // el menú, y eso lo avisa `desktop-file-validate` — que no corre en el
-    // gate, así que la comprobación vive aquí.
+    // ONE main category. With two, the application can show up TWICE in the
+    // menu, and `desktop-file-validate` warns about that — it does not run in
+    // the gate, so the check lives here.
     let principales = [
         "AudioVideo",
         "Audio",
@@ -166,25 +174,25 @@ fn el_escritorio_lo_ofrece_para_abrir_carpetas() {
         .count();
     assert_eq!(
         cuantas, 1,
-        "una sola categoría principal, o sale dos veces en el menú: {cats:?}"
+        "a single main category, or it shows up twice in the menu: {cats:?}"
     );
 }
 
-/// La entrada de escritorio que se empaqueta es la NUESTRA, no la que el
-/// bundler genera.
+/// The desktop entry that gets packaged is OURS, not the one the bundler
+/// generates.
 ///
-/// Sin esta línea en la configuración, todo lo anterior se escribe en un
-/// fichero que nadie usa: el bundler compone el suyo y descarta este.
+/// Without this line in the configuration, everything above gets written to
+/// a file nobody uses: the bundler composes its own and discards this one.
 #[test]
 fn la_entrada_de_escritorio_es_la_que_esta_en_el_repo() {
     let cfg = conf();
     assert_eq!(
         cfg["bundle"]["linux"]["deb"]["desktopTemplate"].as_str(),
         Some("norte.desktop"),
-        "el bundler tiene que usar la plantilla del repo"
+        "the bundler has to use the repo's template"
     );
     assert!(
         raiz().join("norte.desktop").is_file(),
-        "y esa plantilla existe"
+        "and that template exists"
     );
 }

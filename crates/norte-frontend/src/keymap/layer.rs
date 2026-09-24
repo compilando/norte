@@ -80,11 +80,11 @@ pub struct KeymapFile {
     pub(super) pane: RawSection,
     #[serde(default)]
     pub(super) viewer: RawSection,
-    /// Contexto `dialog` (H1, issue #24): teclas de modales/overlays
-    /// (confirmación, aprobación, popups de navegación…) como keymap de
-    /// datos en vez de handlers ad hoc — la ayuda generada nunca puede
-    /// desincronizarse de un rebind. Se fusiona con `global` igual que
-    /// `pane`/`viewer` (ver [`Screen::Dialog`]).
+    /// `dialog` context (H1, issue #24): modal/overlay keys (confirmation,
+    /// approval, navigation popups…) as data keymap instead of ad hoc
+    /// handlers — the generated help can never fall out of sync with a
+    /// rebind. Merges with `global` the same as `pane`/`viewer` (see
+    /// [`Screen::Dialog`]).
     #[serde(default)]
     pub(super) dialog: RawSection,
     /// The preset whose `[dialog]` section this one adopts. norte's dialogs are
@@ -109,19 +109,19 @@ pub struct KeymapFile {
     // `"default": null` out of the published property.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) dialog_from: Option<String>,
-    /// `true` si esta capa es la de PROYECTO (`./.norte`) — contenido
-    /// potencialmente AJENO (viene con un repo clonado) que se carga SIN
-    /// trust. Un keymap de proyecto NO puede bindear `lua:`:
-    /// [`Effective::build_for`](super::Effective::build_for) descarta esos
-    /// bindings (contados en
+    /// `true` if this layer is the PROJECT one (`./.norte`) — potentially
+    /// FOREIGN content (comes with a cloned repo) loaded WITHOUT trust. A
+    /// project keymap CANNOT bind `lua:`:
+    /// [`Effective::build_for`](super::Effective::build_for) discards those
+    /// bindings (counted in
     /// [`Effective::discarded_lua_bindings`](super::Effective::discarded_lua_bindings))
-    /// — rebindear una tecla común a
-    /// un comando del `init.lua` del USUARIO (sin sandbox) sería ejecución
-    /// dirigida por el repo sin confirmación alguna. No viene del TOML
-    /// (`serde(skip)`): lo marca `load_keymap_layer` (`config.rs`) leyendo
-    /// el [`Layer`](norte_config::Layer) del `dir` que trae cada capa
-    /// (ADR 0035: el kind viaja POR DIR en `Layers`, ya no se infiere por
-    /// posición — deuda #75 cerrada).
+    /// — rebinding a common key to a command from the USER's `init.lua`
+    /// (with no sandbox) would be repo-directed execution with no
+    /// confirmation at all. It does not come from the TOML (`serde(skip)`):
+    /// `load_keymap_layer` (`config.rs`) marks it by reading the
+    /// [`Layer`](norte_config::Layer) of the `dir` each layer carries (ADR
+    /// 0035: the kind travels PER DIR in `Layers`, no longer inferred by
+    /// position — debt #75 closed).
     #[serde(skip)]
     project: bool,
 }
@@ -141,8 +141,8 @@ impl KeymapFile {
         }
     }
 
-    /// ¿Define `keymap` (lista completa de preset)? Las CAPAS de usuario
-    /// no lo admiten — el diagnóstico con archivo vive en `config::load`.
+    /// Does it define `keymap` (a preset's full list)? User LAYERS do not
+    /// accept it — the diagnostic with the file lives in `config::load`.
     #[must_use]
     pub fn has_full_keymap(&self) -> bool {
         !self.global.keymap.is_empty()
@@ -151,32 +151,32 @@ impl KeymapFile {
             || !self.dialog.keymap.is_empty()
     }
 
-    /// Marca esta capa como la de PROYECTO (ver el campo `project`): sus
-    /// bindings `lua:` se descartan al fusionar. La llama `config::load`
-    /// con el `keymap.toml` de `./.norte`.
+    /// Marks this layer as the PROJECT one (see the `project` field): its
+    /// `lua:` bindings are discarded on merge. Called by `config::load`
+    /// with `./.norte`'s `keymap.toml`.
     pub fn mark_project(&mut self) {
         self.project = true;
     }
 
-    /// ¿Es la capa de proyecto? (ver [`Self::mark_project`]).
+    /// Is it the project layer? (see [`Self::mark_project`]).
     #[must_use]
     pub fn is_project(&self) -> bool {
         self.project
     }
 }
 
-/// Pantalla activa: decide qué contexto específico se fusiona con
-/// `global` (ADR 0006; el stack crece con la UI).
+/// Active screen: decides which specific context merges with `global`
+/// (ADR 0006; the stack grows with the UI).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Screen {
-    /// Los dos panes (contexto `pane`).
+    /// The two panes (`pane` context).
     Browse,
-    /// El viewer (contexto `viewer`, fase 7).
+    /// The viewer (`viewer` context, phase 7).
     Viewer,
-    /// Modales/overlays (contexto `dialog`, H1 — issue #24): confirmación,
-    /// aprobación, popups de navegación… cada overlay declara su propio
-    /// ALLOWLIST de qué `dialog.*` comandos soporta (la semántica de
-    /// seguridad vive en código, no aquí).
+    /// Modals/overlays (`dialog` context, H1 — issue #24): confirmation,
+    /// approval, navigation popups… each overlay declares its own
+    /// ALLOWLIST of which `dialog.*` commands it supports (the security
+    /// semantics live in code, not here).
     Dialog,
 }
 
@@ -225,9 +225,10 @@ impl Screen {
     }
 }
 
-/// Diagnóstico compacto de un error de parseo TOML: `"line N: msg"` si el
-/// error trae span, o solo el mensaje si no (errores semánticos). Copia
-/// LOCAL de `norte_tui::config::toml_diag` — el motor no depende de la TUI.
+/// Compact diagnostic for a TOML parse error: `"line N: msg"` if the error
+/// carries a span, or just the message if not (semantic errors). LOCAL copy
+/// of `norte_tui::config::toml_diag` — the engine does not depend on the
+/// TUI.
 fn toml_diag(raw: &str, e: &toml::de::Error) -> String {
     match e.span() {
         Some(s) => {
@@ -243,7 +244,8 @@ fn toml_diag(raw: &str, e: &toml::de::Error) -> String {
 /// inheritance is one level, and with no recursion there is no depth to
 /// bound — not even a `dialog_from` that names its own file can loop.
 /// Swapping this call for [`parse_keymap`] is the change the
-/// `un_dialog_from_que_se_apunta_a_si_mismo_no_recursa` test exists to catch.
+/// `a_dialog_from_that_points_at_itself_does_not_recurse` test exists to
+/// catch.
 fn parse_raw(s: &str) -> Result<KeymapFile, KeymapError> {
     toml::from_str(s).map_err(|e| KeymapError::Toml(toml_diag(s, &e)))
 }
@@ -366,15 +368,14 @@ pub(super) enum Section {
     Global,
 }
 
-/// Fusión de un contexto (ADR 0006/0007): prepends de capa superior primero
-/// (ganan), luego el preset, luego los appends (superiores antes). Los
-/// bindings `lua:` de una capa de PROYECTO se DESCARTAN aquí, contados en
-/// `discarded_lua` (seguridad: ver [`KeymapFile::mark_project`] — el
-/// keymap de un repo ajeno no puede dirigir la ejecución de comandos Lua).
-/// Cada binding se etiqueta con su [`Origin`] (preset vs. capa) y su
-/// [`Section`] (específico de pantalla vs. `[global]`) — la LLAMANTE fija
-/// `section` una vez por invocación, porque `get` ya decide qué lista se
-/// está leyendo.
+/// Merges a context (ADR 0006/0007): higher-layer prepends first (they
+/// win), then the preset, then the appends (higher ones first). A PROJECT
+/// layer's `lua:` bindings are DISCARDED here, counted in `discarded_lua`
+/// (security: see [`KeymapFile::mark_project`] — a foreign repo's keymap
+/// cannot direct the execution of Lua commands). Each binding is tagged
+/// with its [`Origin`] (preset vs. layer) and its [`Section`] (screen-
+/// specific vs. `[global]`) — the CALLER fixes `section` once per call,
+/// because `get` already decides which list is being read.
 fn merge_ctx<'a>(
     preset: &'a KeymapFile,
     layers: &'a [KeymapFile],
@@ -509,77 +510,77 @@ mod dialog_from_tests {
         resolve_dialog_from,
     };
 
-    /// Un preset importado en línea: el que traerán las tareas 2 y 3, sin el
-    /// fichero. Nada aquí depende de que exista `total-commander.toml`.
-    const IMPORTADO: &str = r#"
+    /// An inline imported preset: what tasks 2 and 3 will bring, without
+    /// the file. Nothing here depends on `total-commander.toml` existing.
+    const IMPORTED: &str = r#"
 dialog_from = "orthodox"
 
 [pane]
 keymap = [{ on = ["f5"], run = "pane.copy" }]
 "#;
 
-    /// El `[dialog]` de un [`super::RawSection`] como pares comparables: una
-    /// comparación por LONGITUD aceptaría una copia parcial, o la sección del
-    /// preset equivocado si midiese lo mismo.
-    fn pares(s: &super::RawSection) -> Vec<(Vec<String>, String)> {
+    /// A [`super::RawSection`]'s `[dialog]` as comparable pairs: a LENGTH
+    /// comparison would accept a partial copy, or the wrong preset's
+    /// section if it measured the same.
+    fn pairs(s: &super::RawSection) -> Vec<(Vec<String>, String)> {
         s.keymap
             .iter()
             .map(|b| (b.on.clone(), b.run.clone()))
             .collect()
     }
 
-    /// Lo que compra la clave: el preset importado NO copia las 25 líneas de
-    /// `[dialog]` y aun así sale del parseo con el contexto puesto — el mismo,
-    /// binding a binding.
+    /// What the key buys: the imported preset does NOT copy `[dialog]`'s 25
+    /// lines and still comes out of parsing with the context set — the
+    /// same one, binding by binding.
     #[test]
-    fn heredar_puebla_el_contexto_dialog() {
-        let kf = parse_keymap(IMPORTADO).expect("el preset importado parsea");
-        let orthodox = parse_keymap(super::presets::ORTHODOX).expect("orthodox parsea");
-        assert!(!kf.dialog.keymap.is_empty(), "[dialog] quedó vacío");
+    fn inheriting_populates_the_dialog_context() {
+        let kf = parse_keymap(IMPORTED).expect("the imported preset parses");
+        let orthodox = parse_keymap(super::presets::ORTHODOX).expect("orthodox parses");
+        assert!(!kf.dialog.keymap.is_empty(), "[dialog] came out empty");
         assert_eq!(
-            pares(&kf.dialog),
-            pares(&orthodox.dialog),
-            "el [dialog] heredado no es el de orthodox"
+            pairs(&kf.dialog),
+            pairs(&orthodox.dialog),
+            "the inherited [dialog] is not orthodox's"
         );
-        let heredado: Vec<&str> = kf.dialog.keymap.iter().map(|b| b.run.as_str()).collect();
-        assert!(heredado.contains(&"dialog.approve"), "{heredado:?}");
-        // El campo SIGUE puesto tras resolver: es lo que `check_layer_keys`
-        // mira para negárselo a una capa.
+        let inherited: Vec<&str> = kf.dialog.keymap.iter().map(|b| b.run.as_str()).collect();
+        assert!(inherited.contains(&"dialog.approve"), "{inherited:?}");
+        // The field STAYS set after resolving: it is what `check_layer_keys`
+        // looks at to deny it to a layer.
         assert_eq!(kf.dialog_from.as_deref(), Some("orthodox"));
-        // Y lo suyo no se toca.
+        // And its own is not touched.
         assert_eq!(kf.pane.keymap.len(), 1);
     }
 
-    /// Dos respuestas a la misma pregunta. Cuenta CUALQUIERA de las tres
-    /// listas, no solo `keymap`.
+    /// Two answers to the same question. Counts ANY of the three lists, not
+    /// just `keymap`.
     #[test]
-    fn heredar_y_declarar_dialog_a_la_vez_es_error() {
-        for lista in ["keymap", "prepend_keymap", "append_keymap"] {
+    fn inheriting_and_declaring_dialog_at_once_is_an_error() {
+        for list in ["keymap", "prepend_keymap", "append_keymap"] {
             let src = format!(
-                "dialog_from = \"orthodox\"\n\n[dialog]\n{lista} = [{{ on = [\"y\"], run = \"dialog.deny\" }}]\n"
+                "dialog_from = \"orthodox\"\n\n[dialog]\n{list} = [{{ on = [\"y\"], run = \"dialog.deny\" }}]\n"
             );
             let e = parse_keymap(&src)
                 .err()
-                .unwrap_or_else(|| panic!("{lista}: se aceptó"));
+                .unwrap_or_else(|| panic!("{list}: was accepted"));
             assert!(
                 matches!(
                     &e,
-                    KeymapError::DialogFromAndDialog { name, list }
-                        if name == "orthodox" && *list == lista
+                    KeymapError::DialogFromAndDialog { name, list: found }
+                        if name == "orthodox" && *found == list
                 ),
-                "{lista}: {e:?}"
+                "{list}: {e:?}"
             );
-            // El mensaje nombra la lista que encontró, no `keymap` por defecto.
-            assert!(e.to_string().contains(lista), "{lista}: {e}");
+            // The message names the list it found, not `keymap` by default.
+            assert!(e.to_string().contains(list), "{list}: {e}");
         }
     }
 
-    /// Un nombre que no existe es un typo, y el mensaje lo dice con la clave
-    /// y el valor.
+    /// A name that does not exist is a typo, and the message says so with
+    /// the key and the value.
     #[test]
-    fn heredar_de_un_preset_inexistente_es_error() {
+    fn inheriting_from_a_nonexistent_preset_is_an_error() {
         let e = parse_keymap("dialog_from = \"totalcommander\"\n")
-            .expect_err("se aceptó un preset inexistente");
+            .expect_err("a nonexistent preset was accepted");
         assert!(
             matches!(&e, KeymapError::UnknownDialogFrom { name, .. } if name == "totalcommander"),
             "{e:?}"
@@ -587,24 +588,24 @@ keymap = [{ on = ["f5"], run = "pane.copy" }]
         let msg = e.to_string();
         assert!(msg.contains("dialog_from"), "{msg}");
         assert!(msg.contains("totalcommander"), "{msg}");
-        // Y dice cuáles SÍ valen, tomados de `NAMES` para que no se queden
-        // atrás cuando K2b registre los cuatro importados.
+        // And it says which ones ARE valid, taken from `NAMES` so it does
+        // not fall behind once K2b registers the four imported ones.
         for name in super::presets::NAMES {
-            assert!(msg.contains(name), "{msg} no ofrece {name}");
+            assert!(msg.contains(name), "{msg} does not offer {name}");
         }
     }
 
-    /// Un solo nivel: si el preset nombrado hereda a su vez, se para. Se
-    /// inyecta el catálogo porque ningún preset de fábrica hereda todavía —
-    /// y el día que uno lo haga (tarea 2), esta regla ya está puesta.
+    /// One level only: if the named preset inherits in turn, it stops. The
+    /// catalogue is injected because no bundled preset inherits yet — and
+    /// the day one does (task 2), this rule is already in place.
     #[test]
-    fn una_cadena_de_herencia_es_error() {
+    fn a_chain_of_inheritance_is_an_error() {
         let mut kf: KeymapFile =
-            toml::from_str("dialog_from = \"intermedio\"\n").expect("el hijo parsea");
+            toml::from_str("dialog_from = \"intermedio\"\n").expect("the child parses");
         let e = resolve_dialog_from(&mut kf, |n| {
             (n == "intermedio").then_some("dialog_from = \"orthodox\"\n")
         })
-        .expect_err("se aceptó una cadena");
+        .expect_err("a chain was accepted");
         assert!(
             matches!(
                 &e,
@@ -612,27 +613,24 @@ keymap = [{ on = ["f5"], run = "pane.copy" }]
             ),
             "{e:?}"
         );
-        assert!(
-            kf.dialog.is_empty(),
-            "una cadena rota no puede dejar rastro"
-        );
+        assert!(kf.dialog.is_empty(), "a broken chain cannot leave a trace");
     }
 
-    /// El `parse_raw` de `resolve_dialog_from` es LOAD-BEARING, y esto es lo
-    /// único que lo sostiene: con `parse_keymap` en su lugar —la
-    /// «simplificación» obvia, sobre todo el día que alguien quiera dos
-    /// niveles— un preset que se nombra a sí mismo recursaría hasta desbordar
-    /// la pila ANTES de llegar al chequeo de cadena, y desbordar la pila es un
-    /// abort, no un error de carga. El test de la cadena NO cubre esto: con
-    /// recursión seguiría pasando en verde.
+    /// `resolve_dialog_from`'s `parse_raw` is LOAD-BEARING, and this is the
+    /// only thing that proves it: with `parse_keymap` in its place — the
+    /// obvious "simplification", especially the day someone wants two
+    /// levels — a preset naming itself would recurse until it overflowed
+    /// the stack BEFORE reaching the chain check, and overflowing the stack
+    /// is an abort, not a load error. The chain test does NOT cover this:
+    /// with recursion it would still pass green.
     #[test]
-    fn un_dialog_from_que_se_apunta_a_si_mismo_no_recursa() {
+    fn a_dialog_from_that_points_at_itself_does_not_recurse() {
         let mut kf: KeymapFile =
-            toml::from_str("dialog_from = \"bucle\"\n").expect("el fichero parsea");
+            toml::from_str("dialog_from = \"bucle\"\n").expect("the file parses");
         let e = resolve_dialog_from(&mut kf, |n| {
             (n == "bucle").then_some("dialog_from = \"bucle\"\n")
         })
-        .expect_err("un auto-préstamo tiene que parar");
+        .expect_err("a self-loan has to stop");
         assert!(
             matches!(
                 &e,
@@ -642,13 +640,14 @@ keymap = [{ on = ["f5"], run = "pane.copy" }]
         );
     }
 
-    /// La puerta por la que entra toda capa real (`config::load_keymap_layer`)
-    /// la RECHAZA antes de resolver nada: una capa nunca es un preset, así que
-    /// no se le copia un `[dialog]` que luego haya que declarar inalcanzable.
+    /// The door every real layer comes through (`config::load_keymap_layer`)
+    /// REJECTS it before resolving anything: a layer is never a preset, so
+    /// it is never copied a `[dialog]` that would then have to be declared
+    /// unreachable.
     #[test]
-    fn parse_keymap_layer_rechaza_dialog_from_sin_resolverlo() {
+    fn parse_keymap_layer_rejects_dialog_from_without_resolving_it() {
         let e = parse_keymap_layer("dialog_from = \"orthodox\"\n")
-            .expect_err("una capa no puede heredar [dialog]");
+            .expect_err("a layer cannot inherit [dialog]");
         assert!(
             matches!(
                 e,
@@ -659,24 +658,24 @@ keymap = [{ on = ["f5"], run = "pane.copy" }]
             ),
             "{e:?}"
         );
-        // Y lo normal sigue pasando por la misma puerta.
-        let capa = parse_keymap_layer(
+        // And the normal case still goes through the same door.
+        let layer = parse_keymap_layer(
             "[pane]\nprepend_keymap = [{ on = [\"j\"], run = \"cursor.down\" }]\n",
         )
-        .expect("una capa normal parsea");
-        assert!(capa.dialog.is_empty());
+        .expect("a normal layer parses");
+        assert!(layer.dialog.is_empty());
     }
 
-    /// Segunda cerradura: un `KeymapFile` construido con `parse_keymap` y
-    /// pasado como capa —un test, o un frontend con una capa literal— también
-    /// se rechaza, y por el nombre de la clave escrita.
+    /// Second lock: a `KeymapFile` built with `parse_keymap` and passed as a
+    /// layer — a test, or a frontend with a literal layer — is also
+    /// rejected, and by the name of the key that was written.
     #[test]
-    fn dialog_from_en_una_capa_es_wrong_layer_key() {
+    fn dialog_from_in_a_layer_is_wrong_layer_key() {
         let preset = parse_keymap("[pane]\nkeymap = [{ on = [\"f5\"], run = \"pane.copy\" }]\n")
             .expect("preset");
-        let capa = parse_keymap("dialog_from = \"orthodox\"\n").expect("la capa parsea");
-        let e = check_layer_keys(&preset, std::slice::from_ref(&capa))
-            .expect_err("se aceptó dialog_from en una capa");
+        let layer = parse_keymap("dialog_from = \"orthodox\"\n").expect("the layer parses");
+        let e = check_layer_keys(&preset, std::slice::from_ref(&layer))
+            .expect_err("dialog_from in a layer was accepted");
         assert!(
             matches!(
                 e,
@@ -689,36 +688,36 @@ keymap = [{ on = ["f5"], run = "pane.copy" }]
         );
     }
 
-    /// Y la capa de PROYECTO —contenido ajeno— tampoco cuela los bindings
-    /// heredados por la puerta de atrás: `merge_ctx` solo lee
-    /// `prepend_keymap`/`append_keymap` de una capa, así que la copia queda
-    /// estructuralmente inalcanzable aunque el diagnóstico siga andando.
+    /// And the PROJECT layer — foreign content — does not smuggle the
+    /// inherited bindings through the back door either: `merge_ctx` only
+    /// reads a layer's `prepend_keymap`/`append_keymap`, so the copy stays
+    /// structurally unreachable even though the diagnostic keeps walking.
     #[test]
-    fn una_capa_de_proyecto_no_contrabandea_el_dialog_heredado() {
+    fn a_project_layer_does_not_smuggle_the_inherited_dialog() {
         let preset = parse_keymap("[pane]\nkeymap = [{ on = [\"f5\"], run = \"pane.copy\" }]\n")
             .expect("preset");
-        let mut capa = parse_keymap("dialog_from = \"orthodox\"\n").expect("la capa parsea");
-        capa.mark_project();
-        assert!(!capa.dialog.keymap.is_empty(), "la copia sí ocurrió");
-        let mut descartados = 0;
-        let fusion = super::merged_bindings(
+        let mut layer = parse_keymap("dialog_from = \"orthodox\"\n").expect("the layer parses");
+        layer.mark_project();
+        assert!(!layer.dialog.keymap.is_empty(), "the copy did happen");
+        let mut discarded = 0;
+        let merged = super::merged_bindings(
             &preset,
-            std::slice::from_ref(&capa),
+            std::slice::from_ref(&layer),
             super::Screen::Dialog,
-            &mut descartados,
+            &mut discarded,
         );
         assert!(
-            fusion.is_empty(),
-            "la capa aportó bindings de dialog: {fusion:?}"
+            merged.is_empty(),
+            "the layer contributed dialog bindings: {merged:?}"
         );
     }
 
-    /// `orthodox` no usa la clave y no cambia por esto.
+    /// `orthodox` does not use the key and does not change because of this.
     #[test]
-    fn orthodox_no_hereda_de_nadie() {
-        let kf = parse_keymap(super::presets::ORTHODOX).expect("orthodox parsea");
+    fn orthodox_inherits_from_nobody() {
+        let kf = parse_keymap(super::presets::ORTHODOX).expect("orthodox parses");
         assert!(kf.dialog_from.is_none());
         assert!(!kf.dialog.keymap.is_empty());
-        check_layer_keys(&kf, &[]).expect("orthodox sigue siendo un preset válido");
+        check_layer_keys(&kf, &[]).expect("orthodox is still a valid preset");
     }
 }

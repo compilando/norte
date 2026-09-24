@@ -799,7 +799,7 @@ mod tests {
     /// `ConfirmDelete`/`ConfirmTransfer`'s ALLOWLIST — `y`/Enter confirm
     /// (close), `n`/Esc cancel, any other command is out (`None`).
     #[test]
-    fn confirm_quit_reutiliza_allow_confirm() {
+    fn confirm_quit_reuses_allow_confirm() {
         let m = Modal::ConfirmQuit;
         for cmd in ["dialog.approve", "dialog.confirm"] {
             assert_eq!(dialog_action(&m, cmd), Some(DialogOutcome::Confirmed));
@@ -818,7 +818,7 @@ mod tests {
     /// never "confirms" anything: there's nothing to confirm. Everything
     /// else, inert.
     #[test]
-    fn el_informe_de_lote_solo_se_cierra() {
+    fn the_batch_report_only_closes() {
         let m = Modal::Report {
             kind: crate::app::ReportKind::Batch,
             lines: Vec::new(),
@@ -842,7 +842,7 @@ mod tests {
     /// combinations, each on its own (same style as the GUI's
     /// `has_pending_work_tasks_o_marcas_o_ninguno`).
     #[test]
-    fn quit_needs_confirm_los_tres_modos() {
+    fn quit_needs_confirm_the_three_modes() {
         use crate::config::ConfirmQuit;
         assert!(
             !quit_needs_confirm(ConfirmQuit::Never, true),
@@ -874,7 +874,7 @@ mod tests {
     /// contract as the rest — only `y` trusts; `n` and Esc deny; Enter does
     /// NOT decide.
     #[test]
-    fn trust_lua_init_solo_y_confia_y_enter_no_decide() {
+    fn trust_lua_init_only_y_trusts_and_enter_does_not_decide() {
         use crossterm::event::KeyCode as K;
         assert_eq!(trust_lua_key(K::Char('y')), DialogOutcome::Confirmed);
         assert_eq!(trust_lua_key(K::Char('n')), DialogOutcome::Cancelled);

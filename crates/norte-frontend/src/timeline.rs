@@ -1,320 +1,326 @@
-//! La línea de tiempo del journal (fase 7 del programa WOW): qué se ha
-//! hecho en esta máquina, en orden, y hasta dónde se puede volver.
+//! The journal's timeline (WOW program phase 7): what has been done on this
+//! machine, in order, and how far back it can go.
 //!
-//! El modelo es de los dos frontends. Lo que hay aquí es lo que no puede
-//! decidirse dos veces sin que diverja:
+//! The model is shared by both frontends. What lives here is what cannot be
+//! decided twice without the two answers drifting apart:
 //!
-//! - **Qué es una FILA.** Un lote (`batch_id`) es una fila, no `n`: se
-//!   deshace entero o no se toca, así que ofrecer un corte por la mitad de
-//!   uno sería ofrecer algo que no existe.
-//! - **Qué significa señalar una.** «Vuelve aquí» conserva la fila señalada
-//!   entera, y deshace lo de después. De ahí que el corte sea el `seq` MÁS
-//!   NUEVO del grupo y no el más viejo: con el más viejo, el propio lote
-//!   señalado se deshacía a medias.
-//! - **Cuántas entradas se va a llevar.** Se cuenta ANTES de preguntar,
-//!   porque una confirmación que no dice cuánto no es una confirmación.
+//! - **What counts as a ROW.** A batch (`batch_id`) is one row, not `n`: it is
+//!   undone whole or not touched at all, so offering a cut through the middle
+//!   of one would be offering something that does not exist.
+//! - **What marking one means.** "Go back to here" keeps the marked row
+//!   whole, and undoes what came after it. That is why the cutoff is the
+//!   NEWEST `seq` in the group and not the oldest: with the oldest, the
+//!   marked batch itself would be undone halfway.
+//! - **How many entries it is going to take with it.** It is counted BEFORE
+//!   asking, because a confirmation that does not say how many is not a
+//!   confirmation.
 //!
-//! Lo que NO hay aquí: colores, teclas y cómo se pinta un punto. Eso es de
-//! cada frontend, y es lo único que de verdad cambia entre un terminal y una
-//! ventana.
+//! What is NOT here: colors, keys and how a dot gets painted. That belongs to
+//! each frontend, and it is the only thing that really differs between a
+//! terminal and a window.
 
 use norte_proto::methods::JournalRow;
 
-/// Cómo se PINTA la ruta de una fila: sin `file://` delante (lo local no se
-/// anuncia, la regla de [`crate::path_display`]) y enmascarada por la misma
-/// puerta que un listado. Una ruta que no parsea se deja como vino: ya es
-/// texto enmascarado por quien construyó la fila.
+/// How a row's path is PAINTED: with no `file://` in front (the local scheme
+/// is not announced, per [`crate::path_display`]'s rule) and masked through
+/// the same gate as a listing. A path that fails to parse is left as it came:
+/// it is already text masked by whoever built the row.
 ///
-/// En una columna estrecha, `file:///ho…` no decía nada; `/home/oscar/Down…`
-/// sí (captura del 2026-09-21).
+/// In a narrow column, `file:///ho…` said nothing; `/home/oscar/Down…` did
+/// (captured 2026-09-21).
 ///
 /// ```
 /// use norte_frontend::timeline::path_label;
 /// assert_eq!(path_label("file:///home/ana/fotos"), "/home/ana/fotos");
-/// assert_eq!(path_label("no es una ruta"), "no es una ruta");
+/// assert_eq!(path_label("not a path"), "not a path");
 /// ```
 #[must_use]
 pub fn path_label(path: &str) -> String {
     norte_proto::VPath::parse(path).map_or_else(|_| path.to_owned(), |v| crate::path_display(&v).0)
 }
 
-/// La clase de actor del humano, tal y como la escribe el journal.
+/// The human actor's class, exactly as the journal writes it.
 ///
-/// Es el valor de `actor_kind` que [`crate::timeline::Timeline`] compara
-/// para saber qué filas puede deshacer, y vive aquí —y no como un literal
-/// suelto en cada sitio— porque escribirlo mal no rompe nada visiblemente:
-/// simplemente hace que el recuento diga cero para siempre.
+/// It is the `actor_kind` value that [`crate::timeline::Timeline`] compares
+/// to know which rows it can undo, and it lives here — and not as a loose
+/// literal in every call site — because writing it wrong does not break
+/// anything visibly: it just makes the count read zero forever.
 pub const ACTOR_HUMANO: &str = "user";
 
-/// Una fila de la línea de tiempo: una mutación, o un LOTE entero.
+/// One row of the timeline: a mutation, or a whole BATCH.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TimelineRow {
-    /// El `seq` más NUEVO del grupo. Es el corte que hay que mandar para
-    /// conservar esta fila entera ([`Timeline::corte`]).
+    /// The NEWEST `seq` in the group. It is the cutoff that has to be sent to
+    /// keep this row whole ([`Timeline::corte`]).
     pub seq: i64,
-    /// Cuándo ocurrió lo más nuevo del grupo.
+    /// When the newest thing in the group happened.
     pub ts_ms: i64,
-    /// Quién: `"user"`, `"agent"`, `"plugin"`…
+    /// Who: `"user"`, `"agent"`, `"plugin"`…
     pub actor_kind: String,
-    /// Cuál, dentro de esa clase. `None` para el humano.
+    /// Which one, within that class. `None` for the human.
     pub actor_id: Option<String>,
-    /// La operación. Para un lote, la de su entrada más nueva.
+    /// The operation. For a batch, the one from its newest entry.
     pub op: String,
-    /// Sobre qué. Ya pintable; lo enmascara quien construye la fila, que es
-    /// quien sabe de dónde vienen esos bytes.
+    /// What it acted on. Already paintable; it is masked by whoever built the
+    /// row, since that is who knows where those bytes came from.
     pub path: String,
-    /// El destino, si la operación tiene dos lados.
+    /// The destination, if the operation has two sides.
     pub path_to: Option<String>,
-    /// Si TODAS las entradas del grupo declararon vuelta. Un lote con una
-    /// irreversible dentro no es reversible: se deshace entero o nada.
+    /// Whether ALL entries in the group declared a way back. A batch with one
+    /// irreversible entry inside is not reversible: it is undone whole or not
+    /// at all.
     pub reversible: bool,
-    /// Si el grupo YA está deshecho (su compensación sigue viva), o ES una
-    /// compensación.
+    /// Whether the group is ALREADY undone (its compensation is still alive),
+    /// or IS a compensation.
     ///
-    /// Las dos cosas cuentan igual para lo único que importa aquí: el undo
-    /// no las va a tocar. Una compensación se escribe con el actor del
-    /// humano que ejecutó el undo y con una reversa de verdad, así que sin
-    /// esto una línea de tiempo la contaría como deshacible — y después de
-    /// deshacer cinco cosas prometería diez y haría cero.
+    /// Both cases count the same for the one thing that matters here: undo is
+    /// not going to touch them. A compensation is written with the actor of
+    /// the HUMAN who ran the undo and with a real reversal, so without this a
+    /// timeline would count it as undoable — and after undoing five things it
+    /// would promise ten and do zero.
     pub ya_desecho: bool,
-    /// El texto de [`Self::path`] se pinta distinto de lo que dicen los
-    /// bytes guardados: el servidor tuvo que enmascarar algo. Se marca en la
-    /// fila, como en toda superficie de decisión.
+    /// [`Self::path`]'s text is painted differently from what the stored
+    /// bytes say: the server had to mask something. It is flagged on the row,
+    /// like on every decision surface.
     pub hostile: bool,
-    /// Cuántas entradas del journal hay debajo de esta fila. `1` salvo en un
-    /// lote.
+    /// How many journal entries are underneath this row. `1` except in a
+    /// batch.
     pub members: usize,
-    /// El lote, si lo es. Sirve para pintarlo distinto: un grupo no se lee
-    /// igual que una mutación suelta.
+    /// The batch, if it is one. It is there to paint it differently: a group
+    /// does not read the same as a lone mutation.
     pub batch_id: Option<i64>,
 }
 
 impl TimelineRow {
-    /// Si esta fila la hizo el humano, o sea si `journal.undo_after` la va a
-    /// mirar siquiera.
+    /// Whether the human did this row, i.e. whether `journal.undo_after` is
+    /// even going to look at it.
     #[must_use]
     pub fn es_del_humano(&self) -> bool {
         self.actor_kind == ACTOR_HUMANO
     }
 
-    /// Si el undo de verdad va a intentar devolver esta fila.
+    /// Whether undo is actually going to try to bring this row back.
     ///
-    /// Son las TRES condiciones que aplica la consulta del core, no dos: del
-    /// humano, con vuelta declarada, y ni deshecha ya ni siendo ella misma
-    /// una compensación. Contar sólo las dos primeras es lo que hacía que la
-    /// confirmación prometiera el doble de lo que iba a pasar.
+    /// These are the THREE conditions the core's query applies, not two: from
+    /// the human, with a declared way back, and neither already undone nor
+    /// itself a compensation. Counting only the first two is what made the
+    /// confirmation promise twice what was actually going to happen.
     #[must_use]
     pub fn se_va_a_deshacer(&self) -> bool {
         self.es_del_humano() && self.reversible && !self.ya_desecho
     }
 }
 
-/// Lo que se va a llevar un corte, contado ANTES de preguntar.
+/// What a cutoff is going to take with it, counted BEFORE asking.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Corte {
-    /// Entradas del HUMANO, reversibles, posteriores al corte: las que el
-    /// undo va a intentar devolver.
+    /// The HUMAN's entries, reversible, after the cutoff: the ones undo is
+    /// going to try to bring back.
     pub a_deshacer: usize,
-    /// Entradas del humano posteriores al corte que el undo NO va a tocar
-    /// porque no tienen vuelta, porque ya están deshechas, o porque son
-    /// ellas mismas la compensación de otra.
+    /// The human's entries after the cutoff that undo will NOT touch because
+    /// they have no way back, because they are already undone, or because
+    /// they are themselves another one's compensation.
     ///
-    /// Se cuentan aparte y no se suman a [`Self::a_deshacer`] por la razón
-    /// de siempre: un número que las mezclara prometería algo que no va a
-    /// pasar, y esta cifra es la que se enseña justo antes de preguntar.
+    /// These are counted separately and not added to [`Self::a_deshacer`] for
+    /// the usual reason: a number that mixed them would promise something
+    /// that is not going to happen, and this figure is the one shown right
+    /// before asking.
     pub irreversibles: usize,
-    /// Entradas posteriores al corte que NO son del humano. El undo no las
-    /// toca — son de un agente o de un plugin, y se deshacen por su propia
-    /// vía—, y por eso se cuentan aparte en vez de sumarse a las otras: un
-    /// número que mezclara las tres prometería algo que no va a pasar.
+    /// Entries after the cutoff that are NOT the human's. Undo does not touch
+    /// them — they belong to an agent or a plugin, and get undone through
+    /// their own path — and that is why they are counted apart instead of
+    /// added to the others: a number that mixed the three would promise
+    /// something that is not going to happen.
     pub ajenas: usize,
 }
 
 impl Corte {
-    /// Si un corte aquí no va a hacer nada.
+    /// Whether a cutoff here is not going to do anything.
     #[must_use]
     pub fn no_hace_nada(&self) -> bool {
         self.a_deshacer == 0
     }
 }
 
-/// La línea de tiempo cargada: las filas que se han traído, en orden de la
-/// más nueva a la más vieja, y por dónde anda el cursor.
+/// The loaded timeline: the rows that have been brought in, newest to
+/// oldest, and where the cursor stands.
 #[derive(Debug, Clone, Default)]
 pub struct Timeline {
     rows: Vec<TimelineRow>,
     cursor: usize,
     next_before_seq: Option<i64>,
-    cargada: bool,
+    loaded: bool,
 }
 
 impl Timeline {
-    /// Una línea de tiempo con la primera página ya dentro.
+    /// A timeline with the first page already in it.
     #[must_use]
     pub fn new(rows: &[JournalRow], next_before_seq: Option<i64>) -> Self {
         Self {
-            rows: agrupar(rows),
+            rows: group(rows),
             cursor: 0,
             next_before_seq,
-            cargada: true,
+            loaded: true,
         }
     }
 
-    /// Si alguien ha llegado a preguntarle al journal.
+    /// Whether anyone has gotten around to asking the journal.
     ///
-    /// `false` en una recién nacida —la que hereda una disposición guardada,
-    /// antes de que el bucle la llene—, y sirve para no decir «todavía no se
-    /// ha hecho nada» sobre un journal que no se ha mirado. En una pantalla
-    /// de historial, esa frase es la peor equivocación posible.
+    /// `false` on a freshly-born one — one that inherits a saved layout,
+    /// before the loop fills it in — and it exists so as not to say "nothing
+    /// has happened yet" about a journal that has not been looked at. On a
+    /// history screen, that sentence is the worst possible mistake.
     #[must_use]
     pub fn cargada(&self) -> bool {
-        self.cargada
+        self.loaded
     }
 
-    /// Añade una página MÁS VIEJA al final.
+    /// Appends an OLDER page at the end.
     ///
-    /// Se agrupa la página entera junto con la última fila que ya había, por
-    /// si un lote quedó partido entre dos páginas: el journal pagina por
-    /// entradas y no sabe de lotes, así que el corte puede caer dentro de
-    /// uno. Sin esto, la mitad de un lote se pintaría como un grupo propio y
-    /// ofrecería un corte por su medio, que es exactamente lo que no existe.
+    /// The whole page is grouped together with the last row that was already
+    /// there, in case a batch ended up split across two pages: the journal
+    /// paginates by entries and knows nothing about batches, so the cutoff
+    /// can land inside one. Without this, half of a batch would be painted
+    /// as its own group and would offer a cutoff through its middle, which is
+    /// exactly what does not exist.
     pub fn extend(&mut self, rows: &[JournalRow], next_before_seq: Option<i64>) {
-        let nuevas = agrupar(rows);
-        if let (Some(ultima), Some(primera)) = (self.rows.last(), nuevas.first())
-            && ultima.batch_id.is_some()
-            && ultima.batch_id == primera.batch_id
+        let new_rows = group(rows);
+        if let (Some(last), Some(first)) = (self.rows.last(), new_rows.first())
+            && last.batch_id.is_some()
+            && last.batch_id == first.batch_id
         {
-            let cola = self.rows.pop().unwrap_or_else(|| unreachable!());
-            let mut it = nuevas.into_iter();
-            let primera = it.next().unwrap_or_else(|| unreachable!());
-            self.rows.push(fundir(cola, &primera));
+            let tail = self.rows.pop().unwrap_or_else(|| unreachable!());
+            let mut it = new_rows.into_iter();
+            let first = it.next().unwrap_or_else(|| unreachable!());
+            self.rows.push(fuse(tail, &first));
             self.rows.extend(it);
         } else {
-            self.rows.extend(nuevas);
+            self.rows.extend(new_rows);
         }
         self.next_before_seq = next_before_seq;
-        self.cargada = true;
+        self.loaded = true;
     }
 
-    /// Las filas, de la más nueva a la más vieja.
+    /// The rows, newest to oldest.
     #[must_use]
     pub fn rows(&self) -> &[TimelineRow] {
         &self.rows
     }
 
-    /// Dónde está el cursor.
+    /// Where the cursor is.
     #[must_use]
     pub fn cursor(&self) -> usize {
         self.cursor
     }
 
-    /// Mueve el cursor a `i`, acotado.
+    /// Moves the cursor to `i`, clamped.
     pub fn set_cursor(&mut self, i: usize) {
         self.cursor = i.min(self.rows.len().saturating_sub(1));
     }
 
-    /// Sube una fila (hacia lo más nuevo).
+    /// Goes up one row (towards the newest).
     pub fn up(&mut self) {
         self.cursor = self.cursor.saturating_sub(1);
     }
 
-    /// Baja una fila (hacia lo más viejo).
+    /// Goes down one row (towards the oldest).
     pub fn down(&mut self) {
         self.cursor = (self.cursor + 1).min(self.rows.len().saturating_sub(1));
     }
 
-    /// La fila bajo el cursor.
+    /// The row under the cursor.
     #[must_use]
     pub fn selected(&self) -> Option<&TimelineRow> {
         self.rows.get(self.cursor)
     }
 
-    /// Qué `seq` hay que mandar a `journal.undo_after` para volver al estado
-    /// de la fila bajo el cursor, conservándola.
+    /// What `seq` has to be sent to `journal.undo_after` to go back to the
+    /// state at the row under the cursor, keeping it.
     #[must_use]
     pub fn corte(&self) -> Option<i64> {
         self.selected().map(|r| r.seq)
     }
 
-    /// Qué se va a llevar ese corte, contando las filas MÁS NUEVAS que la
-    /// señalada.
+    /// What that cutoff is going to take with it, counting the rows NEWER
+    /// than the marked one.
     ///
-    /// Se cuenta sobre lo cargado, y eso basta SOLO si el undo no pasa de lo
-    /// cargado: lo que se hizo después de pintar la lista no está aquí. Por
-    /// eso quien pide el undo manda también [`Self::techo`] (`upto_seq`,
-    /// 0.80.0), y el core no deshace nada más nuevo. Lo de más abajo del
-    /// cursor, que puede no estar cargado, un corte aquí no lo toca.
+    /// This counts over what is loaded, and that is enough ONLY if undo does
+    /// not go past what is loaded: whatever happened after the list was
+    /// painted is not here. That is why whoever asks for the undo also sends
+    /// [`Self::techo`] (`upto_seq`, 0.80.0), and the core does not undo
+    /// anything newer than that. Whatever is below the cursor, which may not
+    /// be loaded, a cutoff here does not touch.
     #[must_use]
     pub fn resumen(&self) -> Corte {
-        let mut c = Corte::default();
-        for fila in self.rows.iter().take(self.cursor) {
-            if !fila.es_del_humano() {
-                c.ajenas += fila.members;
-            } else if fila.se_va_a_deshacer() {
-                c.a_deshacer += fila.members;
+        let mut summary = Corte::default();
+        for row in self.rows.iter().take(self.cursor) {
+            if !row.es_del_humano() {
+                summary.ajenas += row.members;
+            } else if row.se_va_a_deshacer() {
+                summary.a_deshacer += row.members;
             } else {
-                c.irreversibles += fila.members;
+                summary.irreversibles += row.members;
             }
         }
-        c
+        summary
     }
 
-    /// El TECHO de un undo desde esta lista: el `seq` más nuevo que se ha
-    /// cargado, y por tanto lo más nuevo que [`Self::resumen`] ha podido
-    /// contar. Va como `upto_seq` en `journal.undo_after`: sin él, lo que se
-    /// hizo después de pintar la lista entraría en el undo sin haberse
-    /// contado.
+    /// The CEILING of an undo from this list: the newest `seq` that has been
+    /// loaded, and therefore the newest thing [`Self::resumen`] could have
+    /// counted. It goes as `upto_seq` in `journal.undo_after`: without it,
+    /// whatever happened after the list was painted would enter the undo
+    /// without having been counted.
     #[must_use]
     pub fn techo(&self) -> Option<i64> {
         self.rows.first().map(|r| r.seq)
     }
 
-    /// El cursor para pedir la página siguiente (más vieja), o `None` si ya
-    /// no queda nada por detrás.
+    /// The cursor to ask for the next (older) page, or `None` if there is
+    /// nothing left behind.
     #[must_use]
     pub fn next_before_seq(&self) -> Option<i64> {
         self.next_before_seq
     }
 
-    /// Si no hay ninguna fila.
+    /// Whether there is no row at all.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.rows.is_empty()
     }
 
-    /// Cuántas filas hay.
+    /// How many rows there are.
     #[must_use]
     pub fn len(&self) -> usize {
         self.rows.len()
     }
 }
 
-/// Junta las entradas del mismo lote en una fila.
+/// Joins the entries of the same batch into one row.
 ///
-/// Las entradas llegan de la más nueva a la más vieja, y las de un lote
-/// SUELEN ser contiguas en `seq` — pero no tiene por qué: dos tareas de lote
-/// concurrentes intercalan sus entradas, y eso lo contempla `alloc_batch` en
-/// el core. Por eso se busca el grupo en TODO lo que ya se lleva agrupado y
-/// no sólo en la fila anterior: un lote partido en dos filas ofrecería dos
-/// cortes por dentro de una unidad que se deshace entera.
+/// Entries arrive newest to oldest, and a batch's entries USUALLY are
+/// contiguous in `seq` — but need not be: two concurrent batch tasks
+/// interleave their entries, and `alloc_batch` in the core allows for that.
+/// That is why the group is looked for in EVERYTHING already grouped so far
+/// and not only in the previous row: a batch split across two rows would
+/// offer two cutoffs inside a unit that is undone as one.
 ///
-/// Que eso no sea además PELIGROSO lo garantiza el core, no esto: la
-/// consulta de `undo_after` deja fuera el lote completo cuando el corte cae
-/// dentro de él. Esta agrupación es lo que hace que la pantalla no ofrezca
-/// un corte que el core va a ignorar.
-fn agrupar(rows: &[JournalRow]) -> Vec<TimelineRow> {
+/// That this is not also DANGEROUS is guaranteed by the core, not by this:
+/// the `undo_after` query leaves out the whole batch when the cutoff falls
+/// inside it. This grouping is what keeps the screen from offering a cutoff
+/// that the core is going to ignore.
+fn group(rows: &[JournalRow]) -> Vec<TimelineRow> {
     let mut out: Vec<TimelineRow> = Vec::with_capacity(rows.len());
     for r in rows {
-        let ya = r
+        let existing = r
             .batch_id
-            .and_then(|b| out.iter_mut().find(|u| u.batch_id == Some(b)));
-        if let Some(u) = ya {
-            u.members += 1;
-            // Un lote es reversible sólo si lo son TODAS sus entradas: se
-            // deshace entero o no se toca. Y basta con que una de ellas esté
-            // ya deshecha para que el undo no lo vaya a tocar.
-            u.reversible = u.reversible && r.reversible;
-            u.ya_desecho = u.ya_desecho || r.undone || r.undoes_seq.is_some();
+            .and_then(|b| out.iter_mut().find(|row| row.batch_id == Some(b)));
+        if let Some(row) = existing {
+            row.members += 1;
+            // A batch is reversible only if ALL of its entries are: it is
+            // undone whole or not touched. And it is enough for one of them
+            // to already be undone for undo to skip it.
+            row.reversible = row.reversible && r.reversible;
+            row.ya_desecho = row.ya_desecho || r.undone || r.undoes_seq.is_some();
             continue;
         }
         out.push(TimelineRow {
@@ -326,8 +332,8 @@ fn agrupar(rows: &[JournalRow]) -> Vec<TimelineRow> {
             path: r.path.clone(),
             path_to: r.path_to.clone(),
             reversible: r.reversible,
-            // Una compensación es una mutación que ocurrió y se enseña, pero
-            // el undo no la vuelve a deshacer: cuenta como ya desecha.
+            // A compensation is a mutation that happened and is shown, but
+            // undo does not undo it again: it counts as already undone.
             ya_desecho: r.undone || r.undoes_seq.is_some(),
             hostile: r.hostile,
             members: 1,
@@ -337,24 +343,25 @@ fn agrupar(rows: &[JournalRow]) -> Vec<TimelineRow> {
     out
 }
 
-/// Funde dos trozos del MISMO lote partido entre dos páginas. El `seq` y la
-/// operación son los del trozo más NUEVO, que es el que manda para el corte.
-fn fundir(nuevo: TimelineRow, viejo: &TimelineRow) -> TimelineRow {
+/// Fuses two pieces of the SAME batch split across two pages. The `seq` and
+/// the operation are the NEWER piece's, since that is the one that governs
+/// the cutoff.
+fn fuse(new: TimelineRow, old: &TimelineRow) -> TimelineRow {
     TimelineRow {
-        members: nuevo.members + viejo.members,
-        reversible: nuevo.reversible && viejo.reversible,
-        ya_desecho: nuevo.ya_desecho || viejo.ya_desecho,
-        hostile: nuevo.hostile || viejo.hostile,
-        ..nuevo
+        members: new.members + old.members,
+        reversible: new.reversible && old.reversible,
+        ya_desecho: new.ya_desecho || old.ya_desecho,
+        hostile: new.hostile || old.hostile,
+        ..new
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{Timeline, agrupar};
+    use super::{Timeline, group};
     use norte_proto::methods::JournalRow;
 
-    fn fila(seq: i64, actor: &str, reversible: bool, batch: Option<i64>) -> JournalRow {
+    fn row(seq: i64, actor: &str, reversible: bool, batch: Option<i64>) -> JournalRow {
         JournalRow {
             undoes_seq: None,
             undone: false,
@@ -371,143 +378,148 @@ mod tests {
         }
     }
 
-    /// Un lote es UNA fila: se deshace entero o no se toca, así que una
-    /// lista que lo partiera ofrecería un corte que no existe.
+    /// A batch is ONE row: it is undone whole or not touched, so a list that
+    /// split it would offer a cutoff that does not exist.
     #[test]
-    fn un_lote_es_una_fila() {
-        let filas = [
-            fila(9, "user", true, None),
-            fila(8, "user", true, Some(3)),
-            fila(7, "user", true, Some(3)),
-            fila(6, "user", true, Some(3)),
-            fila(5, "user", true, None),
+    fn a_batch_is_one_row() {
+        let rows = [
+            row(9, "user", true, None),
+            row(8, "user", true, Some(3)),
+            row(7, "user", true, Some(3)),
+            row(6, "user", true, Some(3)),
+            row(5, "user", true, None),
         ];
-        let t = Timeline::new(&filas, None);
-        assert_eq!(t.len(), 3, "suelta, lote, suelta");
+        let t = Timeline::new(&rows, None);
+        assert_eq!(t.len(), 3, "lone, batch, lone");
         assert_eq!(t.rows()[1].members, 3);
-        assert_eq!(t.rows()[1].seq, 8, "el más nuevo del lote manda");
+        assert_eq!(t.rows()[1].seq, 8, "the newest in the batch governs");
     }
 
-    /// Un lote con una entrada irreversible dentro NO es reversible: se
-    /// deshace entero o nada, así que prometer vuelta sería prometer media.
+    /// A batch with one irreversible entry inside is NOT reversible: it is
+    /// undone whole or not at all, so promising a way back would be promising
+    /// half of one.
     #[test]
-    fn un_lote_con_una_irreversible_no_es_reversible() {
-        let filas = [
-            fila(3, "user", true, Some(1)),
-            fila(2, "user", false, Some(1)),
+    fn a_batch_with_one_irreversible_entry_is_not_reversible() {
+        let rows = [
+            row(3, "user", true, Some(1)),
+            row(2, "user", false, Some(1)),
         ];
-        let t = Timeline::new(&filas, None);
+        let t = Timeline::new(&rows, None);
         assert_eq!(t.len(), 1);
         assert!(!t.rows()[0].reversible);
     }
 
-    /// El corte conserva la fila señalada ENTERA: es el `seq` más nuevo del
-    /// grupo. Con el más viejo, señalar un lote lo deshacía a medias.
+    /// The cutoff keeps the marked row WHOLE: it is the newest `seq` in the
+    /// group. With the oldest, marking a batch would undo it halfway.
     #[test]
-    fn el_corte_conserva_el_lote_senalado_entero() {
-        let filas = [
-            fila(9, "user", true, None),
-            fila(8, "user", true, Some(3)),
-            fila(7, "user", true, Some(3)),
+    fn the_cutoff_keeps_the_marked_batch_whole() {
+        let rows = [
+            row(9, "user", true, None),
+            row(8, "user", true, Some(3)),
+            row(7, "user", true, Some(3)),
         ];
-        let mut t = Timeline::new(&filas, None);
+        let mut t = Timeline::new(&rows, None);
         t.down();
-        assert_eq!(t.corte(), Some(8), "el más nuevo del lote señalado");
+        assert_eq!(t.corte(), Some(8), "the newest in the marked batch");
     }
 
-    /// El recuento previo separa lo que se va a deshacer de lo que se va a
-    /// SALTAR y de lo que no es del humano. Un número que los mezclara
-    /// prometería algo que el undo no va a hacer.
+    /// The count up front separates what is actually going to be undone from
+    /// what is going to be SKIPPED and from what is not the human's. A number
+    /// that mixed them would promise something undo is not going to do.
     #[test]
-    fn el_recuento_separa_lo_que_de_verdad_se_deshace() {
-        let filas = [
-            fila(10, "user", true, None),
-            fila(9, "agent", true, None),
-            fila(8, "user", false, None),
-            fila(7, "user", true, Some(2)),
-            fila(6, "user", true, Some(2)),
-            fila(5, "user", true, None),
+    fn the_count_separates_what_actually_gets_undone() {
+        let rows = [
+            row(10, "user", true, None),
+            row(9, "agent", true, None),
+            row(8, "user", false, None),
+            row(7, "user", true, Some(2)),
+            row(6, "user", true, Some(2)),
+            row(5, "user", true, None),
         ];
-        let mut t = Timeline::new(&filas, None);
-        // Cursor en la última (la más vieja): todo lo de arriba entra.
+        let mut t = Timeline::new(&rows, None);
+        // Cursor on the last one (the oldest): everything above enters.
         t.set_cursor(99);
         let c = t.resumen();
-        assert_eq!(c.a_deshacer, 3, "la suelta de arriba y las dos del lote");
+        assert_eq!(
+            c.a_deshacer, 3,
+            "the lone one above and the two in the batch"
+        );
         assert_eq!(c.irreversibles, 1);
-        assert_eq!(c.ajenas, 1, "la del agente no la toca este undo");
+        assert_eq!(c.ajenas, 1, "the agent's is not touched by this undo");
     }
 
-    /// **Una compensación no se cuenta como deshacible, ni una entrada ya
-    /// deshecha.**
+    /// **Neither a compensation nor an already-undone entry counts as
+    /// undoable.**
     ///
-    /// Es el fallo que encontró la revisión de protocolo: una compensación
-    /// se escribe con el actor del HUMANO que ejecutó el undo y con una
-    /// reversa de verdad, así que mirando sólo `actor_kind` y `reversible`
-    /// pasa por deshacible. Deshaces cinco cosas, recargas, señalas el mismo
-    /// corte: el diálogo prometía diez y el undo hacía cero.
+    /// This is the bug the protocol review found: a compensation is written
+    /// with the HUMAN actor who ran the undo and with a real reversal, so
+    /// looking only at `actor_kind` and `reversible` passes it off as
+    /// undoable. Undo five things, reload, mark the same cutoff: the dialog
+    /// promised ten and the undo did zero.
     #[test]
-    fn ni_una_compensacion_ni_lo_ya_deshecho_cuentan() {
-        let mut deshecha = fila(4, "user", true, None);
-        deshecha.undone = true;
-        let mut compensacion = fila(5, "user", true, None);
-        compensacion.undoes_seq = Some(4);
+    fn neither_a_compensation_nor_something_already_undone_counts() {
+        let mut undone = row(4, "user", true, None);
+        undone.undone = true;
+        let mut compensation = row(5, "user", true, None);
+        compensation.undoes_seq = Some(4);
 
-        let filas = [compensacion, deshecha, fila(3, "user", true, None)];
-        let mut t = Timeline::new(&filas, None);
+        let rows = [compensation, undone, row(3, "user", true, None)];
+        let mut t = Timeline::new(&rows, None);
         t.set_cursor(99);
         let c = t.resumen();
 
-        assert_eq!(c.a_deshacer, 0, "las dos de arriba ya están resueltas");
-        assert_eq!(c.irreversibles, 2, "y se cuentan como «no se van a tocar»");
+        assert_eq!(c.a_deshacer, 0, "the two above are already settled");
+        assert_eq!(
+            c.irreversibles, 2,
+            "and count as \"not going to be touched\""
+        );
         assert!(c.no_hace_nada());
     }
 
-    /// Un lote se agrupa aunque sus entradas NO sean contiguas: dos tareas
-    /// de lote concurrentes intercalan sus `seq`, y una lista que lo partiera
-    /// ofrecería dos cortes por dentro de una unidad que se deshace entera.
+    /// A batch groups together even when its entries are NOT contiguous: two
+    /// concurrent batch tasks interleave their `seq`s, and a list that split
+    /// it would offer two cutoffs inside a unit that is undone as one.
     #[test]
-    fn un_lote_con_seqs_intercalados_sigue_siendo_una_fila() {
-        let filas = [
-            fila(9, "user", true, Some(1)),
-            fila(8, "user", true, Some(2)),
-            fila(7, "user", true, Some(1)),
+    fn a_batch_with_interleaved_seqs_is_still_one_row() {
+        let rows = [
+            row(9, "user", true, Some(1)),
+            row(8, "user", true, Some(2)),
+            row(7, "user", true, Some(1)),
         ];
-        let t = Timeline::new(&filas, None);
-        assert_eq!(t.len(), 2, "dos lotes, no tres filas");
-        assert_eq!(t.rows()[0].members, 2, "el lote 1 junta 9 y 7");
+        let t = Timeline::new(&rows, None);
+        assert_eq!(t.len(), 2, "two batches, not three rows");
+        assert_eq!(t.rows()[0].members, 2, "batch 1 joins 9 and 7");
     }
 
-    /// Con el cursor en la fila más nueva no hay nada por encima, así que el
-    /// corte no hace nada — y la pantalla puede decirlo antes de preguntar.
+    /// With the cursor on the newest row there is nothing above it, so the
+    /// cutoff does nothing — and the screen can say so before asking.
     #[test]
-    fn un_corte_en_lo_mas_nuevo_no_hace_nada() {
-        let filas = [fila(2, "user", true, None), fila(1, "user", true, None)];
-        let t = Timeline::new(&filas, None);
+    fn a_cutoff_at_the_newest_entry_does_nothing() {
+        let rows = [row(2, "user", true, None), row(1, "user", true, None)];
+        let t = Timeline::new(&rows, None);
         assert!(t.resumen().no_hace_nada());
     }
 
-    /// Un lote partido entre dos páginas se vuelve a juntar: el journal
-    /// pagina por entradas y no sabe de lotes, así que el corte de página
-    /// puede caer dentro de uno.
+    /// A batch split across two pages gets rejoined: the journal paginates by
+    /// entries and knows nothing about batches, so the page cutoff can land
+    /// inside one.
     #[test]
-    fn un_lote_partido_entre_paginas_se_junta() {
-        let primera = [fila(9, "user", true, None), fila(8, "user", true, Some(3))];
-        let segunda = [fila(7, "user", true, Some(3)), fila(6, "user", true, None)];
-        let mut t = Timeline::new(&primera, Some(8));
-        t.extend(&segunda, None);
+    fn a_batch_split_across_pages_gets_rejoined() {
+        let first = [row(9, "user", true, None), row(8, "user", true, Some(3))];
+        let second = [row(7, "user", true, Some(3)), row(6, "user", true, None)];
+        let mut t = Timeline::new(&first, Some(8));
+        t.extend(&second, None);
 
-        assert_eq!(t.len(), 3, "suelta, lote entero, suelta");
+        assert_eq!(t.len(), 3, "lone, whole batch, lone");
         assert_eq!(t.rows()[1].members, 2);
-        assert_eq!(t.rows()[1].seq, 8, "sigue mandando el más nuevo");
+        assert_eq!(t.rows()[1].seq, 8, "still governed by the newest");
     }
 
-    /// Y dos lotes DISTINTOS pegados no se funden por estar al lado.
+    /// And two DIFFERENT batches next to each other do not merge just for
+    /// being adjacent.
     #[test]
-    fn dos_lotes_distintos_no_se_funden() {
-        let filas = [
-            fila(4, "user", true, Some(2)),
-            fila(3, "user", true, Some(1)),
-        ];
-        assert_eq!(agrupar(&filas).len(), 2);
+    fn two_different_batches_do_not_merge() {
+        let rows = [row(4, "user", true, Some(2)), row(3, "user", true, Some(1))];
+        assert_eq!(group(&rows).len(), 2);
     }
 }

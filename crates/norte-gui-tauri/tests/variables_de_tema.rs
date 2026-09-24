@@ -1,27 +1,28 @@
-//! Cada `var(--x)` de color de la hoja de estilos la alimenta alguien, y cada
-//! color que el host proyecta lo gasta alguien.
+//! Every color `var(--x)` in the stylesheet is fed by someone, and every
+//! color the host projects is spent by someone.
 //!
-//! Una variable que nadie escribe no se ve rota: cae a su valor de respaldo y
-//! se queda ahí para siempre. `--warn-fg` era exactamente eso —una errata de
-//! `warning-fg`, que es lo que `roles_de_tema` proyecta de verdad— y los
-//! avisos del panel de registro llevaban desde que se escribió ignorando el
-//! tema y pintándose de un `#fc6` cosido al CSS.
+//! A variable nobody writes does not look broken: it falls back to its
+//! default value and stays there forever. `--warn-fg` was exactly that — a
+//! typo for `warning-fg`, which is what `roles_de_tema` really projects —
+//! and the log panel's warnings had been ignoring the theme since it was
+//! written, painted in a `#fc6` sewn into the CSS.
 //!
-//! Vive en el RENDERER y no en quien hospeda a propósito: `style.css` es de la
-//! webview, y ADR 0066 prohíbe que `norte-ui-host` conozca un toolkit de
-//! pintado. Que el renderer contraste su propia hoja contra lo que el host le
-//! proyecta es la dirección correcta del conocimiento.
+//! Lives in the RENDERER and not in whoever hosts it, on purpose: `style.css`
+//! belongs to the webview, and ADR 0066 forbids `norte-ui-host` from knowing
+//! a painting toolkit. Having the renderer check its own stylesheet against
+//! what the host projects to it is the correct direction of knowledge.
 //!
-//! **Este test NO lo corre `just ci` ni `just ci-fast`**: `core_pkgs` excluye
-//! `norte-gui-tauri` del gate portable porque compilarlo exige `WebKitGTK`. Lo
-//! corren `just gui-test` (el bucle) y `just gui-ci` (su gate, que es el que
-//! ejecuta `.github/workflows/gui.yml`). Se dice aquí porque el valor de este
-//! test es cazar la errata del siguiente, y el siguiente correrá `just ci`.
+//! **This test is run by NEITHER `just ci` NOR `just ci-fast`**: `core_pkgs`
+//! excludes `norte-gui-tauri` from the portable gate because building it
+//! requires `WebKitGTK`. It is run by `just gui-test` (the loop) and
+//! `just gui-ci` (its gate, which is what `.github/workflows/gui.yml` runs).
+//! Said here because this test's value is catching the next typo, and the
+//! next one will run `just ci`.
 
 use std::collections::BTreeSet;
 
-/// Variables de GEOMETRÍA y de fuente: nunca salen del tema, y por eso no
-/// tienen que estar en `roles_de_tema`.
+/// GEOMETRY and font variables: they never come from the theme, and that is
+/// why they do not have to be in `roles_de_tema`.
 const NO_SON_COLOR: &[&str] = &[
     "cell-w",
     "cell-h",
@@ -39,52 +40,54 @@ const NO_SON_COLOR: &[&str] = &[
     "font-mono",
     "font-ui",
     "dialog-backdrop",
-    // Una OPACIDAD, no un color: cuánto se apaga el contenido del panel que
-    // no tiene el teclado (ADR 0115). Pedirle un rol al tema sería pedirle
-    // que eligiera un color para algo que no pinta ninguno.
+    // An OPACITY, not a color: how much the content of the pane without the
+    // keyboard dims (ADR 0115). Asking the theme for a role would be asking
+    // it to choose a color for something that paints none.
     "inactive-dim",
-    // Una ANCHURA en tanto por ciento: cuánto de la línea fina del borde
-    // está llena (ADR 0148). El color lo pone `border-focus`; esto solo dice
-    // hasta dónde llega.
+    // A WIDTH as a percentage: how much of the border's thin line is filled
+    // (ADR 0148). The color is set by `border-focus`; this only says how far
+    // it reaches.
     "slot-progress",
-    // Y un ANCHO: lo que lleva hecho la task de esa fila, en tanto por
-    // ciento. Lo pone el renderer fila a fila, no el tema.
+    // And a WIDTH: how much of that row's task is done, as a percentage. Set
+    // by the renderer row by row, not by the theme.
     "pct",
-    // Dónde empieza una zona pulsable de un panel de plugin y cuánto ocupa, en
-    // CELDAS (fase 3). Las pone el renderer zona a zona, de lo que dijo el
-    // guest: el marco es texto, y una zona es una región de ese texto. Pedirle
-    // un rol al tema sería pedirle un color para una coordenada.
+    // Where a plugin panel's clickable zone starts and how big it is, in
+    // CELLS (phase 3). Set by the renderer zone by zone, from what the guest
+    // said: the frame is text, and a zone is a region of that text. Asking
+    // the theme for a role would be asking for a color for a coordinate.
     "hit-col",
     "hit-width",
-    // Un FACTOR de escala: el zoom de una imagen, el porcentaje que el host
-    // lleva ya dividido entre cien (puente 80). `1` es ajustada. Pedirle un
-    // rol al tema sería pedirle un color para un multiplicador.
+    // A scale FACTOR: an image's zoom, the percentage the host already
+    // carries divided by a hundred (bridge 80). `1` is fitted. Asking the
+    // theme for a role would be asking for a color for a multiplier.
     "zoom",
-    // Una IMAGEN: la regla de marcas ya compuesta (ADR 0135), un degradado
-    // con una banda por racha de tramos marcados. Su color sale de
-    // `--mark-bg` y `--fg`, que sí son del tema.
+    // An IMAGE: the mark rule already composed (ADR 0135), a gradient with
+    // one band per run of marked spans. Its color comes from `--mark-bg` and
+    // `--fg`, which ARE the theme's.
     "mark-ruler",
 ];
 
-/// Huérfanas CONOCIDAS, con dueño y fecha. Vacía desde que los roles `muted`
-/// y `badge` alimentan lo que eran `--dim-fg` y `--chip-bg`. Se queda como
-/// constante —y no se borra— porque el mecanismo tiene que existir para la
-/// siguiente: una lista de excepciones con dueño es un plan, una sin dueño es
-/// una fuga, y no tener lista obliga a elegir entre las dos cosas peores
-/// (apagar el test, o dejar la variable sin escribir).
+/// KNOWN orphans, with an owner and a date. Empty since the `muted` and
+/// `badge` roles started feeding what used to be `--dim-fg` and `--chip-bg`.
+/// Stays as a constant — and is not deleted — because the mechanism has to
+/// exist for the next one: a list of exceptions with an owner is a plan, one
+/// without an owner is a leak, and not having a list forces a choice between
+/// the two worse options (turning off the test, or leaving the variable
+/// unwritten).
 const HUERFANAS_CONOCIDAS: &[&str] = &[];
 
-/// Nombres que el acuerdo tiene y la hoja aún no GASTA. **Vacía**: desde la
-/// tarea 7 del plan `2026-09-11-vscode-theme.md` no queda ninguno, y las dos
-/// direcciones del guardián están vivas sin más excepción que la geometría.
-/// Se queda por el mismo motivo que `HUERFANAS_CONOCIDAS`: el mecanismo tiene
-/// que existir para el siguiente que llegue con dueño y fecha.
+/// Names the agreement has and the sheet does not SPEND yet. **Empty**: since
+/// task 7 of the `2026-09-11-vscode-theme.md` plan none is left, and the
+/// guard's two directions are alive with no exception beyond geometry. Stays
+/// for the same reason as `HUERFANAS_CONOCIDAS`: the mechanism has to exist
+/// for the next one that arrives with an owner and a date.
 const PENDIENTES_DE_GASTAR: &[&str] = &[];
 
-/// Los nombres de `var(--…)` que aparecen en la hoja.
+/// The `var(--…)` names that appear in the sheet.
 ///
-/// Se busca sobre el texto ENTERO y no línea a línea porque la hoja parte las
-/// pilas de fuentes: `var(` queda en una línea y `--ui-font` en la siguiente.
+/// Searched over the WHOLE text and not line by line because the sheet
+/// splits font stacks: `var(` ends up on one line and `--ui-font` on the
+/// next.
 fn variables_de_la_hoja() -> BTreeSet<String> {
     let css = include_str!("../ui/src/style.css");
     let mut out = BTreeSet::new();
@@ -104,15 +107,15 @@ fn variables_de_la_hoja() -> BTreeSet<String> {
     out
 }
 
-/// El ACUERDO: los nombres de variable que el host conoce, exista o no el
-/// color en un tema concreto.
+/// The AGREEMENT: the variable names the host knows, whether or not the
+/// color exists in a specific theme.
 ///
-/// Es `nombres_de_tema` y no `roles_de_tema(preset_default())` por un motivo
-/// que costó un test mal escrito: los diez roles de cromo no están en
-/// `Role::CORE`, así que el preset por defecto los CALLA y la hoja los deriva
-/// — preguntarle a un tema concreto habría leído ese silencio como «nadie
-/// alimenta esa variable» y habría declarado huérfanas las nueve que la spec
-/// acaba de añadir.
+/// It is `nombres_de_tema` and not `roles_de_tema(preset_default())` for a
+/// reason that cost a badly written test: the ten chrome roles are not in
+/// `Role::CORE`, so the default preset SILENCES them and the sheet derives
+/// them — asking a specific theme would have read that silence as "nobody
+/// feeds that variable" and would have declared as orphans the nine the spec
+/// had just added.
 fn acordadas() -> BTreeSet<String> {
     norte_ui_host::pickers::nombres_de_tema()
         .into_iter()
@@ -131,7 +134,7 @@ fn cada_variable_de_color_la_alimenta_el_tema() {
         .collect();
     assert!(
         huerfanas.is_empty(),
-        "variables de color que nadie alimenta: {huerfanas:?}"
+        "color variables nobody feeds: {huerfanas:?}"
     );
 }
 
@@ -145,6 +148,6 @@ fn cada_color_acordado_lo_gasta_la_hoja() {
         .collect();
     assert!(
         sin_gastar.is_empty(),
-        "colores que el host proyecta y la hoja no pinta: {sin_gastar:?}"
+        "colors the host projects that the sheet does not paint: {sin_gastar:?}"
     );
 }

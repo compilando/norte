@@ -1,33 +1,35 @@
-// `norte:thumbnail` (ADR 0107): una MINIATURA de un fichero para el visor de
-// la ventana — un raster pequeño que el host pinta; el guest solo lo
-// fabrica a partir de los bytes que recibe.
+// `norte:thumbnail` (ADR 0107): a THUMBNAIL of a file for the window's
+// viewer — a small raster the host paints; the guest only builds it from
+// the bytes it receives.
 //
-// Paquete APARTE de `norte:plugin`, y no una interfaz más dentro de él: subir
-// `norte:plugin` invalida cada guest instalado (ADR 0094: el host sirve UNA
-// versión de cada paquete), y ninguno de los que hay implementa miniaturas.
-// Un paquete nuevo estrena su propia versión y no toca a nadie — el mismo
-// trato que `norte:renamer` y `norte:hook`.
+// SEPARATE package from `norte:plugin`, not one more interface inside it:
+// bumping `norte:plugin` invalidates every installed guest (ADR 0094: the
+// host serves ONE version of each package), and none of the existing ones
+// implement thumbnails. A new package debuts its own version and touches
+// nobody else — the same treatment as `norte:renamer` and `norte:hook`.
 //
-// Lo que el guest devuelve son BYTES DE IMAGEN, y por eso el host los trata
-// como hostiles: acota el tamaño, exige que el `mimetype` declarado sea uno
-// de los que la webview pinta (PNG, JPEG, WebP) y que los primeros bytes lo
-// confirmen, y comprueba que las dimensiones declaradas casan con la cabecera
-// antes de que lleguen a un `blob:`. Un guest no elige qué se pinta: describe.
+// What the guest returns is IMAGE BYTES, and that is why the host treats
+// them as hostile: it caps the size, requires the declared `mimetype` to
+// be one the webview paints (PNG, JPEG, WebP) and that the first bytes
+// confirm it, and checks that the declared dimensions match the header
+// before they reach a `blob:`. A guest does not choose what gets painted:
+// it describes.
 package norte:thumbnail@0.1.0;
 
 interface thumbnail {
-    /// Lo que se le da: los bytes del fichero —ACOTADOS por el host, que no
-    /// entrega más de su tope— y el lado mayor que la miniatura no debe
-    /// superar. El `mimetype` es el que el host adivinó por la extensión.
+    /// What it is given: the file's bytes — CAPPED by the host, which
+    /// never hands over more than its ceiling — and the largest edge the
+    /// thumbnail must not exceed. `mimetype` is the one the host guessed
+    /// from the extension.
     record thumb-input {
         mimetype: string,
         content: list<u8>,
         max-edge: u32,
     }
 
-    /// La miniatura: una imagen codificada (`image/png`, `image/jpeg` o
-    /// `image/webp`) con sus dimensiones. El host las verifica contra la
-    /// cabecera del propio raster.
+    /// The thumbnail: an encoded image (`image/png`, `image/jpeg` or
+    /// `image/webp`) with its dimensions. The host verifies them against
+    /// the raster's own header.
     record thumb {
         mimetype: string,
         bytes: list<u8>,
@@ -35,14 +37,16 @@ interface thumbnail {
         height: u32,
     }
 
-    /// Fabrica la miniatura, o dice por qué no (`Err`): un formato que no
-    /// entiende, un fichero truncado. Un `Err` no es un fallo del plugin, es
-    /// «para este no»; el visor cae a lo que tenía.
+    /// Builds the thumbnail, or says why not (`Err`): a format it does
+    /// not understand, a truncated file. An `Err` is not a plugin
+    /// failure, it is "not for this one"; the viewer falls back to what
+    /// it had.
     render: func(input: thumb-input) -> result<thumb, string>;
 }
 
-/// World de un plugin de miniaturas: expone `thumbnail` e importa
-/// `host-log`/`host-config`. Sin `location`: recibe los bytes, no una ruta.
+/// World of a thumbnail plugin: exposes `thumbnail` and imports
+/// `host-log`/`host-config`. No `location`: it receives the bytes, not a
+/// path.
 world norte-thumbnail {
     import norte:host/host-log@0.1.0;
     import norte:host/host-config@0.1.0;

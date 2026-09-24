@@ -1,20 +1,20 @@
-//! Orden del listado (presentación), compartido por los frontends.
+//! Listing order (presentation), shared by the frontends.
 
 use norte_proto::{Entry, EntryKind};
 
-/// Orden elegido para el listado (#108 L7): columna + dirección + grupo de
-/// dirs. El default reproduce EXACTAMENTE el orden histórico (name/asc/
-/// dirs-first), así que nada cambia hasta que el usuario elige otra cosa.
-/// No es `Copy` porque su columna ya no lo es ([`SortColumn::Attr`]).
+/// Chosen order for the listing (#108 L7): column + direction + dir
+/// grouping. The default reproduces EXACTLY the historical order (name/asc/
+/// dirs-first), so nothing changes until the user picks something else.
+/// Not `Copy` because its column no longer is ([`SortColumn::Attr`]).
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct SortSpec {
-    /// Columna por la que se ordena.
+    /// The column sorted by.
     pub column: SortColumn,
-    /// Dirección: invierte SOLO la comparación de la columna — jamás el
-    /// grupo de dirs ni el desempate por nombre (orden total y estable).
+    /// Direction: reverses ONLY the column comparison — never the dir
+    /// grouping nor the name tie-break (total, stable order).
     pub dir: SortDir,
-    /// Directorios primero (grupo aparte, siempre ascendente).
+    /// Directories first (separate group, always ascending).
     pub dirs_first: bool,
 }
 
@@ -29,11 +29,11 @@ impl Default for SortSpec {
 }
 
 impl SortSpec {
-    /// El resultado de un click en la cabecera de `col` (#108 b6): la columna
-    /// activa invierte su dirección; una columna nueva ordena por ella
-    /// ASCENDENTE. `dirs_first` jamás cambia por click — es una preferencia,
-    /// no un criterio de columna. Compartido: la cabecera de la GUI hoy, los
-    /// pickers de ambos frontends en el bloque 7.
+    /// The result of a click on `col`'s header (#108 b6): the active column
+    /// reverses its direction; a new column sorts by it ASCENDING.
+    /// `dirs_first` never changes on a click — it is a preference, not a
+    /// column criterion. Shared: the GUI's header today, both frontends'
+    /// pickers in block 7.
     #[must_use]
     pub fn after_click(self, col: SortColumn) -> Self {
         if self.column == col {
@@ -52,46 +52,47 @@ impl SortSpec {
     }
 }
 
-/// Columna de orden (#108): los built-ins y, desde ADR 0144, cualquier
-/// ATRIBUTO de provider (`attr:<id>`). Las de plugin siguen sin ser
-/// ordenables: sus valores no viven en la `Entry`.
+/// Sort column (#108): the built-ins and, since ADR 0144, any provider
+/// ATTRIBUTE (`attr:<id>`). Plugin ones are still not sortable: their values
+/// do not live in the `Entry`.
 ///
-/// No es `Copy` desde que lleva el id de un atributo: ese id lo emite el
-/// proveedor en tiempo de ejecución, así que es un `String`. Conservar `Copy`
-/// pedía internar los ids con una fuga deliberada, y un proveedor que emita
-/// cien atributos la convierte en una fuga de verdad.
+/// Not `Copy` since it carries an attribute's id: that id is emitted by the
+/// provider at runtime, so it is a `String`. Keeping `Copy` asked for
+/// interning the ids with a deliberate leak, and a provider that emits a
+/// hundred attributes turns it into a real one.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SortColumn {
-    /// Nombre (forma NFC como clave, bytes crudos de desempate) — el orden
-    /// de siempre.
+    /// Name (NFC form as the key, raw bytes to break ties) — the usual
+    /// order.
     Name,
-    /// `Entry.size`. Un valor ausente (dirs, providers perezosos #52) va AL
-    /// FINAL en ambas direcciones.
+    /// `Entry.size`. A missing value (dirs, lazy providers #52) goes AT THE
+    /// END in both directions.
     Size,
-    /// `Entry.mtime_ms` (negativos pre-1970 válidos). Ausente = al final.
+    /// `Entry.mtime_ms` (negative pre-1970 values are valid). Missing = at
+    /// the end.
     Mtime,
-    /// Extensión del nombre: lo que sigue al ÚLTIMO punto (#138).
+    /// The name's extension: what follows the LAST dot (#138).
     ///
-    /// Un directorio no tiene extensión, y un nombre que empieza por punto
-    /// tampoco —`.bashrc` es un nombre, no una extensión—: las dos van AL
-    /// FINAL en ambas direcciones, como cualquier valor ausente.
+    /// A directory has no extension, and neither does a name that starts
+    /// with a dot —`.bashrc` is a name, not an extension—: both go AT THE
+    /// END in both directions, like any missing value.
     Extension,
-    /// Un atributo de provider por su id (`posix.mode`, `posix.uid`…), el
-    /// mismo que nombra su columna `attr:<id>` (ADR 0144).
+    /// A provider attribute by its id (`posix.mode`, `posix.uid`…), the same
+    /// one that names its `attr:<id>` column (ADR 0144).
     ///
-    /// Se ordena por el VALOR del atributo, no por cómo se pinta: `rwxr-xr-x`
-    /// y `0o755` son el mismo número, y es el número el que agrupa. Un valor
-    /// ausente —el provider no lo sabe, o no lo emite para esa entrada— va al
-    /// FINAL en las dos direcciones, como un tamaño que no se conoce.
+    /// Sorted by the attribute's VALUE, not by how it is painted: `rwxr-xr-x`
+    /// and `0o755` are the same number, and it is the number that groups. A
+    /// missing value —the provider does not know it, or does not emit it for
+    /// that entry— goes at the END in both directions, like an unknown size.
     Attr(String),
 }
 
-/// Una columna de orden que un COMANDO o la configuración pueden nombrar: los
-/// built-ins, que son los únicos que tienen tecla y clave `[ui] sort`.
+/// A sort column that a COMMAND or the config can name: the built-ins, which
+/// are the only ones with a key and a `[ui] sort` config key.
 ///
-/// La conversión vive aquí y no en cada sitio que la necesita: estaba escrita
-/// dentro de la lectura de configuración y la ventana tenía que repetirla.
+/// The conversion lives here and not in every place that needs it: it used
+/// to be written inside config reading and the window had to repeat it.
 impl From<norte_config::SortColumnKey> for SortColumn {
     fn from(k: norte_config::SortColumnKey) -> Self {
         match k {
@@ -103,40 +104,40 @@ impl From<norte_config::SortColumnKey> for SortColumn {
     }
 }
 
-/// Dirección del orden de la columna.
+/// The column's sort direction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SortDir {
-    /// Ascendente.
+    /// Ascending.
     Asc,
-    /// Descendente (solo la columna; ver [`SortSpec::dir`]).
+    /// Descending (column only; see [`SortSpec::dir`]).
     Desc,
 }
 
-/// Orden del listado (presentación): directorios primero; dentro de cada
-/// grupo, por la forma NFC del nombre (spec §6.1: `unicode_compare = nfc`
-/// por defecto — SOLO como clave de orden, los bytes jamás se mutan) con
-/// desempate por bytes crudos. Nombres no-UTF8: bytes tal cual.
+/// Listing order (presentation): directories first; within each group, by
+/// the name's NFC form (spec §6.1: `unicode_compare = nfc` by default — ONLY
+/// as the sort key, the bytes are never mutated) with a raw-byte tie-break.
+/// Non-UTF-8 names: bytes as they are.
 pub fn sort_entries(entries: &mut [Entry]) {
     sort_entries_with(entries, &SortSpec::default());
 }
 
-/// [`sort_entries`] bajo un [`SortSpec`] explícito (#108 L7). Estable;
-/// mismo orden que `sort_with_keys_spec`/`merge_keyed_spec` con el mismo spec.
+/// [`sort_entries`] under an explicit [`SortSpec`] (#108 L7). Stable; same
+/// order as `sort_with_keys_spec`/`merge_keyed_spec` with the same spec.
 pub fn sort_entries_with(entries: &mut [Entry], spec: &SortSpec) {
     let keys: Vec<SortKey> = entries.iter().map(sort_key).collect();
-    // sort_by sobre índices sería más alloc-frugal, pero este camino solo
-    // lo usan tests/CLI; los panes van por `sort_with_keys` (#54).
-    let mut pares: Vec<(SortKey, Entry)> = keys.into_iter().zip(entries.iter().cloned()).collect();
-    pares.sort_by(|a, b| cmp_keyed_with((&a.0, &a.1), (&b.0, &b.1), spec));
-    for (slot, (_, e)) in entries.iter_mut().zip(pares) {
+    // `sort_by` over indices would be more alloc-frugal, but only tests/CLI
+    // use this path; panes go through `sort_with_keys` (#54).
+    let mut pairs: Vec<(SortKey, Entry)> = keys.into_iter().zip(entries.iter().cloned()).collect();
+    pairs.sort_by(|a, b| cmp_keyed_with((&a.0, &a.1), (&b.0, &b.1), spec));
+    for (slot, (_, e)) in entries.iter_mut().zip(pairs) {
         *slot = e;
     }
 }
 
-/// Forma NFC del nombre como clave de orden, o `None` cuando coincide byte a
-/// byte con el nombre crudo (ASCII, ya-NFC o no-UTF8) — el caso abrumadoramente
-/// común, que así no materializa nada (#94).
+/// The name's NFC form as the sort key, or `None` when it matches the raw
+/// name byte for byte (ASCII, already-NFC, or non-UTF-8) — the overwhelmingly
+/// common case, which this way materializes nothing (#94).
 fn nfc_key(name: &[u8]) -> Option<Vec<u8>> {
     use unicode_normalization::{UnicodeNormalization, is_nfc};
     let s = std::str::from_utf8(name).ok()?;
@@ -150,19 +151,19 @@ fn name_bytes(e: &Entry) -> &[u8] {
     e.path.file_name().map_or(b"", |n| n.as_bytes())
 }
 
-/// Clave de orden PERSISTIBLE de una entry (#54): grupo (dirs primero) +
-/// forma NFC del nombre. El desempate por bytes crudos NO se materializa —
-/// se lee del propio `Entry` al comparar (una alloc menos por entrada).
-/// OJO: `PartialEq`/`Eq` derivados son REPRESENTACIONALES, no semánticos
-/// (#94): un nombre ya-NFC (`nfc: None`) y su gemelo NFD (`nfc: Some(..)`)
-/// tienen la MISMA clave efectiva pero `!=` como structs. Nada compara
-/// `SortKey`s por igualdad para lógica — solo `cmp_keyed_with` define el orden.
+/// PERSISTABLE sort key of an entry (#54): group (dirs first) + the name's
+/// NFC form. The raw-byte tie-break is NOT materialized — it is read from the
+/// `Entry` itself when comparing (one less alloc per entry). WATCH OUT: the
+/// derived `PartialEq`/`Eq` are REPRESENTATIONAL, not semantic (#94): an
+/// already-NFC name (`nfc: None`) and its NFD twin (`nfc: Some(..)`) have the
+/// SAME effective key but are `!=` as structs. Nothing compares `SortKey`s for
+/// equality for logic — only `cmp_keyed_with` defines the order.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SortKey {
     not_dir: bool,
-    /// `None` = la clave NFC son los bytes crudos del nombre (caso común:
-    /// ASCII, ya-NFC o no-UTF8) — se leen del propio `Entry` al comparar,
-    /// sin materializar ~una alloc por entrada (#94).
+    /// `None` = the NFC key is the name's raw bytes (common case: ASCII,
+    /// already-NFC, or non-UTF-8) — read from the `Entry` itself when
+    /// comparing, without materializing ~one alloc per entry (#94).
     nfc: Option<Vec<u8>>,
 }
 
@@ -173,21 +174,21 @@ pub(crate) fn sort_key(e: &Entry) -> SortKey {
     }
 }
 
-/// Comparación total (clave, entry): clave y, en empate, bytes crudos del
-/// nombre — EXACTAMENTE el mismo orden que [`sort_entries`].
+/// Total comparison (key, entry): key and, on a tie, the name's raw bytes —
+/// EXACTLY the same order as [`sort_entries`].
 ///
-/// INVARIANTE: cada clave DEBE haberse computado de SU entry emparejada
-/// ([`sort_key`]). Desde #94 el emparejamiento es load-bearing para la clave
-/// PRIMARIA (un `None` se resuelve leyendo la entry) — una clave ajena ya no
-/// corrompe solo el desempate, corrompe el orden en silencio.
-/// `cmp_keyed_with` bajo un [`SortSpec`] (#108 L7). Orden, con cada regla
+/// INVARIANT: each key MUST have been computed from ITS paired entry
+/// ([`sort_key`]). Since #94 the pairing is load-bearing for the PRIMARY key
+/// (a `None` is resolved by reading the entry) — a mismatched key no longer
+/// just corrupts the tie-break, it silently corrupts the order.
+/// `cmp_keyed_with` under a [`SortSpec`] (#108 L7). Order, with every rule
 /// load-bearing:
-/// 1. grupo dirs (si `dirs_first`) — SIEMPRE ascendente;
-/// 2. la columna, invertida si `Desc`; un valor AUSENTE (dir sin size,
-///    mtime desconocido) va al final EN AMBAS direcciones — el desc no
-///    llena la cabecera del pane de blancos;
-/// 3. desempate: el orden de nombre de siempre, SIEMPRE ascendente —
-///    total, estable y determinista.
+/// 1. dir grouping (if `dirs_first`) — ALWAYS ascending;
+/// 2. the column, reversed if `Desc`; a MISSING value (a dir with no size,
+///    an unknown mtime) goes at the end in BOTH directions — desc does not
+///    fill the pane's header with blanks;
+/// 3. tie-break: the usual name order, ALWAYS ascending — total, stable and
+///    deterministic.
 pub(crate) fn cmp_keyed_with(
     a: (&SortKey, &Entry),
     b: (&SortKey, &Entry),
@@ -196,16 +197,16 @@ pub(crate) fn cmp_keyed_with(
     use std::cmp::Ordering;
     debug_assert!(
         a.0.not_dir == (a.1.kind != EntryKind::Dir),
-        "clave↔entry desparejadas"
+        "key↔entry mismatched"
     );
     debug_assert!(
         b.0.not_dir == (b.1.kind != EntryKind::Dir),
-        "clave↔entry desparejadas"
+        "key↔entry mismatched"
     );
     if spec.dirs_first {
-        let grupo = a.0.not_dir.cmp(&b.0.not_dir);
-        if grupo != Ordering::Equal {
-            return grupo;
+        let group_order = a.0.not_dir.cmp(&b.0.not_dir);
+        if group_order != Ordering::Equal {
+            return group_order;
         }
     }
     let col = match &spec.column {
@@ -216,78 +217,78 @@ pub(crate) fn cmp_keyed_with(
         SortColumn::Attr(id) => cmp_attr(a.1.attrs.get(id), b.1.attrs.get(id), spec.dir),
     };
     let col = match (&spec.column, spec.dir) {
-        // Name lleva el desempate integrado y su inversión es del bloque
-        // entero (no hay «ausente» que anclar al final).
+        // Name carries its tie-break built in and its reversal is over the
+        // whole block (there is no "missing" to anchor at the end).
         (SortColumn::Name, SortDir::Desc) => col.reverse(),
         _ => col,
     };
     col.then_with(|| cmp_name(a, b))
 }
 
-/// La extensión de una entry: los bytes tras el ÚLTIMO punto, o `None`.
+/// An entry's extension: the bytes after the LAST dot, or `None`.
 ///
-/// `None` para un directorio, para un nombre sin punto, para uno que EMPIEZA
-/// por punto (`.bashrc` es un nombre entero) y para uno que acaba en punto (no
-/// hay nada detrás). Devuelve BYTES, no texto: un nombre no tiene por qué ser
-/// UTF-8 (regla 1).
+/// `None` for a directory, for a name with no dot, for one that STARTS with a
+/// dot (`.bashrc` is a whole name) and for one that ends in a dot (there is
+/// nothing after it). Returns BYTES, not text: a name need not be UTF-8 (hard
+/// rule 1).
 fn ext_bytes(e: &Entry) -> Option<&[u8]> {
     if e.kind == EntryKind::Dir {
         return None;
     }
     let name = name_bytes(e);
-    let punto = name.iter().rposition(|b| *b == b'.')?;
-    if punto == 0 || punto + 1 == name.len() {
+    let dot = name.iter().rposition(|b| *b == b'.')?;
+    if dot == 0 || dot + 1 == name.len() {
         return None;
     }
-    Some(&name[punto + 1..])
+    Some(&name[dot + 1..])
 }
 
-/// Compara dos extensiones SIN distinguir mayúsculas.
+/// Compares two extensions WITHOUT distinguishing case.
 ///
-/// `.TXT` y `.txt` son la misma extensión para quien ordena —agruparlas es el
-/// punto entero de ordenar por extensión— aunque sigan siendo nombres
-/// distintos para todo lo demás: la identidad jamás se pliega (ADR 0051), el
-/// ORDEN sí.
+/// `.TXT` and `.txt` are the same extension for whoever is sorting —grouping
+/// them is the whole point of sorting by extension— even though they remain
+/// different names for everything else: identity never folds (ADR 0051),
+/// ORDER does.
 ///
-/// El camino común (extensión ASCII) no reserva memoria; el raro delega en el
-/// mismo `fold` que usa la búsqueda rápida, para no inventar un segundo
-/// vocabulario de plegado.
-fn cmp_ext_bytes(uno: &[u8], otro: &[u8]) -> std::cmp::Ordering {
-    if uno.is_ascii() && otro.is_ascii() {
-        return uno
+/// The common path (ASCII extension) allocates nothing; the rare one
+/// delegates to the same `fold` the quick search uses, so as not to invent a
+/// second folding vocabulary.
+fn cmp_ext_bytes(one: &[u8], other: &[u8]) -> std::cmp::Ordering {
+    if one.is_ascii() && other.is_ascii() {
+        return one
             .iter()
             .map(u8::to_ascii_lowercase)
-            .cmp(otro.iter().map(u8::to_ascii_lowercase));
+            .cmp(other.iter().map(u8::to_ascii_lowercase));
     }
-    crate::nav::fold(uno).cmp(&crate::nav::fold(otro))
+    crate::nav::fold(one).cmp(&crate::nav::fold(other))
 }
 
-/// La columna EXTENSIÓN: ausente al final en las dos direcciones, igual que un
-/// tamaño o una fecha que no se conocen.
-fn cmp_ext(izq: &Entry, der: &Entry, dir: SortDir) -> std::cmp::Ordering {
+/// The EXTENSION column: missing goes at the end in both directions, same as
+/// an unknown size or date.
+fn cmp_ext(left: &Entry, right: &Entry, dir: SortDir) -> std::cmp::Ordering {
     use std::cmp::Ordering;
-    match (ext_bytes(izq), ext_bytes(der)) {
+    match (ext_bytes(left), ext_bytes(right)) {
         (None, None) => Ordering::Equal,
         (None, Some(_)) => Ordering::Greater,
         (Some(_), None) => Ordering::Less,
-        (Some(uno), Some(otro)) => {
-            let orden = cmp_ext_bytes(uno, otro);
+        (Some(one), Some(other)) => {
+            let order = cmp_ext_bytes(one, other);
             match dir {
-                SortDir::Asc => orden,
-                SortDir::Desc => orden.reverse(),
+                SortDir::Asc => order,
+                SortDir::Desc => order.reverse(),
             }
         }
     }
 }
 
-/// El rango de una forma de valor, para que el orden de atributos sea TOTAL.
+/// The rank of a value's shape, so the attribute order is TOTAL.
 ///
-/// Dos entradas del mismo listado casi siempre traen el mismo tipo para un
-/// mismo atributo, pero nada lo garantiza —un provider de terceros puede
-/// mandar `Uint` en una y `Text` en otra—, y un comparador que no ordena
-/// tipos mezclados deja al `sort` con un orden que depende de la entrada.
-/// El rango fijo lo evita sin inventar conversiones.
-fn rango(v: &norte_proto::attrs::AttrValue) -> u8 {
+/// Two entries in the same listing almost always carry the same type for the
+/// same attribute, but nothing guarantees it —a third-party provider can send
+/// `Uint` on one and `Text` on another—, and a comparator that does not order
+/// mixed types leaves `sort` with an order that depends on the entry. The
+/// fixed rank avoids that without inventing conversions.
+fn rank(v: &norte_proto::attrs::AttrValue) -> u8 {
     use norte_proto::attrs::AttrValue;
     match v {
         AttrValue::Bool(_) => 0,
@@ -295,67 +296,69 @@ fn rango(v: &norte_proto::attrs::AttrValue) -> u8 {
         AttrValue::TimeMs(_) => 2,
         AttrValue::Text(_) => 3,
         AttrValue::Bytes(_) => 4,
-        // `Unknown` no se compara: se trata como ausente (ver `cmp_attr`).
+        // `Unknown` is not compared: it is treated as missing (see `cmp_attr`).
         AttrValue::Unknown => 5,
     }
 }
 
-/// Dos valores del MISMO rango, en su orden natural. `Uint` e `Int` comparten
-/// rango y se comparan como números con signo ancho, que es lo que son.
-fn cmp_valor(
-    uno: &norte_proto::attrs::AttrValue,
-    otro: &norte_proto::attrs::AttrValue,
+/// Two values of the SAME rank, in their natural order. `Uint` and `Int`
+/// share a rank and are compared as wide signed numbers, which is what they
+/// are.
+fn cmp_value(
+    one: &norte_proto::attrs::AttrValue,
+    other: &norte_proto::attrs::AttrValue,
 ) -> std::cmp::Ordering {
     use norte_proto::attrs::AttrValue;
-    let ancho = |v: &AttrValue| match v {
+    let widen = |v: &AttrValue| match v {
         AttrValue::Uint(u) => i128::from(*u),
         AttrValue::Int(i) => i128::from(*i),
         _ => 0,
     };
-    match (uno, otro) {
+    match (one, other) {
         (AttrValue::Bool(x), AttrValue::Bool(y)) => x.cmp(y),
         (AttrValue::Uint(_) | AttrValue::Int(_), AttrValue::Uint(_) | AttrValue::Int(_)) => {
-            ancho(uno).cmp(&ancho(otro))
+            widen(one).cmp(&widen(other))
         }
         (AttrValue::TimeMs(x), AttrValue::TimeMs(y)) => x.cmp(y),
         (AttrValue::Text(x), AttrValue::Text(y)) => x.cmp(y),
         (AttrValue::Bytes(x), AttrValue::Bytes(y)) => x.cmp(y),
-        _ => rango(uno).cmp(&rango(otro)),
+        _ => rank(one).cmp(&rank(other)),
     }
 }
 
-/// La columna de un ATRIBUTO (ADR 0144): ausente —o `Unknown`, que para
-/// ordenar es lo mismo: no hay valor que comparar— al final en las dos
-/// direcciones, como un tamaño o una fecha que no se conocen.
+/// An ATTRIBUTE column (ADR 0144): missing —or `Unknown`, which for sorting
+/// is the same: there is no value to compare— goes at the end in both
+/// directions, same as an unknown size or date.
 fn cmp_attr(
-    izq: Option<&norte_proto::attrs::AttrValue>,
-    der: Option<&norte_proto::attrs::AttrValue>,
+    left: Option<&norte_proto::attrs::AttrValue>,
+    right: Option<&norte_proto::attrs::AttrValue>,
     dir: SortDir,
 ) -> std::cmp::Ordering {
     use norte_proto::attrs::AttrValue;
     use std::cmp::Ordering;
-    // Función y no cierre: un cierre no deja escribir que el préstamo que
-    // devuelve es EL MISMO que recibe, y sin eso la vida útil no cuadra.
-    fn conocido(v: Option<&AttrValue>) -> Option<&AttrValue> {
+    // A function and not a closure: a closure does not let you write that the
+    // borrow it returns is THE SAME as the one it receives, and without that
+    // the lifetime does not check out.
+    fn known(v: Option<&AttrValue>) -> Option<&AttrValue> {
         v.filter(|v| !matches!(v, AttrValue::Unknown))
     }
-    match (conocido(izq), conocido(der)) {
+    match (known(left), known(right)) {
         (None, None) => Ordering::Equal,
         (None, Some(_)) => Ordering::Greater,
         (Some(_), None) => Ordering::Less,
-        (Some(uno), Some(otro)) => {
-            let orden = rango(uno)
-                .cmp(&rango(otro))
-                .then_with(|| cmp_valor(uno, otro));
+        (Some(one), Some(other)) => {
+            let order = rank(one)
+                .cmp(&rank(other))
+                .then_with(|| cmp_value(one, other));
             match dir {
-                SortDir::Asc => orden,
-                SortDir::Desc => orden.reverse(),
+                SortDir::Asc => order,
+                SortDir::Desc => order.reverse(),
             }
         }
     }
 }
 
-/// El orden de NOMBRE de siempre: clave NFC y desempate por bytes crudos.
+/// The usual NAME order: NFC key and raw-byte tie-break.
 fn cmp_name(a: (&SortKey, &Entry), b: (&SortKey, &Entry)) -> std::cmp::Ordering {
     let nfc_a = a.0.nfc.as_deref().unwrap_or_else(|| name_bytes(a.1));
     let nfc_b = b.0.nfc.as_deref().unwrap_or_else(|| name_bytes(b.1));
@@ -364,10 +367,10 @@ fn cmp_name(a: (&SortKey, &Entry), b: (&SortKey, &Entry)) -> std::cmp::Ordering 
         .then_with(|| name_bytes(a.1).cmp(name_bytes(b.1)))
 }
 
-/// Comparación de una columna opcional con «ausente al final en AMBAS
-/// direcciones»: los presentes se comparan (invertidos si `Desc`), un
-/// ausente pierde contra cualquier presente, dos ausentes empatan (decide
-/// el desempate por nombre del caller).
+/// Comparison for an optional column with "missing goes at the end in BOTH
+/// directions": present values are compared (reversed if `Desc`), a missing
+/// one loses against any present one, two missing ones tie (the caller's name
+/// tie-break decides).
 fn cmp_missing_last<T: Ord>(lhs: Option<T>, rhs: Option<T>, dir: SortDir) -> std::cmp::Ordering {
     use std::cmp::Ordering;
     match (lhs, rhs) {
@@ -385,20 +388,20 @@ fn cmp_missing_last<T: Ord>(lhs: Option<T>, rhs: Option<T>, dir: SortDir) -> std
     }
 }
 
-/// Ordena `entries` computando sus claves UNA vez y devuelve ambas
-/// (índice-paralelas). Estable, mismo orden que [`sort_entries`].
-/// `sort_with_keys_spec` bajo un [`SortSpec`] (#108 L7).
+/// Sorts `entries`, computing their keys ONCE, and returns both
+/// (index-parallel). Stable, same order as [`sort_entries`].
+/// `sort_with_keys_spec` under a [`SortSpec`] (#108 L7).
 pub(crate) fn sort_with_keys_spec(
     entries: Vec<Entry>,
     spec: &SortSpec,
 ) -> (Vec<Entry>, Vec<SortKey>) {
-    let mut pares: Vec<(SortKey, Entry)> = entries.into_iter().map(|e| (sort_key(&e), e)).collect();
-    pares.sort_by(|a, b| cmp_keyed_with((&a.0, &a.1), (&b.0, &b.1), spec));
-    pares.into_iter().map(|(k, e)| (e, k)).unzip()
+    let mut pairs: Vec<(SortKey, Entry)> = entries.into_iter().map(|e| (sort_key(&e), e)).collect();
+    pairs.sort_by(|a, b| cmp_keyed_with((&a.0, &a.1), (&b.0, &b.1), spec));
+    pairs.into_iter().map(|(k, e)| (e, k)).unzip()
 }
 
-/// `merge_keyed_spec` bajo un [`SortSpec`] (#108 L7): AMBOS runs deben venir
-/// ordenados por el MISMO spec.
+/// `merge_keyed_spec` under a [`SortSpec`] (#108 L7): BOTH runs must already
+/// be sorted by the SAME spec.
 pub(crate) fn merge_keyed_spec(
     entries: &mut Vec<Entry>,
     keys: &mut Vec<SortKey>,
@@ -406,18 +409,14 @@ pub(crate) fn merge_keyed_spec(
     batch_keys: Vec<SortKey>,
     spec: &SortSpec,
 ) {
-    // El zip de abajo TRUNCARÍA en silencio si los paralelos se desincronizan
-    // (pérdida de entradas del listado sin ruido): que un bug futuro falle
-    // ruidoso en dev/test, no calladamente en producción.
-    debug_assert_eq!(
-        entries.len(),
-        keys.len(),
-        "entries↔sort_keys desincronizados"
-    );
+    // The zip below would silently TRUNCATE if the parallel vectors get out
+    // of sync (losing listing entries without a sound): a future bug should
+    // fail loudly in dev/test, not quietly in production.
+    debug_assert_eq!(entries.len(), keys.len(), "entries↔sort_keys out of sync");
     debug_assert_eq!(
         batch_entries.len(),
         batch_keys.len(),
-        "lote↔claves desincronizados"
+        "batch↔keys out of sync"
     );
     let mut out_e = Vec::with_capacity(entries.len() + batch_entries.len());
     let mut out_k = Vec::with_capacity(keys.len() + batch_keys.len());
@@ -429,7 +428,7 @@ pub(crate) fn merge_keyed_spec(
     loop {
         match (left.peek(), right.peek()) {
             (Some(l), Some(r)) => {
-                // Izquierda gana el empate (estabilidad).
+                // Left wins the tie (stability).
                 if cmp_keyed_with((&l.1, &l.0), (&r.1, &r.0), spec) == std::cmp::Ordering::Greater {
                     let (e, k) = right.next().expect("peek == Some");
                     out_e.push(e);
@@ -474,15 +473,15 @@ mod tests {
         }
     }
 
-    /// Pin del contrato de `SortKey.nfc` (#94): `None` en el caso común
-    /// (ASCII, ya-NFC, no-UTF8) — cero allocs persistidas — y `Some` SOLO
-    /// cuando la forma NFC difiere de los bytes crudos (p.ej. NFD).
+    /// Pins `SortKey.nfc`'s contract (#94): `None` in the common case
+    /// (ASCII, already-NFC, non-UTF-8) — zero persisted allocs — and `Some`
+    /// ONLY when the NFC form differs from the raw bytes (e.g. NFD).
     #[test]
-    fn sort_key_no_materializa_nfc_en_el_caso_comun() {
-        // El caso q+U+0300 es quick-check=Maybe pero SÍ es NFC (no hay
-        // precompuesta): mata al mutante `is_nfc_quick(..) == Yes`, que
-        // materializaría toda marca combinante y regresaría el cero-alloc
-        // en silencio (encoding-auditor m1).
+    fn sort_key_does_not_materialize_nfc_in_the_common_case() {
+        // The q+U+0300 case is quick-check=Maybe but IS NFC (there is no
+        // precomposed form): it kills the `is_nfc_quick(..) == Yes` mutant,
+        // which would materialize every combining mark and silently regress
+        // the zero-alloc case (encoding-auditor m1).
         for w in [
             "mem:///ascii.txt",
             "mem:///a%C3%B1o",
@@ -490,47 +489,46 @@ mod tests {
             "mem:///q%CC%80",
         ] {
             let k = sort_key(&e(w, EntryKind::File));
-            assert_eq!(k.nfc, None, "{w}: nfc==bytes crudos, no debe alocar");
+            assert_eq!(k.nfc, None, "{w}: nfc==raw bytes, must not allocate");
         }
         let nfd = sort_key(&e("mem:///an%CC%83o", EntryKind::File));
         assert_eq!(
             nfd.nfc.as_deref(),
             Some("año".as_bytes()),
-            "NFD materializa su forma NFC"
+            "NFD materializes its NFC form"
         );
-        // Singleton U+212B (ANGSTROM SIGN) → U+00C5 "Å": NFC difiere sin
-        // ser el caso NFD clásico — debe materializar.
+        // Singleton U+212B (ANGSTROM SIGN) → U+00C5 "Å": NFC differs without
+        // being the classic NFD case — must materialize.
         let singleton = sort_key(&e("mem:///%E2%84%AB", EntryKind::File));
         assert_eq!(
             singleton.nfc.as_deref(),
             Some("Å".as_bytes()),
-            "singleton materializa su forma NFC"
+            "singleton materializes its NFC form"
         );
     }
 
-    /// Equivalencia determinista (sin proptest como dev-dep en este crate,
-    /// ver `grep proptest crates/norte-frontend/Cargo.toml`): dos mitades
-    /// desordenadas, cada una pasada por `sort_with_keys`, mergeadas con
-    /// `merge_keyed`, deben coincidir EXACTAMENTE con `sort_entries` sobre el
-    /// total — cubre dirs/files, NFD vs NFC, no-UTF8 y empates de clave.
+    /// Deterministic equivalence (no proptest as a dev-dep in this crate, see
+    /// `grep proptest crates/norte-frontend/Cargo.toml`): two unsorted
+    /// halves, each run through `sort_with_keys`, merged with `merge_keyed`,
+    /// must match `sort_entries` over the total EXACTLY — covers dirs/files,
+    /// NFD vs NFC, non-UTF-8 and key ties.
     #[test]
-    fn merge_keyed_equivale_a_sort_entries() {
-        let izquierda = vec![
+    fn merge_keyed_matches_sort_entries() {
+        let left = vec![
             e("mem:///zeta", EntryKind::File),
             e("mem:///Adir", EntryKind::Dir),
             e("mem:///an%CC%83o", EntryKind::File), // NFD "año"
-            e("mem:///%FF%FE", EntryKind::File),    // no-UTF8
+            e("mem:///%FF%FE", EntryKind::File),    // non-UTF-8
         ];
-        let derecha = vec![
+        let right = vec![
             e("mem:///a%C3%B1o2", EntryKind::File), // NFC "año2"
             e("mem:///Bdir", EntryKind::Dir),
-            e("mem:///a%C3%B1o", EntryKind::File), // NFC "año" — empata clave con la NFD de arriba
-            e("mem:///alfa", EntryKind::File),
+            e("mem:///a%C3%B1o", EntryKind::File), // NFC "año" — ties in key with the NFD one above
+            e("mem:///alpha", EntryKind::File),
         ];
 
-        let (mut entries, mut keys) = sort_with_keys_spec(izquierda.clone(), &SortSpec::default());
-        let (batch_entries, batch_keys) =
-            sort_with_keys_spec(derecha.clone(), &SortSpec::default());
+        let (mut entries, mut keys) = sort_with_keys_spec(left.clone(), &SortSpec::default());
+        let (batch_entries, batch_keys) = sort_with_keys_spec(right.clone(), &SortSpec::default());
         merge_keyed_spec(
             &mut entries,
             &mut keys,
@@ -539,15 +537,15 @@ mod tests {
             &SortSpec::default(),
         );
 
-        let mut esperado: Vec<Entry> = izquierda.into_iter().chain(derecha).collect();
-        sort_entries(&mut esperado);
+        let mut expected: Vec<Entry> = left.into_iter().chain(right).collect();
+        sort_entries(&mut expected);
 
-        assert_eq!(entries, esperado, "merge_keyed ≡ sort_entries del total");
+        assert_eq!(entries, expected, "merge_keyed ≡ sort_entries of the total");
         assert_eq!(keys.len(), entries.len());
     }
 
     #[test]
-    fn after_click_misma_columna_invierte_la_direccion() {
+    fn after_click_same_column_reverses_direction() {
         let s = SortSpec {
             column: SortColumn::Size,
             dir: SortDir::Asc,
@@ -562,12 +560,12 @@ mod tests {
                 dirs_first: true,
             }
         );
-        // Y el segundo click vuelve a Asc.
+        // And the second click goes back to Asc.
         assert_eq!(t.after_click(SortColumn::Size).dir, SortDir::Asc);
     }
 
     #[test]
-    fn after_click_columna_nueva_asc_y_dirs_first_intacto() {
+    fn after_click_new_column_asc_and_dirs_first_untouched() {
         let s = SortSpec {
             column: SortColumn::Name,
             dir: SortDir::Desc,
@@ -622,12 +620,12 @@ mod sort_spec_merge {
         out
     }
 
-    /// #108 L7: merge incremental ≡ sort total bajo LOS 16 specs — la
-    /// propiedad #54, generalizada del default al espacio entero, sobre un
-    /// corpus con ausentes, empates, dirs y pre-1970, partido en todos los
-    /// puntos posibles.
+    /// #108 L7: incremental merge ≡ full sort under ALL 16 specs — property
+    /// #54, generalized from the default to the whole space, over a corpus
+    /// with missing values, ties, dirs and pre-1970 dates, split at every
+    /// possible point.
     #[test]
-    fn merge_equivale_a_sort_bajo_todos_los_specs() {
+    fn merge_matches_sort_under_all_specs() {
         let corpus = vec![
             e("b", false, Some(10), Some(5)),
             e("dir1", true, None, Some(-3)),
@@ -637,8 +635,8 @@ mod sort_spec_merge {
             e("m", false, Some(1), Some(1_000)),
             e("a2", false, None, None),
         ];
-        // La columna de atributo (ADR 0144) con valores, empates, un tipo
-        // ajeno y un `Unknown`; los demás no lo tienen.
+        // The attribute column (ADR 0144) with values, ties, a foreign type
+        // and an `Unknown`; the rest do not have it.
         let mut corpus = corpus;
         for (i, v) in [
             (0, AttrValue::Uint(0o644)),
@@ -651,16 +649,16 @@ mod sort_spec_merge {
         }
         for spec in all_specs() {
             for cut in 0..=corpus.len() {
-                let (izq, der) = corpus.split_at(cut);
+                let (left, right) = corpus.split_at(cut);
                 let mut total = corpus.clone();
                 sort_entries_with(&mut total, &spec);
 
-                let (mut entries, mut keys) = sort_with_keys_spec(izq.to_vec(), &spec);
-                let (be, bk) = sort_with_keys_spec(der.to_vec(), &spec);
+                let (mut entries, mut keys) = sort_with_keys_spec(left.to_vec(), &spec);
+                let (be, bk) = sort_with_keys_spec(right.to_vec(), &spec);
                 merge_keyed_spec(&mut entries, &mut keys, be, bk, &spec);
                 let a: Vec<_> = total.iter().map(|x| x.path.clone()).collect();
                 let b: Vec<_> = entries.iter().map(|x| x.path.clone()).collect();
-                assert_eq!(a, b, "spec {spec:?} corte {cut}");
+                assert_eq!(a, b, "spec {spec:?} cut {cut}");
             }
         }
     }
@@ -688,10 +686,10 @@ mod sort_spec_tests {
             .collect()
     }
 
-    /// #108 L7: por tamaño ASC — dirs primero (siempre), None AL FINAL,
-    /// desempate por nombre.
+    /// #108 L7: by size ASC — dirs first (always), None AT THE END,
+    /// tie-break by name.
     #[test]
-    fn size_asc_none_al_final_y_dirs_primero() {
+    fn size_asc_none_at_the_end_and_dirs_first() {
         let mut es = vec![
             e("g", EntryKind::File, Some(5), None),
             e("f-sin", EntryKind::File, None, None),
@@ -708,19 +706,19 @@ mod sort_spec_tests {
         assert_eq!(
             names(&es),
             vec![
-                b"dir".as_slice(), // grupo dirs
-                b"b",              // 5, desempate nombre asc
+                b"dir".as_slice(), // dir group
+                b"b",              // 5, name tie-break asc
                 b"g",              // 5
                 b"a",              // 9
-                b"f-sin",          // None SIEMPRE al final
+                b"f-sin",          // None ALWAYS at the end
             ]
         );
     }
 
-    /// #108 L7: DESC invierte SOLO la columna — None sigue al final, el
-    /// desempate sigue por nombre ASC, el grupo dirs no se invierte.
+    /// #108 L7: DESC reverses ONLY the column — None still goes at the end,
+    /// the tie-break is still by name ASC, the dir group is not reversed.
     #[test]
-    fn size_desc_invierte_solo_la_columna() {
+    fn size_desc_reverses_only_the_column() {
         let mut es = vec![
             e("g", EntryKind::File, Some(5), None),
             e("f-sin", EntryKind::File, None, None),
@@ -739,17 +737,17 @@ mod sort_spec_tests {
             vec![
                 b"dir".as_slice(),
                 b"a",     // 9
-                b"b",     // 5, desempate nombre ASC aunque la columna sea desc
+                b"b",     // 5, name tie-break ASC even though the column is desc
                 b"g",     // 5
-                b"f-sin", // None al final TAMBIÉN en desc
+                b"f-sin", // None at the end ALSO in desc
             ]
         );
     }
 
-    /// #108 L7: mtime desc = «lo recién descargado arriba», negativos
-    /// (pre-1970) válidos.
+    /// #108 L7: mtime desc = "the newly downloaded on top", negative
+    /// (pre-1970) values are valid.
     #[test]
-    fn mtime_desc_con_pre_1970() {
+    fn mtime_desc_with_pre_1970() {
         let mut es = vec![
             e("viejo", EntryKind::File, None, Some(-1000)),
             e("nuevo", EntryKind::File, None, Some(2_000_000)),
@@ -768,9 +766,9 @@ mod sort_spec_tests {
         );
     }
 
-    /// El spec DEFAULT reproduce el orden histórico exacto.
+    /// The DEFAULT spec reproduces the exact historical order.
     #[test]
-    fn spec_default_es_el_orden_de_siempre() {
+    fn spec_default_is_the_usual_order() {
         let mut a = vec![
             e("b", EntryKind::File, Some(1), None),
             e("dir", EntryKind::Dir, None, None),
@@ -782,9 +780,9 @@ mod sort_spec_tests {
         assert_eq!(a, b);
     }
 
-    /// `dirs_first` = false: los dirs compiten como uno más.
+    /// `dirs_first` = false: dirs compete like any other entry.
     #[test]
-    fn sin_dirs_first_no_hay_grupo() {
+    fn without_dirs_first_there_is_no_group() {
         let mut es = vec![
             e("z-dir", EntryKind::Dir, None, None),
             e("a", EntryKind::File, None, None),
@@ -803,12 +801,12 @@ mod sort_spec_tests {
 mod extension_tests {
     use super::*;
 
-    fn e(nombre: &str, kind: EntryKind) -> Entry {
-        crudo(nombre.as_bytes(), kind)
+    fn e(name: &str, kind: EntryKind) -> Entry {
+        raw(name.as_bytes(), kind)
     }
 
-    fn crudo(nombre: &[u8], kind: EntryKind) -> Entry {
-        let seg = norte_proto::Segment::new(nombre.to_vec()).expect("segmento");
+    fn raw(name: &[u8], kind: EntryKind) -> Entry {
+        let seg = norte_proto::Segment::new(name.to_vec()).expect("segment");
         Entry {
             path: norte_proto::VPath::parse("file:///d")
                 .expect("vpath")
@@ -820,13 +818,13 @@ mod extension_tests {
         }
     }
 
-    fn nombres(v: &[Entry]) -> Vec<String> {
+    fn names(v: &[Entry]) -> Vec<String> {
         v.iter()
             .map(|e| String::from_utf8_lossy(name_bytes(e)).into_owned())
             .collect()
     }
 
-    fn por_extension(dir: SortDir) -> SortSpec {
+    fn by_extension(dir: SortDir) -> SortSpec {
         SortSpec {
             column: SortColumn::Extension,
             dir,
@@ -834,77 +832,78 @@ mod extension_tests {
         }
     }
 
-    /// `.TXT` va con `.txt`: agrupar las dos es el punto entero de ordenar por
-    /// extensión. La identidad no se pliega jamás (ADR 0051); el ORDEN sí.
+    /// `.TXT` goes with `.txt`: grouping the two is the whole point of
+    /// sorting by extension. Identity never folds (ADR 0051); ORDER does.
     #[test]
-    fn la_extension_agrupa_sin_distinguir_mayusculas() {
+    fn extension_groups_without_distinguishing_case() {
         let mut v = vec![
             e("b.TXT", EntryKind::File),
             e("a.rs", EntryKind::File),
             e("c.txt", EntryKind::File),
         ];
-        sort_entries_with(&mut v, &por_extension(SortDir::Asc));
-        assert_eq!(nombres(&v), ["a.rs", "b.TXT", "c.txt"]);
+        sort_entries_with(&mut v, &by_extension(SortDir::Asc));
+        assert_eq!(names(&v), ["a.rs", "b.TXT", "c.txt"]);
     }
 
-    /// Lo que no tiene extensión va AL FINAL en las DOS direcciones, como
-    /// cualquier ausente: un `desc` no llena la cabecera del pane de nombres
-    /// pelados. Y un nombre que EMPIEZA por punto no tiene extensión —
-    /// `.bashrc` es un nombre entero—, ni uno que acaba en punto.
+    /// What has no extension goes AT THE END in BOTH directions, like any
+    /// missing value: a `desc` does not fill the pane's header with bare
+    /// names. And a name that STARTS with a dot has no extension —
+    /// `.bashrc` is a whole name—, nor does one that ends in a dot.
     #[test]
-    fn lo_que_no_tiene_extension_va_al_final_en_las_dos_direcciones() {
+    fn what_has_no_extension_goes_at_the_end_in_both_directions() {
         for dir in [SortDir::Asc, SortDir::Desc] {
             let mut v = vec![
-                e("leeme", EntryKind::File),
+                e("readme", EntryKind::File),
                 e(".bashrc", EntryKind::File),
                 e("a.rs", EntryKind::File),
-                e("punto.", EntryKind::File),
+                e("dot.", EntryKind::File),
             ];
-            sort_entries_with(&mut v, &por_extension(dir));
+            sort_entries_with(&mut v, &by_extension(dir));
             assert_eq!(
-                nombres(&v)[0],
+                names(&v)[0],
                 "a.rs",
-                "el único con extensión manda ({dir:?})"
+                "the only one with an extension governs ({dir:?})"
             );
         }
     }
 
-    /// Una extensión que no es UTF-8 ordena igual y no muta un byte (regla 1).
+    /// A non-UTF-8 extension sorts the same and does not mutate a byte (hard
+    /// rule 1).
     #[test]
-    fn una_extension_no_utf8_ordena_sin_romperse() {
+    fn a_non_utf8_extension_sorts_without_breaking() {
         let mut v = vec![
-            crudo(b"raro\xff.zz", EntryKind::File),
+            raw(b"raro\xff.zz", EntryKind::File),
             e("a.aa", EntryKind::File),
         ];
-        sort_entries_with(&mut v, &por_extension(SortDir::Asc));
-        assert_eq!(nombres(&v)[0], "a.aa", "aa < zz");
+        sort_entries_with(&mut v, &by_extension(SortDir::Asc));
+        assert_eq!(names(&v)[0], "a.aa", "aa < zz");
         assert_eq!(
             name_bytes(&v[1]),
             b"raro\xff.zz",
-            "y los bytes vuelven intactos"
+            "and the bytes come back intact"
         );
     }
 
-    /// El grupo de directorios manda antes que la columna, como con cualquier
-    /// otra: un dir no tiene extensión y aun así sale primero.
+    /// The directory group governs before the column, same as with any
+    /// other: a dir has no extension and still comes out first.
     #[test]
-    fn los_directorios_siguen_primero() {
+    fn directories_still_come_first() {
         let mut v = vec![e("z.rs", EntryKind::File), e("dir", EntryKind::Dir)];
-        sort_entries_with(&mut v, &por_extension(SortDir::Asc));
+        sort_entries_with(&mut v, &by_extension(SortDir::Asc));
         assert_eq!(v[0].kind, EntryKind::Dir);
     }
 
-    /// Empate de extensión: desempata el nombre, SIEMPRE ascendente, como en
-    /// las demás columnas.
+    /// Extension tie: the name breaks it, ALWAYS ascending, like in the
+    /// other columns.
     #[test]
-    fn a_igual_extension_desempata_el_nombre() {
+    fn equal_extension_ties_break_by_name() {
         let mut v = vec![
             e("z.rs", EntryKind::File),
             e("a.rs", EntryKind::File),
             e("m.rs", EntryKind::File),
         ];
-        sort_entries_with(&mut v, &por_extension(SortDir::Desc));
-        assert_eq!(nombres(&v), ["a.rs", "m.rs", "z.rs"]);
+        sort_entries_with(&mut v, &by_extension(SortDir::Desc));
+        assert_eq!(names(&v), ["a.rs", "m.rs", "z.rs"]);
     }
 }
 
@@ -913,10 +912,10 @@ mod attr_tests {
     use super::*;
     use norte_proto::attrs::AttrValue;
 
-    fn e(nombre: &str, kind: EntryKind, modo: Option<AttrValue>) -> Entry {
-        let seg = norte_proto::Segment::new(nombre.as_bytes().to_vec()).expect("segmento");
+    fn e(name: &str, kind: EntryKind, mode: Option<AttrValue>) -> Entry {
+        let seg = norte_proto::Segment::new(name.as_bytes().to_vec()).expect("segment");
         let mut attrs = std::collections::BTreeMap::new();
-        if let Some(v) = modo {
+        if let Some(v) = mode {
             attrs.insert("posix.mode".to_owned(), v);
         }
         Entry {
@@ -930,13 +929,13 @@ mod attr_tests {
         }
     }
 
-    fn nombres(v: &[Entry]) -> Vec<String> {
+    fn names(v: &[Entry]) -> Vec<String> {
         v.iter()
             .map(|e| String::from_utf8_lossy(name_bytes(e)).into_owned())
             .collect()
     }
 
-    fn por_modo(dir: SortDir) -> SortSpec {
+    fn by_mode(dir: SortDir) -> SortSpec {
         SortSpec {
             column: SortColumn::Attr("posix.mode".to_owned()),
             dir,
@@ -944,25 +943,25 @@ mod attr_tests {
         }
     }
 
-    /// Se ordena por el VALOR, no por su texto: 0o100 (64) va antes que
-    /// 0o77 (63) como cadena, y después como número.
+    /// Sorted by VALUE, not by its text: 0o100 (64) comes before 0o77 (63) as
+    /// a string, and after as a number.
     #[test]
-    fn ordena_por_valor_numerico() {
+    fn sorts_by_numeric_value() {
         let mut v = vec![
             e("a", EntryKind::File, Some(AttrValue::Uint(0o100))),
             e("b", EntryKind::File, Some(AttrValue::Uint(0o77))),
             e("c", EntryKind::File, Some(AttrValue::Uint(0o644))),
         ];
-        sort_entries_with(&mut v, &por_modo(SortDir::Asc));
-        assert_eq!(nombres(&v), ["b", "a", "c"]);
-        sort_entries_with(&mut v, &por_modo(SortDir::Desc));
-        assert_eq!(nombres(&v), ["c", "a", "b"]);
+        sort_entries_with(&mut v, &by_mode(SortDir::Asc));
+        assert_eq!(names(&v), ["b", "a", "c"]);
+        sort_entries_with(&mut v, &by_mode(SortDir::Desc));
+        assert_eq!(names(&v), ["c", "a", "b"]);
     }
 
-    /// Lo que no lleva el atributo, o lo lleva como `Unknown`, va al final
-    /// en las DOS direcciones: invertir no debe subir los huecos arriba.
+    /// What has no attribute, or has it as `Unknown`, goes at the end in
+    /// BOTH directions: reversing must not push the gaps to the top.
     #[test]
-    fn ausente_y_unknown_al_final_en_las_dos_direcciones() {
+    fn missing_and_unknown_go_at_the_end_in_both_directions() {
         for dir in [SortDir::Asc, SortDir::Desc] {
             let mut v = vec![
                 e("sin", EntryKind::File, None),
@@ -970,23 +969,24 @@ mod attr_tests {
                 e("raro", EntryKind::File, Some(AttrValue::Unknown)),
                 e("dos", EntryKind::File, Some(AttrValue::Uint(2))),
             ];
-            sort_entries_with(&mut v, &por_modo(dir));
-            let n = nombres(&v);
-            assert_eq!(&n[2..], ["raro", "sin"], "{dir:?}: huecos por nombre");
-            let conocidos: Vec<_> = n[..2].to_vec();
-            let esperado = match dir {
+            sort_entries_with(&mut v, &by_mode(dir));
+            let n = names(&v);
+            assert_eq!(&n[2..], ["raro", "sin"], "{dir:?}: gaps by name");
+            let known: Vec<_> = n[..2].to_vec();
+            let expected = match dir {
                 SortDir::Asc => ["uno", "dos"],
                 SortDir::Desc => ["dos", "uno"],
             };
-            assert_eq!(conocidos, esperado, "{dir:?}");
+            assert_eq!(known, expected, "{dir:?}");
         }
     }
 
-    /// Un proveedor que emite tipos distintos bajo el mismo id no rompe el
-    /// orden total: agrupa por tipo (bool < número < fecha < texto < bytes)
-    /// y compara dentro de cada grupo; `Int` y `Uint` son el mismo grupo.
+    /// A provider that emits different types under the same id does not
+    /// break the total order: it groups by type (bool < number < date <
+    /// text < bytes) and compares within each group; `Int` and `Uint` are
+    /// the same group.
     #[test]
-    fn tipos_mezclados_dan_un_orden_total() {
+    fn mixed_types_give_a_total_order() {
         let mut v = vec![
             e("t", EntryKind::File, Some(AttrValue::Text("a".to_owned()))),
             e("u", EntryKind::File, Some(AttrValue::Uint(3))),
@@ -995,20 +995,20 @@ mod attr_tests {
             e("f", EntryKind::File, Some(AttrValue::TimeMs(0))),
             e("x", EntryKind::File, Some(AttrValue::Bytes(vec![0xff]))),
         ];
-        sort_entries_with(&mut v, &por_modo(SortDir::Asc));
-        assert_eq!(nombres(&v), ["b", "i", "u", "f", "t", "x"]);
+        sort_entries_with(&mut v, &by_mode(SortDir::Asc));
+        assert_eq!(names(&v), ["b", "i", "u", "f", "t", "x"]);
     }
 
-    /// Los directorios siguen primero y, a igual valor, desempata el nombre
-    /// en orden ascendente, como en las demás columnas.
+    /// Directories still come first and, at equal value, the name breaks the
+    /// tie in ascending order, like in the other columns.
     #[test]
-    fn dirs_primero_y_empate_por_nombre() {
+    fn dirs_first_and_tie_by_name() {
         let mut v = vec![
             e("z", EntryKind::File, Some(AttrValue::Uint(1))),
             e("d", EntryKind::Dir, Some(AttrValue::Uint(9))),
             e("a", EntryKind::File, Some(AttrValue::Uint(1))),
         ];
-        sort_entries_with(&mut v, &por_modo(SortDir::Desc));
-        assert_eq!(nombres(&v), ["d", "a", "z"]);
+        sort_entries_with(&mut v, &by_mode(SortDir::Desc));
+        assert_eq!(names(&v), ["d", "a", "z"]);
     }
 }

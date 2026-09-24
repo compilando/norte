@@ -1,47 +1,48 @@
-//! Papelera freedesktop.org implementada AQUÍ, sin delegar en el crate
-//! `trash` (Linux/BSD; macOS y Windows siguen delegando).
+//! freedesktop.org trash implemented HERE, without delegating to the
+//! `trash` crate (Linux/BSD; macOS and Windows keep delegating).
 //!
-//! # Por qué existe este módulo
-//! El crate `trash` sabe enterrar un fichero pero no dice DÓNDE lo puso, así
-//! que [`Provider::trash`](norte_vfs::Provider::trash) contestaba `Ok(None)` y
-//! el journal se quedaba sin `reversal_ref`. El undo de una sobrescritura
-//! tenía entonces que casar por ruta ORIGINAL y quedarse con el ítem más
-//! reciente — que para cuando llega ahí es el fichero que el propio undo acaba
-//! de enterrar al deshacer la mitad `created` de la pareja. Restauraba el
-//! fichero NUEVO sobre sí mismo, dejaba el original del usuario dentro de la
-//! papelera y lo contaba como éxito (BLOCKER de la review de seguridad de la
-//! tarea 11 del plan de sincronización).
+//! # Why this module exists
+//! The `trash` crate knows how to bury a file but doesn't say WHERE it put
+//! it, so [`Provider::trash`](norte_vfs::Provider::trash) used to answer
+//! `Ok(None)` and the journal was left without a `reversal_ref`. Undoing an
+//! overwrite then had to match by ORIGINAL path and pick the most recent
+//! item — which by the time it got there was the file undo itself had just
+//! buried while reverting the `created` half of the pair. It restored the
+//! NEW file over itself, left the user's original inside the trash, and
+//! counted it as a success (BLOCKER from the security review of task 11 of
+//! the sync plan).
 //!
-//! La spec de freedesktop es corta y el destino lo elegimos nosotros: **si lo
-//! elegimos, lo sabemos**. Es la misma forma que ya tiene la papelera LÓGICA
-//! de `norte-vfs-sftp` (`.norte-trash/<id>/payload`).
+//! The freedesktop spec is short and we choose the destination: **if we
+//! choose it, we know it**. It's the same shape the LOGICAL trash of
+//! `norte-vfs-sftp` already has (`.norte-trash/<id>/payload`).
 //!
-//! # Reglas duras que dirigen el diseño
-//! - **Regla 1 (los nombres son BYTES).** El fichero conserva sus bytes tal
-//!   cual dentro de `files/`; el sidecar `info/<nombre>.trashinfo` es TEXTO y
-//!   guarda la ruta original percent-codificada, con lo que sale ASCII puro
-//!   pase lo que pase por delante. Los dos no pueden discrepar porque no
-//!   nombran lo mismo: el sidecar nombra el ORIGEN (que es lo que el restore
-//!   necesita) y el fichero se llama como puede (deduplicado, y truncado si el
-//!   `NAME_MAX` aprieta). Aquí no se normaliza NADA: ni NFC, ni NFD, ni cajas.
-//! - **Regla 2 (nada de I/O bloqueante en async).** Todo este módulo es
-//!   síncrono y lo llama el provider desde `blocking()`.
-//! - **Regla 5 (`unsafe` justificado).** Solo `getuid` y `localtime_r`, las
-//!   dos con su `// SAFETY:`.
+//! # Hard rules that drive the design
+//! - **Rule 1 (names are BYTES).** The file keeps its bytes as they are
+//!   inside `files/`; the `info/<name>.trashinfo` sidecar is TEXT and
+//!   stores the percent-encoded original path, which comes out as pure
+//!   ASCII no matter what's in front of it. The two can't disagree because
+//!   they don't name the same thing: the sidecar names the SOURCE (which
+//!   is what restore needs) and the file is named however it can be
+//!   (deduplicated, and truncated if `NAME_MAX` squeezes). Nothing gets
+//!   normalized here: not NFC, not NFD, not case.
+//! - **Rule 2 (no blocking I/O in async).** This whole module is
+//!   synchronous and the provider calls it from `blocking()`.
+//! - **Rule 5 (`unsafe` justified).** Only `getuid` and `localtime_r`,
+//!   both with their `// SAFETY:`.
 //!
-//! # El orden importa, y la spec dice cuál
-//! Primero el sidecar con `O_EXCL` —eso es lo que hace ATÓMICA la reserva del
-//! nombre frente a otro proceso—, después el movimiento de la víctima. Si el
-//! movimiento falla, se desenlaza el sidecar y el nombre vuelve a estar libre.
+//! # Order matters, and the spec says which
+//! First the sidecar with `O_EXCL` — that's what makes the name
+//! reservation ATOMIC against another process —, then the victim's move.
+//! If the move fails, the sidecar is unlinked and the name is free again.
 //!
-//! La reserva cubre `info/<nombre>.trashinfo`, no `files/<nombre>`: lo segundo
-//! lo cubre el `rename` no-replace, y ahí queda una rendija en los FS sin
-//! `renameat2(RENAME_NOREPLACE)` (NFS, y los unix que no son Linux ni macOS),
-//! donde `do_rename` degrada a comprobar-y-renombrar. Otra papelera que
-//! escribiera su `files/x` dentro de esa ventana perdería su fichero. Las
-//! implementaciones que se respetan reservan el `info/` primero igual que
-//! nosotros, así que la ventana pide una que no lo haga Y un FS sin la
-//! primitiva (MINOR del security-reviewer).
+//! The reservation covers `info/<name>.trashinfo`, not `files/<name>`: the
+//! latter is covered by the no-replace `rename`, and there's a gap on FSes
+//! without `renameat2(RENAME_NOREPLACE)` (NFS, and the unix systems that
+//! aren't Linux or macOS), where `do_rename` degrades to check-and-rename.
+//! Another trash implementation that wrote its `files/x` inside that
+//! window would lose its file. Implementations that respect themselves
+//! reserve `info/` first just like we do, so the gap needs one that
+//! doesn't AND an FS without the primitive (security-reviewer MINOR).
 
 use std::ffi::OsStr;
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
@@ -53,76 +54,77 @@ use norte_vfs::trash::TrashId;
 
 use crate::provider::{do_rename, map_io};
 
-/// Subdirectorio de los ficheros enterrados.
+/// Subdirectory of the buried files.
 pub(crate) const FILES: &str = "files";
-/// Subdirectorio de los sidecars de metadatos.
+/// Subdirectory of the metadata sidecars.
 pub(crate) const INFO: &str = "info";
-/// Sufijo del sidecar, que la spec fija.
+/// The sidecar's suffix, which the spec fixes.
 const INFO_SUFFIX: &[u8] = b".trashinfo";
-/// Tope de un nombre de entrada en un FS unix corriente. El sidecar añade
-/// [`INFO_SUFFIX`], así que el nombre de la entrada se recorta para que quepan
-/// los dos.
+/// Ceiling on an entry name's length on an ordinary unix FS. The sidecar
+/// adds [`INFO_SUFFIX`], so the entry's name is trimmed for both to fit.
 ///
-/// Es un PUNTO DE PARTIDA, no un hecho: eCryptfs corta sobre los 143 bytes,
-/// gocryptfs sobre los 175, y un servidor NFS o CIFS pone el suyo. Por eso el
-/// bucle de [`trash`] recorta y reintenta cuando el FS rechaza el nombre en vez
-/// de rendirse (hallazgo MAJOR-1 del encoding-auditor).
+/// It's a STARTING POINT, not a fact: eCryptfs cuts around 143 bytes,
+/// gocryptfs around 175, and an NFS or CIFS server sets its own. That's why
+/// [`trash`]'s loop trims and retries when the FS rejects the name instead
+/// of giving up (encoding-auditor finding MAJOR-1).
 const NAME_MAX: usize = 255;
-/// Suelo del recorte: por debajo, el nombre deja de parecerse a nada y más vale
-/// fallar limpio.
+/// Floor of the trim: below it, the name stops resembling anything and
+/// it's better to fail cleanly.
 const MIN_NAME_BUDGET: usize = 16;
-/// Cuántos nombres `x`, `x.2`… `x.8` se prueban antes de pasar al nombre
-/// derivado del `id`.
+/// How many names `x`, `x.2`… `x.8` are tried before moving on to the name
+/// derived from the `id`.
 ///
-/// El tope no es estético. Con una escala abierta (`x.2`, `x.3`, … `x.4096`),
-/// sembrar cuatro mil sidecars vacíos deja un nombre INTRASHEABLE para siempre,
-/// y un `Mirror` de un árbol con miles de `index.html` cuesta un `open()` por
-/// hueco. Tras ocho sondas se salta al hueco `x.<id>`, que es único por
-/// operación y se acierta a la primera.
+/// The ceiling isn't cosmetic. With an open scale (`x.2`, `x.3`, …
+/// `x.4096`), seeding four thousand empty sidecars leaves a name that can
+/// NEVER be trashed, and a `Mirror` of a tree with thousands of
+/// `index.html` files costs one `open()` per slot. After eight probes it
+/// jumps to slot `x.<id>`, which is unique per operation and hits on the
+/// first try.
 const PROBES: u32 = 8;
-/// Cuántas veces se recorta el nombre ante un rechazo del FS antes de rendirse.
+/// How many times the name gets trimmed on an FS rejection before giving up.
 const MAX_SHRINKS: u32 = 4;
 
-/// Entierra `victim` en la papelera que le corresponda y devuelve la ruta
-/// NATIVA exacta de `files/<nombre>` — el destino recuperable que el journal
-/// guarda como `reversal_ref`.
+/// Buries `victim` in the trash that applies to it and returns the exact
+/// NATIVE path of `files/<name>` — the recoverable destination the journal
+/// stores as `reversal_ref`.
 ///
-/// `data_home` sustituye a `$XDG_DATA_HOME` cuando viene (costura de test:
-/// ver [`LocalProvider::with_trash_home`](crate::LocalProvider::with_trash_home)).
+/// `data_home` substitutes `$XDG_DATA_HOME` when given (test seam: see
+/// [`LocalProvider::with_trash_home`](crate::LocalProvider::with_trash_home)).
 ///
-/// # Idempotencia (#99)
-/// `id` NO se inventa aquí: lo genera el engine una vez por operación y de él
-/// sale la `DeletionDate` del sidecar, de modo que un reintento escribe el
-/// MISMO sidecar byte a byte. Hay dos caminos, y los dos convergen:
+/// # Idempotence (#99)
+/// `id` is NOT invented here: the engine generates it once per operation
+/// and the sidecar's `DeletionDate` comes from it, so a retry writes the
+/// SAME sidecar byte for byte. There are two paths, and both converge:
 ///
-/// - **El intento anterior falló al mover.** Deshizo su reserva, así que el
-///   reintento vuelve a elegir el MISMO nombre libre y el mismo destino.
-/// - **El intento anterior movió, pero su respuesta se perdió.** La víctima ya
-///   no está; el reintento reconoce su propia entrada —mismo `Path=` y misma
-///   `DeletionDate=`— y devuelve su destino en vez de crear una segunda o
-///   perder el `reversal_ref`.
+/// - **The previous attempt failed to move.** It undid its reservation, so
+///   the retry picks the SAME free name and the same destination again.
+/// - **The previous attempt moved, but its response was lost.** The victim
+///   is no longer there; the retry recognizes its own entry — same
+///   `Path=` and same `DeletionDate=` — and returns its destination
+///   instead of creating a second one or losing the `reversal_ref`.
 ///
-/// Residuo honesto, y conviene leerlo entero. Una entrada se identifica por
-/// (ruta original, instante de borrado), que es lo único que cabe en un
-/// `.trashinfo` estándar — y ese instante tiene resolución de SEGUNDO. Dos
-/// operaciones que compartan las dos cosas —la misma ruta y el mismo segundo—
-/// son indistinguibles, y si la segunda encuentra la ruta ya vacía heredaría el
-/// destino de la primera. Distinguirlas del todo pediría meter una clave
-/// privada en la papelera del usuario, que otras papeleras leen.
+/// Honest residue, worth reading in full. An entry is identified by
+/// (original path, deletion instant), which is all a standard
+/// `.trashinfo` can hold — and that instant has SECOND resolution. Two
+/// operations sharing both things — the same path and the same second —
+/// are indistinguishable, and if the second one finds the path already
+/// empty it would inherit the first one's destination. Telling them apart
+/// completely would require putting a private key in the user's trash,
+/// which other trash implementations read.
 ///
-/// Lo que ACOTA ese residuo no es el `.trashinfo` sino el directorio: la
-/// papelera es 0700 y de este uid ([`ensure_dir_owned`]), y tanto el sidecar
-/// como el payload se comprueban propios ([`is_ours`]), así que la entrada que
-/// se hereda salió de este usuario y de esa misma ruta. Lo que este módulo NO
-/// puede prometer es que el CONTENIDO no haya cambiado entre los dos intentos:
-/// otro proceso de este mismo usuario puede haber sustituido el payload, y eso
-/// queda fuera del modelo de amenazas (`SECURITY.md`).
+/// What BOUNDS that residue isn't the `.trashinfo` but the directory: the
+/// trash is 0700 and owned by this uid ([`ensure_dir_owned`]), and both the
+/// sidecar and the payload are checked to be ours ([`is_ours`]), so the
+/// inherited entry came from this user and that same path. What this
+/// module CANNOT promise is that the CONTENT hasn't changed between the
+/// two attempts: another process of this same user may have replaced the
+/// payload, and that's outside the threat model (`SECURITY.md`).
 ///
 /// # Errors
-/// [`Error::NotFound`] si la víctima no está (y no hay entrada previa nuestra);
-/// [`Error::Unsupported`] si no hay ninguna papelera utilizable para ese punto
-/// de montaje (el frontend reofrece borrado permanente, ADR 0009);
-/// [`Error::Conflict`] si todos los huecos estaban ocupados.
+/// [`Error::NotFound`] if the victim isn't there (and there's no earlier
+/// entry of ours); [`Error::Unsupported`] if there's no usable trash for
+/// that mount point (the frontend re-offers permanent deletion, ADR 0009);
+/// [`Error::Conflict`] if every slot was occupied.
 pub(crate) fn trash(
     victim: &Path,
     data_home: Option<&Path>,
@@ -136,8 +138,9 @@ pub(crate) fn trash(
         .to_vec();
     let body = trashinfo(&original_path(victim)?, id.deleted_ms());
 
-    // La víctima ya no está: o nunca existió, o la movió un intento anterior de
-    // ESTA misma operación. Lo segundo se reconoce por el sidecar.
+    // The victim is no longer there: either it never existed, or an
+    // earlier attempt of THIS SAME operation moved it. The latter is
+    // recognized by the sidecar.
     if std::fs::symlink_metadata(victim).is_err() {
         return converged(&dir, &name, &body, id).ok_or(Error::NotFound);
     }
@@ -152,34 +155,35 @@ pub(crate) fn trash(
         match write_new(&sidecar, &body) {
             Ok(()) => match do_rename(victim, &dest) {
                 Ok(()) => return Ok(dest),
-                // El nombre estaba reservado en `info/` pero OCUPADO en
-                // `files/` (una entrada a medio escribir, o algo sembrado):
-                // suelta la reserva y prueba el siguiente.
+                // The name was reserved in `info/` but OCCUPIED in
+                // `files/` (a half-written entry, or something seeded):
+                // drop the reservation and try the next one.
                 Err(Error::Conflict { .. }) => {
                     let _ = std::fs::remove_file(&sidecar);
                     k += 1;
                 }
-                // Cualquier otro fallo deja el nombre libre: el sidecar sin
-                // fichero sería una entrada fantasma en la papelera del usuario.
+                // Any other failure leaves the name free: a sidecar
+                // without a file would be a ghost entry in the user's
+                // trash.
                 Err(e) => {
                     let _ = std::fs::remove_file(&sidecar);
                     return Err(e);
                 }
             },
-            // El nombre está reservado por alguien: el siguiente. Aquí NO se
-            // converge aunque el sidecar sea idéntico al nuestro — la víctima
-            // está delante, así que hay algo que mover; reclamar la entrada de
-            // un intento anterior dejaría el fichero en su sitio y lo contaría
-            // como enterrado.
+            // The name is reserved by someone: the next one. Here it does
+            // NOT converge even if the sidecar is identical to ours — the
+            // victim is right there, so there's something to move;
+            // claiming an earlier attempt's entry would leave the file
+            // where it is and count it as buried.
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => k += 1,
-            // **El FS rechaza el NOMBRE, no la operación.** `ENAMETOOLONG` en
-            // un `$HOME` sobre eCryptfs (tope ~143), `EINVAL`/`EILSEQ` en un
-            // vfat montado `utf8=1` o un ext4 con `casefold` si el recorte
-            // partió un carácter. El nombre de la entrada es ALMACENAMIENTO
-            // —la ruta buena vive en el sidecar—, así que se recorta y se
-            // reintenta el mismo hueco en vez de declarar intrasheable un
-            // fichero que el propio volumen aceptó (MAJOR-1 del
-            // encoding-auditor).
+            // **The FS rejects the NAME, not the operation.**
+            // `ENAMETOOLONG` on a `$HOME` over eCryptfs (ceiling ~143),
+            // `EINVAL`/`EILSEQ` on a vfat mounted `utf8=1` or an ext4 with
+            // `casefold` if the trim split a character. The entry's name
+            // is STORAGE — the good path lives in the sidecar —, so it's
+            // trimmed and the same slot is retried instead of declaring
+            // untrashable a file the volume itself accepted
+            // (encoding-auditor finding MAJOR-1).
             Err(e) if name_rejected(&e) && shrinks < MAX_SHRINKS && budget > MIN_NAME_BUDGET => {
                 budget = (budget / 2).max(MIN_NAME_BUDGET);
                 shrinks += 1;
@@ -192,9 +196,10 @@ pub(crate) fn trash(
     })
 }
 
-/// ¿Este error dice «ese NOMBRE no me vale» en vez de «esa operación no se
-/// puede»? `ENAMETOOLONG`, `EINVAL` y `EILSEQ` — los tres los contesta el FS
-/// mirando los bytes del nombre, y los tres se arreglan acortándolo.
+/// Does this error say "that NAME isn't good for me" rather than "that
+/// operation can't be done"? `ENAMETOOLONG`, `EINVAL` and `EILSEQ` — all
+/// three are answered by the FS looking at the name's bytes, and all three
+/// are fixed by shortening it.
 fn name_rejected(e: &std::io::Error) -> bool {
     matches!(
         e.kind(),
@@ -205,31 +210,31 @@ fn name_rejected(e: &std::io::Error) -> bool {
     )
 }
 
-/// Olvida el sidecar de `dest` tras restaurarlo (best-effort).
+/// Forgets `dest`'s sidecar after restoring it (best-effort).
 ///
-/// Se llama DESPUÉS de mover el fichero de vuelta, nunca antes: un `files/x`
-/// sin su `info/x.trashinfo` es una entrada que ninguna papelera gráfica
-/// enseña, así que perder el sidecar primero y fallar el movimiento después
-/// escondería el fichero. Al revés lo peor que queda es un sidecar huérfano.
+/// Called AFTER moving the file back, never before: a `files/x` without
+/// its `info/x.trashinfo` is an entry no graphical trash shows, so losing
+/// the sidecar first and then failing the move would hide the file. The
+/// other way around, the worst that's left is an orphan sidecar.
 pub(crate) fn forget_sidecar(dest: &Path) {
     let Some(sidecar) = sidecar_of(dest) else {
         return;
     };
-    // La FORMA de la ruta no basta para borrar: `sidecar_of` acepta cualquier
-    // cosa cuyo padre se llame `files`, así que un `reversal_ref` manipulado
-    // —o simplemente un proyecto del usuario con un `files/` y un `info/` al
-    // lado— apuntaría a un fichero suyo. Se exige que sea un fichero REGULAR y
-    // que empiece por la cabecera de la spec: entonces es un `.trashinfo`, y
-    // borrarlo es lo que toca (MINOR-5 del encoding-auditor, MINOR del
-    // security-reviewer).
+    // The SHAPE of the path isn't enough to delete: `sidecar_of` accepts
+    // anything whose parent is called `files`, so a tampered
+    // `reversal_ref` — or simply a user project with a `files/` and an
+    // `info/` next to it — would point at a file of theirs. It's required
+    // to be a REGULAR file and to start with the spec's header: only then
+    // is it a `.trashinfo`, and deleting it is the right call
+    // (encoding-auditor MINOR-5, security-reviewer MINOR).
     let regular = std::fs::symlink_metadata(&sidecar).is_ok_and(|md| md.file_type().is_file());
     if regular && std::fs::read(&sidecar).is_ok_and(|b| b.starts_with(HEADER.as_bytes())) {
         let _ = std::fs::remove_file(&sidecar);
     }
 }
 
-/// El sidecar que le toca a `<papelera>/files/<nombre>`, o `None` si `dest` no
-/// tiene esa forma (no salió de esta papelera).
+/// The sidecar that corresponds to `<trash>/files/<name>`, or `None` if
+/// `dest` doesn't have that shape (it didn't come from this trash).
 fn sidecar_of(dest: &Path) -> Option<PathBuf> {
     let name = dest.file_name()?;
     let files = dest.parent()?;
@@ -244,19 +249,20 @@ fn sidecar_of(dest: &Path) -> Option<PathBuf> {
     )
 }
 
-/// La entrada que un intento anterior dejó, si la dejó.
+/// The entry an earlier attempt left, if it left one.
 ///
-/// Se recorren TODOS los huecos que [`trash`] podría haber usado, incluidos los
-/// recortes: parar en el primero cuyo sidecar falta sería suponer que los huecos
-/// se llenan de abajo arriba, y este módulo hace agujeros él solo —el intento
-/// que reserva `x` y falla el rename suelta `x` y se va a `x.2`, y
-/// [`forget_sidecar`] vacía un hueco cualquiera al restaurar—. Con esa
-/// suposición, un reintento no encontraba su propia entrada y contestaba
-/// `NotFound` sobre un fichero YA enterrado, perdiendo el `reversal_ref`: el
-/// bug que este módulo existe para no tener (MAJOR-2 del encoding-auditor).
+/// EVERY slot [`trash`] could have used is walked, trims included: stopping
+/// at the first one whose sidecar is missing would assume slots fill from
+/// the bottom up, and this module makes holes on its own — the attempt
+/// that reserves `x` and fails the rename drops `x` and moves on to `x.2`,
+/// and [`forget_sidecar`] empties an arbitrary slot on restore. With that
+/// assumption, a retry wouldn't find its own entry and would answer
+/// `NotFound` about a file that was ALREADY buried, losing the
+/// `reversal_ref`: the bug this module exists not to have
+/// (encoding-auditor finding MAJOR-2).
 ///
-/// El recorrido está acotado por construcción ([`PROBES`] × [`MAX_SHRINKS`]) y
-/// solo corre cuando la víctima ya no está, que es el camino raro.
+/// The walk is bounded by construction ([`PROBES`] × [`MAX_SHRINKS`]) and
+/// only runs when the victim is no longer there, which is the rare path.
 fn converged(dir: &Path, name: &[u8], body: &[u8], id: &TrashId) -> Option<PathBuf> {
     let mut budget = NAME_MAX - INFO_SUFFIX.len();
     for _ in 0..=MAX_SHRINKS {
@@ -276,37 +282,38 @@ fn converged(dir: &Path, name: &[u8], body: &[u8], id: &TrashId) -> Option<PathB
     None
 }
 
-/// ¿El sidecar es EXACTAMENTE el que escribiríamos nosotros y el fichero está
-/// donde dice? La comparación es byte a byte del cuerpo entero: misma ruta
-/// original y misma `DeletionDate`, que sale del `id` del engine.
+/// Is the sidecar EXACTLY the one we'd write and is the file where it
+/// says? The comparison is byte-for-byte of the whole body: same original
+/// path and same `DeletionDate`, which comes from the engine's `id`.
 ///
-/// Lo que eso distingue y lo que no está en el residuo de [`trash`]: dos
-/// entierros de la MISMA ruta en el MISMO segundo escriben el mismo cuerpo y
-/// son indistinguibles. Cualquier otra entrada de la papelera —otra ruta, otro
-/// segundo, otra aplicación— no cuela.
+/// What that distinguishes and what it doesn't is [`trash`]'s residue:
+/// two burials of the SAME path in the SAME second write the same body and
+/// are indistinguishable. Any other trash entry — another path, another
+/// second, another application — doesn't pass.
 fn is_ours(sidecar: &Path, dest: &Path, body: &[u8]) -> bool {
-    // NUESTROS los dos: el sidecar y el payload. La papelera es 0700 y de este
-    // uid (lo impone `ensure_dir_owned`), así que esto es cinturón sobre
-    // tirantes — pero es el cinturón que impide que una entrada sembrada se
-    // haga pasar por la nuestra y acabe de `reversal_ref` en el journal
-    // (MAJOR del security-reviewer).
-    let mio = |p: &Path| std::fs::symlink_metadata(p).is_ok_and(|md| md.uid() == uid());
-    mio(sidecar) && mio(dest) && std::fs::read(sidecar).is_ok_and(|found| found == body)
+    // OURS, both: the sidecar and the payload. The trash is 0700 and owned
+    // by this uid (`ensure_dir_owned` enforces it), so this is belt over
+    // suspenders — but it's the belt that keeps a seeded entry from
+    // passing for ours and ending up as `reversal_ref` in the journal
+    // (security-reviewer MAJOR).
+    let ours = |p: &Path| std::fs::symlink_metadata(p).is_ok_and(|md| md.uid() == uid());
+    ours(sidecar) && ours(dest) && std::fs::read(sidecar).is_ok_and(|found| found == body)
 }
 
-/// El candidato `k`-ésimo con el presupuesto de bytes que le quede al nombre.
+/// The `k`-th candidate with whatever byte budget the name has left.
 ///
-/// `k` de 1 a [`PROBES`] es la deduplicación que la spec describe (`x`, `x.2`,
-/// `x.3`…). El hueco [`PROBES`]`+1` es `x.<id>`, único por operación: cierra la
-/// escala sin dejarla abierta a que otro la llene (ver [`PROBES`]).
+/// `k` from 1 to [`PROBES`] is the deduplication the spec describes (`x`,
+/// `x.2`, `x.3`…). Slot [`PROBES`]`+1` is `x.<id>`, unique per operation:
+/// it closes the scale without leaving it open for someone else to fill
+/// (see [`PROBES`]).
 ///
-/// El nombre se recorta si no cabe. Recortar no pierde nada —la ruta buena vive
-/// en el sidecar, y el de `files/` es solo almacenamiento—, pero se recorta por
-/// FRONTERA DE CARÁCTER cuando el nombre es UTF-8 válido: partir un carácter
-/// produce un nombre que un vfat montado `utf8=1` o un ext4 con `casefold`
-/// RECHAZAN, y entonces un fichero que el volumen aceptó se vuelve intrasheable.
-/// Un nombre que nunca fue UTF-8 se corta por bytes, que es lo coherente: ese
-/// volumen ya lo aceptaba así.
+/// The name is trimmed if it doesn't fit. Trimming loses nothing — the
+/// good path lives in the sidecar, and the one under `files/` is just
+/// storage —, but it's trimmed at a CHARACTER BOUNDARY when the name is
+/// valid UTF-8: splitting a character produces a name a vfat mounted
+/// `utf8=1` or an ext4 with `casefold` REJECT, and then a file the volume
+/// had accepted becomes untrashable. A name that was never UTF-8 is cut by
+/// bytes, which is consistent: that volume already accepted it that way.
 fn candidate(name: &[u8], k: u32, budget: usize, id: &TrashId) -> Vec<u8> {
     let suffix = match k {
         1 => Vec::new(),
@@ -315,7 +322,7 @@ fn candidate(name: &[u8], k: u32, budget: usize, id: &TrashId) -> Vec<u8> {
     };
     let room = budget.saturating_sub(suffix.len()).max(1);
     let mut out = truncate_bytes(name, room).to_vec();
-    // Un recorte no puede dejar un nombre que el FS no acepta como entrada.
+    // A trim can't leave a name the FS won't accept as an entry.
     if out.is_empty() || out == b"." || out == b".." {
         out = b"trashed".to_vec();
     }
@@ -323,35 +330,35 @@ fn candidate(name: &[u8], k: u32, budget: usize, id: &TrashId) -> Vec<u8> {
     out
 }
 
-/// `name` recortado a `room` bytes, por frontera de carácter si es UTF-8.
+/// `name` trimmed to `room` bytes, at a character boundary if it's UTF-8.
 fn truncate_bytes(name: &[u8], room: usize) -> &[u8] {
     if name.len() <= room {
         return name;
     }
     match std::str::from_utf8(name) {
-        Ok(texto) => {
-            let mut fin = room;
-            while fin > 0 && !texto.is_char_boundary(fin) {
-                fin -= 1;
+        Ok(text) => {
+            let mut end = room;
+            while end > 0 && !text.is_char_boundary(end) {
+                end -= 1;
             }
-            &name[..fin]
+            &name[..end]
         }
         Err(_) => &name[..room],
     }
 }
 
-/// `a` seguido de `b` como nombre de fichero, sin pasar por `str` (regla 1).
+/// `a` followed by `b` as a file name, without going through `str` (rule 1).
 fn join_bytes(a: &[u8], b: &[u8]) -> std::ffi::OsString {
     let mut out = a.to_vec();
     out.extend_from_slice(b);
     std::ffi::OsString::from_vec(out)
 }
 
-/// Crea el fichero con `O_EXCL` y le escribe `body`.
+/// Creates the file with `O_EXCL` and writes `body` to it.
 ///
-/// `create_new` ES `O_EXCL|O_CREAT`: no sigue symlinks y falla si el nombre
-/// existe, que es justo lo que convierte la reserva en atómica frente a otro
-/// proceso escribiendo en la misma papelera.
+/// `create_new` IS `O_EXCL|O_CREAT`: it doesn't follow symlinks and fails
+/// if the name exists, which is exactly what turns the reservation atomic
+/// against another process writing into the same trash.
 fn write_new(path: &Path, body: &[u8]) -> std::io::Result<()> {
     use std::io::Write as _;
     let mut f = std::fs::OpenOptions::new()
@@ -359,10 +366,10 @@ fn write_new(path: &Path, body: &[u8]) -> std::io::Result<()> {
         .create_new(true)
         .mode(0o600)
         .open(path)?;
-    // Si el CONTENIDO no llega (ENOSPC, EIO), el nombre ya está creado: hay que
-    // soltarlo. Sin esto queda un `.trashinfo` vacío, que es una entrada
-    // fantasma en la papelera del usuario y un hueco gastado para siempre
-    // (MINOR del security-reviewer).
+    // If the CONTENT doesn't make it (ENOSPC, EIO), the name is already
+    // created: it has to be released. Without this, an empty
+    // `.trashinfo` is left behind, which is a ghost entry in the user's
+    // trash and a slot spent forever (security-reviewer MINOR).
     if let Err(e) = f.write_all(body).and_then(|()| f.sync_all()) {
         drop(f);
         let _ = std::fs::remove_file(path);
@@ -371,11 +378,11 @@ fn write_new(path: &Path, body: &[u8]) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Cabecera de sección del `.trashinfo`, que la spec fija.
+/// Section header of the `.trashinfo`, which the spec fixes.
 const HEADER: &str = "[Trash Info]\n";
 
-/// El cuerpo del `.trashinfo`: cabecera, ruta original percent-codificada y
-/// fecha de borrado en hora LOCAL, que es lo que la spec pide.
+/// The `.trashinfo`'s body: header, percent-encoded original path and
+/// deletion date in LOCAL time, which is what the spec asks for.
 fn trashinfo(original: &[u8], deleted_ms: u64) -> Vec<u8> {
     format!(
         "{HEADER}Path={}\nDeletionDate={}\n",
@@ -385,17 +392,18 @@ fn trashinfo(original: &[u8], deleted_ms: u64) -> Vec<u8> {
     .into_bytes()
 }
 
-/// La ruta ORIGINAL que va al sidecar: el parent CANONICALIZADO más el nombre
-/// tal cual.
+/// The ORIGINAL path that goes into the sidecar: the CANONICALIZED parent
+/// plus the name as is.
 ///
-/// Se canoniza el parent y no la víctima porque la víctima puede ser un
-/// symlink y lo que se entierra es el symlink, no su destino. Y se canoniza
-/// porque es lo que guardan las demás implementaciones —y lo que
-/// `restore_trashed` (que lista la papelera con el crate `trash`) espera casar—:
-/// una raíz colgada de un symlink no acertaría de otro modo.
+/// The parent is canonicalized and not the victim because the victim may
+/// be a symlink and what's being buried is the symlink, not its target.
+/// And it's canonicalized because that's what other implementations store
+/// — and what `restore_trashed` (which lists the trash with the `trash`
+/// crate) expects to match against: a root hanging off a symlink wouldn't
+/// match any other way.
 ///
 /// # Errors
-/// [`Error`] del OS si el parent no se puede canonizar.
+/// An OS [`Error`] if the parent can't be canonicalized.
 fn original_path(victim: &Path) -> Result<Vec<u8>, Error> {
     let name = victim.file_name().ok_or(Error::InvalidPath)?;
     let parent = victim.parent().ok_or(Error::InvalidPath)?;
@@ -403,20 +411,20 @@ fn original_path(victim: &Path) -> Result<Vec<u8>, Error> {
     Ok(real.join(name).into_os_string().into_vec())
 }
 
-/// Percent-codifica BYTES según la spec del `.trashinfo` (RFC 2396 sobre los
-/// bytes crudos, dejando `/` legible).
+/// Percent-encodes BYTES per the `.trashinfo` spec (RFC 2396 over the raw
+/// bytes, leaving `/` readable).
 ///
-/// Deja sin escapar solo el conjunto `unreserved` de RFC 3986 más `/`. Escapa
-/// de más respecto a lo que hace glib (`!~*'()` los deja pasar), y eso es
-/// deliberado: decodifica idéntico en cualquier lector y no hay que razonar
-/// sobre qué carácter es especial en qué contexto. Lo que importa es que
-/// **cualquier byte que pudiera romper el formato clave=valor sale escapado**:
-/// un `\n` en un nombre de fichero se convierte en `%0A` y no puede inyectar
-/// una línea `Path=` falsa.
+/// Leaves unescaped only RFC 3986's `unreserved` set plus `/`. It escapes
+/// more than glib does (`!~*'()` are let through there), and that's
+/// deliberate: it decodes identically in any reader and there's no need to
+/// reason about which character is special in which context. What matters
+/// is that **any byte that could break the key=value format comes out
+/// escaped**: a `\n` in a file name becomes `%0A` and can't inject a fake
+/// `Path=` line.
 ///
-/// El resultado es ASCII puro, así que el sidecar es UTF-8 válido incluso
-/// cuando el nombre del fichero no lo es (regla 1: el nombre no se decodifica
-/// jamás, se codifica byte a byte).
+/// The result is pure ASCII, so the sidecar is valid UTF-8 even when the
+/// file's name isn't (rule 1: the name is never decoded, it's encoded byte
+/// by byte).
 fn percent_encode(bytes: &[u8]) -> String {
     const HEX: &[u8; 16] = b"0123456789ABCDEF";
     let mut out = String::with_capacity(bytes.len());
@@ -432,28 +440,28 @@ fn percent_encode(bytes: &[u8]) -> String {
     out
 }
 
-/// `YYYY-MM-DDThh:mm:ss` en hora LOCAL desde un instante en milisegundos.
+/// `YYYY-MM-DDThh:mm:ss` in LOCAL time from an instant in milliseconds.
 ///
-/// Hora local porque es lo que la spec pide y lo que enseñan las papeleras
-/// gráficas. Sale de `localtime_r`, que es la única forma de aplicar la zona
-/// del sistema sin meter una dependencia de calendario (regla 8) — la
-/// alternativa sería escribir UTC y que la papelera del usuario mintiera por
-/// el desfase de su zona.
+/// Local time because that's what the spec asks for and what graphical
+/// trashes show. It comes from `localtime_r`, which is the only way to
+/// apply the system's zone without pulling in a calendar dependency (rule
+/// 8) — the alternative would be writing UTC and having the user's trash
+/// lie by their zone's offset.
 #[allow(unsafe_code)]
 fn local_datetime(deleted_ms: u64) -> String {
     const FALLBACK: &str = "1970-01-01T00:00:00";
     let Ok(secs) = libc::time_t::try_from(deleted_ms / 1000) else {
         return FALLBACK.to_owned();
     };
-    // SAFETY: `libc::tm` es POD (enteros más un `*const c_char` para el nombre
-    // de la zona, y el puntero nulo es un valor válido), así que el patrón
-    // todo-ceros es una instancia válida.
+    // SAFETY: `libc::tm` is POD (integers plus a `*const c_char` for the
+    // zone's name, and the null pointer is a valid value), so the
+    // all-zeros pattern is a valid instance.
     let mut tm: libc::tm = unsafe { std::mem::zeroed() };
-    // SAFETY: `localtime_r` escribe en el `tm` que se le pasa y no guarda
-    // ninguno de los dos punteros; ambos apuntan a locales vivas durante toda
-    // la llamada y están correctamente alineados. Es la variante REENTRANTE:
-    // no toca estado global compartido. Contrato testeado en
-    // `tests::la_fecha_de_borrado_es_iso_local`.
+    // SAFETY: `localtime_r` writes into the `tm` it's given and keeps
+    // neither pointer; both point at locals alive for the whole call and
+    // are correctly aligned. It's the REENTRANT variant: it touches no
+    // shared global state. Contract tested in
+    // `tests::the_deletion_date_is_local_iso`.
     let ok = unsafe { libc::localtime_r(std::ptr::from_ref(&secs), std::ptr::from_mut(&mut tm)) };
     if ok.is_null() {
         return FALLBACK.to_owned();
@@ -469,34 +477,35 @@ fn local_datetime(deleted_ms: u64) -> String {
     )
 }
 
-/// Deja lista la papelera que le toca a `victim` y devuelve su raíz.
+/// Gets `victim`'s trash ready and returns its root.
 ///
-/// La papelera "home" (`$XDG_DATA_HOME/Trash`) solo sirve si está en el MISMO
-/// dispositivo que la víctima; si no, la spec manda usar la del punto de
-/// montaje de la víctima. Eso no es un detalle de rendimiento: papelerizar
-/// entre dispositivos sería un copy+delete largo e incancelable a mitad
-/// (excepción de plataforma que ADR 0009 anotaba y que este camino ya no
-/// tiene: aquí el movimiento es SIEMPRE un `rename` dentro de un dispositivo).
-/// Es el issue #26, y lo fija
-/// `tests::la_papelera_jamas_cruza_de_dispositivo` con dos dispositivos de
-/// verdad — sin un test, «ya no copia» es una frase, no una garantía.
+/// The "home" trash (`$XDG_DATA_HOME/Trash`) only works if it's on the
+/// SAME device as the victim; if not, the spec says to use the victim's
+/// mount point's. That's not a performance detail: trashing across
+/// devices would be a long, uncancellable copy+delete mid-way (a platform
+/// exception ADR 0009 used to note and that this path no longer has: here
+/// the move is ALWAYS a `rename` within one device). It's issue #26, and
+/// `tests::the_trash_never_crosses_a_device` pins it down with two real
+/// devices — without a test, "it doesn't copy anymore" is a sentence, not
+/// a guarantee.
 ///
-/// # Las dos papeleras NO se validan igual, y es deliberado
-/// La de casa cuelga de `$HOME`: quien pueda escribir ahí ya es este usuario, y
-/// un `~/.local/share/Trash` que es un symlink a otro disco es una decisión
-/// suya que se respeta (glib hace lo mismo). La del TOPDIR cuelga de la raíz de
-/// un montaje que puede ser compartida y escribible por otros, y ahí se exige
-/// que el directorio sea NUESTRO —lstat, no stat, y `st_uid` propio— antes de
-/// meter nada dentro. Sin esa comprobación, sembrar `/tmp/.Trash-1000` (mode
-/// 0777, de otro uid) basta para que los ficheros que este usuario tira acaben
-/// en un árbol ajeno, y para que el `reversal_ref` del journal apunte a un sitio
-/// donde otro puede cambiar el contenido antes del undo — BLOCKER del
-/// security-reviewer.
+/// # The two trashes are NOT validated the same way, and that's deliberate
+/// The home one hangs off `$HOME`: whoever can write there is already this
+/// user, and a `~/.local/share/Trash` that's a symlink to another disk is
+/// their own decision, respected as is (glib does the same). The TOPDIR
+/// one hangs off the root of a mount that may be shared and writable by
+/// others, and there it's required that the directory be OURS — lstat, not
+/// stat, and our own `st_uid` — before putting anything inside. Without
+/// that check, seeding `/tmp/.Trash-1000` (mode 0777, another uid) is
+/// enough for the files this user deletes to end up in someone else's
+/// tree, and for the journal's `reversal_ref` to point at a place where
+/// someone else can change the content before the undo —
+/// security-reviewer BLOCKER.
 ///
 /// # Errors
-/// [`Error::Unsupported`] si no hay ninguna papelera utilizable —incluido el
-/// caso de que la del topdir exista y no sea nuestra—. El frontend reofrece
-/// entonces el borrado PERMANENTE con aviso (ADR 0009).
+/// [`Error::Unsupported`] if there's no usable trash at all — including
+/// the case where the topdir one exists and isn't ours. The frontend then
+/// re-offers PERMANENT deletion with a warning (ADR 0009).
 fn prepare_trash_dir(victim: &Path, data_home: Option<&Path>) -> Result<PathBuf, Error> {
     let parent = victim.parent().ok_or(Error::InvalidPath)?;
     let dev = std::fs::metadata(parent).map_err(|e| map_io(&e))?.dev();
@@ -508,31 +517,33 @@ fn prepare_trash_dir(victim: &Path, data_home: Option<&Path>) -> Result<PathBuf,
     }
     let top = top_dir(parent).ok_or(Error::Unsupported)?;
     let uid = uid();
-    // `$top/.Trash/$uid` primero (spec), y si no vale se cae a `$top/.Trash-$uid`
-    // en vez de rendirse: un `$uid` sembrado por otro dentro del `.Trash`
-    // compartido no puede dejar sin papelera a nadie (glib se comporta igual).
-    if let Some(compartida) = shared_topdir_trash(&top, uid)
-        && ensure_owned_layout(&compartida).is_ok()
+    // `$top/.Trash/$uid` first (spec), and if it's no good it falls back
+    // to `$top/.Trash-$uid` instead of giving up: a `$uid` someone else
+    // seeded inside the shared `.Trash` can't leave anyone without a
+    // trash (glib behaves the same way).
+    if let Some(shared) = shared_topdir_trash(&top, uid)
+        && ensure_owned_layout(&shared).is_ok()
     {
-        return Ok(compartida);
+        return Ok(shared);
     }
-    let propia = top.join(format!(".Trash-{uid}"));
-    ensure_owned_layout(&propia)?;
-    Ok(propia)
+    let own = top.join(format!(".Trash-{uid}"));
+    ensure_owned_layout(&own)?;
+    Ok(own)
 }
 
-/// Crea `<papelera>/`, `files/` e `info/` bajo `$HOME` con permisos `0700`.
+/// Creates `<trash>/`, `files/` and `info/` under `$HOME` with `0700`
+/// permissions.
 ///
-/// `0700` porque el contenido de una papelera es del usuario y de nadie más:
-/// los nombres de lo que ha borrado ya son información.
+/// `0700` because a trash's content belongs to the user and nobody else:
+/// the names of what they've deleted are already information.
 ///
 /// # Errors
-/// [`Error`] del OS si alguno no se puede crear (papelera en un montaje de
-/// solo lectura, por ejemplo).
+/// An OS [`Error`] if any of them can't be created (a trash on a
+/// read-only mount, for instance).
 fn ensure_home_layout(dir: &Path) -> Result<(), Error> {
     if let Some(parent) = dir.parent() {
-        // El contenedor (`~/.local/share`) con los permisos que le toquen: solo
-        // la papelera es 0700.
+        // The container (`~/.local/share`) with whatever permissions it
+        // has: only the trash itself is 0700.
         std::fs::create_dir_all(parent).map_err(|e| map_io(&e))?;
     }
     for d in [dir.to_path_buf(), dir.join(FILES), dir.join(INFO)] {
@@ -545,33 +556,34 @@ fn ensure_home_layout(dir: &Path) -> Result<(), Error> {
     Ok(())
 }
 
-/// Lo mismo en un TOPDIR, donde el directorio tiene que ser NUESTRO.
+/// The same on a TOPDIR, where the directory has to be OURS.
 ///
 /// # Errors
-/// [`Error::Unsupported`] si alguno de los tres no se puede crear o no pasa la
-/// comprobación de propiedad: "aquí no hay papelera utilizable", que es
-/// exactamente lo que ADR 0009 hace que el frontend sepa manejar. No se
-/// distingue un `EROFS` de un `.Trash-$uid` ajeno a propósito — para quien
-/// borra son la misma respuesta, y el errno de un montaje que no controlamos no
-/// es información que el frontend pueda usar.
+/// [`Error::Unsupported`] if any of the three can't be created or doesn't
+/// pass the ownership check: "no usable trash here", which is exactly what
+/// ADR 0009 has the frontend know how to handle. An `EROFS` isn't
+/// distinguished from someone else's `.Trash-$uid` on purpose — to
+/// whoever's deleting they're the same answer, and the errno of a mount we
+/// don't control isn't information the frontend can use.
 fn ensure_owned_layout(dir: &Path) -> Result<(), Error> {
     ensure_dir_owned(dir)?;
     ensure_dir_owned(&dir.join(FILES))?;
     ensure_dir_owned(&dir.join(INFO))
 }
 
-/// Crea `dir` con `0700` si falta, y en cualquier caso comprueba que es un
-/// DIRECTORIO de verdad (no un symlink) y NUESTRO.
+/// Creates `dir` with `0700` if it's missing, and in any case checks that
+/// it's a real DIRECTORY (not a symlink) and OURS.
 ///
-/// `create_dir` sin `recursive`: la versión recursiva, ante un `EEXIST`,
-/// pregunta con `metadata`, que SIGUE symlinks — un symlink a un árbol ajeno
-/// pasaría por directorio válido. Aquí se comprueba con `symlink_metadata`, que
-/// no sigue nada, y se exige `st_uid` propio: quien no es dueño no puede
-/// haberlo hecho nuestro (no hay `chown` hacia otro uid sin privilegios).
+/// `create_dir` without `recursive`: the recursive version, on `EEXIST`,
+/// asks with `metadata`, which FOLLOWS symlinks — a symlink to someone
+/// else's tree would pass as a valid directory. Here it's checked with
+/// `symlink_metadata`, which follows nothing, and our own `st_uid` is
+/// required: whoever doesn't own it can't have made it ours (there's no
+/// `chown` to another uid without privileges).
 ///
-/// Si es nuestro pero con permisos flojos, se APRIETA a `0700` en vez de
-/// rechazarlo: los nombres de lo que uno borra no son de nadie más, y el mismo
-/// criterio usa el directorio de spool del core.
+/// If it's ours but with loose permissions, it gets TIGHTENED to `0700`
+/// instead of being rejected: the names of what one deletes belong to
+/// nobody else, and the core's spool directory uses the same criterion.
 fn ensure_dir_owned(dir: &Path) -> Result<(), Error> {
     match std::fs::DirBuilder::new().mode(0o700).create(dir) {
         Ok(()) => {}
@@ -589,10 +601,10 @@ fn ensure_dir_owned(dir: &Path) -> Result<(), Error> {
     Ok(())
 }
 
-/// `$XDG_DATA_HOME/Trash`, con `$HOME/.local/share/Trash` de respaldo.
+/// `$XDG_DATA_HOME/Trash`, falling back to `$HOME/.local/share/Trash`.
 ///
-/// Un `$XDG_DATA_HOME` RELATIVO se ignora, como manda la spec XDG: una raíz de
-/// papelera relativa al cwd del daemon no es una raíz.
+/// A RELATIVE `$XDG_DATA_HOME` is ignored, as the XDG spec requires: a
+/// trash root relative to the daemon's cwd is not a root.
 pub(crate) fn home_trash(data_home: Option<&Path>) -> Option<PathBuf> {
     let base = match data_home {
         Some(d) => d.to_path_buf(),
@@ -606,11 +618,11 @@ pub(crate) fn home_trash(data_home: Option<&Path>) -> Option<PathBuf> {
     base.is_absolute().then(|| base.join("Trash"))
 }
 
-/// `st_dev` del ancestro EXISTENTE más cercano a `p`.
+/// `st_dev` of the closest EXISTING ancestor of `p`.
 ///
-/// Hace falta porque la papelera "home" puede no existir todavía y hay que
-/// decidir su dispositivo ANTES de crearla — crearla para averiguarlo dejaría
-/// un directorio en un sitio donde a lo mejor no se va a enterrar nada.
+/// Needed because the "home" trash may not exist yet and its device has to
+/// be decided BEFORE creating it — creating it just to find out would
+/// leave a directory in a place where nothing might end up being buried.
 fn device_of_nearest(p: &Path) -> Option<u64> {
     let mut cur = p;
     loop {
@@ -621,9 +633,9 @@ fn device_of_nearest(p: &Path) -> Option<u64> {
     }
 }
 
-/// El punto de montaje de `p`: el ancestro más alto con su mismo `st_dev`.
-/// Sin leer `/proc/mounts` — que además no es UTF-8 por contrato y ha hecho
-/// panicar al crate `trash` upstream.
+/// `p`'s mount point: the highest ancestor with the same `st_dev`. Without
+/// reading `/proc/mounts` — which isn't UTF-8 by contract, and has made
+/// the upstream `trash` crate panic.
 fn top_dir(p: &Path) -> Option<PathBuf> {
     let dev = std::fs::metadata(p).ok()?.dev();
     let mut top = p.to_path_buf();
@@ -636,18 +648,19 @@ fn top_dir(p: &Path) -> Option<PathBuf> {
     Some(top)
 }
 
-/// `$top/.Trash/$uid` cuando `$top/.Trash` existe y la spec la da por buena:
-/// un DIRECTORIO, con el bit sticky y que no sea un symlink. `None` si no.
+/// `$top/.Trash/$uid` when `$top/.Trash` exists and the spec accepts it: a
+/// DIRECTORY, with the sticky bit and not a symlink. `None` otherwise.
 ///
-/// `symlink_metadata` y no `metadata`: la spec exige explícitamente que
-/// `$top/.Trash` no sea un symlink, y con esta llamada un symlink no es un
-/// directorio. Es la comprobación que impide que quien pueda escribir en la
-/// raíz de un montaje compartido redirija las papeleras de los demás a un árbol
-/// suyo. El sticky es la otra mitad: sin él, cualquiera borra lo de cualquiera.
+/// `symlink_metadata` and not `metadata`: the spec explicitly requires
+/// that `$top/.Trash` not be a symlink, and with this call a symlink isn't
+/// a directory. It's the check that stops whoever can write to a shared
+/// mount's root from redirecting everyone else's trash into a tree of
+/// their own. Sticky is the other half: without it, anyone can delete
+/// anyone's things.
 ///
-/// Que el `$uid` de dentro sea NUESTRO lo comprueba [`ensure_dir_owned`]; el
-/// sticky de la carpeta madre no lo garantiza, porque sembrar una entrada nueva
-/// con el nombre de otro uid sí es legal en un directorio sticky.
+/// That the `$uid` inside is OURS is checked by [`ensure_dir_owned`]; the
+/// parent folder's sticky bit doesn't guarantee it, because seeding a new
+/// entry with another uid's name is legal in a sticky directory.
 fn shared_topdir_trash(top: &Path, uid: u32) -> Option<PathBuf> {
     let shared = top.join(".Trash");
     let md = std::fs::symlink_metadata(&shared).ok()?;
@@ -655,11 +668,11 @@ fn shared_topdir_trash(top: &Path, uid: u32) -> Option<PathBuf> {
         .then(|| shared.join(uid.to_string()))
 }
 
-/// El uid real del proceso, que es el que nombra la papelera de un topdir.
+/// The process's real uid, which is what names a topdir's trash.
 #[allow(unsafe_code)]
 fn uid() -> u32 {
-    // SAFETY: `getuid` no recibe punteros, no puede fallar y no toca estado
-    // que este proceso comparta; su ABI la fija POSIX.
+    // SAFETY: `getuid` takes no pointers, can't fail, and touches no state
+    // this process shares; its ABI is fixed by POSIX.
     unsafe { libc::getuid() }
 }
 
@@ -671,124 +684,125 @@ mod tests {
     use norte_vfs::trash::TrashId;
     use std::path::Path;
 
-    /// #26: la papelera JAMÁS cruza una frontera de dispositivo.
+    /// #26: the trash NEVER crosses a device boundary.
     ///
-    /// El fallo que este test fija no es hipotético: el crate `trash`, que es
-    /// quien hacía esto antes de que existiera este módulo, degrada a
-    /// copiar-el-árbol-y-borrar-el-origen cuando el montaje de la víctima no
-    /// admite papelera. Eso son GB dentro de UN `spawn_blocking`, sin progreso
-    /// y sin cancelación (regla dura 3), y el fichero deja de estar donde
-    /// estaba antes de que nadie pueda parar nada.
+    /// The bug this test pins down isn't hypothetical: the `trash` crate,
+    /// which is what did this before this module existed, degrades to
+    /// copy-the-tree-and-delete-the-source when the victim's mount doesn't
+    /// support trashing. That's GBs inside ONE `spawn_blocking`, with no
+    /// progress and no cancellation (hard rule 3), and the file stops
+    /// being where it was before anyone can stop anything.
     ///
-    /// Aquí la papelera se elige POR DISPOSITIVO ([`super::prepare_trash_dir`])
-    /// y el traslado es un `rename`, que a través de una frontera falla en vez
-    /// de copiar. El test lo comprueba de verdad, con dos dispositivos reales:
-    /// la víctima en `/dev/shm` (tmpfs) y una home-trash inyectada en el disco.
+    /// Here the trash is chosen PER DEVICE ([`super::prepare_trash_dir`])
+    /// and the transfer is a `rename`, which fails instead of copying
+    /// across a boundary. The test verifies this for real, with two real
+    /// devices: the victim on `/dev/shm` (tmpfs) and an injected home
+    /// trash on disk.
     ///
-    /// Sin dos dispositivos no hay nada que comprobar y el test se retira
-    /// diciéndolo: fingirlo sería peor que no correrlo.
+    /// Without two devices there's nothing to check and the test bows out
+    /// saying so: faking it would be worse than not running it.
     ///
-    /// # Por qué las DOS mitades viven en un solo test (#216)
+    /// # Why BOTH halves live in a single test (#216)
     ///
-    /// La segunda mitad —que la papelera elegida es la del topdir del montaje
-    /// de la víctima, y no la de casa— era un test aparte, y los dos eran
-    /// intermitentemente rojos bajo `cargo test --lib` (verdes bajo nextest,
-    /// que es lo que corre `just t`, así que el gate no lo veía).
+    /// The second half — that the chosen trash is the victim's mount's
+    /// topdir one, not the home one — used to be a separate test, and the
+    /// two were intermittently red under `cargo test --lib` (green under
+    /// nextest, which is what `just t` runs, so the gate never saw it).
     ///
-    /// El recurso compartido no era una variable de entorno ni el cwd: era una
-    /// **ruta REAL del sistema**, `/dev/shm/.Trash-$uid`. La papelera de un
-    /// topdir la fija el spec freedesktop, así que los dos tests no tenían más
-    /// remedio que usar exactamente la misma, y la limpieza de cada uno
-    /// borraba la que el otro estaba usando. Falla en las dos direcciones:
-    /// «y queda lista» cuando le borran el `files/` recién creado, y «ni
-    /// papelera en el dispositivo ni Unsupported» cuando le borran la papelera
-    /// a mitad del `trash()`.
+    /// The shared resource wasn't an environment variable or the cwd: it
+    /// was a **REAL system path**, `/dev/shm/.Trash-$uid`. A topdir's
+    /// trash is fixed by the freedesktop spec, so the two tests had no
+    /// choice but to use exactly the same one, and each one's cleanup
+    /// deleted the one the other was using. It failed in both directions:
+    /// "and it's left ready" when its freshly created `files/` got
+    /// deleted, and "neither a trash on the device nor Unsupported" when
+    /// its trash got deleted mid-`trash()`.
     ///
-    /// Un mutex no basta: nextest da un PROCESO por test, así que la exclusión
-    /// tendría que ser entre procesos. Fundirlos es lo que quita la carrera en
-    /// los dos runners, y de paso deja juntas dos aserciones sobre la misma
-    /// regla. Reproducción del rojo, antes del arreglo:
+    /// A mutex isn't enough: nextest gives one PROCESS per test, so the
+    /// exclusion would have to be between processes. Merging them is what
+    /// removes the race under both runners, and it also puts two
+    /// assertions about the same rule side by side. Reproduction of the
+    /// red, before the fix:
     /// `cargo test -p norte-vfs-local --lib -- --test-threads=2 dispositivo`
-    /// en bucle — uno de cada quince fallaba.
+    /// in a loop — one in fifteen failed.
     #[cfg(target_os = "linux")]
     #[test]
-    fn la_papelera_jamas_cruza_de_dispositivo() {
+    fn the_trash_never_crosses_a_device() {
         use std::os::unix::fs::MetadataExt;
 
-        let casa = tempfile::tempdir().expect("tempdir");
+        let home = tempfile::tempdir().expect("tempdir");
         let Ok(shm) = std::fs::metadata("/dev/shm") else {
-            eprintln!("sin /dev/shm: no hay dos dispositivos que comprobar");
+            eprintln!("no /dev/shm: no two devices to check");
             return;
         };
-        if shm.dev() == std::fs::metadata(casa.path()).expect("stat").dev() {
-            eprintln!("/dev/shm y el tempdir son el MISMO dispositivo: nada que comprobar");
+        if shm.dev() == std::fs::metadata(home.path()).expect("stat").dev() {
+            eprintln!("/dev/shm and the tempdir are the SAME device: nothing to check");
             return;
         }
         let base = Path::new("/dev/shm").join(format!("norte-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
-        std::fs::create_dir_all(&base).expect("dir en /dev/shm");
-        let victima = base.join("v.txt");
-        std::fs::write(&victima, b"x").expect("victima");
+        std::fs::create_dir_all(&base).expect("dir in /dev/shm");
+        let victim = base.join("v.txt");
+        std::fs::write(&victim, b"x").expect("victim");
 
-        let dest = super::trash(&victima, Some(casa.path()), &id());
+        let dest = super::trash(&victim, Some(home.path()), &id());
 
-        let veredicto = match &dest {
+        let verdict = match &dest {
             Ok(dest) => {
-                let d = std::fs::metadata(dest).expect("stat del destino").dev();
-                assert_eq!(
-                    d,
-                    shm.dev(),
-                    "la entrada se quedó en el dispositivo de la víctima"
-                );
+                let d = std::fs::metadata(dest)
+                    .expect("stat of the destination")
+                    .dev();
+                assert_eq!(d, shm.dev(), "the entry stayed on the victim's device");
                 assert!(
-                    !casa
+                    !home
                         .path()
                         .join("Trash")
                         .join("files")
                         .join("v.txt")
                         .exists(),
-                    "y NADA se copió a la papelera de $HOME"
+                    "and NOTHING was copied to the $HOME trash"
                 );
                 let _ = std::fs::remove_file(dest);
                 let _ = std::fs::remove_file(super::sidecar_of(dest).expect("sidecar"));
-                // Y la papelera del topdir que este test acaba de crear, SOLO
-                // si queda vacía: `remove_dir` falla con contenido, que es
-                // exactamente la protección que hace falta para no barrer la
-                // papelera de verdad de nadie.
-                if let Some(papelera) = dest.parent().and_then(Path::parent) {
-                    let _ = std::fs::remove_dir(papelera.join(super::FILES));
-                    let _ = std::fs::remove_dir(papelera.join(super::INFO));
-                    let _ = std::fs::remove_dir(papelera);
+                // And the topdir trash this test just created, ONLY if it's
+                // left empty: `remove_dir` fails with content, which is
+                // exactly the protection needed to avoid sweeping anyone's
+                // real trash.
+                if let Some(trash_dir) = dest.parent().and_then(Path::parent) {
+                    let _ = std::fs::remove_dir(trash_dir.join(super::FILES));
+                    let _ = std::fs::remove_dir(trash_dir.join(super::INFO));
+                    let _ = std::fs::remove_dir(trash_dir);
                 }
                 true
             }
-            // `Unsupported` es la OTRA respuesta correcta (montaje sin
-            // papelera utilizable): el frontend reofrece borrado permanente
-            // con aviso, ADR 0009. Lo que no vale es copiar.
+            // `Unsupported` is the OTHER correct answer (a mount with no
+            // usable trash): the frontend re-offers permanent deletion
+            // with a warning, ADR 0009. What's not acceptable is copying.
             Err(norte_proto::Error::Unsupported) => {
-                assert!(victima.exists(), "una papelera imposible no mueve nada");
+                assert!(victim.exists(), "an impossible trash moves nothing");
                 true
             }
-            Err(e) => panic!("ni papelera en el dispositivo ni Unsupported: {e:?}"),
+            Err(e) => panic!("neither a trash on the device nor Unsupported: {e:?}"),
         };
         let _ = std::fs::remove_dir_all(&base);
-        assert!(veredicto);
+        assert!(verdict);
 
-        // Segunda mitad: la papelera ELEGIDA es la del topdir del montaje de
-        // la víctima, no la de casa. Va aquí, en secuencia, por lo que dice el
-        // doc de arriba: comparte `/dev/shm/.Trash-$uid` con lo de encima.
-        let victima = tempfile::tempdir_in("/dev/shm").expect("tempdir en /dev/shm");
-        let esperada = Path::new("/dev/shm").join(format!(".Trash-{}", super::uid()));
-        let existia = esperada.exists();
-        let dir = super::prepare_trash_dir(&victima.path().join("v.txt"), Some(casa.path()))
-            .expect("hay papelera");
+        // Second half: the CHOSEN trash is the victim's mount's topdir
+        // one, not the home one. It goes here, in sequence, for the
+        // reason the doc above gives: it shares `/dev/shm/.Trash-$uid`
+        // with the part above.
+        let victim = tempfile::tempdir_in("/dev/shm").expect("tempdir in /dev/shm");
+        let expected = Path::new("/dev/shm").join(format!(".Trash-{}", super::uid()));
+        let existed = expected.exists();
+        let dir = super::prepare_trash_dir(&victim.path().join("v.txt"), Some(home.path()))
+            .expect("there is a trash");
         assert_eq!(
-            dir, esperada,
-            "la papelera es la del montaje de la víctima, no la de casa"
+            dir, expected,
+            "the trash is the victim's mount's, not the home one"
         );
-        assert!(dir.join(super::FILES).is_dir(), "y queda lista");
-        if !existia {
-            let _ = std::fs::remove_dir_all(&esperada);
+        assert!(dir.join(super::FILES).is_dir(), "and it's left ready");
+        if !existed {
+            let _ = std::fs::remove_dir_all(&expected);
         }
     }
 
@@ -796,100 +810,101 @@ mod tests {
         TrashId::new(1_726_000_000_123, 7)
     }
 
-    /// El presupuesto de bytes con el que arranca el bucle de [`super::trash`].
+    /// The byte budget [`super::trash`]'s loop starts with.
     fn budget() -> usize {
         super::NAME_MAX - super::INFO_SUFFIX.len()
     }
 
-    /// Regla 1: el sidecar es ASCII (y por tanto UTF-8 válido) aunque el nombre
-    /// no lo sea, y ningún byte del nombre sobrevive sin escapar en una
-    /// posición donde pudiera romper el formato.
+    /// Rule 1: the sidecar is ASCII (and therefore valid UTF-8) even when
+    /// the name isn't, and no byte of the name survives unescaped in a
+    /// position where it could break the format.
     #[test]
-    fn un_nombre_no_utf8_sale_escapado_y_el_sidecar_es_ascii() {
+    fn a_non_utf8_name_comes_out_escaped_and_the_sidecar_is_ascii() {
         let body = trashinfo(b"/tmp/x/h\xffstil\n=raro.bin", 0);
-        let text = String::from_utf8(body).expect("el sidecar es UTF-8 por construcción");
+        let text = String::from_utf8(body).expect("the sidecar is UTF-8 by construction");
         assert!(text.is_ascii(), "{text}");
         assert!(
             text.contains("Path=/tmp/x/h%FFstil%0A%3Draro.bin"),
             "{text}"
         );
-        // Tres líneas exactas: la inyección de un `\n` no puede añadir una cuarta.
+        // Exactly three lines: injecting a `\n` can't add a fourth.
         assert_eq!(text.lines().count(), 3, "{text}");
         assert!(text.starts_with("[Trash Info]\n"));
     }
 
     #[test]
-    fn el_percent_encoding_deja_legible_lo_que_no_estorba() {
+    fn percent_encoding_leaves_readable_what_does_not_get_in_the_way() {
         assert_eq!(percent_encode(b"/home/u/a-b_c.d~e"), "/home/u/a-b_c.d~e");
         assert_eq!(percent_encode(b" %#?"), "%20%25%23%3F");
         assert_eq!(percent_encode("café".as_bytes()), "caf%C3%A9");
     }
 
-    /// La deduplicación de la spec, y el recorte que el `NAME_MAX` obliga: el
-    /// nombre de la entrada más `.trashinfo` tiene que caber.
+    /// The spec's deduplication, and the trimming `NAME_MAX` forces: the
+    /// entry's name plus `.trashinfo` has to fit.
     #[test]
-    fn los_candidatos_deduplican_y_caben() {
+    fn candidates_deduplicate_and_fit() {
         assert_eq!(candidate(b"a.txt", 1, budget(), &id()), b"a.txt");
         assert_eq!(candidate(b"a.txt", 2, budget(), &id()), b"a.txt.2");
         assert_eq!(candidate(b"a.txt", 8, budget(), &id()), b"a.txt.8");
-        // Pasadas las sondas, el hueco lo nombra el id: único por operación, y
-        // por tanto no lo puede llenar nadie más.
+        // Past the probes, the id names the slot: unique per operation,
+        // and therefore nobody else can fill it.
         assert_eq!(
             candidate(b"a.txt", 9, budget(), &id()),
             b"a.txt.1726000000123-7"
         );
-        let largo = vec![b'x'; 255];
+        let long_name = vec![b'x'; 255];
         for k in [1u32, 2, 9] {
-            let c = candidate(&largo, k, budget(), &id());
+            let c = candidate(&long_name, k, budget(), &id());
             assert!(
                 c.len() + ".trashinfo".len() <= 255,
-                "candidato {k} de {} bytes",
+                "candidate {k} at {} bytes",
                 c.len()
             );
         }
-        // Un recorte jamás deja un nombre que el FS no acepta.
+        // A trim never leaves a name the FS won't accept.
         assert_eq!(candidate(b"", 1, budget(), &id()), b"trashed");
     }
 
-    /// MAJOR-1 del encoding-auditor: un nombre UTF-8 largo se recorta por
-    /// FRONTERA de carácter. Partirlo produce un nombre que un vfat `utf8=1` o
-    /// un ext4 con `casefold` rechazan, y entonces un fichero que el volumen
-    /// aceptó se vuelve intrasheable.
+    /// encoding-auditor finding MAJOR-1: a long UTF-8 name is trimmed at a
+    /// CHARACTER boundary. Splitting it produces a name a vfat `utf8=1` or
+    /// an ext4 with `casefold` reject, and then a file the volume had
+    /// accepted becomes untrashable.
     #[test]
-    fn un_recorte_no_parte_un_caracter() {
-        // 85 × U+3042 = 255 bytes; el presupuesto (245) cae a mitad del 82º.
-        let largo = "あ".repeat(85).into_bytes();
-        assert_eq!(largo.len(), 255);
-        let c = candidate(&largo, 1, budget(), &id());
+    fn a_truncation_never_splits_a_character() {
+        // 85 × U+3042 = 255 bytes; the budget (245) falls mid-way through
+        // the 82nd.
+        let long_name = "あ".repeat(85).into_bytes();
+        assert_eq!(long_name.len(), 255);
+        let c = candidate(&long_name, 1, budget(), &id());
         assert!(c.len() <= budget());
-        std::str::from_utf8(&c).expect("el recorte deja UTF-8 válido");
-        assert_eq!(c.len() % 3, 0, "cortó en frontera: {}", c.len());
+        std::str::from_utf8(&c).expect("the trim leaves valid UTF-8");
+        assert_eq!(c.len() % 3, 0, "cut at a boundary: {}", c.len());
 
-        // Y un nombre que NUNCA fue UTF-8 se corta por bytes, sin intentar
-        // decodificarlo: el volumen ya lo aceptaba así (regla 1).
-        let mut crudo = vec![b'a'; 245];
-        crudo.extend_from_slice(&[0xff; 10]);
-        let c = candidate(&crudo, 1, budget(), &id());
+        // And a name that was NEVER UTF-8 is cut by bytes, without trying
+        // to decode it: the volume already accepted it that way (rule 1).
+        let mut raw = vec![b'a'; 245];
+        raw.extend_from_slice(&[0xff; 10]);
+        let c = candidate(&raw, 1, budget(), &id());
         assert_eq!(c.len(), 245);
         assert_eq!(c, vec![b'a'; 245]);
     }
 
     #[test]
-    fn la_fecha_de_borrado_es_iso_local() {
+    fn the_deletion_date_is_local_iso() {
         let s = local_datetime(1_726_000_000_123);
         assert_eq!(s.len(), 19, "{s}");
         assert_eq!(&s[4..5], "-");
         assert_eq!(&s[10..11], "T");
-        // El MISMO id da la MISMA fecha: es lo que hace idempotente el reintento.
+        // The SAME id gives the SAME date: that's what makes the retry idempotent.
         assert_eq!(s, local_datetime(1_726_000_000_123));
-        // Hora LOCAL, así que la del epoch depende de la zona del runner: lo
-        // que no depende de ella es la FORMA y que un día sea un día.
+        // LOCAL time, so the epoch's depends on the runner's zone: what
+        // doesn't depend on it is the SHAPE and that a day is a day.
         assert!(local_datetime(0).starts_with("19"), "{}", local_datetime(0));
         assert_ne!(s, local_datetime(1_726_000_000_123 + 86_400_000));
     }
 
     #[test]
-    fn el_sidecar_solo_se_deduce_de_una_ruta_con_forma_de_papelera() {
+    fn the_sidecar_is_only_deduced_from_a_trash_shaped_path() {
         assert_eq!(
             sidecar_of(Path::new("/t/Trash/files/a.txt")),
             Some(Path::new("/t/Trash/info/a.txt.trashinfo").to_path_buf())
@@ -897,71 +912,82 @@ mod tests {
         assert_eq!(sidecar_of(Path::new("/t/otro/a.txt")), None);
     }
 
-    /// Un `.Trash` que es un SYMLINK no se usa: cae en `.Trash-$uid`, que es
-    /// lo que impide redirigir la papelera de un montaje compartido.
+    /// A `.Trash` that's a SYMLINK isn't used: it falls back to
+    /// `.Trash-$uid`, which is what prevents redirecting a shared mount's
+    /// trash.
     #[test]
-    fn un_trash_compartido_que_es_symlink_no_se_usa() {
+    fn a_shared_trash_that_is_a_symlink_is_not_used() {
         let dir = tempfile::tempdir().expect("tempdir");
         let top = dir.path();
         std::os::unix::fs::symlink("/tmp", top.join(".Trash")).expect("symlink");
-        assert_eq!(shared_topdir_trash(top, 1000), None, "cae en .Trash-$uid");
+        assert_eq!(
+            shared_topdir_trash(top, 1000),
+            None,
+            "falls back to .Trash-$uid"
+        );
     }
 
-    /// En el mismo dispositivo manda la papelera de casa.
+    /// On the same device, the home trash wins.
     #[test]
-    fn en_el_mismo_dispositivo_manda_la_papelera_de_casa() {
+    fn on_the_same_device_the_home_trash_wins() {
         use super::prepare_trash_dir;
-        let casa = tempfile::tempdir().expect("tempdir");
-        let dir =
-            prepare_trash_dir(&casa.path().join("v.txt"), Some(casa.path())).expect("hay papelera");
-        assert_eq!(dir, casa.path().join("Trash"));
+        let home = tempfile::tempdir().expect("tempdir");
+        let dir = prepare_trash_dir(&home.path().join("v.txt"), Some(home.path()))
+            .expect("there is a trash");
+        assert_eq!(dir, home.path().join("Trash"));
         assert!(dir.join(super::INFO).is_dir());
     }
 
-    /// BLOCKER del security-reviewer: un directorio de papelera de topdir que
-    /// no es NUESTRO no se usa. Aquí se prueba la mitad que un test sin
-    /// privilegios puede construir —un symlink en su sitio—, que es la que
-    /// `create_dir_all` seguía alegremente: sembrar `/tmp/.Trash-1000 ->
-    /// /home/atacante/botín` mandaba ahí los ficheros de otro usuario.
+    /// security-reviewer BLOCKER: a topdir trash directory that isn't
+    /// OURS isn't used. Here the half a privilege-less test can build is
+    /// tested — a symlink in its place —, which is the one
+    /// `create_dir_all` used to happily follow: seeding
+    /// `/tmp/.Trash-1000 -> /home/attacker/loot` would send another
+    /// user's files there.
     #[test]
-    fn una_papelera_de_topdir_que_no_es_nuestra_no_se_usa() {
+    fn a_topdir_trash_that_is_not_ours_is_not_used() {
         use super::ensure_dir_owned;
         use std::os::unix::fs::PermissionsExt as _;
         let dir = tempfile::tempdir().expect("tempdir");
-        let ajeno = dir.path().join("ajeno");
-        std::fs::create_dir(&ajeno).expect("mkdir");
-        std::os::unix::fs::symlink(&ajeno, dir.path().join(".Trash-1000")).expect("symlink");
+        let foreign = dir.path().join("foreign");
+        std::fs::create_dir(&foreign).expect("mkdir");
+        std::os::unix::fs::symlink(&foreign, dir.path().join(".Trash-1000")).expect("symlink");
         assert_eq!(
             ensure_dir_owned(&dir.path().join(".Trash-1000")),
             Err(norte_proto::Error::Unsupported),
-            "un symlink no es una papelera nuestra"
+            "a symlink is not a trash of ours"
         );
 
-        // Y una que sí es nuestra pero se quedó abierta se APRIETA a 0700 en
-        // vez de rechazarse: los nombres de lo que uno borra no son de nadie más.
-        let mia = dir.path().join(".Trash-2000");
-        std::fs::create_dir(&mia).expect("mkdir");
-        std::fs::set_permissions(&mia, std::fs::Permissions::from_mode(0o777)).expect("chmod");
-        ensure_dir_owned(&mia).expect("es nuestra");
-        let modo = std::fs::symlink_metadata(&mia)
+        // And one that IS ours but was left open gets TIGHTENED to 0700
+        // instead of being rejected: the names of what one deletes belong
+        // to nobody else.
+        let mine = dir.path().join(".Trash-2000");
+        std::fs::create_dir(&mine).expect("mkdir");
+        std::fs::set_permissions(&mine, std::fs::Permissions::from_mode(0o777)).expect("chmod");
+        ensure_dir_owned(&mine).expect("it is ours");
+        let mode = std::fs::symlink_metadata(&mine)
             .expect("stat")
             .permissions()
             .mode();
-        assert_eq!(modo & 0o777, 0o700, "apretada: {modo:o}");
+        assert_eq!(mode & 0o777, 0o700, "tightened: {mode:o}");
     }
 
-    /// Y un `.Trash` sin sticky tampoco (spec): un directorio compartido sin
-    /// sticky deja que cualquiera borre lo de los demás.
+    /// And a `.Trash` without sticky doesn't work either (spec): a shared
+    /// directory without sticky lets anyone delete anyone else's things.
     #[test]
-    fn un_trash_compartido_sin_sticky_no_se_usa() {
+    fn a_shared_trash_without_sticky_is_not_used() {
         use std::os::unix::fs::PermissionsExt as _;
         let dir = tempfile::tempdir().expect("tempdir");
         let top = dir.path();
         std::fs::create_dir(top.join(".Trash")).expect("mkdir");
         std::fs::set_permissions(top.join(".Trash"), std::fs::Permissions::from_mode(0o777))
             .expect("chmod");
-        assert_eq!(shared_topdir_trash(top, 1000), None, "cae en .Trash-$uid");
-        // Con sticky sí: `$top/.Trash/$uid`.
+        assert_eq!(
+            shared_topdir_trash(top, 1000),
+            None,
+            "falls back to .Trash-$uid"
+        );
+        // With sticky, yes: `$top/.Trash/$uid`.
         std::fs::set_permissions(top.join(".Trash"), std::fs::Permissions::from_mode(0o1777))
             .expect("chmod sticky");
         assert_eq!(

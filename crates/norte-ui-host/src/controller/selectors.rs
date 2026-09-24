@@ -595,7 +595,7 @@ impl Estado {
             .map(|h| h.name.as_str())
             .collect();
         let sugerido = norte_frontend::places::suggested_hotlist_name(&destino, &ocupados);
-        let donde = Self::linea_de_ruta(&destino);
+        let location_line = Self::linea_de_ruta(&destino);
         let id = ModalId(self.siguiente_modal);
         self.siguiente_modal += 1;
         let vista = DialogView {
@@ -606,7 +606,7 @@ impl Estado {
             asker: None,
             deadline: None,
             deadline_at_ms: None,
-            body: vec![donde],
+            body: vec![location_line],
             overflow_note: String::new(),
             overflow_hostile: false,
             choices: vec![

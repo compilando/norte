@@ -1,31 +1,32 @@
-//! Estado del viewer (fase 7, spec §6): texto decodificado con detección
-//! (vía `norte-encoding`), «recargar como…» y hexview para binarios. Puro y
-//! testeable: la lectura la hace `main` vía el core (regla 7).
+//! Viewer state (phase 7, spec §6): decoded text with detection (via
+//! `norte-encoding`), "reload as…", and a hexview for binaries. Pure and
+//! testable: reading is done by `main` through the core (rule 7).
 //!
-//! Core SIN i18n (GUI-d T1): el texto de estado localizado vive render-side
-//! en cada frontend (`norte-tui::viewer::status`, TUI T2) compuesto sobre los
-//! getters de este módulo (`encoding_name`/`eol`/`had_errors`/`is_forced`).
+//! Core WITHOUT i18n (GUI-d T1): the localised status text lives render-side
+//! in each frontend (`norte-tui::viewer::status`, TUI T2), composed over this
+//! module's getters (`encoding_name`/`eol`/`had_errors`/`is_forced`).
 
 use norte_encoding::{Decoded, Detection, Eol};
 use norte_proto::{Entry, EntryKind, VPath};
 
-/// Cuántas líneas salta una página (fijo, como en los panes).
+/// How many lines a page jumps (fixed, same as in the panes).
 pub const PAGE: usize = 10;
 
-/// Bytes por fila del hexview.
+/// Bytes per hexview row.
 const HEX_COLS: usize = 16;
 
-/// Ancho de una fila del hexview, en celdas: `offset  hex×16  ascii`.
+/// A hexview row's width, in cells: `offset  hex×16  ascii`.
 ///
-/// Todo ASCII, así que celdas y bytes coinciden. La cuenta es la de
-/// [`hex_rows`]: ocho de offset, dos de separación, tres por byte, uno de
-/// hueco entre las dos mitades, dos más de separación, y la columna ASCII.
+/// All ASCII, so cells and bytes match. The count is [`hex_rows`]'s: eight
+/// for the offset, two of separation, three per byte, one gap between the
+/// two halves, two more of separation, and the ASCII column.
 const HEX_ROW_CELLS: usize = 8 + 2 + HEX_COLS * 3 + 1 + 2 + HEX_COLS;
 
-/// Formato de imagen RECONOCIDO por bytes mágicos (no por extensión: el viewer
-/// lee CONTENIDO, spec §6). El core NO decodifica (sin dep `image`): solo
-/// reconoce y entrega los bytes crudos al frontend, que decide si sabe pintarlos
-/// (la GUI GPUI decodifica y muestra la imagen; la TUI cae a hexview vía `rows`).
+/// An image format RECOGNISED by magic bytes (not by extension: the viewer
+/// reads CONTENT, spec §6). The core does NOT decode (no `image` dep): it
+/// only recognises and hands the raw bytes to the frontend, which decides
+/// whether it knows how to paint them (the GPUI GUI decodes and shows the
+/// image; the TUI falls back to hexview through `rows`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ImageFmt {
     /// PNG (`\x89PNG\r\n\x1a\n`).
@@ -41,7 +42,7 @@ pub enum ImageFmt {
 }
 
 impl ImageFmt {
-    /// Etiqueta técnica para la barra de estado (literal, no i18n).
+    /// Technical label for the status bar (literal, not i18n).
     #[must_use]
     pub fn label(self) -> &'static str {
         match self {
@@ -54,11 +55,12 @@ impl ImageFmt {
     }
 }
 
-/// Reconoce un formato de imagen por sus bytes MÁGICOS (spec §6: el viewer lee
-/// CONTENIDO, jamás confía en la extensión). Puro y barato: solo mira la
-/// cabecera, no decodifica ni valida el resto. `None` si no es ninguno de los
-/// formatos soportados. La decodificación real (y su validación) la hace el
-/// frontend; un falso positivo aquí se cae al fallback del frontend, no rompe.
+/// Recognises an image format by its MAGIC bytes (spec §6: the viewer reads
+/// CONTENT, never trusts the extension). Pure and cheap: it only looks at
+/// the header, it does not decode or validate the rest. `None` if it is none
+/// of the supported formats. The real decoding (and its validation) is done
+/// by the frontend; a false positive here falls back to the frontend's
+/// fallback, it does not break.
 #[must_use]
 pub fn image_format(bytes: &[u8]) -> Option<ImageFmt> {
     if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
@@ -76,24 +78,25 @@ pub fn image_format(bytes: &[u8]) -> Option<ImageFmt> {
     }
 }
 
-/// El gemelo por EXTENSIÓN de [`image_format`], y el ÚNICO sitio de este
-/// módulo donde se mira un nombre en vez de unos bytes.
+/// [`image_format`]'s twin by EXTENSION, and the ONLY place in this module
+/// that looks at a name instead of bytes.
 ///
-/// Existe por una razón concreta y acotada: para saber cuál es la hermana
-/// siguiente hay que clasificar candidatas que todavía no se han leído, y
-/// leerlas todas para averiguarlo costaría una lectura —y en un provider
-/// remoto, un viaje— por cada fichero que se descarta. Así que la escalera de
-/// [`hermana`] se recorre por extensión y el MODO del visor lo sigue decidiendo
-/// el contenido, como siempre: una `.jpg` que no lo es se abre igual, y se abre
-/// como lo que de verdad sea.
+/// Exists for a specific, bounded reason: knowing which is the next sibling
+/// requires classifying candidates that have not been read yet, and reading
+/// all of them to find out would cost one read —and on a remote provider, one
+/// round trip— per file that gets discarded. So [`hermana`]'s ladder is
+/// walked by extension and the viewer's MODE keeps being decided by content,
+/// as always: a `.jpg` that is not one still opens, and opens as whatever it
+/// really is.
 ///
-/// Las extensiones son exactamente las de los cinco formatos que
-/// [`image_format`] reconoce. Una que no esté aquí no es que no sea una imagen:
-/// es que este visor no sabría pintarla.
+/// The extensions are exactly those of the five formats [`image_format`]
+/// recognises. One that is not here does not mean it is not an image: it
+/// means this viewer would not know how to paint it.
 ///
-/// Opera sobre bytes crudos (regla 1): parte por el ÚLTIMO `.` a nivel de bytes
-/// y solo valida la EXTENSIÓN como UTF-8, así que un nombre con stem no-UTF8
-/// (`caf\xe9\xff.png`) se clasifica por su extensión igual que cualquier otro.
+/// Operates on raw bytes (rule 1): it splits at the LAST `.` at the byte
+/// level and only validates the EXTENSION as UTF-8, so a name with a
+/// non-UTF8 stem (`caf\xe9\xff.png`) is classified by its extension like any
+/// other.
 ///
 /// ```
 /// use norte_frontend::viewer::{ImageFmt, image_format_by_name};
@@ -118,23 +121,24 @@ pub fn image_format_by_name(name: &[u8]) -> Option<ImageFmt> {
     })
 }
 
-/// A qué clase pertenece una hermana, que es lo que decide si «siguiente» se
-/// para en ella o la salta.
+/// Which class a sibling belongs to, which is what decides whether "next"
+/// stops at it or skips it.
 ///
-/// Dos clases y no más: pasando fotos se quieren fotos, y leyendo un fichero se
-/// quiere el siguiente fichero. Una taxonomía más fina (por mimetype, por
-/// ejemplo) sonaría mejor y se notaría peor — al lector le tocaría adivinar por
-/// qué su `.md` no lleva a su `.txt`.
+/// Two classes and no more: browsing photos, photos are wanted, and reading a
+/// file, the next file is wanted. A finer taxonomy (by mimetype, for
+/// instance) would sound better and would be noticed for the worse — the
+/// reader would be left guessing why their `.md` does not lead to their
+/// `.txt`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Clase {
-    /// Una imagen de las que este visor sabe pintar.
+    /// An image of the kind this viewer knows how to paint.
     Imagen,
-    /// Todo lo demás que se puede abrir: texto, binario, lo que sea.
+    /// Everything else that can be opened: text, binary, whatever.
     Otro,
 }
 
-/// La clase de un nombre, por extensión. Ver [`image_format_by_name`] para por
-/// qué aquí manda el nombre y no el contenido.
+/// A name's class, by extension. See [`image_format_by_name`] for why the
+/// name rules here and not the content.
 ///
 /// ```
 /// use norte_frontend::viewer::{Clase, clase_por_nombre};
@@ -150,107 +154,111 @@ pub fn clase_por_nombre(name: &[u8]) -> Clase {
     }
 }
 
-/// El índice de la hermana SIGUIENTE (o anterior) de la clase pedida, dentro
-/// del listado que el usuario está viendo.
+/// The index of the NEXT (or previous) sibling of the requested class,
+/// within the listing the user is looking at.
 ///
-/// Tres decisiones, y cada una tapa algo que se nota:
+/// Three decisions, and each one covers something that gets noticed:
 ///
-/// - **La clase se PIDE, no se deduce del candidato de partida.** Quien llama
-///   pasa la del visor abierto, que la sabe por sus bytes ([`Viewer::is_image`]),
-///   así que una foto guardada como `.dat` sigue llevando a la foto siguiente.
-/// - **Solo ficheros REGULARES son hermanas.** No es solo que un directorio no
-///   lo sea (que también, fila `..` incluida: entrar en una carpeta ya tiene su
-///   tecla): un enlace o algo que el provider no clasifica tampoco. El visor se
-///   niega a leer «lo que sea» —así es como un preview automático acaba
-///   abriendo un dispositivo de bloque—, así que la escalera no puede llevar a
-///   un fifo llamado `dump.png` que `pane.view` misma no abriría.
-/// - **No envuelve.** Al llegar al final se contesta `None` y quien llama lo
-///   dice; dar la vuelta en silencio deja al lector sin saber que ya las vio
-///   todas, y volviendo a la primera parece que no pasó nada.
+/// - **The class is REQUESTED, not deduced from the starting candidate.**
+///   The caller passes the open viewer's, which knows it from its bytes
+///   ([`Viewer::is_image`]), so a photo saved as `.dat` still leads to the
+///   next photo.
+/// - **Only REGULAR files are siblings.** It is not just that a directory is
+///   not one (which it also is not, `..` row included: entering a folder
+///   already has its own key): a link or something the provider does not
+///   classify is not one either. The viewer refuses to read "whatever it
+///   is" —that is how an automatic preview ends up opening a block device—
+///   so the ladder cannot lead to a fifo called `dump.png` that `pane.view`
+///   itself would not open.
+/// - **It does not wrap.** On reaching the end it answers `None` and the
+///   caller says so; wrapping around silently leaves the reader not knowing
+///   they already saw them all, and going back to the first one looks like
+///   nothing happened.
 ///
-/// - **Solo se pasa por lo que el lector VE.** `visibles` son los índices que
-///   el filtro de la búsqueda rápida deja en pantalla
-///   ([`crate::PaneState::quick_visible`]); `None` = sin filtro, y entonces la
-///   escalera es el listado entero. Sin esto, con un filtro vivo `viewer.next`
-///   abría un fichero que no estaba en la lista que el lector acababa de
-///   reducir — y la ayuda prometía justo lo contrario.
+/// - **It only walks what the reader SEES.** `visible` is the indices the
+///   quick search filter leaves on screen
+///   ([`crate::PaneState::quick_visible`]); `None` = no filter, and then the
+///   ladder is the whole listing. Without this, with a live filter
+///   `viewer.next` opened a file that was not in the list the reader had
+///   just narrowed down — and the help promised exactly the opposite.
 ///
-/// El orden es el del listado TAL COMO SE VE —ya ordenado por quien llama—,
-/// que es la única escalera que el lector puede predecir. `desde` es siempre
-/// un índice de `entries`, filtro o no; si con filtro esa fila no está visible,
-/// no hay escalera que recorrer y la respuesta es `None`.
+/// The order is the listing's AS SEEN —already sorted by the caller—, which
+/// is the only ladder the reader can predict. `from` is always an index
+/// into `entries`, filter or not; if under a filter that row is not visible,
+/// there is no ladder to walk and the answer is `None`.
 ///
 /// ```
 /// use norte_frontend::viewer::{Clase, hermana};
 /// use norte_proto::{Entry, EntryKind, VPath};
 ///
-/// let fila = |wire: &str, kind| Entry {
+/// let row = |wire: &str, kind| Entry {
 ///     attrs: std::collections::BTreeMap::new(),
 ///     path: VPath::parse(wire).unwrap(),
 ///     kind,
 ///     size: None,
 ///     mtime_ms: None,
 /// };
-/// let listado = [
-///     fila("mem:///a.jpg", EntryKind::File),
-///     fila("mem:///notas.md", EntryKind::File),
-///     fila("mem:///b.png", EntryKind::File),
+/// let listing = [
+///     row("mem:///a.jpg", EntryKind::File),
+///     row("mem:///notas.md", EntryKind::File),
+///     row("mem:///b.png", EntryKind::File),
 /// ];
-/// // Desde la foto, «siguiente imagen» salta el texto de en medio.
-/// assert_eq!(hermana(&listado, None, 0, true, Clase::Imagen), Some(2));
-/// // Y desde la última no hay más: no se vuelve a la primera.
-/// assert_eq!(hermana(&listado, None, 2, true, Clase::Imagen), None);
-/// // Con un filtro que solo deja la primera, no hay siguiente.
-/// assert_eq!(hermana(&listado, Some(&[0]), 0, true, Clase::Imagen), None);
+/// // From the photo, "next image" skips the text in between.
+/// assert_eq!(hermana(&listing, None, 0, true, Clase::Imagen), Some(2));
+/// // And from the last one there is nothing more: it does not go back to the first.
+/// assert_eq!(hermana(&listing, None, 2, true, Clase::Imagen), None);
+/// // With a filter that leaves only the first one, there is no next.
+/// assert_eq!(hermana(&listing, Some(&[0]), 0, true, Clase::Imagen), None);
 /// ```
 #[must_use]
 pub fn hermana(
     entries: &[Entry],
-    visibles: Option<&[usize]>,
-    desde: usize,
-    adelante: bool,
-    quiero: Clase,
+    visible: Option<&[usize]>,
+    from: usize,
+    forward: bool,
+    wanted: Clase,
 ) -> Option<usize> {
-    let paso = |i: usize| {
-        if adelante {
+    let step = |i: usize| {
+        if forward {
             i.checked_add(1)
         } else {
             i.checked_sub(1)
         }
     };
-    // La misma pregunta para los dos recorridos: solo un fichero regular, y de
-    // la clase pedida. Un índice fuera del listado contesta que no.
-    let vale = |i: usize| {
+    // The same question for both walks: only a regular file, and of the
+    // requested class. An index outside the listing answers no.
+    let valid = |i: usize| {
         entries.get(i).is_some_and(|e| {
             e.kind == EntryKind::File
                 && clase_por_nombre(
                     e.path
                         .file_name()
                         .map_or(&[][..], norte_proto::Segment::as_bytes),
-                ) == quiero
+                ) == wanted
         })
     };
-    match visibles {
-        // Sin filtro: la escalera son los índices del listado.
+    match visible {
+        // No filter: the ladder is the listing's indices.
         None => {
-            let mut i = desde;
+            let mut i = from;
             loop {
-                i = paso(i)?;
-                // El tope: sin esto, avanzar más allá del final no terminaría.
+                i = step(i)?;
+                // The bound: without this, advancing past the end would
+                // never stop.
                 entries.get(i)?;
-                if vale(i) {
+                if valid(i) {
                     return Some(i);
                 }
             }
         }
-        // Con filtro: se anda por POSICIONES dentro de lo visible, y lo que se
-        // devuelve sigue siendo el índice real del listado.
+        // With a filter: it walks by POSITION within what is visible, and
+        // what gets returned is still the listing's real index.
         Some(vis) => {
-            let mut p = vis.iter().position(|&real| real == desde)?;
+            let mut p = vis.iter().position(|&real| real == from)?;
             loop {
-                p = paso(p)?;
+                p = step(p)?;
                 let &i = vis.get(p)?;
-                if vale(i) {
+                if valid(i) {
                     return Some(i);
                 }
             }
@@ -258,52 +266,52 @@ pub fn hermana(
     }
 }
 
-/// El presupuesto de píxeles de una preview: 40 megapíxeles.
+/// A preview's pixel budget: 40 megapixels.
 ///
-/// No es un límite de estética sino de MEMORIA. Un PNG de 64 KB puede declarar
-/// 60000×60000 y costarle gigabytes al decodificador: es la bomba de
-/// descompresión, y la única defensa barata es leerle la cabecera y negarse
-/// ANTES de darle los bytes a nadie que decodifique. Cuarenta megapíxeles
-/// cubren con holgura cualquier foto real (una de 50 Mpx es un sensor de gama
-/// alta) y son ~160 MB en RGBA, que es caro pero no letal.
+/// It is not an aesthetic limit but a MEMORY one. A 64 KB PNG can declare
+/// 60000×60000 and cost the decoder gigabytes: this is the decompression
+/// bomb, and the only cheap defense is to read its header and refuse BEFORE
+/// handing the bytes to anything that decodes. Forty megapixels comfortably
+/// cover any real photo (a 50 Mpx one is a high-end sensor) and are ~160 MB
+/// in RGBA, which is expensive but not lethal.
 pub const PIXEL_BUDGET: u64 = 40_000_000;
 
-/// Las dimensiones que la cabecera DECLARA, sin decodificar nada.
+/// The dimensions the header DECLARES, without decoding anything.
 ///
-/// `None` cuando no se reconoce el formato, cuando la cabecera está incompleta
-/// o cuando dice algo que no se entiende: quien llama trata ese `None` como
-/// «no se puede prometer nada de esta imagen» y se niega, que es lo contrario
-/// de tratarlo como «adelante».
+/// `None` when the format is not recognised, when the header is incomplete,
+/// or when it says something that makes no sense: the caller treats that
+/// `None` as "nothing about this image can be promised" and refuses, which
+/// is the opposite of treating it as "go ahead".
 ///
-/// Lee OFFSETS FIJOS y no asigna nada en función de lo que lea. Es código que
-/// mira bytes de un tercero para decidir un número, así que es del tipo
-/// aburrido a propósito: sin bucles sobre longitudes del fichero salvo el
-/// recorrido acotado de segmentos de JPEG, y sin aritmética que pueda
-/// desbordar (todo en `u64`).
+/// Reads FIXED OFFSETS and allocates nothing based on what it reads. This is
+/// code that looks at a third party's bytes to decide a number, so it is
+/// deliberately the boring kind: no loops over file lengths except JPEG's
+/// bounded segment walk, and no arithmetic that could overflow (everything
+/// in `u64`).
 ///
 /// ```
 /// use norte_frontend::viewer::image_dimensions;
-/// // Un PNG mínimo: firma, longitud del IHDR, tipo, y ancho/alto.
+/// // A minimal PNG: signature, IHDR length, type, and width/height.
 /// let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
 /// png.extend_from_slice(&[0, 0, 0, 13]);
 /// png.extend_from_slice(b"IHDR");
 /// png.extend_from_slice(&800u32.to_be_bytes());
 /// png.extend_from_slice(&600u32.to_be_bytes());
 /// assert_eq!(image_dimensions(&png), Some((800, 600)));
-/// assert_eq!(image_dimensions(b"no soy una imagen"), None);
+/// assert_eq!(image_dimensions(b"not an image"), None);
 /// ```
 #[must_use]
 pub fn image_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
     match image_format(bytes)? {
-        // IHDR es SIEMPRE el primer chunk y está en un offset fijo.
+        // IHDR is ALWAYS the first chunk and sits at a fixed offset.
         ImageFmt::Png => (bytes.len() >= 24 && &bytes[12..16] == b"IHDR")
             .then(|| (be32(bytes, 16), be32(bytes, 20))),
-        // Logical Screen Descriptor, little-endian, justo tras la firma.
+        // Logical Screen Descriptor, little-endian, right after the signature.
         ImageFmt::Gif => {
             (bytes.len() >= 10).then(|| (u32::from(le16(bytes, 6)), u32::from(le16(bytes, 8))))
         }
-        // DIB header: ancho y alto con signo; el alto NEGATIVO significa
-        // filas de arriba abajo, no una imagen de tamaño negativo.
+        // DIB header: signed width and height; a NEGATIVE height means
+        // top-to-bottom rows, not a negatively sized image.
         ImageFmt::Bmp => (bytes.len() >= 26).then(|| {
             (
                 le32(bytes, 18).unsigned_abs(),
@@ -327,28 +335,29 @@ fn le32(b: &[u8], at: usize) -> i32 {
     i32::from_le_bytes([b[at], b[at + 1], b[at + 2], b[at + 3]])
 }
 
-/// WebP tiene TRES sabores y cada uno guarda el tamaño en otro sitio. Uno que
-/// no se reconozca es `None`: negarse es la respuesta correcta a «no sé».
+/// WebP has THREE flavors and each one keeps the size somewhere else. One
+/// that is not recognised is `None`: refusing is the correct answer to "I do
+/// not know".
 fn webp_dimensions(b: &[u8]) -> Option<(u32, u32)> {
     if b.len() < 30 {
         return None;
     }
     match &b[12..16] {
-        // Simple lossy: el keyframe de VP8 lleva 14 bits por eje.
+        // Simple lossy: VP8's keyframe carries 14 bits per axis.
         b"VP8 " => Some((
             u32::from(le16(b, 26) & 0x3FFF),
             u32::from(le16(b, 28) & 0x3FFF),
         )),
-        // Lossless: 14 bits por eje, empaquetados y menos uno.
+        // Lossless: 14 bits per axis, packed and minus one.
         b"VP8L" => {
             let v = u32::from_le_bytes([b[21], b[22], b[23], b[24]]);
             Some(((v & 0x3FFF) + 1, ((v >> 14) & 0x3FFF) + 1))
         }
-        // Extendido: 24 bits por eje, menos uno.
-        // El `+ 1` es del VALOR entero, no del último desplazamiento: sin
-        // los paréntesis se ata al `<< 16` y el ancho sale mal por 65536.
-        // Lo cazó clippy, y es justo la clase de error que esta función
-        // tiene prohibida.
+        // Extended: 24 bits per axis, minus one.
+        // The `+ 1` belongs to the integer VALUE, not the last shift:
+        // without the parentheses it binds to the `<< 16` and the width
+        // comes out wrong by 65536. clippy caught it, and it is exactly the
+        // class of error this function is forbidden from having.
         b"VP8X" => Some((
             (u32::from(b[24]) | (u32::from(b[25]) << 8) | (u32::from(b[26]) << 16)) + 1,
             (u32::from(b[27]) | (u32::from(b[28]) << 8) | (u32::from(b[29]) << 16)) + 1,
@@ -357,118 +366,121 @@ fn webp_dimensions(b: &[u8]) -> Option<(u32, u32)> {
     }
 }
 
-/// JPEG no tiene offset fijo: hay que recorrer segmentos hasta el SOF. El
-/// recorrido está ACOTADO por la longitud de lo leído y avanza siempre, así
-/// que no puede quedarse dando vueltas sobre un fichero manipulado.
+/// JPEG has no fixed offset: segments have to be walked up to the SOF. The
+/// walk is BOUNDED by the length of what was read and always advances, so it
+/// cannot get stuck spinning over a tampered file.
 fn jpeg_dimensions(b: &[u8]) -> Option<(u32, u32)> {
     let mut i = 2usize;
     while i + 9 < b.len() {
         if b[i] != 0xFF {
-            // Fuera de sincronía: no se adivina, se abandona.
+            // Out of sync: it is not guessed at, it is abandoned.
             return None;
         }
-        let marcador = b[i + 1];
-        // SOF0..SOF15, saltando los que no llevan tamaño (DHT, JPG, DAC).
-        if (0xC0..=0xCF).contains(&marcador) && !matches!(marcador, 0xC4 | 0xC8 | 0xCC) {
+        let marker = b[i + 1];
+        // SOF0..SOF15, skipping the ones that carry no size (DHT, JPG, DAC).
+        if (0xC0..=0xCF).contains(&marker) && !matches!(marker, 0xC4 | 0xC8 | 0xCC) {
             return Some((
                 u32::from(u16::from_be_bytes([b[i + 7], b[i + 8]])),
                 u32::from(u16::from_be_bytes([b[i + 5], b[i + 6]])),
             ));
         }
-        let largo = usize::from(u16::from_be_bytes([b[i + 2], b[i + 3]]));
-        if largo < 2 {
+        let length = usize::from(u16::from_be_bytes([b[i + 2], b[i + 3]]));
+        if length < 2 {
             return None;
         }
-        i += 2 + largo;
+        i += 2 + length;
     }
     None
 }
 
-/// Preview producido por un plugin (M4-P5): reemplaza la vista cruda mientras
-/// está presente. Líneas con estilo (#29): la salida del plugin se parsea con
-/// el saneador ANSI-SGR ([`crate::ansi::parse_sgr`]) — que DESCARTA cualquier
-/// escape peligroso y deja solo color de primer plano — y cada tramo se
-/// enmascara ([`crate::display_name`]): texto de un TERCERO, jamás confiado.
+/// A plugin-produced preview (M4-P5): replaces the raw view while it is
+/// present. Styled lines (#29): the plugin's output is parsed with the
+/// ANSI-SGR sanitiser ([`crate::ansi::parse_sgr`]) — which DISCARDS any
+/// dangerous escape and keeps only foreground color — and each span is
+/// masked ([`crate::display_name`]): THIRD-PARTY text, never trusted.
 pub struct PluginPreviewView {
-    /// Nombre legible del plugin previewer (ya enmascarado), para el indicador.
+    /// The plugin previewer's readable name (already masked), for the
+    /// indicator.
     pub plugin_name: String,
-    /// La decodificación host-side del fichero fue LOSSY (#101,
-    /// `PluginPreview::lossy` del wire): los `�` de la salida vienen de una
-    /// decodificación fallida, no del fichero. El frontend lo lee por
-    /// [`Viewer::preview_lossy`] y lo señala junto al indicador «via …».
-    /// Privado: solo lo fijan los dos constructores del `Viewer`.
+    /// The host-side decoding of the file was LOSSY (#101, the wire's
+    /// `PluginPreview::lossy`): the `�`s in the output come from a failed
+    /// decoding, not from the file. The frontend reads it through
+    /// [`Viewer::preview_lossy`] and flags it next to the "via …" indicator.
+    /// Private: only the `Viewer`'s two constructors set it.
     lossy: bool,
-    /// Líneas con color, saneadas y enmascaradas.
+    /// Colored lines, sanitised and masked.
     styled: Vec<crate::ansi::StyledLine>,
 }
 
-/// El viewer abierto sobre un archivo.
+/// The viewer open over a file.
 #[expect(
     clippy::struct_excessive_bools,
-    reason = "hechos independientes del fichero abierto: si se truncó, si se \
-              enseña en hexadecimal, si la decodificación dio errores y si los \
-              BYTES eran de una imagen. No son estados de una máquina —pueden \
-              darse en cualquier combinación— y juntarlos en enums de dos \
-              variantes solo renombraría el mismo booleano"
+    reason = "independent facts about the open file: whether it was \
+              truncated, whether it shows in hexadecimal, whether decoding \
+              gave errors, and whether the BYTES were an image's. They are \
+              not states of a machine —they can occur in any combination— \
+              and grouping them into two-variant enums would only rename \
+              the same boolean"
 )]
 pub struct Viewer {
-    /// El archivo mostrado.
+    /// The displayed file.
     pub path: VPath,
-    /// Lo leído (posiblemente truncado al presupuesto del viewer).
+    /// What was read (possibly truncated to the viewer's budget).
     bytes: Vec<u8>,
-    /// `true` si el archivo seguía (solo se leyó la cabecera).
+    /// `true` if the file kept going (only the header was read).
     pub truncated: bool,
-    /// Hexview activo (automático en binarios NO-imagen; toggle manual).
+    /// Hexview active (automatic on NON-image binaries; manual toggle).
     pub hex: bool,
-    /// Formato de imagen reconocido por bytes mágicos (`recompute`), o `None`.
-    /// Cuando es `Some` y no hay encoding forzado, el viewer está en modo
-    /// imagen: la GUI la pinta ([`Viewer::is_image`]); frontends sin render de
-    /// imagen (TUI) caen a hexview (los bytes siguen disponibles vía `rows`).
+    /// Image format recognised by magic bytes (`recompute`), or `None`. When
+    /// it is `Some` and there is no forced encoding, the viewer is in image
+    /// mode: the GUI paints it ([`Viewer::is_image`]); frontends with no
+    /// image render (TUI) fall back to hexview (the bytes stay available
+    /// through `rows`).
     image: Option<ImageFmt>,
-    /// Si los BYTES leídos eran los de una imagen, INDEPENDIENTEMENTE de qué
-    /// acabe pintando este visor.
+    /// Whether the BYTES read were an image's, REGARDLESS of what this
+    /// viewer ends up painting.
     ///
-    /// Va aparte de `image` porque `image` contesta «qué estoy pintando» y se
-    /// apaga con un encoding forzado o cuando un previewer de plugin sustituye
-    /// la vista entera; esto contesta «qué ES el fichero», que no cambia por
-    /// ninguna de las dos cosas. Lo fija [`Viewer::new`] y lo traslada
-    /// [`Viewer::set_image_by_bytes`] en los constructores de preview, que no
-    /// reciben bytes.
+    /// Kept apart from `image` because `image` answers "what am I
+    /// painting" and turns off with a forced encoding or when a plugin
+    /// previewer replaces the whole view; this answers "what the file IS",
+    /// which does not change for either of those two things. Set by
+    /// [`Viewer::new`] and carried over by [`Viewer::set_image_by_bytes`] in
+    /// the preview constructors, which receive no bytes.
     image_bytes: bool,
-    /// Encoding forzado por «recargar como…» (None = detección).
+    /// Encoding forced by "reload as…" (None = detection).
     forced: Option<&'static norte_encoding::Encoding>,
-    /// Primera línea visible.
+    /// First visible line.
     pub scroll: usize,
-    /// Primera COLUMNA visible, en celdas de terminal.
+    /// First visible COLUMN, in terminal cells.
     ///
-    /// Sin esto, una línea más ancha que la ventana —un HTML minificado, un
-    /// CSV, un log— se pintaba recortada y el resto era inalcanzable: el visor
-    /// no envuelve, así que lo que no cabe no está en ninguna parte.
+    /// Without this, a line wider than the window —a minified HTML, a CSV, a
+    /// log— painted truncated and the rest was unreachable: the viewer does
+    /// not wrap, so what does not fit is nowhere.
     ///
-    /// Cada modo tiene su propio ancho, así que al cambiar de modo vuelve a
-    /// cero: una columna de la vista anterior no nombra la misma columna aquí.
+    /// Each mode has its own width, so switching modes resets it to zero: a
+    /// column from the previous view does not name the same column here.
     hscroll: usize,
-    /// La línea de TEXTO más ancha, en celdas.
+    /// The widest TEXT line, in cells.
     ///
-    /// El tope de verdad lo da [`Self::max_cols`], que además sabe del
-    /// hexadecimal — este campo es solo la mitad de texto de esa respuesta.
+    /// The real cap comes from [`Self::max_cols`], which also knows about
+    /// the hexadecimal — this field is only the text half of that answer.
     ///
-    /// Se mide una vez al decodificar y no por ventana. Medir solo lo visible
-    /// haría que el tope cambiara al bajar, y el texto saltaría de lado sin
-    /// que nadie hubiera pulsado nada.
+    /// Measured once on decoding and not per window. Measuring only what is
+    /// visible would make the cap change when scrolling down, and the text
+    /// would jump sideways without anyone pressing anything.
     max_cols_texto: usize,
-    /// El zoom de la IMAGEN, en porcentaje de lo que ocuparía ajustada.
-    /// `None` = ajustar, y es como se abre siempre: lo primero que se quiere
-    /// de una imagen es verla entera.
+    /// The IMAGE's zoom, as a percentage of what it would take up fitted.
+    /// `None` = fit, and that is how it always opens: the first thing wanted
+    /// from an image is to see it whole.
     ///
-    /// [`Viewer::ZOOM_ACTUAL`] es el centinela de «tamaño real». Vive aquí y
-    /// no en el frontend porque los dos lo necesitan igual y porque es
-    /// estado del visor, como el hexadecimal o el encoding forzado.
+    /// [`Viewer::ZOOM_ACTUAL`] is the "real size" sentinel. Lives here and
+    /// not in the frontend because both need it the same way and because it
+    /// is viewer state, like the hexadecimal or the forced encoding.
     zoom: Option<u16>,
-    /// Preview de un plugin (M4-P5): si está, REEMPLAZA la vista cruda y la
-    /// decodificación (bytes/encoding se ignoran; `lines` ya enmascaradas).
+    /// A plugin's preview (M4-P5): if present, REPLACES the raw view and the
+    /// decoding (bytes/encoding are ignored; `lines` already masked).
     plugin_preview: Option<PluginPreviewView>,
-    // ---- cache de decodificación (se recomputa al cambiar encoding) ----
+    // ---- decoding cache (recomputed when the encoding changes) ----
     text: String,
     encoding_name: &'static str,
     eol: Eol,
@@ -477,7 +489,7 @@ pub struct Viewer {
 }
 
 impl Viewer {
-    /// Struct base con todos los campos en su cero (sin decodificar aún).
+    /// Base struct with every field at its zero (not decoded yet).
     fn base(path: VPath, bytes: Vec<u8>, truncated: bool) -> Self {
         Self {
             path,
@@ -1091,7 +1103,7 @@ fn desplazar_estilo(linea: &crate::ansi::StyledLine, n: usize) -> crate::ansi::S
     // se tira igual: quién la pinta no puede depender de dónde el plugin puso
     // sus fronteras de color.
     if let Some(primero) = out.first_mut() {
-        let limpio = crate::display::sin_marcas_de_cabeza(&primero.text);
+        let limpio = crate::display::strip_leading_marks(&primero.text);
         if limpio.len() != primero.text.len() {
             primero.text = limpio.to_owned();
         }

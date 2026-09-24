@@ -148,7 +148,7 @@ mod error_message_tests {
     /// Every category renders its OWN localized message — never the proto's
     /// hardcoded English `Display` (#20, spec §17.7).
     #[test]
-    fn cada_categoria_tiene_mensaje_propio_no_display() {
+    fn each_category_has_its_own_message_not_display() {
         let _ = norte_i18n::force(norte_i18n::Lang::Es);
         let nf = error_message(&Error::NotFound);
         assert!(nf.contains("no encontrado"), "localized ES: {nf}");
@@ -176,7 +176,7 @@ mod error_message_tests {
 
     /// An unknown future category falls back to `err-unknown`, never empty.
     #[test]
-    fn categoria_desconocida_cae_a_unknown() {
+    fn unknown_category_falls_back_to_unknown() {
         let _ = norte_i18n::force(norte_i18n::Lang::En);
         let u = error_message(&Error::Unknown);
         assert!(u.contains("unknown error"), "{u}");
@@ -186,7 +186,7 @@ mod error_message_tests {
     /// `HostKeyUnknown`'s host — a hostile host with a bidi override would
     /// spoof the status bar — nor a `PolicyDenied`'s `rule`.
     #[test]
-    fn categoria_no_filtra_host_hostil_ni_rule() {
+    fn category_doesnt_leak_hostile_host_or_rule() {
         use super::error_category;
         let hk = error_category(&Error::HostKeyUnknown {
             host: "evil\u{202E}host".into(),
@@ -213,7 +213,7 @@ mod error_message_tests {
     /// duplication, zero drift between what a script compares and what the
     /// status bar paints.
     #[test]
-    fn error_key_es_la_clave_estable_de_la_categoria() {
+    fn error_key_is_the_categorys_stable_key() {
         use super::{error_category, error_key};
         let _ = norte_i18n::force(norte_i18n::Lang::En);
         assert_eq!(error_key(&Error::NotFound), "err-not-found");
@@ -247,7 +247,7 @@ mod error_message_tests {
     /// directory") isn't the other two's ("leave the tree containing the
     /// other one").
     #[test]
-    fn cada_relacion_de_solape_tiene_su_propia_frase() {
+    fn each_overlap_relation_has_its_own_phrase() {
         use super::{error_category, error_key};
         use norte_proto::RootOverlap;
         let mut seen = std::collections::BTreeSet::new();
@@ -297,7 +297,7 @@ mod error_message_tests {
     /// `Display` ("Permission denied (os error 13)", which the OS localizes
     /// however it pleases — rule 1).
     #[test]
-    fn categoria_io_local_no_filtra_el_display_del_os() {
+    fn local_io_category_doesnt_leak_the_os_display() {
         let _ = norte_i18n::force(norte_i18n::Lang::En);
         let e = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
         let s = io_error_category(&e);
@@ -313,7 +313,7 @@ mod error_message_tests {
     /// through `display_name` — never raw bidi/controls in the status bar —
     /// and capped.
     #[test]
-    fn categoria_config_no_filtra_el_diagnostico_del_parser() {
+    fn config_category_doesnt_leak_the_parsers_diagnostic() {
         let _ = norte_i18n::force(norte_i18n::Lang::En);
         let e = config::ConfigError::Toml {
             path: "/etc/norte/config.toml".into(),
@@ -339,7 +339,7 @@ mod error_message_tests {
     /// a hostile spec (can come from a FOREIGN repo's `./.norte`) and the
     /// OS's Display, raw on the status bar via `apply_theme`.
     #[test]
-    fn categoria_tema_no_filtra_spec_hostil_ni_os() {
+    fn theme_category_doesnt_leak_hostile_spec_or_os() {
         let _ = norte_i18n::force(norte_i18n::Lang::En);
         let e = crate::theme::ResolveError::Io {
             spec: "themes/\u{202E}x.toml".into(),
@@ -361,7 +361,7 @@ mod error_message_tests {
     /// #73: a mile-long diagnostic (a hostile TOML can quote arbitrary
     /// values) comes out TRUNCATED — the status bar is one line.
     #[test]
-    fn el_detalle_del_parser_tiene_tope() {
+    fn the_parsers_detail_has_a_cap() {
         let s = detail_for_bar(&"x".repeat(1000));
         assert!(s.chars().count() <= DETAIL_MAX_CHARS + 1, "{}", s.len());
         assert!(s.ends_with('…'), "truncation marked: {s}");
@@ -370,7 +370,7 @@ mod error_message_tests {
     /// #73: the keymaps error is localized via Fluent (hardcoded Spanish
     /// anyhow contexts violated the i18n convention).
     #[test]
-    fn error_de_keymap_se_localiza_con_el_nombre_del_preset() {
+    fn keymap_error_is_localized_with_the_presets_name() {
         let _ = norte_i18n::force(norte_i18n::Lang::En);
         let s = keymaps_error_category(&KeymapsError::UnknownPreset {
             name: "vintage".into(),

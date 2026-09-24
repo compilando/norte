@@ -1,27 +1,29 @@
-//! La pantalla de arranque, compartida (spec 2026-09-15, fase 2).
+//! The shared startup screen (spec 2026-09-15, phase 2).
 //!
-//! Qué dice el splash —qué build corre, contra qué daemon, y a dónde puedes ir
-//! de un número— es la misma pregunta en el terminal y en la ventana, así que
-//! se contesta una vez. Cada frontend pone los píxeles.
+//! What the splash says — what build is running, against which daemon, and
+//! where a number can take you — is the same question in the terminal and
+//! in the window, so it is answered once. Each frontend supplies the
+//! pixels.
 //!
-//! Las secciones salen de un REGISTRO y no de una lista escrita a mano: una
-//! fuente nueva (los populares, los favoritos, los perfiles… y mañana lo que
-//! aporte un plugin) se añade implementando [`SplashSource`], sin tocar a
-//! quien pinta. Una fuente sin nada que decir NO ocupa sitio.
+//! The sections come from a REGISTRY and not a hand-written list: a new
+//! source (recents, favorites, profiles… and tomorrow whatever a plugin
+//! contributes) is added by implementing [`SplashSource`], without
+//! touching whoever paints it. A source with nothing to say takes up NO
+//! room.
 
-/// Contra qué está hablando este frontend.
+/// What this frontend is talking to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Daemon {
-    /// El core va dentro del proceso.
+    /// The core runs inside the process.
     Embedded,
-    /// Hay un daemon y está conectado.
+    /// There is a daemon and it is connected.
     Connected,
-    /// Se está conectando, o reconectando.
+    /// It is connecting, or reconnecting.
     Connecting,
 }
 
 impl Daemon {
-    /// La clave Fluent que lo dice.
+    /// The Fluent key that says it.
     #[must_use]
     pub fn key(self) -> &'static str {
         match self {
@@ -32,69 +34,71 @@ impl Daemon {
     }
 }
 
-/// Una fila del splash: lo que se lee, y el comando que corre si se elige.
+/// A row of the splash: what is read, and the command that runs if it is
+/// chosen.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SplashRow {
-    /// Lo que se lee, ya saneado por quien lo construye.
+    /// What is read, already sanitized by whoever builds it.
     pub label: String,
-    /// El detalle a la derecha (una ruta, un número de visitas). Puede ir
-    /// vacío.
+    /// The detail on the right (a path, a visit count). Can be empty.
     pub detail: String,
-    /// El comando del catálogo que ejecuta la fila.
+    /// The catalogue command the row runs.
     pub command: String,
-    /// Su argumento, si lo lleva (un directorio, un nombre de perfil).
+    /// Its argument, if it carries one (a directory, a profile name).
     pub arg: Option<String>,
 }
 
-/// Un grupo de filas con su título.
+/// A group of rows with its title.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SplashSection {
-    /// Clave Fluent del título: el splash no lleva prosa traducida dentro.
+    /// Fluent key of the title: the splash carries no translated prose
+    /// inline.
     pub title_key: &'static str,
-    /// Las filas, en el orden en que se pintan.
+    /// The rows, in the order they are painted.
     pub rows: Vec<SplashRow>,
 }
 
-/// Todo lo que el splash enseña.
+/// Everything the splash shows.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SplashView {
-    /// El arte, una fila por línea ([`ART`]).
+    /// The art, one row per line ([`ART`]).
     pub art: &'static [&'static str],
-    /// La versión del binario.
+    /// The binary's version.
     pub version: String,
-    /// La revisión de git con la que se compiló.
+    /// The git revision it was built from.
     pub revision: String,
-    /// Contra qué core habla.
+    /// Which core it talks to.
     pub daemon: Daemon,
-    /// Las secciones, ya filtradas: ninguna viene vacía.
+    /// The sections, already filtered: none of them come empty.
     pub sections: Vec<SplashSection>,
 }
 
-/// De dónde sale una sección del splash.
+/// Where a splash section comes from.
 ///
-/// `None` = esta fuente no tiene nada que decir hoy (sin favoritos, sin
-/// perfiles), y entonces no ocupa sitio en pantalla.
+/// `None` = this source has nothing to say today (no favorites, no
+/// profiles), and then it takes up no room on screen.
 pub trait SplashSource {
-    /// La sección de esta fuente, si tiene filas.
+    /// This source's section, if it has rows.
     fn section(&self) -> Option<SplashSection>;
 }
 
-/// Las secciones de las fuentes dadas, en su orden, saltándose las vacías.
+/// The sections of the given sources, in their order, skipping the empty
+/// ones.
 ///
 /// ```
 /// use norte_frontend::splash::{SplashRow, SplashSection, SplashSource, sections};
 ///
-/// struct Vacia;
-/// impl SplashSource for Vacia {
+/// struct Empty;
+/// impl SplashSource for Empty {
 ///     fn section(&self) -> Option<SplashSection> { None }
 /// }
-/// struct Una;
-/// impl SplashSource for Una {
+/// struct One;
+/// impl SplashSource for One {
 ///     fn section(&self) -> Option<SplashSection> {
 ///         Some(SplashSection {
 ///             title_key: "splash-recent",
 ///             rows: vec![SplashRow {
-///                 label: "casa".to_owned(),
+///                 label: "home".to_owned(),
 ///                 detail: String::new(),
 ///                 command: "nav.enter".to_owned(),
 ///                 arg: None,
@@ -102,75 +106,76 @@ pub trait SplashSource {
 ///         })
 ///     }
 /// }
-/// let fuentes: [&dyn SplashSource; 3] = [&Vacia, &Una, &Vacia];
-/// let s = sections(&fuentes);
-/// assert_eq!(s.len(), 1, "una fuente sin filas no ocupa sitio");
+/// let sources: [&dyn SplashSource; 3] = [&Empty, &One, &Empty];
+/// let s = sections(&sources);
+/// assert_eq!(s.len(), 1, "a source with no rows takes up no room");
 /// assert_eq!(s[0].title_key, "splash-recent");
 /// ```
 #[must_use]
-pub fn sections(fuentes: &[&dyn SplashSource]) -> Vec<SplashSection> {
-    fuentes
+pub fn sections(sources: &[&dyn SplashSource]) -> Vec<SplashSection> {
+    sources
         .iter()
         .filter_map(|f| f.section())
         .filter(|s| !s.rows.is_empty())
         .collect()
 }
 
-/// Cuánto tapa el splash `brief` como MUCHO, en milisegundos.
+/// How long the `brief` splash covers the screen AT MOST, in milliseconds.
 ///
-/// Compartido porque es parte de lo que la pantalla PROMETE: «se ve, y se
-/// quita sola». Dos plazos distintos serían dos arranques distintos, y el que
-/// tardara más se leería como que esa superficie va más lenta.
+/// Shared because it is part of what the screen PROMISES: "it shows, and
+/// it goes away on its own". Two different deadlines would be two
+/// different startups, and whichever took longer would read as that
+/// surface being slower.
 ///
-/// No es de los temporizadores que prohíbe la ADR 0006 —aquello va de resolver
-/// TECLAS—: aquí ninguna tecla espera al reloj, porque cualquiera lo quita
-/// antes.
+/// It is not one of the timers ADR 0006 forbids — that one is about
+/// resolving KEYS — here no key waits on the clock, because any of them
+/// dismisses it first.
 pub const BRIEF_MS: i64 = norte_config::load::UiChrome::DEFAULT_SPLASH_MS as i64;
 
-/// Cuántas filas del splash se pueden elegir por número.
+/// How many splash rows can be picked by number.
 ///
-/// Nueve, y no diez: `0` no es la décima de nada, y una lista que empieza en
-/// `1` y acaba en `0` hay que leerla dos veces.
+/// Nine, not ten: `0` is not the tenth of anything, and a list that starts
+/// at `1` and ends at `0` has to be read twice.
 pub const NUMBERED: usize = 9;
 
-/// Las filas numeradas, en el orden en que se pintan: `(número, fila)`.
+/// The numbered rows, in the order they are painted: `(number, row)`.
 ///
-/// Numera a través de las secciones, no dentro de cada una: lo que el lector
-/// ve es una lista con números, y dos filas con el mismo número serían dos
-/// teclas que hacen cosas distintas.
+/// Numbers across the sections, not within each one: what the reader sees
+/// is a list with numbers, and two rows with the same number would be two
+/// keys that do different things.
 ///
 /// ```
 /// use norte_frontend::splash::{SplashRow, SplashSection, numbered};
-/// let fila = |l: &str| SplashRow {
+/// let row = |l: &str| SplashRow {
 ///     label: l.to_owned(),
 ///     detail: String::new(),
 ///     command: "nav.enter".to_owned(),
 ///     arg: None,
 /// };
-/// let secciones = vec![
-///     SplashSection { title_key: "a", rows: vec![fila("uno"), fila("dos")] },
-///     SplashSection { title_key: "b", rows: vec![fila("tres")] },
+/// let sections = vec![
+///     SplashSection { title_key: "a", rows: vec![row("one"), row("two")] },
+///     SplashSection { title_key: "b", rows: vec![row("three")] },
 /// ];
-/// let n = numbered(&secciones);
-/// assert_eq!(n[2].0, 3, "la numeración cruza las secciones");
-/// assert_eq!(n[2].1.label, "tres");
+/// let n = numbered(&sections);
+/// assert_eq!(n[2].0, 3, "numbering crosses the sections");
+/// assert_eq!(n[2].1.label, "three");
 /// ```
 #[must_use]
-pub fn numbered(secciones: &[SplashSection]) -> Vec<(u8, &SplashRow)> {
-    secciones
+pub fn numbered(sections: &[SplashSection]) -> Vec<(u8, &SplashRow)> {
+    sections
         .iter()
         .flat_map(|s| s.rows.iter())
         .take(NUMBERED)
         .enumerate()
-        .map(|(i, fila)| (u8::try_from(i + 1).unwrap_or(u8::MAX), fila))
+        .map(|(i, row)| (u8::try_from(i + 1).unwrap_or(u8::MAX), row))
         .collect()
 }
 
-/// La brújula: el arte del splash, una fila por línea.
+/// The compass: the splash's art, one row per line.
 ///
-/// Todas las filas miden lo MISMO en celdas — lo fija un test—, porque las dos
-/// superficies la centran, y una fila más ancha que las demás sale torcida en
-/// cuanto el centrado es por línea.
+/// All rows measure the SAME in cells — a test pins it — because both
+/// surfaces center it, and a row wider than the rest comes out crooked as
+/// soon as centering is done per line.
 pub const ART: &[&str] = &[
     "▛▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▜",
     "▌                                 ▐",
@@ -183,15 +188,15 @@ pub const ART: &[&str] = &[
 mod tests {
     use super::*;
 
-    struct Fija(&'static str, usize);
+    struct Fixed(&'static str, usize);
 
-    impl SplashSource for Fija {
+    impl SplashSource for Fixed {
         fn section(&self) -> Option<SplashSection> {
             Some(SplashSection {
                 title_key: self.0,
                 rows: (0..self.1)
                     .map(|i| SplashRow {
-                        label: format!("fila {i}"),
+                        label: format!("row {i}"),
                         detail: String::new(),
                         command: "nav.enter".to_owned(),
                         arg: None,
@@ -202,35 +207,36 @@ mod tests {
     }
 
     #[test]
-    fn el_registro_conserva_el_orden_y_se_salta_lo_vacio() {
-        let (a, vacia, b) = (Fija("a", 2), Fija("vacia", 0), Fija("b", 1));
-        let fuentes: [&dyn SplashSource; 3] = [&a, &vacia, &b];
-        let s = sections(&fuentes);
+    fn the_registry_keeps_order_and_skips_empty_ones() {
+        let (a, empty, b) = (Fixed("a", 2), Fixed("empty", 0), Fixed("b", 1));
+        let sources: [&dyn SplashSource; 3] = [&a, &empty, &b];
+        let s = sections(&sources);
         assert_eq!(
             s.iter().map(|x| x.title_key).collect::<Vec<_>>(),
             ["a", "b"]
         );
     }
 
-    /// El arte se CENTRA, así que una fila de otro ancho sale torcida.
+    /// The art is CENTERED, so a row of a different width comes out
+    /// crooked.
     #[test]
-    fn el_arte_mide_lo_mismo_en_todas_sus_filas() {
-        let anchos: Vec<usize> = ART.iter().map(|l| crate::display::cells(l)).collect();
+    fn the_art_measures_the_same_in_all_its_rows() {
+        let widths: Vec<usize> = ART.iter().map(|l| crate::display::cells(l)).collect();
         assert!(
-            anchos.windows(2).all(|w| w[0] == w[1]),
-            "filas de anchos distintos: {anchos:?}"
+            widths.windows(2).all(|w| w[0] == w[1]),
+            "rows of different widths: {widths:?}"
         );
     }
 
-    /// Nueve como mucho: la décima fila se pinta, pero sin número que la
-    /// llame — un `0` detrás del `9` se lee dos veces.
+    /// Nine at most: the tenth row is painted, but with no number to call
+    /// it — a `0` after the `9` is read twice.
     #[test]
-    fn la_numeracion_se_para_en_nueve() {
-        let muchas = Fija("muchas", 12);
-        let fuentes: [&dyn SplashSource; 1] = [&muchas];
-        let s = sections(&fuentes);
+    fn numbering_stops_at_nine() {
+        let many = Fixed("many", 12);
+        let sources: [&dyn SplashSource; 1] = [&many];
+        let s = sections(&sources);
         let n = numbered(&s);
         assert_eq!(n.len(), NUMBERED);
-        assert_eq!(n.last().expect("hay filas").0, 9);
+        assert_eq!(n.last().expect("there are rows").0, 9);
     }
 }

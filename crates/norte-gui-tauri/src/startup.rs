@@ -1,11 +1,11 @@
-//! Arrancar: leer la configuración UNA vez, resolver dónde está el daemon y
-//! dónde empieza el listado, y montar el host.
+//! Starting up: read the configuration ONCE, resolve where the daemon is and
+//! where the listing starts, and mount the host.
 //!
-//! Ni un parser de argumentos nuevo (`norte_frontend::cli`), ni una lectura de
-//! configuración propia (`norte_config`), ni una segunda idea de dónde vive el
-//! socket (`norte_client::default_socket_path`): un frontend que resuelve
-//! estas cosas a su manera es un frontend que arranca en otro sitio que el
-//! resto (ADR 0066, decisión D14).
+//! Neither a new argument parser (`norte_frontend::cli`), nor its own
+//! configuration read (`norte_config`), nor a second idea of where the socket
+//! lives (`norte_client::default_socket_path`): a frontend that resolves
+//! these things its own way is a frontend that starts up somewhere else than
+//! the rest (ADR 0066, decision D14).
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -22,43 +22,46 @@ use norte_ui_host::pickers::HostTheme;
 use norte_ui_host::settings::{ConfigLayer, HostPath, HostPaths};
 use norte_ui_host::{UiHost, UiHostOptions, ViewSnapshot};
 
-/// Hasta dónde llega esta ventana.
+/// How far this window reaches.
 ///
-/// **Completo desde la tarea 5.4** (2026-08-22), que es la revisión de
-/// seguridad de las mutaciones que el gate de salida de la fase 5 exige antes
-/// de que una compilación de release escriba nada. Hasta entonces fue
-/// `SoloLectura`, y no por falta de código: la revisión de la tarea 3.3 había
-/// encontrado que el preset ya ataba F7/F8 a crear y borrar y que
-/// `Dialog{choice:"approve"}` aprobaba la operación de un agente, o sea que
-/// la rebanada «de solo lectura» tenía autoridad destructiva y de policy.
+/// **Full since task 5.4** (2026-08-22), which is the mutation security
+/// review that phase 5's exit gate requires before a release build writes
+/// anything. Until then it was `SoloLectura` (read-only), and not for lack of
+/// code: task 3.3's review had found that the preset already bound F7/F8 to
+/// create and delete, and that `Dialog{choice:"approve"}` approved an agent's
+/// operation — so the "read-only" slice already had destructive and policy
+/// authority.
 ///
-/// Lo que sostiene el cambio, y que está probado en `norte-ui-host`:
+/// What backs the change, and is tested in `norte-ui-host`:
 ///
-/// - **Ningún operando lo nombra el renderer** (ADR 0070). `UiAction` no
-///   lleva un `VPath` ni una cadena que sea una ruta; los orígenes salen de
-///   las marcas del hueco enfocado y el destino del hueco con el rol
-///   `Target`. Lo único que cruza es texto TECLEADO, que se valida como
-///   segmento y se rehúsa si trae el carácter de sustitución.
-/// - **Toda mutación pasa por una confirmación** y de ahí a una Task del
-///   daemon: journal, tablero, cancelación y relistado. Los caminos a
-///   `backend.delete/copy/move_/mkdir/rename_batch` son DOS y los dos exigen
-///   una pantalla contestada: `ejecutar_pendiente` (los diálogos) y
-///   `aprobar_revision_ia` (la revisión de un plan, que además exige el
-///   `plan_hash` que devolvió el core y haber leído el plan entero).
-/// - **Levantar esto también habilita `pane.ai-rename`**, que manda el
-///   contenido del directorio a un modelo externo. No escribe, pero sale del
-///   proceso, y por eso está en la lista de lo que solo lectura quita.
-/// - **La decisión de una aprobación no tiene respuesta implícita**: solo
-///   `approve` aprueba, el diálogo se abre sin reconocer —la primera tecla
-///   solo dice «ya lo veo»—, enseña su TTL, se cierra al vencer, y si el
-///   `policy.decide` no llega al daemon se DICE.
-/// - **La superficie de la webview sigue siendo la de siempre**: cuatro
-///   comandos, CSP sin `eval` ni orígenes remotos, capacidades mínimas, sin
-///   filesystem ni shell, y `tests/webview_boundary.rs` lo clava.
+/// - **No operand is named by the renderer** (ADR 0070). `UiAction` carries
+///   no `VPath` nor a string that is a path; sources come from the focused
+///   slot's marks and the destination from the slot with the `Target` role.
+///   The only thing that crosses is TYPED text, which is validated as a
+///   segment and refused if it carries the substitution character.
+/// - **Every mutation goes through a confirmation** and from there to a
+///   daemon Task: journal, dashboard, cancellation and relisting. The paths
+///   to `backend.delete/copy/move_/mkdir/rename_batch` are TWO and both
+///   require an answered screen: `ejecutar_pendiente` (the dialogs) and
+///   `aprobar_revision_ia` (an AI plan's review, which also requires the
+///   `plan_hash` the core returned and having read the whole plan).
+/// - **Turning this on also enables `pane.ai-rename`**, which sends the
+///   directory's contents to an external model. It does not write, but it
+///   leaves the process, and that is why it is on the list of what read-only
+///   takes away.
+/// - **An approval's decision has no implicit answer**: only `approve`
+///   approves, the dialog opens unacknowledged — the first keystroke only
+///   says "I see it" — shows its TTL, closes when it expires, and if
+///   `policy.decide` does not reach the daemon it is SAID.
+/// - **The webview's surface stays the same as ever**: four commands, a CSP
+///   with no `eval` and no remote origins, minimal capabilities, no
+///   filesystem and no shell, and `tests/webview_boundary.rs` pins it.
 pub const EFECTOS: norte_ui_host::commands::Efectos = norte_ui_host::commands::Efectos::Completo;
 
-/// La ayuda de la línea de comandos. Corta a propósito: lo que esta ventana
-/// sabe hacer se documenta DENTRO (F1), no en un `--help`.
+/// The command-line help. Short on purpose: what this window knows how to do
+/// is documented INSIDE (F1), not in a `--help`.
+// TODO(translation): this banner is user-visible text that does not go
+// through Fluent (reported to the controller for phase 3); left in Spanish.
 pub const USAGE: &str = "\
 norte-gui — el renderer gráfico de norte
 
@@ -80,37 +83,38 @@ OPCIONES:
     -V, --version        La versión
 ";
 
-/// El comando que arranca el daemon, o `None` si no hay binario que lanzar.
+/// The command that starts the daemon, or `None` if there is no binary to
+/// launch.
 ///
-/// **`norte-gui` no sabe ser daemon**, al revés que el CLI: aquel usa su
-/// propio `current_exe` porque el mismo ejecutable trae el subcomando. Aquí
-/// hay que encontrar a `norte`, y el orden importa:
+/// **`norte-gui` does not know how to be a daemon**, unlike the CLI: that one
+/// uses its own `current_exe` because the same executable carries the
+/// subcommand. Here `norte` has to be found, and the order matters:
 ///
-/// 1. **El hermano**: `norte` en el mismo directorio que este ejecutable. Es
-///    lo determinista — el par que se instaló junto — y funciona con
-///    `just link`, donde los dos symlinks apuntan al mismo `target/debug`
-///    (`current_exe` ya resuelve el enlace, así que el hermano es el del
-///    árbol y no el de `~/.local/bin`).
-/// 2. **El `PATH`**, como último recurso.
+/// 1. **The sibling**: `norte` in the same directory as this executable. It
+///    is the deterministic one — the pair that was installed together — and
+///    it works with `just link`, where both symlinks point at the same
+///    `target/debug` (`current_exe` already resolves the link, so the
+///    sibling is the tree's and not `~/.local/bin`'s).
+/// 2. **The `PATH`**, as a last resort.
 ///
-/// Nunca el directorio de trabajo: ahí el binario lo elige quien haya dejado
-/// un fichero, y esto lanza un proceso. El hermano no añade riesgo — quien
-/// pueda escribir en el directorio de este ejecutable ya controla la ventana
-/// que está corriendo.
+/// Never the working directory: there the binary is chosen by whoever left a
+/// file, and this launches a process. The sibling adds no risk — whoever can
+/// write to this executable's directory already controls the window that is
+/// running.
 ///
-/// `None` deja el arranque como estaba: se intenta conectar y, si no hay
-/// nadie, se dice.
+/// `None` leaves startup as it was: it tries to connect and, if nobody
+/// answers, it says so.
 async fn comando_de_daemon(socket: &std::path::Path) -> Option<Vec<std::ffi::OsString>> {
     let socket = socket.to_path_buf();
-    // Sondas de FS fuera del runtime (regla 2).
+    // FS probes outside the runtime (rule 2).
     tokio::task::spawn_blocking(move || {
-        let junto_a = std::env::current_exe()
+        let next_to = std::env::current_exe()
             .ok()
             .and_then(|exe| exe.parent().map(std::path::Path::to_path_buf));
-        // El argv es el compartido: lo que arranca esta ventana se apaga
-        // solo cuando su último cliente se va.
+        // The argv is the shared one: what starts this window shuts down
+        // only once its last client leaves.
         Some(norte_client::daemon_run_argv(
-            programa_del_daemon(junto_a.as_deref()),
+            programa_del_daemon(next_to.as_deref()),
             &socket,
         ))
     })
@@ -119,16 +123,17 @@ async fn comando_de_daemon(socket: &std::path::Path) -> Option<Vec<std::ffi::OsS
     .flatten()
 }
 
-/// Qué `norte` se va a lanzar: el HERMANO del ejecutable si está, y si no el
-/// del `PATH`.
+/// Which `norte` is going to be launched: the executable's SIBLING if there
+/// is one, and if not, the `PATH`'s.
 ///
-/// Separada de [`comando_de_daemon`] para que se pueda probar. Es la promesa
-/// que sostiene el paquete —`norte-gui`, `norte` y `ntc` viajan juntos y la
-/// ventana encuentra al suyo (#256)— y hasta ahora sólo se podía comprobar
-/// instalando, que es cuando ya es tarde. Lo que no se puede probar aquí es
-/// `current_exe`, y por eso el directorio entra como argumento.
-fn programa_del_daemon(junto_a: Option<&std::path::Path>) -> std::ffi::OsString {
-    junto_a
+/// Separate from [`comando_de_daemon`] so it can be tested. It is the promise
+/// that backs the package — `norte-gui`, `norte` and `ntc` travel together and
+/// the window finds its own (#256) — and until now it could only be checked
+/// by installing, which is when it is already too late. What cannot be tested
+/// here is `current_exe`, and that is why the directory comes in as an
+/// argument.
+fn programa_del_daemon(next_to: Option<&std::path::Path>) -> std::ffi::OsString {
+    next_to
         .map(|d| d.join("norte"))
         .filter(|p| p.is_file())
         .map_or_else(|| "norte".into(), Into::into)
@@ -138,19 +143,21 @@ fn programa_del_daemon(junto_a: Option<&std::path::Path>) -> std::ffi::OsString 
 mod prueba_del_daemon {
     use super::programa_del_daemon;
 
-    /// Con un `norte` al lado, se lanza ESE y con su ruta completa.
+    /// With a `norte` next to it, THAT one is launched, and with its full
+    /// path.
     ///
-    /// Es lo que hace que el paquete funcione: en una instalación limpia el
-    /// `PATH` puede no tener nada, y el hermano sí está.
+    /// It is what makes the package work: on a clean install the `PATH` may
+    /// have nothing, and the sibling is there.
     #[test]
     fn el_hermano_gana() {
         let dir = tempfile::tempdir().expect("temp");
-        let hermano = dir.path().join("norte");
-        std::fs::write(&hermano, b"#!/bin/sh\n").expect("se escribe");
-        assert_eq!(programa_del_daemon(Some(dir.path())), hermano.as_os_str());
+        let sibling = dir.path().join("norte");
+        std::fs::write(&sibling, b"#!/bin/sh\n").expect("is written");
+        assert_eq!(programa_del_daemon(Some(dir.path())), sibling.as_os_str());
     }
 
-    /// Sin hermano se cae al `PATH`, que es el caso del árbol de desarrollo.
+    /// Without a sibling it falls back to the `PATH`, which is the
+    /// development tree's case.
     #[test]
     fn sin_hermano_se_cae_al_path() {
         let dir = tempfile::tempdir().expect("temp");
@@ -158,112 +165,116 @@ mod prueba_del_daemon {
         assert_eq!(programa_del_daemon(None), "norte");
     }
 
-    /// Un DIRECTORIO llamado `norte` no es un daemon: se ignora.
+    /// A DIRECTORY named `norte` is not a daemon: it is ignored.
     ///
-    /// Sin el `is_file` se lanzaría un directorio como si fuera un programa y
-    /// el fallo saldría como «no se pudo conectar», que no dice nada.
+    /// Without the `is_file` check, a directory would be launched as if it
+    /// were a program, and the failure would come out as "could not
+    /// connect", which says nothing.
     #[test]
     fn un_directorio_no_es_un_daemon() {
         let dir = tempfile::tempdir().expect("temp");
-        std::fs::create_dir(dir.path().join("norte")).expect("se crea");
+        std::fs::create_dir(dir.path().join("norte")).expect("is created");
         assert_eq!(programa_del_daemon(Some(dir.path())), "norte");
     }
 }
 
-/// Lo que puede impedir arrancar.
+/// What can keep it from starting.
 #[derive(Debug, thiserror::Error)]
 pub enum StartupError {
-    /// Un flag que no existe.
-    #[error("flag desconocido: {0}")]
+    /// A flag that does not exist.
+    #[error("unknown flag: {0}")]
     UnknownFlag(String),
-    /// El directorio de arranque no sirve.
-    #[error("directorio de arranque: {0}")]
+    /// The startup directory does not work.
+    #[error("startup directory: {0}")]
     Dir(String),
-    /// La configuración no carga.
-    #[error("configuración: {0}")]
+    /// The configuration does not load.
+    #[error("configuration: {0}")]
     Config(String),
-    /// No hay daemon al otro lado.
-    #[error("no se pudo conectar con el daemon en {socket}: {source}")]
+    /// There is no daemon on the other side.
+    #[error("could not connect to the daemon at {socket}: {source}")]
     Connect {
-        /// Dónde se buscó.
+        /// Where it looked.
         socket: String,
-        /// Qué dijo el daemon (o el socket).
+        /// What the daemon (or the socket) said.
         #[source]
         source: norte_proto::Error,
     },
-    /// El daemon se arrancó y MURIÓ, con lo que él dijo.
+    /// The daemon started and DIED, with whatever it said.
     ///
-    /// Separado de [`StartupError::Connect`] porque el consejo es el
-    /// contrario: aquello invita a comprobar si hay un daemon, y esto a leer
-    /// una frase que ya explica el problema. Reintentar no lo arregla.
-    #[error("el daemon no pudo arrancar{}:\n{}",
-        match .status { Some(c) => format!(" (salió con {c})"), None => String::new() },
-        if .stderr.is_empty() { "y no dijo por qué" } else { .stderr })]
+    /// Separate from [`StartupError::Connect`] because the advice is the
+    /// opposite: that one invites checking whether there is a daemon, and
+    /// this one invites reading a sentence that already explains the
+    /// problem. Retrying does not fix it.
+    #[error("the daemon could not start{}:\n{}",
+        match .status { Some(c) => format!(" (exited with {c})"), None => String::new() },
+        if .stderr.is_empty() { "and did not say why" } else { .stderr })]
     DaemonMuerto {
-        /// Código de salida, si lo hubo (`None` = lo mató una señal).
+        /// Exit code, if there was one (`None` = a signal killed it).
         status: Option<i32>,
-        /// Lo que escribió por `stderr`. Puede venir vacío.
+        /// What it wrote to `stderr`. May come empty.
         stderr: String,
     },
-    /// Un valor de la línea de órdenes que no existe.
-    #[error("{que}: «{valor}» no existe")]
+    /// A command-line value that does not exist.
+    #[error("{que}: \"{valor}\" does not exist")]
     Desconocido {
-        /// Qué opción.
+        /// Which option.
         que: &'static str,
-        /// Lo que se pidió.
+        /// What was asked for.
         valor: String,
     },
-    /// El host no arrancó.
-    #[error("el host no arrancó: {0}")]
+    /// The host did not start.
+    #[error("the host did not start: {0}")]
     Host(#[from] norte_ui_host::controller::UiError),
 }
 
-/// Los argumentos ya resueltos.
+/// The arguments, already resolved.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 #[expect(
     clippy::struct_excessive_bools,
-    reason = "cada bool es un flag INDEPENDIENTE de la línea de órdenes; un enum \
-              de dos variantes por flag sería el mismo dato con más ruido"
+    reason = "each bool is an INDEPENDENT command-line flag; a two-variant enum \
+              per flag would be the same data with more noise"
 )]
 pub struct Cli {
-    /// Directorio de arranque, crudo (regla 1: no tiene por qué ser UTF-8).
+    /// Startup directory, raw (rule 1: it has no reason to be UTF-8).
     pub dir: Option<PathBuf>,
-    /// Socket del daemon.
+    /// The daemon's socket.
     pub socket: Option<PathBuf>,
-    /// Disposición pedida para ESTE arranque, con los BYTES intactos.
+    /// Layout requested for THIS run, with the BYTES intact.
     ///
-    /// Un nombre de disposición acaba siendo un nombre de fichero
-    /// (`layouts/<nombre>.toml`), y dos bytes inválidos distintos colapsan al
-    /// MISMO `\u{FFFD}` con una conversión lossy: abrirían el mismo fichero
-    /// (#246, ADR 0061). El TUI ya lo lee así.
+    /// A layout name ends up being a file name (`layouts/<name>.toml`), and
+    /// two different invalid byte sequences collapse to the SAME `\u{FFFD}`
+    /// with a lossy conversion: they would open the same file (#246, ADR
+    /// 0061). The TUI already reads it this way.
     pub layout: Option<std::ffi::OsString>,
-    /// Preset de teclado pedido para ESTE arranque.
+    /// Keyboard preset requested for THIS run.
     pub preset: Option<std::ffi::OsString>,
-    /// Perfil pedido para ESTE arranque (#307, ADR 0079).
+    /// Profile requested for THIS run (#307, ADR 0079).
     ///
-    /// Bytes intactos por lo mismo que [`Self::layout`], y con más motivo: un
-    /// nombre de perfil acaba siendo un DIRECTORIO (`profiles/<nombre>/`).
+    /// Bytes intact for the same reason as [`Self::layout`], and with more
+    /// reason: a profile name ends up being a DIRECTORY
+    /// (`profiles/<name>/`).
     pub profile: Option<std::ffi::OsString>,
-    /// Sin pantalla de arranque en ESTE arranque, diga lo que diga `[ui]
-    /// splash`. Para pilotos y capturas, igual que en el terminal.
+    /// No startup screen on THIS run, whatever `[ui] splash` says. For pilots
+    /// and screenshots, same as in the terminal.
     pub no_splash: bool,
-    /// Esta ventana es el otro extremo de un RELEVO (`--attach`, fase 9): además
-    /// de la pantalla, reclama lo MARCADO que la terminal dejó en la sesión.
+    /// This window is the other end of a HANDOFF (`--attach`, phase 9): in
+    /// addition to the screen, it claims the MARKS the terminal left in the
+    /// session.
     ///
-    /// Sin él un arranque es un arranque, y unas marcas de un relevo que se
-    /// quedó a medias no resucitan al día siguiente.
+    /// Without it a startup is a startup, and marks from a handoff that was
+    /// left halfway do not come back to life the next day.
     pub attach: bool,
-    /// Se pidió la ayuda.
+    /// Help was requested.
     pub help: bool,
-    /// Se pidió la versión.
+    /// The version was requested.
     pub version: bool,
 }
 
-/// Parsea con el MISMO parser que el TUI.
+/// Parses with the SAME parser as the TUI.
 ///
 /// # Errors
-/// [`StartupError::UnknownFlag`] si aparece un flag que no existe: un flag
-/// mal escrito que se ignora es una opción que el usuario cree haber puesto.
+/// [`StartupError::UnknownFlag`] if a flag that does not exist shows up: a
+/// misspelled flag that gets ignored is an option the user believes they set.
 pub fn parse<I, T>(args: I) -> Result<Cli, StartupError>
 where
     I: IntoIterator<Item = T>,
@@ -290,49 +301,52 @@ where
     })
 }
 
-/// Todo lo que el proceso necesita para pintar.
+/// Everything the process needs in order to paint.
 pub struct Boot {
-    /// El host, ya con su primer listado pedido.
+    /// The host, already with its first listing requested.
     pub host: UiHost,
-    /// La primera foto: la secuencia 0.
+    /// The first frame: sequence 0.
     pub snapshot: ViewSnapshot,
-    /// El idioma negociado.
+    /// The negotiated language.
     pub lang: Lang,
-    /// El tema resuelto.
+    /// The resolved theme.
     pub theme: Theme,
-    /// Fuentes y movimiento, de `[ui]`: lo que esta ventana pinta y no es
-    /// color. Va aquí y no se relee en `main` porque la configuración ya está
-    /// cargada y volver a mirarla sería una segunda lectura que puede diferir.
+    /// Fonts and motion, from `[ui]`: what this window paints that is not
+    /// color. It goes here and is not re-read in `main` because the
+    /// configuration is already loaded and looking at it again would be a
+    /// second read that can differ.
     pub appearance: crate::catalog::Appearance,
-    /// No hay `norte.toml` de usuario (spec 2026-09-10): el catálogo lo
-    /// lleva y el renderer abre el asistente de primer arranque.
+    /// There is no user `norte.toml` (spec 2026-09-10): the catalogue carries
+    /// this and the renderer opens the first-run wizard.
     pub first_run: bool,
-    /// Esta ventana arranca SIN pantalla de inicio, diga lo que diga `[ui]
-    /// splash` (ADR 0115): `--no-splash` o `NORTE_NO_SPLASH`.
+    /// This window starts WITHOUT a splash screen, whatever `[ui] splash`
+    /// says (ADR 0115): `--no-splash` or `NORTE_NO_SPLASH`.
     ///
-    /// Se decide aquí y viaja en el catálogo, como `first_run`: el host no
-    /// mira el entorno del proceso ni la línea de órdenes —no son suyos—, y
-    /// el renderer solo necesita saber si avisar del arranque o callarse.
+    /// Decided here and carried in the catalogue, like `first_run`: the host
+    /// does not look at the process's environment nor the command line —
+    /// they are not its — and the renderer only needs to know whether to
+    /// announce the startup or stay quiet.
     pub no_splash: bool,
-    /// `[ui] theme_light` / `theme_dark` ya resueltos a variables (spec
-    /// 2026-09-11, V6), o `None` cuando la clave no está o su tema no carga
-    /// — entonces la ventana pinta `theme` en ese esquema, y se avisa.
+    /// `[ui] theme_light` / `theme_dark` already resolved to variables (spec
+    /// 2026-09-11, V6), or `None` when the key is absent or its theme does
+    /// not load — then the window paints `theme` on that side, and warns.
     pub theme_light: Option<BTreeMap<String, String>>,
-    /// La variante oscura; ver [`Self::theme_light`].
+    /// The dark variant; see [`Self::theme_light`].
     pub theme_dark: Option<BTreeMap<String, String>>,
 }
 
-/// Las disposiciones que el usuario tiene guardadas, YA leídas.
+/// The layouts the user has saved, ALREADY read.
 ///
-/// Leídas aquí y no por nombre porque el selector pinta la FORMA de cada una:
-/// leerlas al mover el cursor sería I/O en el bucle de eventos. Una que no
-/// parsea se conserva CON su motivo — el selector la enseña sin vista previa
-/// y explica por qué, que es más útil que una fila que no está.
+/// Read here and not by name because the picker paints each one's SHAPE:
+/// reading them when the cursor moves would be I/O on the event loop. One
+/// that does not parse is kept WITH its reason — the picker shows it without
+/// a preview and explains why, which is more useful than a row that is not
+/// there.
 ///
-/// Va por `spawn_blocking`, como sus dos vecinas. «Es el arranque y es un
-/// directorio pequeño» no es el criterio: `read_dir` sobre una capa de
-/// configuración en un montaje caído bloquea el hilo de trabajo del runtime
-/// igual de bien, y aquí ni siquiera hay ventana donde decirlo (regla 2).
+/// Goes through `spawn_blocking`, like its two neighbors. "It is startup and
+/// it is a small directory" is not the criterion: a `read_dir` over a
+/// configuration layer on a downed mount blocks the runtime's worker thread
+/// just as well, and here there is not even a window to say so in (rule 2).
 fn disposiciones_del_usuario(capas: &norte_config::Layers) -> Vec<UserLayout> {
     let Some((dir, _)) = capas
         .dirs
@@ -351,13 +365,13 @@ fn disposiciones_del_usuario(capas: &norte_config::Layers) -> Vec<UserLayout> {
         .collect()
 }
 
-/// El tema, para poder verlo por dentro desde la ventana.
+/// The theme, so it can be seen from the inside from the window.
 ///
-/// Los roles salen de la MISMA correspondencia explícita que alimenta las
-/// variables CSS (`catalog::variables`), no de un volcado aparte: lo que la
-/// vista enseña es literalmente lo que pinta. Los efectos se nombran uno a
-/// uno como NO soportados, porque este renderer es una webview y no
-/// interpreta ninguno — y un tema retro que se ve idéntico se lee como roto.
+/// The roles come from the SAME explicit mapping that feeds the CSS
+/// variables (`catalog::variables`), not from a separate dump: what the view
+/// shows is literally what gets painted. The effects are named one by one as
+/// NOT supported, because this renderer is a webview and interprets none of
+/// them — and a retro theme that looks identical reads as broken.
 fn tema_visto(
     spec: Option<&str>,
     theme: &Theme,
@@ -365,61 +379,61 @@ fn tema_visto(
     variante_oscura: Option<Theme>,
 ) -> HostTheme {
     HostTheme {
-        // En `Box`: `HostTheme` viaja dentro del futuro de arranque, y dos
-        // `Theme` inline lo cruzaban el umbral de `large_futures`.
+        // In a `Box`: `HostTheme` travels inside the startup future, and two
+        // inline `Theme`s crossed `large_futures`'s threshold.
         variante_clara: variante_clara.map(Box::new),
         variante_oscura: variante_oscura.map(Box::new),
-        // El RESUELTO, que es el de `theme`. `spec` es lo que se pidió, y con
-        // un fichero roto los dos no coinciden.
+        // The RESOLVED one, which is `theme`'s. `spec` is what was
+        // requested, and with a broken file the two do not match.
         name: spec.unwrap_or("default").to_owned(),
         roles: crate::catalog::variables(theme).into_iter().collect(),
         effects: efectos_declarados(theme),
-        // El tema ENTERO, que es lo que hace falta para colorear una entrada
-        // por su extensión (puente 66): eso no se puede proyectar como
-        // variables CSS porque las extensiones son un conjunto abierto.
+        // The WHOLE theme, which is what is needed to color an entry by its
+        // extension (bridge 66): that cannot be projected as CSS variables
+        // because extensions are an open set.
         resuelto: theme.clone(),
     }
 }
 
-/// Los nombres de los efectos que el tema declara.
+/// The names of the effects the theme declares.
 ///
-/// El bloque `[effects]` es libre a propósito (ADR 0036): cada renderer lo
-/// interpreta. Aquí solo se enumeran sus claves de primer nivel, que es lo
-/// que hace falta para decir cuáles no se pintan.
+/// The `[effects]` block is free-form on purpose (ADR 0036): each renderer
+/// interprets it. Here only its top-level keys are enumerated, which is what
+/// is needed to say which ones are not painted.
 fn efectos_declarados(theme: &Theme) -> Vec<String> {
-    // `Theme::effects` es un `toml::Value` y este crate no depende de `toml`
-    // (ni tiene por qué: no parsea configuración). Se pregunta por la forma
-    // a través del tipo que ya tiene delante.
+    // `Theme::effects` is a `toml::Value` and this crate does not depend on
+    // `toml` (nor does it need to: it does not parse configuration). It asks
+    // for the shape through the type it already has in hand.
     theme.effect_names().unwrap_or_default()
 }
 
-/// El idioma de la ventana, y fijado para todo el proceso.
+/// The window's language, fixed for the whole process.
 ///
-/// **`NORTE_LANG` > `[ui] lang` > el entorno del sistema**, que es lo que
-/// hace el terminal (`norte-tui/src/main.rs`). Las dos superficies
-/// documentaban reglas CONTRARIAS y las dos las cumplían: aquí ganaba la
-/// configuración, allí ganaba `NORTE_LANG`, así que con `NORTE_LANG=en` y
-/// `lang = "es"` escritos, `ntc` salía en inglés y `norte-gui` en español.
+/// **`NORTE_LANG` > `[ui] lang` > the system's environment**, which is what
+/// the terminal does (`norte-tui/src/main.rs`). The two surfaces used to
+/// document OPPOSITE rules and both honored them: here the configuration
+/// won, there `NORTE_LANG` won, so with `NORTE_LANG=en` and `lang = "es"`
+/// both set, `ntc` came out in English and `norte-gui` in Spanish.
 ///
-/// Manda el terminal porque su regla es la que ya sigue el resto: `NORTE_LANG`
-/// es específico de norte y se pone para UNA ejecución, o sea la misma clase
-/// de cosa que `--layout`, que gana a `[ui] layout`. `LANG` no: ése es el
-/// idioma del sistema, y una decisión escrita en la configuración es más
-/// específica que él.
+/// The terminal rules because its rule is the one the rest already follows:
+/// `NORTE_LANG` is norte-specific and is set for ONE run, i.e. the same kind
+/// of thing as `--layout`, which beats `[ui] layout`. `LANG` does not: that
+/// is the system's language, and a decision written in the configuration is
+/// more specific than it.
 fn idioma(pedido: Option<&str>) -> Lang {
     let explicito = std::env::var("NORTE_LANG").ok().filter(|v| !v.is_empty());
     let lang = elegir_idioma(explicito.as_deref(), pedido, Lang::from_env());
     let _ = norte_i18n::force(lang);
-    // Las teclas se nombran en el idioma de la ventana (ver el TUI).
+    // Keys are named in the window's language (see the TUI).
     let _ = norte_frontend::keymap::set_chord_lang(lang);
     lang
 }
 
-/// La regla de precedencia, sin tocar el entorno.
+/// The precedence rule, without touching the environment.
 ///
-/// Separada para poder probarla: `std::env::set_var` es `unsafe` desde la
-/// edición 2024 y la regla 5 lo prohíbe, así que lo que se lee del entorno
-/// entra como argumento. Es el mismo arreglo que [`programa_del_daemon`].
+/// Separate so it can be tested: `std::env::set_var` is `unsafe` since the
+/// 2024 edition and rule 5 forbids it, so what is read from the environment
+/// comes in as an argument. Same fix as [`programa_del_daemon`].
 fn elegir_idioma(explicito: Option<&str>, config: Option<&str>, del_entorno: Lang) -> Lang {
     match (explicito, config) {
         (Some(e), _) => Lang::negotiate(Some(e)),
@@ -428,13 +442,13 @@ fn elegir_idioma(explicito: Option<&str>, config: Option<&str>, del_entorno: Lan
     }
 }
 
-/// Las dos lecturas de disco del arranque que no son la configuración.
+/// The two startup disk reads that are not the configuration.
 ///
-/// Juntas y fuera del runtime (regla 2): `rutas` hace un `metadata` por sitio
-/// y `disposiciones_del_usuario` un `read_dir` más un `read_to_string` por
-/// disposición. Las dos sobre las MISMAS capas que `config::load`, que ya iba
-/// por `spawn_blocking` por este mismo motivo, y las dos pueden tocar un
-/// montaje caído.
+/// Together and outside the runtime (rule 2): `rutas` does one `metadata`
+/// per location and `disposiciones_del_usuario` a `read_dir` plus a
+/// `read_to_string` per layout. Both over the SAME layers as `config::load`,
+/// which already went through `spawn_blocking` for this same reason, and
+/// both can touch a downed mount.
 async fn diagnostico(
     capas: &norte_config::Layers,
     socket: &std::path::Path,
@@ -447,23 +461,23 @@ async fn diagnostico(
     .await
     {
         Ok(par) => par,
-        // Un panic aquí es un bug NUESTRO, no un directorio que falta.
+        // A panic here is a bug of OURS, not a missing directory.
         Err(e) => std::panic::resume_unwind(e.into_panic()),
     }
 }
 
-/// Dónde vive cada cosa, para la vista de diagnóstico de los ajustes.
+/// Where each thing lives, for the settings' diagnostic view.
 ///
-/// Se construye con las capas que el arranque ACABA de leer y con el socket
-/// al que acaba de conectar: preguntarlo otra vez podría contestar otra cosa
-/// (un `NORTE_CONFIG_DIR` que cambie, un `--socket` que se ignore) y la
-/// ventana diría que su configuración sale de un sitio distinto de donde
-/// salió de verdad.
+/// Built with the layers startup JUST read and the socket it just connected
+/// to: asking again could answer something else (a `NORTE_CONFIG_DIR` that
+/// changes, a `--socket` that gets ignored) and the window would say its
+/// configuration comes from a place other than where it really came from.
 fn rutas(capas: &norte_config::Layers, socket: &std::path::Path) -> HostPaths {
-    // Con su `missing` YA resuelto: el host proyecta esta lista dentro del
-    // bucle del único escritor, y un `exists()` allí es `std::fs::metadata`
-    // sobre —entre otras— una capa de configuración que puede estar en un
-    // montaje caído. Esta función corre en `spawn_blocking` (regla 2).
+    // With its `missing` ALREADY resolved: the host projects this list
+    // inside the single writer's loop, and an `exists()` there is
+    // `std::fs::metadata` over — among others — a configuration layer that
+    // may be on a downed mount. This function runs in `spawn_blocking`
+    // (rule 2).
     let sitio = |p: PathBuf| HostPath {
         missing: !p.exists(),
         path: p,
@@ -483,8 +497,8 @@ fn rutas(capas: &norte_config::Layers, socket: &std::path::Path) -> HostPaths {
             })
             .collect(),
         state_dir: norte_config::dirs::state_dir().map(sitio),
-        // El MISMO sitio al que escribe `logging()`, que es lo único que hace
-        // útil enseñarlo.
+        // The SAME place `logging()` writes to, which is the only thing that
+        // makes showing it useful.
         logs_dir: norte_config::dirs::state_dir()
             .map(|d| d.join("logs"))
             .map(sitio),
@@ -492,17 +506,17 @@ fn rutas(capas: &norte_config::Layers, socket: &std::path::Path) -> HostPaths {
     }
 }
 
-/// Lo que la primera foto tiene que DECIR, si hay algo.
+/// What the first frame has to SAY, if anything.
 ///
-/// Va en el mensaje de la foto inicial, que es el equivalente exacto del
-/// `app.message` del arranque del terminal: lo pisa la primera acción del
-/// lector, no antes.
+/// Goes in the initial frame's message, which is the exact equivalent of the
+/// terminal startup's `app.message`: the reader's first action overwrites
+/// it, not before.
 ///
-/// El de Lua va el ÚLTIMO y por eso gana: un `lua:` que un repositorio pone
-/// en su capa de proyecto se descarta —un repositorio no elige qué código
-/// corre una tecla— y ése es el aviso que no puede quedar pisado. El de la
-/// capa de proyecto ignorada (#260) es el otro: saltársela en silencio deja
-/// al lector con una configuración que cree activa y no lo está.
+/// Lua's goes LAST and that is why it wins: a `lua:` a repository puts in its
+/// project layer is discarded — a repository does not choose what code a key
+/// runs — and that is the warning that cannot be left overwritten. The
+/// ignored project layer's (#260) is the other one: skipping it silently
+/// leaves the reader with a configuration they believe is active and is not.
 fn aviso_de_arranque(
     cfg: &norte_frontend::config::FrontendConfig,
     lang: Lang,
@@ -511,8 +525,8 @@ fn aviso_de_arranque(
 ) -> Option<String> {
     let mut msg = None;
     if !cfg.common.project_warnings.is_empty() {
-        for aviso in &cfg.common.project_warnings {
-            tracing::warn!(motivo = %aviso, "capa de proyecto ignorada");
+        for warning in &cfg.common.project_warnings {
+            tracing::warn!(reason = %warning, "project layer ignored");
         }
         msg = Some(norte_i18n::ta_in(
             lang,
@@ -520,13 +534,14 @@ fn aviso_de_arranque(
             &[("n", &cfg.common.project_warnings.len().to_string())],
         ));
     }
-    // Las líneas del PERFIL que no se entienden, con el mismo reparto: el
-    // conteo a la barra y el motivo al registro. Sin esto, ser estricto con
-    // `[profile.start]` era una trampa — se escribe `/tmp`, la línea se tira y
-    // el hueco abre donde le parece sin que nada lo diga (ADR 0098, D5).
+    // The PROFILE lines that are not understood, with the same split: the
+    // count to the bar and the reason to the log. Without this, being strict
+    // with `[profile.start]` was a trap — `/tmp` gets written, the line is
+    // dropped and the slot opens wherever it likes without anything saying
+    // so (ADR 0098, D5).
     if !cfg.common.profile_warnings.is_empty() {
-        for aviso in &cfg.common.profile_warnings {
-            tracing::warn!(motivo = %aviso, "línea del perfil ignorada");
+        for warning in &cfg.common.profile_warnings {
+            tracing::warn!(reason = %warning, "profile line ignored");
         }
         msg = Some(norte_i18n::ta_in(
             lang,
@@ -552,25 +567,26 @@ fn aviso_de_arranque(
     msg
 }
 
-/// Los tres keymaps EFECTIVOS: preset de fábrica más las capas del usuario.
+/// The three EFFECTIVE keymaps: factory preset plus the user's layers.
 ///
-/// SOLO LECTURA hasta la fase 5. El preset ata F7/F8 a crear y borrar, y que
-/// la tecla exista no es permiso: los comandos que escriben no entran en el
-/// keymap efectivo —la tecla se responde «aquí no» en vez de quedarse muda— y
-/// el host los rechaza aunque llegaran por otra vía.
+/// READ-ONLY until phase 5. The preset binds F7/F8 to create and delete, and
+/// the key existing is not permission: commands that write do not enter the
+/// effective keymap — the key answers "not here" instead of staying mute —
+/// and the host rejects them even if they arrived some other way.
 ///
-/// CON las capas del usuario, igual que el terminal: sin ellas un
-/// `keymap.toml` con rebinds se ignoraba en silencio aquí mientras el otro
-/// frontend sí lo honraba (#253). `UiHostOptions::keymap` documenta que lo
-/// que recibe ya viene fusionado, y fusionarlo es trabajo de quien lee disco.
+/// WITH the user's layers, same as the terminal: without them a
+/// `keymap.toml` with rebinds was silently ignored here while the other
+/// frontend did honor it (#253). `UiHostOptions::keymap` documents that what
+/// it receives already comes merged, and merging it is the job of whoever
+/// reads disk.
 ///
-/// El visor y los diálogos son otras PANTALLAS con el mismo preset: `esc`
-/// cierra y `e` recarga con otro encoding porque lo dice el preset, no porque
-/// el renderer lo decida.
+/// The viewer and the dialogs are other SCREENS with the same preset: `esc`
+/// closes and `e` reloads with another encoding because the preset says so,
+/// not because the renderer decides it.
 ///
-/// Un preset que no existe se DICE: el mismo fichero rechaza a gritos un flag
-/// mal escrito, y tragarse un VALOR mal escrito para arrancar con otra cosa
-/// sería la incoherencia contraria.
+/// A preset that does not exist is SAID: the same file loudly rejects a
+/// misspelled flag, and swallowing a misspelled VALUE to start with something
+/// else would be the opposite inconsistency.
 fn keymaps(
     preset: &str,
     cfg: &norte_frontend::config::FrontendConfig,
@@ -592,7 +608,8 @@ fn keymaps(
     Ok((keymap, visor, dialogo))
 }
 
-/// cambie esta ventana igual que el TUI (#287).
+/// Change this window the same as the TUI (#287).
+// TODO(translation): review — fragment, looks like it is missing its subject.
 fn otras_pantallas(
     preset: &str,
     capas: &[norte_frontend::keymap::KeymapFile],
@@ -614,25 +631,27 @@ fn otras_pantallas(
     Ok((visor, dialogo))
 }
 
-/// Las capas de configuración con el perfil que el lector NOMBRÓ metido
-/// dentro (#307, ADR 0079 D7).
+/// The configuration layers with the profile the reader NAMED already tucked
+/// inside (#307, ADR 0079 D7).
 ///
-/// Y si ese perfil no se puede usar, esto FALLA: pediste ese perfil, y
-/// arrancar como otra cosa sería contestar otra pregunta. El nombre tiene que
-/// estar en el LISTADO, byte a byte — mirar solo si el resolutor produjo una
-/// capa no basta, porque la añade en cuanto el nombre es legal y hay
-/// directorio de usuario, exista o no; entonces la carga la trata como una
-/// capa ausente, que no es un error, y `--profile fantasma` arrancaba como si
-/// nada. Es la misma comprobación, palabra por palabra, que hace el terminal.
+/// And if that profile cannot be used, this FAILS: you asked for that
+/// profile, and starting as something else would be answering a different
+/// question. The name has to be in the LISTING, byte for byte — looking only
+/// at whether the resolver produced a layer is not enough, because it adds
+/// one as soon as the name is legal and there is a user directory, whether it
+/// exists or not; the load then treats it as an absent layer, which is not an
+/// error, and `--profile ghost` used to start as if nothing happened. It is
+/// the same check, word for word, that the terminal makes.
 fn capas_con_perfil(nombre: &std::ffi::OsStr) -> Result<norte_config::Layers, StartupError> {
     let dir = norte_config::profiles_dir_from(&|k| std::env::var_os(k)).ok_or_else(|| {
-        StartupError::Config("no hay directorio de configuración donde colgar un perfil".to_owned())
+        StartupError::Config("no configuration directory to hang a profile off of".to_owned())
     })?;
     capas_con_perfil_en(&dir, nombre)
 }
 
-/// El núcleo probable de [`capas_con_perfil`]: el directorio de perfiles entra
-/// como ARGUMENTO, para que su test no dependa del `HOME` de quien lo corra.
+/// The probable core of [`capas_con_perfil`]: the profiles directory comes in
+/// as an ARGUMENT, so its test does not depend on the `HOME` of whoever runs
+/// it.
 fn capas_con_perfil_en(
     dir: &std::path::Path,
     nombre: &std::ffi::OsStr,
@@ -650,68 +669,71 @@ fn capas_con_perfil_en(
     Ok(norte_config::standard_layers_with_profile(Some(nombre)))
 }
 
-/// Monta el host: configuración, socket, directorio, keymap y disposición.
+/// Mounts the host: configuration, socket, directory, keymap and layout.
 ///
-/// **Es una SECUENCIA, y por eso crece un paso por cosa que haya que montar.**
-/// Cada línea es un nombre y una llamada, en el único orden en que se pueden
-/// hacer: el log necesita la configuración, el keymap necesita el preset, el
-/// host los necesita a todos. Partirla para bajar del umbral del lint mete el
-/// orden en dos sitios y deja al lector reconstruyéndolo — y el orden es lo
-/// único delicado que hay aquí. Mismo trato que `aplicar_efecto` en el host.
+/// **It is a SEQUENCE, and that is why it grows one step per thing that has
+/// to be mounted.** Each line is a name and a call, in the only order they
+/// can be done in: the log needs the configuration, the keymap needs the
+/// preset, the host needs all of them. Splitting it to get under the lint's
+/// threshold puts the order in two places and leaves the reader
+/// reconstructing it — and the order is the only delicate thing here. Same
+/// treatment as `aplicar_efecto` in the host.
 ///
 /// # Errors
-/// [`StartupError`] si la configuración no carga, el directorio no vale, o no
-/// hay daemon al otro lado.
+/// [`StartupError`] if the configuration does not load, the directory is not
+/// valid, or there is no daemon on the other side.
 #[expect(
     clippy::too_many_lines,
-    reason = "secuencia de arranque: un paso por línea, y el orden es el contrato"
+    reason = "startup sequence: one step per line, and the order is the contract"
 )]
 pub async fn boot(cli: &Cli) -> Result<Boot, StartupError> {
-    // Las MISMAS capas que el TUI, leídas fuera del runtime (regla 2) — y con
-    // el perfil que `--profile` nombre metido YA en ellas (#307, ADR 0079).
+    // The SAME layers as the TUI, read outside the runtime (rule 2) — and
+    // with the profile `--profile` names ALREADY tucked into them (#307, ADR
+    // 0079).
     //
-    // En la PRIMERA carga y no por el cambio en caliente, igual que en el
-    // terminal: así aplica hasta `[ui] lang`, que es lo único que un cambio en
-    // marcha no puede deshacer (`norte_i18n::force` corre una vez). El perfil
-    // PEGAJOSO no puede hacer esto —vive en la sesión, y la sesión la tiene el
-    // daemon, al que se llega con la configuración que estamos cargando— y por
-    // eso llega por el otro camino.
+    // On the FIRST load and not through hot reload, same as the terminal:
+    // this way it applies up to `[ui] lang`, which is the only thing a
+    // running change cannot undo (`norte_i18n::force` runs once). The STICKY
+    // profile cannot do this — it lives in the session, and the session
+    // belongs to the daemon, which is reached with the configuration we are
+    // loading right now — and that is why it arrives by the other path.
     let capas = match &cli.profile {
         Some(nombre) => capas_con_perfil(nombre)?,
         None => norte_config::standard_layers(),
     };
-    // Se guardan para la vista de «dónde vive cada cosa»: el host no descubre
-    // ficheros, así que la lista de capas se la damos ya resuelta y es
-    // exactamente la que se acaba de LEER, no una que se vuelva a calcular.
+    // Saved for the "where each thing lives" view: the host does not
+    // discover files, so the layer list is handed to it already resolved and
+    // is exactly the one that was just READ, not one recomputed later.
     let capas_vistas = capas.clone();
     let cfg = match tokio::task::spawn_blocking(move || norte_frontend::config::load(&capas)).await
     {
         Ok(res) => res.map_err(|e| StartupError::Config(e.to_string()))?,
-        // Un panic dentro de `load` es un bug NUESTRO: no se entierra como
-        // un error de configuración con una ruta inventada (regla 6).
+        // A panic inside `load` is a bug of OURS: it is not buried as a
+        // configuration error with a made-up path (rule 6).
         Err(e) => std::panic::resume_unwind(e.into_panic()),
     };
 
     let lang = idioma(cfg.common.ui_lang.as_deref());
 
     let (theme, tema_resuelto) = tema(cfg.common.ui_theme.as_deref());
-    // Las variantes por esquema del escritorio (V6): cada una se resuelve
-    // como `theme` y viaja ya como variables. Una clave puesta cuyo tema no
-    // carga se queda SIN variante —no con el de fábrica—, para que la
-    // ventana pinte `theme` en ese lado y el fallo no se disfrace de tema.
+    // The desktop-scheme variants (V6): each one resolves like `theme` and
+    // already travels as variables. A key that is set whose theme does not
+    // load ends up WITHOUT a variant — not with the factory one — so the
+    // window paints `theme` on that side and the failure does not disguise
+    // itself as a theme.
     //
-    // Se guarda el `Theme` ENTERO además de sus variables: las variables las
-    // enchufa el renderer, pero el color de una entrada por `[files.ext]`
-    // (puente 66) lo resuelve el HOST, y no cabe en variables porque las
-    // extensiones son un conjunto abierto. Resolviendo siempre contra `[ui]
-    // theme`, un escritorio en claro pintaba el cromo con la variante clara y
-    // los NOMBRES con los colores de la oscura.
+    // The WHOLE `Theme` is saved in addition to its variables: the renderer
+    // plugs in the variables, but an entry's color by `[files.ext]` (bridge
+    // 66) is resolved by the HOST, and it does not fit in variables because
+    // extensions are an open set. Always resolving against `[ui] theme`, a
+    // desktop in light mode painted the chrome with the light variant and
+    // the NAMES with the dark one's colors.
     let variante = |nombre: Option<&str>| -> Option<Theme> {
         let n = nombre?;
         match norte_frontend::theme::resolve_theme(Some(n)) {
             Ok(t) => Some(t),
             Err(e) => {
-                tracing::warn!(error = %e, tema = n, "la variante de tema no cargó: se ignora");
+                tracing::warn!(error = %e, theme = n, "theme variant did not load: ignored");
                 None
             }
         }
@@ -722,10 +744,10 @@ pub async fn boot(cli: &Cli) -> Result<Boot, StartupError> {
         tema_claro.as_ref().map(crate::catalog::variables);
     let theme_dark: Option<BTreeMap<String, String>> =
         tema_oscuro.as_ref().map(crate::catalog::variables);
-    // Fuera del runtime (regla 2): `metadata` sobre un NFS caído bloquea el
-    // hilo de trabajo hasta que expire el montaje, y encima antes de que
-    // exista ventana donde decirlo. La lectura de la configuración de arriba
-    // ya iba por `spawn_blocking`; esta se quedó a ocho líneas.
+    // Outside the runtime (rule 2): `metadata` over a downed NFS mount blocks
+    // the worker thread until the mount times out, and before there is even
+    // a window to say so in. The configuration read above already went
+    // through `spawn_blocking`; this one was left at eight lines.
     let dir_pedido = cli.dir.clone();
     let inicio = match tokio::task::spawn_blocking(move || start_dir(dir_pedido)).await {
         Ok(res) => res?,
@@ -738,18 +760,18 @@ pub async fn boot(cli: &Cli) -> Result<Boot, StartupError> {
         .or_else(|| cfg.common.daemon.socket.clone())
         .unwrap_or_else(|| norte_client::default_socket_path(None));
 
-    // Daemon y SOLO daemon: la GUI de referencia no construye un `Engine` en
-    // su proceso (decisión D10). Lo que sí hace es ARRANCARLO si no hay
-    // ninguno, igual que el `--daemon` del CLI: exigir que el lector abra un
-    // terminal antes de poder abrir una ventana no es una decisión de
-    // arquitectura, es una tarea que se le queda al lector.
+    // Daemon and ONLY daemon: the reference GUI does not build an `Engine` in
+    // its own process (decision D10). What it does do is START ONE if there
+    // is none, same as the CLI's `--daemon`: requiring the reader to open a
+    // terminal before they can open a window is not an architecture
+    // decision, it is a chore left for the reader.
     //
-    // Y se conecta con `connect_detallado` a propósito: cuando el daemon
-    // arranca y MUERE —un journal que no se puede migrar es el caso real—, la
-    // única frase que dice qué hacer la escribe él por `stderr`, y la
-    // taxonomía del wire no tiene dónde ponerla. Sin esto, la ventana decía
-    // «no se pudo conectar (retryable: true)», o sea «espera», sobre algo que
-    // no iba a llegar nunca.
+    // And it connects with `connect_detallado` on purpose: when the daemon
+    // starts and DIES — a journal that cannot migrate is the real case — the
+    // only sentence that says what to do is the one it writes to `stderr`,
+    // and the wire's taxonomy has nowhere to put it. Without this, the
+    // window said "could not connect (retryable: true)", i.e. "wait", about
+    // something that was never going to arrive.
     let arranque = comando_de_daemon(&socket).await;
     let backend = RemoteBackend::connect_detallado(
         socket.clone(),
@@ -770,18 +792,19 @@ pub async fn boot(cli: &Cli) -> Result<Boot, StartupError> {
         },
     })?;
 
-    // El log, DESPUÉS de cargar la config porque `[log] dir` y `[log] retain`
-    // salen de ella —la ventana los ignoraba— y antes que nada más, para que
-    // lo que falle a partir de aquí deje rastro. Misma regla que el terminal:
-    // un `--help` sale antes y no escribe nada, que es lo correcto.
-    // #326: el log va TAMBIÉN a un anillo en memoria, que es lo que pinta el
-    // panel de registro. El fichero sirve para investigar después; el anillo,
-    // para ver lo que está pasando sin salir de la ventana.
+    // The log, AFTER loading the config because `[log] dir` and `[log]
+    // retain` come from it — the window used to ignore them — and before
+    // anything else, so that whatever fails from here on leaves a trace.
+    // Same rule as the terminal: a `--help` exits before this and writes
+    // nothing, which is correct.
+    // #326: the log ALSO goes to an in-memory ring, which is what the log
+    // panel paints. The file is for investigating afterwards; the ring is
+    // for seeing what is happening without leaving the window.
     //
-    // Ojo con lo que este anillo NO lleva: la ventana arranca su propio daemon
-    // (#300), así que aquí solo están las líneas de ESTE proceso — los
-    // providers, el journal y la política registran en el suyo. El panel lo
-    // dice; callarlo haría que pareciera roto.
+    // Watch what this ring does NOT carry: the window starts its own daemon
+    // (#300), so only THIS process's lines are here — the providers, the
+    // journal and the policy log to their own. The panel says so; keeping
+    // quiet about it would make it look broken.
     let log_ring = logging(&cfg);
 
     let preset = if let Some(p) = &cli.preset {
@@ -790,22 +813,22 @@ pub async fn boot(cli: &Cli) -> Result<Boot, StartupError> {
         cfg.common.preset.clone()
     };
     let (keymap, keymap_viewer, keymap_dialog) = keymaps(&preset, &cfg)?;
-    // Un `lua:` de la capa de PROYECTO se descarta —un repositorio no elige
-    // qué código corre una tecla—, y se DICE, como en el terminal: un
-    // descarte silencioso es una tecla que no hace lo que su fichero dice.
+    // A `lua:` from the PROJECT layer is discarded — a repository does not
+    // choose what code a key runs — and it is SAID, like in the terminal: a
+    // silent discard is a key that does not do what its file says.
     let capas_lua_descartadas = keymap
         .discarded_lua_bindings()
         .max(keymap_viewer.discarded_lua_bindings())
         .max(keymap_dialog.discarded_lua_bindings());
 
-    // De la línea de órdenes se exige que exista; de la CONFIGURACIÓN se cae
-    // a la de siempre, que es lo que el usuario tenía antes de escribir la
-    // clave (la misma regla que el TUI). La diferencia es quién lo acaba de
-    // teclear.
+    // From the command line it is required to exist; from the CONFIGURATION
+    // it falls back to the usual one, which is what the user had before
+    // writing the key (same rule as the TUI). The difference is who just
+    // typed it.
     //
-    // El fichero se lee FUERA del runtime (regla 2), como en el TUI: es un
-    // TOML pequeño, pero leerlo con `std::fs` dentro de un `async fn` es I/O
-    // bloqueante igual.
+    // The file is read OUTSIDE the runtime (rule 2), as in the TUI: it is a
+    // small TOML, but reading it with `std::fs` inside an `async fn` is
+    // blocking I/O all the same.
     let (layout, layout_roto) = {
         let cli_layout = cli.layout.clone();
         let cfg_layout = cfg.common.ui_layout.clone();
@@ -816,13 +839,13 @@ pub async fn boot(cli: &Cli) -> Result<Boot, StartupError> {
         .await
         .map_err(|e| StartupError::Config(e.to_string()))??
     };
-    // Un fichero roto NO deja sin pantalla —queda el preset— pero tampoco se
-    // calla: un layout que no parsea y desaparece en silencio es una
-    // configuración que el lector cree puesta. Va al LOG y a la barra de
-    // estado, como en el TUI: el log solo no lo lee nadie que esté mirando
-    // una disposición que no pidió.
+    // A broken file does NOT leave the screen empty — the preset stays — but
+    // it does not stay quiet either: a layout that fails to parse and
+    // disappears silently is a configuration the reader believes is set. It
+    // goes to the LOG and the status bar, as in the TUI: the log alone is
+    // read by nobody who is looking at a layout they did not ask for.
     let aviso_layout = layout_roto.map(|e| {
-        tracing::warn!(error = %e, "la disposición del usuario no cargó: queda la de fábrica");
+        tracing::warn!(error = %e, "user layout did not load: the factory one stays");
         let nombre = cli.layout.clone().unwrap_or_else(|| {
             std::ffi::OsString::from(cfg.common.ui_layout.as_deref().unwrap_or("orthodox"))
         });
@@ -835,17 +858,17 @@ pub async fn boot(cli: &Cli) -> Result<Boot, StartupError> {
 
     let columnas = norte_frontend::columns::ColumnsSettings::resolve(&cfg.common.ui_columns)
         .with_date_format(cfg.common.ui_chrome.date_format());
-    // Un id de columna que no parsea no desaparece en silencio: `doctor` lo
-    // reporta, y aquí al menos queda en el log de arranque.
+    // A column id that fails to parse does not disappear silently: `doctor`
+    // reports it, and here it at least stays in the startup log.
     for malo in &columnas.invalid {
-        tracing::warn!(columna = %malo, "id de columna inválido: se ignora");
+        tracing::warn!(column = %malo, "invalid column id: ignored");
     }
     let (paths, user_layouts) = diagnostico(&capas_vistas, &socket).await;
     let (host, snapshot) = UiHost::start(UiHostOptions {
         backend: Arc::new(backend),
         initial_dir: inicio,
-        // Lo escribió un humano, así que gana a la sesión en el panel activo
-        // — la misma regla que el terminal cerró en `eb237c61`.
+        // A human typed it, so it beats the session in the active pane — the
+        // same rule the terminal settled in `eb237c61`.
         initial_dir_pedido: cli.dir.is_some(),
         attach: cli.attach,
         locale: match lang {
@@ -856,33 +879,34 @@ pub async fn boot(cli: &Cli) -> Result<Boot, StartupError> {
         keymap_viewer,
         keymap_dialog,
         layout,
-        // El renderer corrige el tamaño en cuanto sepa el suyo; esto es lo
-        // que se reparte mientras tanto.
+        // The renderer corrects the size as soon as it knows its own; this
+        // is what gets used meanwhile.
         viewport: (120, 40),
-        // Los ajustes ENTEROS: las columnas se configuran por esquema, y
-        // resolverlas aquí para `file` dejaba muerta esa mitad de la
-        // configuración en cuanto un panel navegaba a un `sftp://`.
+        // The WHOLE settings: columns are configured per scheme, and
+        // resolving them here for `file` left that half of the
+        // configuration dead as soon as a pane navigated to an `sftp://`.
         columns: columnas,
         effects: EFECTOS,
         settings: cfg.clone(),
         paths,
         theme: tema_visto(tema_resuelto.as_deref(), &theme, tema_claro, tema_oscuro),
         user_layouts,
-        // Ya está APLICADO en `settings` (sus capas entraron arriba); esto es
-        // para que el host lo sepa y el selector lo marque puesto (#307).
+        // Already APPLIED in `settings` (its layers went in above); this is
+        // so the host knows and the picker marks it as set (#307).
         profile: cli.profile.clone(),
         log_ring,
     })
     .await?;
     let mut snapshot = snapshot;
-    // El de la disposición va PRIMERO si lo hay: los otros dos avisan de una
-    // capa ignorada, y éste de que la pantalla que se está mirando no es la
-    // pedida — que es lo que el lector no puede deducir solo.
+    // The layout's goes FIRST if there is one: the other two warn about an
+    // ignored layer, and this one warns that the screen being looked at is
+    // not the one requested — which is what the reader cannot work out on
+    // their own.
     snapshot.status.message = aviso_layout
         .or_else(|| aviso_de_arranque(&cfg, lang, capas_lua_descartadas, cli.profile.as_deref()));
-    // El asistente de primer arranque (spec 2026-09-10): sin `norte.toml` de
-    // usuario y sin `NORTE_NO_WIZARD`, como en el terminal. Un `stat`, fuera
-    // del hilo de la UI (regla 2).
+    // The first-run wizard (spec 2026-09-10): without a user `norte.toml` and
+    // without `NORTE_NO_WIZARD`, as in the terminal. A `stat`, outside the UI
+    // thread (rule 2).
     let first_run = if std::env::var_os("NORTE_NO_WIZARD").is_some() {
         false
     } else if let Some(dir) = norte_config::user_config_dir() {
@@ -892,10 +916,10 @@ pub async fn boot(cli: &Cli) -> Result<Boot, StartupError> {
     } else {
         false
     };
-    // Sin pantalla de inicio en ESTE arranque (ADR 0115): la bandera, o la
-    // variable que usan los pilotos y las capturas. Misma pareja que el
-    // terminal, porque una ventana que ignora `NORTE_NO_SPLASH` deja una
-    // pantalla encima de cada captura automática.
+    // No splash screen on THIS run (ADR 0115): the flag, or the variable
+    // pilots and screenshots use. Same pair as the terminal, because a
+    // window that ignores `NORTE_NO_SPLASH` leaves a screen on top of every
+    // automated screenshot.
     let no_splash = cli.no_splash || std::env::var_os("NORTE_NO_SPLASH").is_some();
     Ok(Boot {
         host,
@@ -910,12 +934,13 @@ pub async fn boot(cli: &Cli) -> Result<Boot, StartupError> {
     })
 }
 
-/// El nombre de un layout, PINTABLE: lossy marcado y hazards enmascarados.
+/// A layout's name, SHOWABLE: lossy marked and hazards masked.
 ///
-/// Solo para mensajes. Los bytes no se tocan —los usa el cargador—, y esto es
-/// lo mismo que hace el TUI en `App::apply_loaded_layout`: sin la máscara, un
-/// `--layout $'a\x1b[31mb'` deja la secuencia CRUDA en `norte-gui.log`, y sin
-/// la marca `$'\xff'` y `$'\xfe'` dan el mismo mensaje.
+/// For messages only. The bytes are not touched — the loader uses them —
+/// and this is the same thing the TUI does in `App::apply_loaded_layout`:
+/// without the mask, a `--layout $'a\x1b[31mb'` leaves the RAW sequence in
+/// `norte-gui.log`, and without the marker `$'\xff'` and `$'\xfe'` give the
+/// same message.
 fn layout_pintable(name: &std::ffi::OsStr) -> String {
     let (showable, lossy) = norte_frontend::display_os_name(name);
     let showable = norte_encoding::mask_terminal_hazards(&showable);
@@ -926,31 +951,32 @@ fn layout_pintable(name: &std::ffi::OsStr) -> String {
     }
 }
 
-/// La disposición con la que arranca la ventana, y el aviso si el fichero del
-/// usuario estaba roto.
+/// The layout the window starts with, and the warning if the user's file was
+/// broken.
 ///
-/// Dos fuentes y dos criterios: de `--layout` se exige que exista, porque lo
-/// acaba de teclear un humano; de `[ui] layout` se cae a `orthodox`, que es lo
-/// que se tenía antes de escribir la clave.
+/// Two sources and two criteria: `--layout` is required to exist, because a
+/// human just typed it; `[ui] layout` falls back to `orthodox`, which is what
+/// was there before the key was written.
 ///
-/// **La ventana es más estricta que el TUI en la primera**, y a propósito: el
-/// TUI avisa por la barra y sigue, porque ya tiene una pantalla puesta cuando
-/// eso ocurre; aquí no hay todavía nada que enseñar, y arrancar con una
-/// disposición que no es la pedida es peor que decir que no existe. Lo que sí
-/// se comparte es la REGLA de resolución (`or_preset`) y el motivo: un fichero
-/// ROTO no se anuncia como «no existe», se anuncia con su error de parseo.
+/// **The window is stricter than the TUI on the first one**, on purpose: the
+/// TUI warns through the bar and continues, because it already has a screen
+/// up when that happens; here there is not yet anything to show, and
+/// starting with a layout that is not the one requested is worse than saying
+/// it does not exist. What IS shared is the resolution RULE (`or_preset`) and
+/// the reasoning: a BROKEN file is not announced as "does not exist", it is
+/// announced with its parse error.
 ///
-/// Dentro de cada fuente, el fichero del usuario gana al preset de fábrica
-/// —[`norte_frontend::layout::config::or_preset`] es esa regla, compartida—.
-/// Antes esto miraba SOLO los presets, así que un layout guardado no se podía
-/// pedir por la línea de órdenes aunque el selector de esta misma ventana lo
-/// ofreciera.
+/// Within each source, the user's file beats the factory preset —
+/// [`norte_frontend::layout::config::or_preset`] is that rule, shared. This
+/// used to look ONLY at the presets, so a saved layout could not be
+/// requested from the command line even though this same window's picker
+/// offered it.
 ///
-/// El nombre viaja como [`std::ffi::OsStr`] y no como `String` (#246): es un
-/// nombre de FICHERO, y colapsar sus bytes manda a `layouts/\u{fffd}.toml` a
-/// dos nombres inválidos distintos.
+/// The name travels as [`std::ffi::OsStr`] and not as `String` (#246): it is
+/// a FILE name, and collapsing its bytes sends two different invalid names to
+/// `layouts/\u{fffd}.toml`.
 ///
-/// Lee del disco: va bajo `spawn_blocking`.
+/// Reads from disk: goes under `spawn_blocking`.
 fn arbol_de_arranque(
     cli: Option<&std::ffi::OsStr>,
     config: Option<&str>,
@@ -972,23 +998,23 @@ fn arbol_de_arranque(
     };
     if let Some(name) = cli {
         return config::or_preset(name, leer(name)).map_err(|e| match e {
-            // No hay fichero ni preset con ese nombre: es un valor que no
-            // existe, y eso es lo que se dice.
+            // There is no file and no preset with that name: it is a value
+            // that does not exist, and that is what gets said.
             LayoutError::NotFound(_) | LayoutError::BadName(_) => StartupError::Desconocido {
                 que: "--layout",
                 valor: layout_pintable(name),
             },
-            // El fichero SÍ está y no sirve. Anunciarlo como «no existe»
-            // manda al lector a buscar un nombre que ya tiene bien escrito:
-            // lo que necesita es el error de parseo.
+            // The file IS there and does not work. Announcing it as "does
+            // not exist" sends the reader looking for a name they already
+            // typed correctly: what they need is the parse error.
             otro => StartupError::Config(format!("--layout {}: {otro}", layout_pintable(name))),
         });
     }
     let name = std::ffi::OsString::from(config.unwrap_or("orthodox"));
     match config::or_preset(&name, leer(&name)) {
         Ok(v) => Ok(v),
-        // La clave nombra algo que no existe: se sigue con la de siempre, que
-        // es lo que el lector tenía antes de escribirla.
+        // The key names something that does not exist: it falls back to the
+        // usual one, which is what the reader had before writing it.
         Err(e) => Ok((
             norte_frontend::layout::presets::tree("orthodox")
                 .map_err(|x| StartupError::Config(x.to_string()))?,
@@ -997,12 +1023,12 @@ fn arbol_de_arranque(
     }
 }
 
-/// Un valor de la línea de órdenes que TIENE que ser texto para poder
-/// compararlo con una lista de nombres conocidos.
+/// A command-line value that HAS to be text so it can be compared against a
+/// list of known names.
 ///
-/// Los bytes se conservan hasta aquí (`OsString`) y la conversión falla en
-/// vez de colapsar: dos nombres inválidos distintos no pueden acabar siendo
-/// el mismo (#246).
+/// The bytes are kept intact up to here (`OsString`) and the conversion
+/// fails instead of collapsing: two different invalid names cannot end up
+/// being the same one (#246).
 fn nombre_de(v: &std::ffi::OsStr, que: &'static str) -> Result<String, StartupError> {
     v.to_str()
         .map(str::to_owned)
@@ -1012,29 +1038,29 @@ fn nombre_de(v: &std::ffi::OsStr, que: &'static str) -> Result<String, StartupEr
         })
 }
 
-/// El tema pedido, y el nombre del que se va a pintar.
+/// The requested theme, and the name of the one that is going to be painted.
 ///
-/// Por `resolve_theme`, que es el resolutor COMPARTIDO: acepta el nombre de
-/// un preset **o la ruta a un `.toml`** (ADR 0020). Aquí se llamaba a
-/// `Theme::preset` a secas, así que un `theme = "~/.config/norte/mio.toml"`
-/// tematizaba el terminal y dejaba la ventana con la paleta por defecto, sin
-/// decir nada — la misma forma que tenía el bug de `--layout`.
+/// Through `resolve_theme`, the SHARED resolver: it accepts a preset's name
+/// **or the path to a `.toml`** (ADR 0020). This used to call plain
+/// `Theme::preset`, so a `theme = "~/.config/norte/mine.toml"` themed the
+/// terminal and left the window with the default palette, without saying
+/// anything — the same shape the `--layout` bug had.
 ///
-/// Lee del disco cuando el spec es una ruta: va bajo `spawn_blocking`.
+/// Reads from disk when the spec is a path: goes under `spawn_blocking`.
 ///
-/// Devuelve el nombre del que SE VA A PINTAR y no el del que se pidió: la
-/// vista del tema existe para ver por dentro el que hay, y titularla con un
-/// nombre cuyos colores no son los de debajo es justo lo que esa vista viene
-/// a impedir. Un tema de fichero no tiene nombre de preset, así que va con el
-/// suyo propio si lo declara.
+/// Returns the name of the one that IS GOING TO BE PAINTED and not the one
+/// that was requested: the theme view exists to see the one that is actually
+/// there from the inside, and titling it with a name whose colors are not
+/// the ones underneath is exactly what that view exists to prevent. A file
+/// theme has no preset name, so it goes with its own if it declares one.
 fn tema(nombre: Option<&str>) -> (Theme, Option<String>) {
     let Some(n) = nombre else {
         return (Theme::preset_default(), None);
     };
     match norte_frontend::theme::resolve_theme(Some(n)) {
         Ok(t) => {
-            // Un preset se titula con el nombre pedido; uno de fichero, con
-            // el que el propio fichero declare.
+            // A preset is titled with the requested name; a file one, with
+            // whatever the file itself declares.
             let titulo = Theme::preset(n)
                 .ok()
                 .flatten()
@@ -1042,16 +1068,16 @@ fn tema(nombre: Option<&str>) -> (Theme, Option<String>) {
             (t, titulo)
         }
         Err(e) => {
-            tracing::warn!(error = %e, "el tema pedido no cargó: queda el de fábrica");
+            tracing::warn!(error = %e, "requested theme did not load: the factory one stays");
             (Theme::preset_default(), None)
         }
     }
 }
 
-/// El directorio de arranque, como `VPath`.
+/// The startup directory, as a `VPath`.
 ///
-/// Se valida AQUÍ y no dentro de la ventana: un error de arranque con la
-/// pantalla ya montada es un cuadro gris que no dice nada.
+/// Validated HERE and not inside the window: a startup error with the screen
+/// already mounted is a gray box that says nothing.
 fn start_dir(dir: Option<PathBuf>) -> Result<VPath, StartupError> {
     let nativo = match dir {
         Some(d) => {
@@ -1059,7 +1085,7 @@ fn start_dir(dir: Option<PathBuf>) -> Result<VPath, StartupError> {
                 .map_err(|e| StartupError::Dir(format!("{}: {e}", d.display())))?;
             if !meta.is_dir() {
                 return Err(StartupError::Dir(format!(
-                    "{} no es un directorio",
+                    "{} is not a directory",
                     d.display()
                 )));
             }
@@ -1071,19 +1097,20 @@ fn start_dir(dir: Option<PathBuf>) -> Result<VPath, StartupError> {
         .map_err(|e| StartupError::Dir(format!("{}: {e}", nativo.display())))
 }
 
-/// El log va al FICHERO y solo al fichero.
+/// The log goes to the FILE and only to the file.
 ///
-/// El MONTAJE es el compartido (`norte_config::logging`): rotación diaria,
-/// directorio 0700 y ficheros 0600, retención acotada y el cap de seguridad
-/// de `suppaftp`. Aquí se montaba a mano —porque el helper vivía en el core y
-/// este binario habla con el daemon por un socket—, y lo que costó fue que la
-/// copia se dejó el endurecimiento: un log legible por cualquier cuenta local
-/// con las rutas por las que el usuario había navegado (#255). El helper vive
-/// ahora en `norte-config`, que ya era dueño de `state_dir()` y de `[log]`.
+/// The SETUP is the shared one (`norte_config::logging`): daily rotation,
+/// 0700 directory and 0600 files, bounded retention and `suppaftp`'s safety
+/// cap. This used to be set up by hand — because the helper lived in the
+/// core and this binary talks to the daemon over a socket — and what it cost
+/// was that the copy was left without the hardening: a log readable by any
+/// local account, with the paths the user had navigated (#255). The helper
+/// now lives in `norte-config`, which already owned `state_dir()` and
+/// `[log]`.
 ///
-/// El prefijo SÍ es propio: el daemon y esta ventana pueden estar vivos a la
-/// vez, y compartir fichero de rotación haría que la retención de uno podase
-/// los ficheros del otro.
+/// The prefix IS its own: the daemon and this window can both be alive at
+/// the same time, and sharing a rotation file would make one's retention
+/// prune the other's files.
 fn logging(cfg: &norte_frontend::config::FrontendConfig) -> Option<norte_config::logring::LogRing> {
     norte_config::logging::init_to_file_with_ring(
         norte_config::logging::LogConfig {
@@ -1100,38 +1127,39 @@ fn logging(cfg: &norte_frontend::config::FrontendConfig) -> Option<norte_config:
 mod tests {
     use super::*;
 
-    /// `NORTE_LANG` > `[ui] lang` > el entorno del sistema.
+    /// `NORTE_LANG` > `[ui] lang` > the system's environment.
     ///
-    /// Las dos superficies documentaban reglas CONTRARIAS y las dos las
-    /// cumplían: la ventana daba la razón a la configuración y el terminal a
-    /// `NORTE_LANG`, así que con las dos puestas `ntc` salía en un idioma y
-    /// `norte-gui` en otro. Manda el terminal: `NORTE_LANG` es específico de
-    /// norte y se pone para UNA ejecución, o sea la misma clase de cosa que
-    /// `--layout`, que gana a `[ui] layout`.
+    /// The two surfaces used to document OPPOSITE rules and both honored
+    /// them: the window sided with the configuration and the terminal with
+    /// `NORTE_LANG`, so with both set `ntc` came out in one language and
+    /// `norte-gui` in another. The terminal rules: `NORTE_LANG` is
+    /// norte-specific and is set for ONE run, i.e. the same kind of thing as
+    /// `--layout`, which beats `[ui] layout`.
     #[test]
     fn norte_lang_gana_a_la_config_y_la_config_al_entorno() {
         assert_eq!(
             elegir_idioma(Some("en"), Some("es"), Lang::Es),
             Lang::En,
-            "lo que se puso para esta ejecución manda"
+            "what was set for this run rules"
         );
         assert_eq!(
             elegir_idioma(None, Some("es"), Lang::En),
             Lang::Es,
-            "y una decisión escrita manda sobre el idioma del sistema"
+            "and a decision written down rules over the system's language"
         );
         assert_eq!(
             elegir_idioma(None, None, Lang::En),
             Lang::En,
-            "sin nada, el sistema"
+            "with nothing, the system"
         );
     }
 
-    /// `[ui] theme` acepta la RUTA a un `.toml`, no solo un preset (ADR 0020).
+    /// `[ui] theme` accepts the PATH to a `.toml`, not just a preset (ADR
+    /// 0020).
     ///
-    /// La ventana llamaba a `Theme::preset` a secas, así que un tema propio
-    /// tematizaba el terminal y dejaba la ventana con la paleta por defecto,
-    /// sin decir nada.
+    /// The window used to call plain `Theme::preset`, so a custom theme
+    /// themed the terminal and left the window with the default palette,
+    /// without saying anything.
     #[test]
     fn el_tema_puede_ser_un_fichero() {
         let dir = tempfile::tempdir().expect("tmp");
@@ -1141,24 +1169,25 @@ mod tests {
         assert_eq!(
             t.name.as_deref(),
             Some("mío"),
-            "se cargó el tema del fichero"
+            "the file's theme was loaded"
         );
         assert_eq!(
             titulo.as_deref(),
             Some("mío"),
-            "y se titula con el nombre que el fichero declara"
+            "and it is titled with the name the file declares"
         );
     }
 
-    /// Un preset sigue siendo un preset, y se titula con el nombre pedido.
+    /// A preset is still a preset, and is titled with the requested name.
     #[test]
     fn un_preset_sigue_yendo_por_su_nombre() {
         let (_t, titulo) = tema(Some("nord"));
         assert_eq!(titulo.as_deref(), Some("nord"));
     }
 
-    /// Y un tema que no carga deja el de fábrica, sin nombre: la vista del
-    /// tema no puede titularse con unos colores que no son los de debajo.
+    /// And a theme that fails to load leaves the factory one, with no name:
+    /// the theme view cannot be titled with colors that are not the ones
+    /// underneath.
     #[test]
     fn un_tema_que_no_carga_deja_el_de_fabrica() {
         let (_t, titulo) = tema(Some("/no/existe/ni/de/lejos.toml"));
@@ -1171,12 +1200,12 @@ mod tests {
         std::fs::write(layouts.join(fichero), texto).expect("write");
     }
 
-    /// `--layout mio` abre el fichero del USUARIO, igual que en el TUI.
+    /// `--layout mio` opens the USER's file, same as in the TUI.
     ///
-    /// La ventana miraba solo los presets de fábrica, así que un layout
-    /// guardado no se podía pedir por la línea de órdenes — y esta misma
-    /// ventana lo ofrece en su selector, o sea que la lista y la opción
-    /// decían cosas distintas sobre el mismo fichero.
+    /// The window used to look only at the factory presets, so a saved
+    /// layout could not be requested from the command line — and this same
+    /// window offers it in its picker, i.e. the list and the option said
+    /// different things about the same file.
     #[test]
     fn el_layout_de_la_linea_de_ordenes_puede_ser_del_usuario() {
         let dir = tempfile::tempdir().expect("tmp");
@@ -1187,17 +1216,13 @@ mod tests {
         );
         let (arbol, aviso) =
             arbol_de_arranque(Some(std::ffi::OsStr::new("mio")), None, Some(dir.path()))
-                .expect("carga el del usuario");
-        assert_eq!(
-            arbol.slot_ids().len(),
-            1,
-            "el del fichero, de un solo hueco"
-        );
+                .expect("loads the user's");
+        assert_eq!(arbol.slot_ids().len(), 1, "the file's, with a single slot");
         assert!(aviso.is_none());
     }
 
-    /// Y uno del usuario que se llama como un preset GANA al preset, que es
-    /// la regla del resto de la configuración.
+    /// And a user one named like a preset BEATS the preset, which is the
+    /// rule for the rest of the configuration.
     #[test]
     fn el_fichero_del_usuario_gana_al_preset_del_mismo_nombre() {
         let dir = tempfile::tempdir().expect("tmp");
@@ -1208,16 +1233,16 @@ mod tests {
         );
         let (arbol, _) =
             arbol_de_arranque(Some(std::ffi::OsStr::new("simple")), None, Some(dir.path()))
-                .expect("carga");
+                .expect("loads");
         assert_eq!(
             arbol.slot_ids().len(),
             1,
-            "el `simple` de fábrica tiene tres huecos: éste es el del usuario"
+            "the factory `simple` has three slots: this is the user's"
         );
     }
 
-    /// Un nombre que no es UTF-8 es un nombre de fichero como cualquier otro
-    /// (#246): se busca, no se rechaza de entrada.
+    /// A name that is not UTF-8 is a file name like any other (#246): it is
+    /// searched for, not rejected outright.
     #[test]
     fn un_nombre_de_layout_que_no_es_utf8_se_busca_igual() {
         use std::os::unix::ffi::OsStrExt;
@@ -1227,21 +1252,22 @@ mod tests {
         fichero.push(".toml");
         escribe_layout(dir.path(), &fichero, "[slot]\nid = 1\nkind = \"browser\"\n");
         let (arbol, _) =
-            arbol_de_arranque(Some(nombre), None, Some(dir.path())).expect("carga por bytes");
+            arbol_de_arranque(Some(nombre), None, Some(dir.path())).expect("loads by bytes");
         assert_eq!(arbol.slot_ids().len(), 1);
     }
 
-    /// De la línea de órdenes se EXIGE que exista; de la configuración se cae
-    /// a `orthodox`, que es lo que se tenía antes de escribir la clave.
+    /// From the command line it is REQUIRED to exist; from the configuration
+    /// it falls back to `orthodox`, which is what was there before the key
+    /// was written.
     #[test]
     fn un_nombre_inventado_falla_en_la_orden_y_cae_en_la_config() {
         let dir = tempfile::tempdir().expect("tmp");
         assert!(
             arbol_de_arranque(Some(std::ffi::OsStr::new("nada")), None, Some(dir.path())).is_err(),
-            "lo acaba de teclear un humano: se le dice"
+            "a human just typed it: they are told"
         );
         let (arbol, _) = arbol_de_arranque(None, Some("nada"), Some(dir.path()))
-            .expect("la config no deja sin pantalla");
+            .expect("the config does not leave the screen empty");
         assert_eq!(
             arbol,
             norte_frontend::layout::presets::tree("orthodox").expect("preset")
@@ -1250,7 +1276,7 @@ mod tests {
 
     #[test]
     fn los_flags_se_leen_como_en_el_tui() {
-        let cli = parse(["--socket", "/tmp/x.sock", "--layout", "simple"]).expect("parsea");
+        let cli = parse(["--socket", "/tmp/x.sock", "--layout", "simple"]).expect("parses");
         assert_eq!(
             cli.socket.as_deref(),
             Some(std::path::Path::new("/tmp/x.sock"))
@@ -1259,11 +1285,11 @@ mod tests {
         assert!(!cli.help);
     }
 
-    /// `--profile` existe también en la ventana (#307), y con los BYTES
-    /// intactos: un nombre de perfil acaba siendo un directorio.
+    /// `--profile` also exists on the window (#307), and with the BYTES
+    /// intact: a profile name ends up being a directory.
     #[test]
     fn el_perfil_se_lee_y_conserva_sus_bytes() {
-        let cli = parse(["--profile", "trabajo"]).expect("parsea");
+        let cli = parse(["--profile", "trabajo"]).expect("parses");
         assert_eq!(
             cli.profile.as_deref(),
             Some(std::ffi::OsStr::new("trabajo"))
@@ -1274,80 +1300,83 @@ mod tests {
             use std::os::unix::ffi::OsStrExt as _;
             let crudo = std::ffi::OsStr::from_bytes(b"perf\xffil");
             let cli = parse([std::ffi::OsString::from("--profile"), crudo.to_os_string()])
-                .expect("parsea");
+                .expect("parses");
             assert_eq!(
                 cli.profile.as_deref(),
                 Some(crudo),
-                "sin pasar por texto: dos bytes inválidos distintos abrirían el mismo directorio"
+                "without going through text: two different invalid byte \
+                 sequences would open the same directory"
             );
         }
     }
 
-    /// Y un perfil que no está en el listado ABORTA (ADR 0079, D7): pediste
-    /// ese perfil, y arrancar como otra cosa sería contestar otra pregunta.
+    /// And a profile that is not in the listing ABORTS (ADR 0079, D7): you
+    /// asked for that profile, and starting as something else would be
+    /// answering a different question.
     #[test]
     fn un_perfil_que_no_existe_no_arranca() {
         let dir = tempfile::tempdir().expect("temp");
-        // Sin `profiles/` dentro, así que el listado viene vacío.
-        let e =
-            capas_con_perfil_en(dir.path(), std::ffi::OsStr::new("fantasma")).expect_err("no vale");
+        // No `profiles/` inside, so the listing comes back empty.
+        let e = capas_con_perfil_en(dir.path(), std::ffi::OsStr::new("fantasma"))
+            .expect_err("not valid");
         assert!(
             matches!(&e, StartupError::Desconocido { que, valor } if *que == "--profile" && valor == "fantasma"),
             "{e}"
         );
     }
 
-    /// Un flag mal escrito NO se ignora: se dice. Ignorarlo es arrancar sin
-    /// la opción que el usuario cree haber puesto.
+    /// A misspelled flag is NOT ignored: it is said. Ignoring it would be
+    /// starting up without the option the user believes they set.
     #[test]
     fn un_flag_desconocido_no_se_traga() {
-        let e = parse(["--socketo", "/tmp/x"]).expect_err("no vale");
+        let e = parse(["--socketo", "/tmp/x"]).expect_err("not valid");
         assert!(
             matches!(&e, StartupError::UnknownFlag(f) if f == "--socketo"),
             "{e}"
         );
     }
 
-    /// La ventana ACEPTA lo que la terminal le pasa en un relevo (fase 9).
+    /// The window ACCEPTS what the terminal hands it in a handoff (phase 9).
     ///
-    /// El test que faltaba, y el bug que lo pidió: la terminal lanzaba
-    /// `ntc-gui --attach --daemon`, este parser no conocía ninguno de los dos,
-    /// y la ventana salía con código 2 — sin decir nada, porque el relevo le
-    /// cierra `stderr`. Se construye con la MISMA función que usa la terminal,
-    /// así que un flag nuevo en un lado sin el otro pone esto en rojo.
+    /// The test that was missing, and the bug that asked for it: the
+    /// terminal launched `ntc-gui --attach --daemon`, this parser knew
+    /// neither of the two, and the window exited with code 2 — without
+    /// saying anything, because the handoff closes its `stderr`. Built with
+    /// the SAME function the terminal uses, so a new flag on one side
+    /// without the other turns this red.
     #[test]
     fn la_ventana_acepta_el_argv_del_relevo() {
         let cli = parse(norte_frontend::handoff::window_args())
-            .expect("la ventana tiene que aceptar lo que el relevo le pasa");
-        assert!(cli.attach, "y entender que viene de un relevo");
-        // Un arranque cualquiera NO es un relevo.
-        assert!(!parse(Vec::<String>::new()).expect("sin flags").attach);
+            .expect("the window has to accept what the handoff hands it");
+        assert!(cli.attach, "and understand that it comes from a handoff");
+        // Any regular startup is NOT a handoff.
+        assert!(!parse(Vec::<String>::new()).expect("no flags").attach);
     }
 
-    /// Dos nombres de disposición con bytes DISTINTOS no pueden acabar
-    /// siendo el mismo: con una conversión lossy los dos colapsaban a
-    /// `caf\u{FFFD}` y abrían el mismo fichero (#246).
+    /// Two layout names with DIFFERENT bytes cannot end up being the same
+    /// one: with a lossy conversion the two used to collapse to
+    /// `caf\u{FFFD}` and open the same file (#246).
     #[cfg(unix)]
     #[test]
     fn dos_nombres_invalidos_distintos_siguen_siendo_distintos() {
         use std::os::unix::ffi::OsStringExt as _;
         let uno = std::ffi::OsString::from_vec(b"caf\xff".to_vec());
         let otro = std::ffi::OsString::from_vec(b"caf\xfe".to_vec());
-        let a = parse([std::ffi::OsString::from("--layout"), uno]).expect("parsea");
-        let b = parse([std::ffi::OsString::from("--layout"), otro]).expect("parsea");
-        assert_ne!(a.layout, b.layout, "los bytes se conservan");
+        let a = parse([std::ffi::OsString::from("--layout"), uno]).expect("parses");
+        let b = parse([std::ffi::OsString::from("--layout"), otro]).expect("parses");
+        assert_ne!(a.layout, b.layout, "the bytes are kept");
     }
 
     #[test]
     fn la_ayuda_y_la_version_se_reconocen() {
-        assert!(parse(["--help"]).expect("parsea").help);
-        assert!(parse(["-V"]).expect("parsea").version);
+        assert!(parse(["--help"]).expect("parses").help);
+        assert!(parse(["-V"]).expect("parses").version);
     }
 
-    /// Un directorio que no existe se dice ANTES de abrir ventana.
+    /// A directory that does not exist is reported BEFORE opening a window.
     #[test]
     fn un_directorio_que_no_existe_se_dice_pronto() {
-        let e = start_dir(Some(PathBuf::from("/no/existe/ni/de/lejos"))).expect_err("falla");
+        let e = start_dir(Some(PathBuf::from("/no/existe/ni/de/lejos"))).expect_err("fails");
         assert!(matches!(e, StartupError::Dir(_)), "{e}");
     }
 }

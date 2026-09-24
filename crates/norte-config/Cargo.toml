@@ -18,27 +18,27 @@ schemars = { workspace = true, features = ["derive"], optional = true }
 notify = { workspace = true, optional = true }
 tokio = { workspace = true, features = ["rt", "time", "sync", "macros"], optional = true }
 tokio-util = { workspace = true, optional = true }
-# El montaje del log (feature `logging`, #255): los tres binarios lo instalan
-# igual y este crate ya es dueño de `state_dir()` y de las claves `[log]`.
-# Tras la feature para que una biblioteca que solo lee `norte.toml` no
-# compile el subscriber. Las tres ya son dependencias del workspace.
+# The log setup (feature `logging`, #255): the three binaries install it the
+# same way and this crate already owns `state_dir()` and the `[log]` keys.
+# Behind the feature so a library that only reads `norte.toml` does not
+# compile the subscriber. All three are already workspace dependencies.
 tracing = { workspace = true, optional = true }
 tracing-subscriber = { workspace = true, optional = true }
 tracing-appender = { workspace = true, optional = true }
 
 [dev-dependencies]
 tempfile.workspace = true
-# Para leer de vuelta las líneas de `[log] format = "json"` (ADR 0127). Ya está
-# en el árbol: lo trae el propio formato.
+# To read back the lines of `[log] format = "json"` (ADR 0127). Already in
+# the tree: the format itself brings it in.
 serde_json.workspace = true
-# Para probar la cota de secretos POR EL CAMINO REAL. `suppaftp` no emite
-# eventos de `tracing`: emite `log::trace!`, y el puente `tracing-log` cambia el
-# `target` del evento despachado a `"log"`, dejando el verdadero como campo. Los
-# tests que usaban `tracing::trace!(target: "suppaftp", …)` no probaban ese
-# camino, así que una defensa puesta sobre `meta.target()` en el sumidero
-# habría parecido correcta y no habría hecho nada. Las dos ya están en el árbol
-# (`suppaftp` usa `log`; `tracing-log` es feature por defecto de
-# `tracing-subscriber`), así que esto no añade dependencia nueva al binario.
+# To test the secrets gate the REAL WAY. `suppaftp` does not emit `tracing`
+# events: it emits `log::trace!`, and the `tracing-log` bridge changes the
+# dispatched event's `target` to `"log"`, leaving the real one as a field.
+# Tests that used `tracing::trace!(target: "suppaftp", …)` were not exercising
+# that path, so a guard placed on `meta.target()` in the sink would have
+# looked correct and done nothing. Both are already in the tree (`suppaftp`
+# uses `log`; `tracing-log` is a default feature of `tracing-subscriber`), so
+# this adds no new dependency to the binary.
 log = "0.4"
 tracing-log = "0.2"
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }
@@ -53,8 +53,8 @@ schema = ["dep:schemars"]
 # Live config watching (notify + polling fallback). Frontends enable it;
 # core/CLI do not need it.
 watch = ["dep:notify", "dep:tokio", "dep:tokio-util"]
-# Montaje de tracing para los binarios (#255). Lo activan la CLI, el daemon,
-# el terminal y la ventana; nadie más.
+# Tracing setup for the binaries (#255). Enabled by the CLI, the daemon, the
+# terminal and the window; nobody else.
 logging = ["dep:tracing", "dep:tracing-subscriber", "dep:tracing-appender"]
 
 [lints]

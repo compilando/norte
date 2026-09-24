@@ -1,16 +1,17 @@
-//! El contrato del bridge, clavado.
+//! The bridge's contract, nailed down.
 //!
-//! Un renderer que no está escrito en Rust no comparte tipos con el host:
-//! comparte JSON. Estas fixtures son ese acuerdo, y romperlas sin querer es
-//! exactamente el fallo del que protegen — un campo renombrado en Rust que
-//! deja al renderer leyendo `null` sin que nada se ponga rojo.
+//! A renderer not written in Rust does not share types with the host: it
+//! shares JSON. These fixtures are that agreement, and breaking them by
+//! accident is exactly the failure they protect against — a field renamed in
+//! Rust that leaves the renderer reading `null` with nothing turning red.
 //!
-//! La cobertura es 1:1 entre las fixtures y los casos de este fichero, y
-//! ADEMÁS `tag_de_accion` es un `match` exhaustivo sin comodín: añadir una
-//! variante a `UiAction` deja de compilar aquí. Sin eso la promesa era falsa
-//! —se comparaba el JSON contra una lista escrita a mano, no contra el
-//! enum— y ya se había colado `search_activate_row`, que cruzaba el cable
-//! sin fixture mientras esta cabecera decía que era imposible.
+//! Coverage is 1:1 between this file's fixtures and cases, and ON TOP OF
+//! THAT `tag_de_accion` is an exhaustive `match` with no wildcard: adding a
+//! variant to `UiAction` stops this from compiling. Without that the promise
+//! was false — the JSON was compared against a hand-written list, not
+//! against the enum — and `search_activate_row` had already slipped through,
+//! crossing the wire with no fixture while this very header said that was
+//! impossible.
 
 use std::collections::BTreeMap;
 use std::fmt::Debug;
@@ -32,18 +33,18 @@ fn load(name: &str) -> BTreeMap<String, Value> {
         .join("tests/golden")
         .join(name);
     let raw = std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("no se pudo leer {}: {e}", path.display()));
-    serde_json::from_str(&raw).expect("fixture JSON válida")
+        .unwrap_or_else(|e| panic!("could not read {}: {e}", path.display()));
+    serde_json::from_str(&raw).expect("valid fixture JSON")
 }
 
-/// Cobertura 1:1 entre fixtures y casos, y match exacto en ambos sentidos.
-/// Reescribe las fixtures de una familia desde los casos Rust.
+/// 1:1 coverage between fixtures and cases, and an exact match both ways.
+/// Rewrites a family's fixtures from the Rust cases.
 ///
-/// Solo con `NORTE_BLESS=1`, y a propósito: el corpus ES el acuerdo con un
-/// renderer que no comparte tipos, así que regenerarlo tiene que ser un acto
-/// explícito que se lee en el diff. Sin esto, un campo nuevo obligaba a
-/// parchear el JSON a mano —y a mano es donde se cuelan los valores que no
-/// corresponden a ningún caso.
+/// Only with `NORTE_BLESS=1`, and on purpose: the corpus IS the agreement
+/// with a renderer that shares no types, so regenerating it has to be an
+/// explicit act that shows up in the diff. Without this, a new field forced
+/// hand-patching the JSON — and by hand is where values matching no case
+/// slip in.
 fn bless<T: Serialize>(file: &str, cases: &[(&str, T)]) {
     let mut mapa = serde_json::Map::new();
     for (nombre, valor) in cases {
@@ -56,7 +57,7 @@ fn bless<T: Serialize>(file: &str, cases: &[(&str, T)]) {
         .join("tests/golden")
         .join(file);
     let texto = serde_json::to_string_pretty(&Value::Object(mapa)).expect("json");
-    std::fs::write(&path, texto + "\n").expect("escribir la fixture");
+    std::fs::write(&path, texto + "\n").expect("write the fixture");
 }
 
 fn check_family<T>(file: &str, cases: &[(&str, T)])
@@ -72,7 +73,7 @@ where
     case_names.sort_unstable();
     assert_eq!(
         fixture_names, case_names,
-        "[{file}] los casos Rust y las fixtures deben cubrirse 1:1"
+        "[{file}] Rust cases and fixtures must cover each other 1:1"
     );
     for (name, value) in cases {
         let expected = &fixtures[*name];
@@ -83,7 +84,7 @@ where
         );
         let back: T = serde_json::from_value(expected.clone())
             .unwrap_or_else(|e| panic!("[{file}/{name}] deserialize: {e}"));
-        assert_eq!(&back, value, "[{file}/{name}] deserialize == construido");
+        assert_eq!(&back, value, "[{file}/{name}] deserialize == constructed");
     }
 }
 
@@ -92,7 +93,7 @@ fn fila(key: u64, nombre: &str, hostile: bool) -> RowView {
         key: RowKey(key),
         display_name: nombre.to_owned(),
         hostile,
-        // Ninguna tarea trabaja sobre esta fila (puente 69).
+        // No task works on this row (bridge 69).
         progress: None,
         kind: RowKind::File,
         selected: false,
@@ -114,11 +115,11 @@ fn fila(key: u64, nombre: &str, hostile: bool) -> RowView {
     }
 }
 
-/// La misma fila, con la insignia que le puso un plugin, y el icono que le
-/// puso otro (puente 62): los dos huecos en una fila.
+/// The same row, with the badge one plugin put on it, and the icon another
+/// one put on it (bridge 62): both slots in one row.
 ///
-/// La insignia, su rol y el icono cruzan JSON aquí y en ningún otro sitio:
-/// son lo que un TERCERO pinta pegado a un nombre de fichero.
+/// The badge, its role and the icon cross JSON here and nowhere else: they
+/// are what a THIRD PARTY paints attached to a file name.
 fn fila_adornada(key: u64, nombre: &str) -> RowView {
     RowView {
         badge: "M".to_owned(),
@@ -135,25 +136,25 @@ fn acciones() {
     let mut casos = acciones_de_fila();
     casos.extend(acciones_de_overlay());
     casos.extend(acciones_de_pantalla());
-    // Cada caso se llama como su variante: es lo que hace que la cobertura la
-    // vigile el COMPILADOR y no una lista.
+    // Each case is named after its variant: that is what makes the COMPILER,
+    // not a list, watch over coverage.
     for (nombre, accion) in &casos {
         assert_eq!(
             *nombre,
             tag_de_accion(accion),
-            "el caso `{nombre}` no se llama como su variante"
+            "case `{nombre}` is not named after its variant"
         );
     }
     check_family("actions.json", &casos);
 }
 
-/// El tag de cada acción, en un `match` EXHAUSTIVO y sin comodín.
+/// Each action's tag, in an EXHAUSTIVE `match` with no wildcard.
 ///
-/// Es el guardia que faltaba. `check_family` compara las fixtures con una
-/// lista de casos escrita a mano, así que una variante nueva sin caso pasaba
-/// sin que nada dijera nada —y pasó: `SearchActivateRow` cruzaba el cable sin
-/// fixture—. Con esto, añadir una variante rompe la compilación de este
-/// fichero, que es donde hay que enterarse.
+/// It is the guard that was missing. `check_family` compares the fixtures
+/// against a hand-written list of cases, so a new variant with no case would
+/// pass with nothing saying anything — and it did: `SearchActivateRow`
+/// crossed the wire with no fixture. With this, adding a variant breaks this
+/// file's compilation, which is where it needs to be noticed.
 fn tag_de_accion(a: &UiAction) -> &'static str {
     match a {
         UiAction::MoveCursor { .. } => "move_cursor",
@@ -240,12 +241,12 @@ fn tag_de_accion(a: &UiAction) -> &'static str {
     }
 }
 
-/// Las que nombran una fila: llevan clave Y generación (ADR 0068).
+/// The ones that name a row: they carry key AND generation (ADR 0068).
 ///
-/// Crece con cada acción nueva, y es lo que debe hacer: como
-/// [`slots_de_referencia`], es UNA lista de literales sin lógica dentro, y
-/// repartirla escondería justo lo que este fichero enseña de un vistazo.
-#[expect(clippy::too_many_lines, reason = "lista de literales, sin lógica")]
+/// Grows with every new action, and that is what it should do: like
+/// [`slots_de_referencia`], it is ONE list of literals with no logic inside,
+/// and splitting it up would hide exactly what this file shows at a glance.
+#[expect(clippy::too_many_lines, reason = "list of literals, no logic")]
 fn acciones_de_fila() -> Vec<(&'static str, UiAction)> {
     vec![
         (
@@ -257,10 +258,10 @@ fn acciones_de_fila() -> Vec<(&'static str, UiAction)> {
             },
         ),
         ("cancel_task", UiAction::CancelTask { task_id: 42 }),
-        // #326: los cinco del panel de registro. En un puente que sube de
-        // número, los nombres de wire nuevos son lo primero que hay que clavar
-        // — y `tag_de_accion` no basta: con la lista de casos y las fixtures
-        // las DOS vacías, `check_family` las cubre 1:1 y no dice nada.
+        // #326: the log panel's five. On a bridge that bumps its number, new
+        // wire names are the first thing that needs nailing down — and
+        // `tag_de_accion` is not enough: with the case list and the fixtures
+        // BOTH empty, `check_family` covers them 1:1 and says nothing.
         ("refresh_slot", UiAction::RefreshSlot { slot_id: 1 }),
         (
             "log_set_level",
@@ -279,9 +280,9 @@ fn acciones_de_fila() -> Vec<(&'static str, UiAction)> {
             "panel_click",
             UiAction::PanelClick {
                 slot_id: 13,
-                // Celdas DENTRO del marco: el renderer ya restó el borde, y
-                // el host resuelve con ellas qué zona era. El comando no
-                // viaja.
+                // Cells INSIDE the frame: the renderer has already
+                // subtracted the border, and the host works out which zone
+                // it was from them. The command does not travel.
                 row: 2,
                 col: 7,
             },
@@ -342,8 +343,8 @@ fn acciones_de_fila() -> Vec<(&'static str, UiAction)> {
                 text: "carpeta nueva".to_owned(),
             },
         ),
-        // Un campo de FORMULARIO (puente 91). El de texto es el que lleva
-        // payload; el interruptor y el ciclo dicen solo que se tocaron.
+        // A FORM field (bridge 91). The text one is the one that carries a
+        // payload; the switch and the cycle only say they were touched.
         (
             "dialog_field",
             UiAction::DialogField {
@@ -354,21 +355,21 @@ fn acciones_de_fila() -> Vec<(&'static str, UiAction)> {
                 },
             },
         ),
-        // La vuelta del selector del escritorio (#284). Un caso por variante,
-        // que es la regla de arriba; el `path: null` de un selector cerrado
-        // sin elegir lo cubre `un_selector_cancelado_viaja_como_null`.
+        // The desktop picker's return trip (#284). One case per variant,
+        // which is the rule above; the `path: null` of a picker closed
+        // without choosing is covered by `un_selector_cancelado_viaja_como_null`.
         (
             "directory_picked",
             UiAction::DirectoryPicked {
                 path: Some("/home/oscar/destino".to_owned()),
             },
         ),
-        // `false` y no `true`: es el valor que CAMBIA algo. Con la ventana
-        // enfocada el host se comporta como antes de #285.
+        // `false` and not `true`: it is the value that CHANGES something.
+        // With the window focused, the host behaves as it did before #285.
         ("window_focus", UiAction::WindowFocus { focused: false }),
-        // Lo que llega de un drop del escritorio (#283): una LISTA, porque
-        // arrastrar varios de golpe es el caso normal, y texto nativo sin
-        // convertir — el `VPath` lo hace el host.
+        // What arrives from a desktop drop (#283): a LIST, because dragging
+        // several at once is the normal case, and native text without
+        // conversion — the host does the `VPath` conversion.
         (
             "files_dropped",
             UiAction::FilesDropped {
@@ -381,9 +382,9 @@ fn acciones_de_fila() -> Vec<(&'static str, UiAction)> {
     ]
 }
 
-/// Los tres cambios de `extension_govern` (puente 61), por su nombre de
-/// wire. Fuera de la familia golden porque ahí solo cabe un caso por
-/// variante, y los otros dos son igual de fáciles de escribir mal.
+/// The three changes of `extension_govern` (bridge 61), by their wire name.
+/// Kept out of the golden family because there only one case per variant
+/// fits, and the other two are just as easy to get wrong.
 #[test]
 fn los_tres_cambios_de_una_extension_viajan_por_su_nombre() {
     for (change, nombre) in [
@@ -396,48 +397,48 @@ fn los_tres_cambios_de_una_extension_viajan_por_su_nombre() {
             id: "acme.ftp".to_owned(),
             change,
         };
-        let json = serde_json::to_value(&a).expect("serializa");
+        let json = serde_json::to_value(&a).expect("serialize");
         assert_eq!(
             json,
             serde_json::json!({
                 "action": "extension_govern", "row": 0, "id": "acme.ftp", "change": nombre
             })
         );
-        let back: UiAction = serde_json::from_value(json).expect("deserializa");
+        let back: UiAction = serde_json::from_value(json).expect("deserialize");
         assert_eq!(back, a);
     }
 }
 
-/// Cerrar el selector sin elegir viaja como `null`, y vuelve como `None`
-/// (#284). Fuera de la familia golden porque ahí solo cabe un caso por
-/// variante — pero la forma en el cable importa igual: un renderer que
-/// mandara `""` estaría nombrando la raíz.
+/// Closing the picker without choosing travels as `null`, and comes back as
+/// `None` (#284). Kept out of the golden family because there only one case
+/// per variant fits — but the shape on the wire matters just the same: a
+/// renderer that sent `""` would be naming the root.
 #[test]
 fn un_selector_cancelado_viaja_como_null() {
     let a = UiAction::DirectoryPicked { path: None };
-    let json = serde_json::to_value(&a).expect("serializa");
+    let json = serde_json::to_value(&a).expect("serialize");
     assert_eq!(
         json,
         serde_json::json!({"action": "directory_picked", "path": null})
     );
-    let vuelta: UiAction = serde_json::from_value(json).expect("deserializa");
+    let vuelta: UiAction = serde_json::from_value(json).expect("deserialize");
     assert!(matches!(vuelta, UiAction::DirectoryPicked { path: None }));
 }
 
-/// Las que nombran una fila de un OVERLAY por su índice.
+/// The ones that name an OVERLAY row by its index.
 ///
-/// Dos llevan generación —la barra lateral y el selector se llenan desde una
-/// tarea de fondo, así que su lista cambia sin que el usuario toque nada— y
-/// las demás no, porque no pueden cambiar sin un gesto suyo.
+/// Two carry generation — the sidebar and the picker fill from a background
+/// task, so their list changes without the user touching anything — and the
+/// rest do not, because they cannot change without a gesture from them.
 fn acciones_de_overlay() -> Vec<(&'static str, UiAction)> {
     vec![
         (
             "extension_select_row",
             UiAction::ExtensionSelectRow { row: 1 },
         ),
-        // Puente 61: el botón. `uninstall` y no `approval` porque es el
-        // valor cuyo nombre de wire más cuesta arreglar después: un renderer
-        // que lo escriba mal desinstala nada, en silencio.
+        // Bridge 61: the button. `uninstall` and not `approval` because it
+        // is the value whose wire name is hardest to fix later: a renderer
+        // that misspells it uninstalls nothing, silently.
         (
             "extension_govern",
             UiAction::ExtensionGovern {
@@ -513,8 +514,8 @@ fn acciones_de_overlay() -> Vec<(&'static str, UiAction)> {
     .collect()
 }
 
-/// Las de la pantalla de AJUSTES, aparte porque son seis y la lista de
-/// overlays se pasaba del tope de líneas del lint.
+/// The SETTINGS screen's, kept apart because there are six of them and the
+/// overlay list was going over the lint's line cap.
 fn acciones_de_ajustes() -> Vec<(&'static str, UiAction)> {
     vec![
         (
@@ -535,7 +536,7 @@ fn acciones_de_ajustes() -> Vec<(&'static str, UiAction)> {
             },
         ),
         ("settings_reset", UiAction::SettingsReset { row: 2 }),
-        // PONER, no ciclar: por el id del catálogo y con el valor dentro.
+        // SET, not cycle: by the catalogue's id and with the value inside.
         (
             "settings_set",
             UiAction::SettingsSet {
@@ -546,11 +547,11 @@ fn acciones_de_ajustes() -> Vec<(&'static str, UiAction)> {
     ]
 }
 
-/// Las del CROMO: menús, barras, el asistente y la pantalla de arranque.
+/// The CHROME's: menus, bars, the wizard and the splash screen.
 ///
-/// Separadas de las de overlay solo por tamaño —una lista de cien líneas no
-/// se lee—, y por esa junta y no por otra: estas cuelgan de algo que está
-/// siempre a la vista, no de una pantalla que se abre.
+/// Separated from the overlay ones only by size — a hundred-line list is not
+/// readable — and along that seam and no other: these hang off something
+/// that is always in view, not off a screen that opens.
 fn acciones_de_cromo() -> Vec<(&'static str, UiAction)> {
     vec![
         ("menu_open", UiAction::MenuOpen { menu: 2 }),
@@ -609,8 +610,8 @@ fn acciones_de_cromo() -> Vec<(&'static str, UiAction)> {
     ]
 }
 
-/// Las demás: pantalla, teclado, diálogos y tasks.
-#[expect(clippy::too_many_lines, reason = "lista de literales, sin lógica")]
+/// The rest: screen, keyboard, dialogs and tasks.
+#[expect(clippy::too_many_lines, reason = "list of literals, no logic")]
 fn acciones_de_pantalla() -> Vec<(&'static str, UiAction)> {
     vec![
         ("focus_slot", UiAction::FocusSlot { slot_id: 2 }),
@@ -656,9 +657,9 @@ fn acciones_de_pantalla() -> Vec<(&'static str, UiAction)> {
             },
         ),
         ("set_color_scheme", UiAction::SetColorScheme { dark: true }),
-        // Aquí y no junto a las demás del menú: `acciones_de_overlay` está en
-        // el tope de líneas de clippy, y el orden de esta lista no cuenta —
-        // el corpus se escribe por nombre.
+        // Here and not next to the rest of the menu's: `acciones_de_overlay`
+        // is at clippy's line cap, and this list's order does not matter —
+        // the corpus is written up by name.
         ("menu_toggle", UiAction::MenuToggle),
         (
             "sort_by",
@@ -767,9 +768,9 @@ fn acuses() {
     );
 }
 
-/// El snapshot de referencia: una pantalla con un listado (una fila hostil),
-/// un hueco que este host aún no proyecta, un diálogo y una task viva.
-/// El diálogo que clavan las fixtures.
+/// The reference snapshot: a screen with a listing (one hostile row), a slot
+/// this host does not project yet, a dialog and a live task.
+/// The dialog the fixtures nail down.
 fn dialogo_de_referencia() -> DialogView {
     DialogView {
         id: ModalId(3),
@@ -787,17 +788,17 @@ fn dialogo_de_referencia() -> DialogView {
             hostile: false,
         }),
         deadline: Some("caduca en 30 s".to_owned()),
-        // Un instante FIJO en la fixture: lo que el golden congela es la forma
-        // del campo, y un `ahora + 30 s` de verdad haría el fichero distinto
-        // en cada ejecución.
+        // A FIXED instant in the fixture: what the golden freezes is the
+        // field's shape, and a real `now + 30 s` would make the file
+        // different on every run.
         deadline_at_ms: Some(1_700_000_030_000),
         body: vec![norte_ui_host::dto::DialogLine {
             text: "/home/oscar".to_owned(),
             hostile: true,
         }],
         overflow_note: "… se enseñan 1 de 3".to_owned(),
-        // Y que alguna de las DOS que no se enseñan se pintaría alterada: el
-        // corpus fija el caso interesante, no el vacío.
+        // And that one of the TWO not shown would be painted as altered: the
+        // corpus fixes the interesting case, not the empty one.
         overflow_hostile: true,
         choices: vec![
             DialogChoice {
@@ -819,7 +820,7 @@ fn dialogo_de_referencia() -> DialogView {
     }
 }
 
-/// El plan de renombrado que clavan las fixtures.
+/// The rename plan the fixtures nail down.
 fn plan_ia_de_referencia() -> norte_ui_host::dto::AiRenameView {
     use norte_ui_host::dto::{AiRenamePairView, AiRenameView, DialogLine};
     AiRenameView {
@@ -852,12 +853,13 @@ fn plan_ia_de_referencia() -> norte_ui_host::dto::AiRenameView {
     }
 }
 
-/// El árbol de organizar que clavan las fixtures (fase 8).
+/// The organize tree the fixtures nail down (phase 8).
 ///
-/// Con una carpeta NUEVA, una que ya estaba y un fichero dentro: las tres
-/// clases de línea en la misma foto, que es lo que hace que un renderer no
-/// pueda colapsarlas sin que esto se entere. Y con un nombre alterado, porque
-/// la marca es lo que separa «lo que se lee» de «lo que hay».
+/// With a NEW folder, one that already existed and a file inside: the three
+/// line classes in the same snapshot, which is what makes it impossible for
+/// a renderer to collapse them without this noticing. And with an altered
+/// name, because the mark is what separates "what is read" from "what is
+/// there".
 fn arbol_de_organizar_de_referencia() -> norte_ui_host::dto::OrganizeView {
     use norte_ui_host::dto::{DialogLine, OrganizeLineKind, OrganizeLineView, OrganizeView};
     OrganizeView {
@@ -900,15 +902,15 @@ fn arbol_de_organizar_de_referencia() -> norte_ui_host::dto::OrganizeView {
     }
 }
 
-/// La task que clavan las fixtures.
+/// The task the fixtures nail down.
 fn task_de_referencia() -> TaskView {
     TaskView {
         task_id: 7,
         kind: "copy".to_owned(),
         state: TaskStateView::Running,
         percent: Some(40),
-        // Ritmo y ETA (puente 69): con una sola foto no se saben, y entonces
-        // la fila calla en vez de inventar un número.
+        // Rate and ETA (bridge 69): with a single snapshot they are not
+        // known, so the row stays silent instead of making up a number.
         rate: String::new(),
         eta: String::new(),
         detail: Some("notas.txt".to_owned()),
@@ -917,17 +919,18 @@ fn task_de_referencia() -> TaskView {
     }
 }
 
-/// El reparto que las fixtures clavan: dos huecos, papeles puestos.
+/// The layout the fixtures nail down: two slots, roles assigned.
 fn disposicion_de_referencia() -> LayoutView {
     LayoutView {
         cells: (120, 40),
-        // La referencia lleva TRES listados, así que la marca de destino dice
-        // algo: con dos es «el otro» y no se pinta. Es la mitad del contrato
-        // que un corpus con `false` no fijaría.
+        // The reference carries THREE listings, so the destination mark
+        // means something: with two it is "the other one" and is not
+        // painted. It is half the contract a corpus with `false` would not
+        // pin down.
         mark_target: true,
-        // Un grupo de PESTAÑAS, con una cuyo nombre se pinta distinto de lo
-        // que es: un directorio hostil dentro de una pestaña es tan hostil
-        // como dentro de un listado.
+        // A group of TABS, with one whose name is painted differently from
+        // what it is: a hostile directory inside a tab is as hostile as
+        // inside a listing.
         tabs: vec![norte_ui_host::dto::TabGroupView {
             slot_id: 1,
             tabs: vec![
@@ -949,13 +952,14 @@ fn disposicion_de_referencia() -> LayoutView {
     }
 }
 
-/// Dónde cae cada hueco del corpus.
+/// Where each of the corpus's slots lands.
 ///
-/// Aparte de la foto porque son trece, y crece con cada hueco nuevo: como
-/// [`slots_de_referencia`] y [`acciones_de_fila`], es UNA lista de literales
-/// sin lógica dentro, y repartirla escondería justo lo que este fichero enseña
-/// de un vistazo — dónde cae cada hueco, entero y en un sitio.
-#[expect(clippy::too_many_lines, reason = "lista de literales, sin lógica")]
+/// Kept apart from the snapshot because there are thirteen of them, and it
+/// grows with every new slot: like [`slots_de_referencia`] and
+/// [`acciones_de_fila`], it is ONE list of literals with no logic inside,
+/// and splitting it up would hide exactly what this file shows at a glance —
+/// where each slot lands, whole and in one place.
+#[expect(clippy::too_many_lines, reason = "list of literals, no logic")]
 fn colocaciones_de_referencia() -> Vec<SlotPlacement> {
     vec![
         SlotPlacement {
@@ -976,10 +980,10 @@ fn colocaciones_de_referencia() -> Vec<SlotPlacement> {
             role: Some(SlotRole::Target),
             focus_index: 1,
         },
-        // Los otros huecos de `slots` también se COLOCAN. Sin esto el
-        // corpus describía una pantalla que nombra seis huecos y pinta
-        // dos, así que un renderer podía pasar el contrato sin saber
-        // pintar la barra lateral, la ficha, los procesos ni el árbol.
+        // The other slots from `slots` are also PLACED. Without this the
+        // corpus described a screen that names six slots and places two, so
+        // a renderer could pass the contract without knowing how to paint
+        // the sidebar, the attributes sheet, the processes, or the tree.
         SlotPlacement {
             slot_id: 5,
             x: 0,
@@ -1007,10 +1011,11 @@ fn colocaciones_de_referencia() -> Vec<SlotPlacement> {
             role: None,
             focus_index: 4,
         },
-        // Los dos paneles de PLUGIN (fase 3) también se colocan, y por el
-        // mismo motivo que sus vecinos: el contrato se comprueba pintando, y
-        // un hueco que el corpus nombra y no coloca es un hueco que el
-        // renderer nunca intenta pintar — pasaría el test sin saber hacerlo.
+        // The two PLUGIN panels (phase 3) are also placed, for the same
+        // reason as their neighbors: the contract is checked by painting,
+        // and a slot the corpus names and does not place is a slot the
+        // renderer never attempts to paint — it would pass the test without
+        // knowing how.
         SlotPlacement {
             slot_id: 13,
             x: 120,
@@ -1020,8 +1025,8 @@ fn colocaciones_de_referencia() -> Vec<SlotPlacement> {
             role: None,
             focus_index: 11,
         },
-        // Y el que todavía no tiene marco, que es la forma que se ve en cada
-        // arranque hasta que su guest contesta.
+        // And the one that still has no frame, which is the shape seen on
+        // every startup until its guest answers.
         SlotPlacement {
             slot_id: 14,
             x: 120,
@@ -1071,13 +1076,14 @@ fn colocaciones_de_referencia() -> Vec<SlotPlacement> {
     ]
 }
 
-/// El visor que clavan las fixtures.
+/// The viewer the fixtures nail down.
 fn visor_de_referencia() -> norte_ui_host::dto::ViewerView {
     norte_ui_host::dto::ViewerView {
         path_display: "⟨file⟩/home/oscar/notas.txt".to_owned(),
         path_hostile: false,
-        // Un zoom que NO es el de por defecto (puente 80): con 100 el golden
-        // no distinguiría «lo manda» de «no existe el campo».
+        // A zoom that is NOT the default one (bridge 80): with 100 the
+        // golden would not distinguish "it is set" from "the field does not
+        // exist".
         image_zoom: 150,
         encoding: "UTF-8".to_owned(),
         eol: "lf".to_owned(),
@@ -1087,15 +1093,15 @@ fn visor_de_referencia() -> norte_ui_host::dto::ViewerView {
         truncated: true,
         total_rows: 120,
         first_line: 4,
-        // Y cuánto hay A LO ANCHO, con la ventana ya movida de lado: el visor
-        // no envuelve, así que sin esto un fichero cortado por la derecha se
-        // lee como un fichero corto (puente 59).
+        // And how much there is WIDTHWISE, with the window already scrolled
+        // sideways: the viewer does not wrap, so without this a file cut off
+        // on the right reads as a short file (bridge 59).
         total_cols: 320,
         first_col: 12,
         lines: vec!["quinta línea".to_owned()],
-        // Lo enseña un PREVIEWER, y se dice de quién es: un plugin puede
-        // enseñar cualquier cosa —ese es su trabajo— y quien mira tiene
-        // derecho a saber que no está viendo los bytes del fichero.
+        // Shown by a PREVIEWER, and it says whose it is: a plugin can show
+        // anything — that is its job — and whoever is looking has the right
+        // to know they are not seeing the file's bytes.
         preview_by: "via PDF de ACME".to_owned(),
         preview_lossy: true,
         image: Some(norte_ui_host::dto::ImageView {
@@ -1104,8 +1110,9 @@ fn visor_de_referencia() -> norte_ui_host::dto::ViewerView {
             height: 1080,
         }),
         image_refused: String::new(),
-        // La misma línea que `lines`, partida en sus fragmentos: uno con rol
-        // (y un `fg` que el rol tapa), otro con solo color, otro plano.
+        // The same line as `lines`, split into its fragments: one with a
+        // role (and an `fg` the role hides), another with only color,
+        // another plain.
         styled: vec![vec![
             norte_ui_host::dto::SpanView {
                 text: "quinta".to_owned(),
@@ -1129,22 +1136,22 @@ fn visor_de_referencia() -> norte_ui_host::dto::ViewerView {
     }
 }
 
-/// Los huecos de la foto de referencia: un listado, la hoja de atributos, el
-/// panel de procesos, la barra de sitios, el árbol, el panel de registro con
-/// sus dos fuentes y uno de un tipo que este host no proyecta.
+/// The reference snapshot's slots: a listing, the attributes sheet, the
+/// processes panel, the places bar, the tree, the log panel with its two
+/// sources, and one of a kind this host does not project.
 ///
-/// Larga a propósito, y crece con cada `SlotView` nueva: es UNA lista de
-/// literales sin lógica dentro, y repartirla escondería justo lo que este
-/// fichero existe para enseñar de un vistazo — la forma en el cable de cada
-/// variante, entera y en un sitio.
-#[expect(clippy::too_many_lines, reason = "lista de literales, sin lógica")]
+/// Long on purpose, and it grows with every new `SlotView`: it is ONE list
+/// of literals with no logic inside, and splitting it up would hide exactly
+/// what this file exists to show at a glance — every variant's wire shape,
+/// whole and in one place.
+#[expect(clippy::too_many_lines, reason = "list of literals, no logic")]
 fn slots_de_referencia() -> Vec<SlotView> {
     vec![
         SlotView::Browser(Box::new(BrowserSlotView {
             slot_id: 1,
             generation: 4,
-            // Con la línea fina puesta (ADR 0148, puente 94): una copia
-            // llegando a este directorio.
+            // With the thin line set (ADR 0148, bridge 94): a copy arriving
+            // at this directory.
             progress: Some(62),
             path_display: "⟨file⟩/home/oscar".to_owned(),
             path_hostile: false,
@@ -1157,23 +1164,23 @@ fn slots_de_referencia() -> Vec<SlotView> {
             ],
             icon_column: true,
             cursor: Some(RowKey(1)),
-            // DOS, como dice `marked_note`: el número y la frase son dos
-            // vistas de un mismo hecho, y una referencia que las contradice
-            // enseña justo lo contrario de lo que el DTO promete.
+            // TWO, as `marked_note` says: the number and the phrase are two
+            // views of the same fact, and a reference that contradicts them
+            // shows exactly the opposite of what the DTO promises.
             marks: 2,
-            // Las dos marcas caen en tramos distintos de la regla.
+            // The two marks fall on different stretches of the ruler.
             mark_ruler: vec![0, 170],
-            // El provider se saltó dos: se DICE. Un listado al que le faltan
-            // entradas y no lo avisa miente por omisión.
+            // The provider skipped two: it is SAID. A listing missing
+            // entries that does not warn about it lies by omission.
             skipped_note: "⚠ 2 entradas omitidas (nombres hostiles/límites)".to_owned(),
-            // Los dos avisos a la vez, que es el caso real: un provider que
-            // se saltó entradas Y una ocultación activa. Si el renderer los
-            // pegara en el mismo nodo, esta fixture lo enseñaría.
+            // Both notices at once, which is the real case: a provider that
+            // skipped entries AND an active hiding filter. If the renderer
+            // glued them into the same node, this fixture would show it.
             hidden_note: "3 ocultas".to_owned(),
-            // Y las cuatro que la ventana no tenía, TODAS a la vez y en la
-            // misma foto: es el caso que el renderer tiene que saber apilar
-            // sin pegarlas en un solo nodo, y el que fija en qué ORDEN van —
-            // los avisos antes que el contador de marcas.
+            // And the four the window did not have, ALL at once and in the
+            // same snapshot: it is the case the renderer has to know how to
+            // stack without gluing them into a single node, and the one
+            // that fixes their ORDER — notices before the marks counter.
             names_note: "nombres: cp866".to_owned(),
             filling_note: "cargando… (3)".to_owned(),
             pruned_note: "2 marcas caídas, sus entradas ya no están".to_owned(),
@@ -1221,11 +1228,11 @@ fn slots_de_referencia() -> Vec<SlotView> {
             slot_id: 6,
             cursor: Some(0),
         },
-        // La barra lateral cruza JSON AQUÍ y en ningún otro sitio hasta hoy,
-        // y es la única variante de `SlotView` con newtype dentro de un enum
-        // etiquetado por `kind`: su forma en el cable no se parece a la de
-        // sus hermanas y no había nada que la clavara. Sus tres clases de
-        // fila van las tres, incluida la rota con su motivo.
+        // The sidebar crosses JSON HERE and nowhere else so far, and it is
+        // the only `SlotView` variant with a newtype inside an enum tagged
+        // by `kind`: its wire shape does not look like its siblings' and
+        // nothing was nailing it down. All three of its row classes go in,
+        // including the broken one with its reason.
         SlotView::Places(Box::new(norte_ui_host::dto::PlacesSlotView {
             slot_id: 7,
             rows: vec![
@@ -1261,9 +1268,9 @@ fn slots_de_referencia() -> Vec<SlotView> {
             cursor: 1,
             generation: 5,
         })),
-        // El árbol: sus tres estados de `children` son tres cosas distintas
-        // para quien lee —rama abierta, hoja, y todavía no se ha mirado—, así
-        // que los tres cruzan el cable aquí.
+        // The tree: its three `children` states are three different things
+        // to the reader — an open branch, a leaf, and not looked at yet — so
+        // all three cross the wire here.
         SlotView::Tree(Box::new(norte_ui_host::dto::TreeSlotView {
             slot_id: 8,
             rows: vec![
@@ -1292,22 +1299,24 @@ fn slots_de_referencia() -> Vec<SlotView> {
             cursor: 1,
             generation: 3,
         })),
-        // El panel de registro, con las DOS fuentes a la vista (#328, puente
-        // 48). La combinación no es decorativa: es la única en la que se ven
-        // a la vez el selector (`sources_available`), la fuente efectiva, la
-        // frase que dice de quién es el nivel, una línea de cada proceso, y
-        // las dos cuentas de pérdidas —que son números distintos y por eso no
-        // se suman—. Sin ella, los cuatro campos que el puente 48 añadió no
-        // los clavaba nada y el renderer podía separarse en silencio.
+        // The log panel, with BOTH sources in view (#328, bridge 48). The
+        // combination is not decorative: it is the only one where the
+        // selector (`sources_available`), the effective source, the phrase
+        // saying whose level it is, one line from each process, and the two
+        // drop counts — which are different numbers and are not added
+        // together for that reason — are all visible at once. Without it,
+        // the four fields bridge 48 added had nothing pinning them down and
+        // the renderer could drift apart in silence.
         SlotView::Log(Box::new(norte_ui_host::dto::LogSlotView {
             slot_id: 10,
             lines: vec![
                 norte_ui_host::dto::LogLineView {
                     time: "12:00:00".to_owned(),
                     level: "error".to_owned(),
-                    // La etiqueta va al lado del id, y con OTRA forma: es lo
-                    // que hace visible en el corpus que son dos cosas — una
-                    // se compara y la otra se lee.
+                    // The label sits next to the id, and in a DIFFERENT
+                    // shape: that is what makes it visible in the corpus
+                    // that they are two things — one is compared and the
+                    // other is read.
                     level_label: "ERROR".to_owned(),
                     target: "norte_core::connect".to_owned(),
                     message: "no se pudo conectar".to_owned(),
@@ -1319,25 +1328,26 @@ fn slots_de_referencia() -> Vec<SlotView> {
                     level: "info".to_owned(),
                     level_label: "INFO".to_owned(),
                     target: "norte_ui_host".to_owned(),
-                    // Con el reemplazo canónico y MARCADA: un mensaje de
-                    // registro puede llevar dentro un nombre que alguien
-                    // eligió.
+                    // With the canonical replacement and MARKED: a log
+                    // message can carry a name inside that someone chose.
                     message: "abriendo caf\u{fffd}.txt".to_owned(),
                     hostile: true,
                     source: "window".to_owned(),
                 },
             ],
-            // El que se ENSEÑA, siempre: es el que los botones controlan.
+            // The one that is ALWAYS SHOWN: it is the one the buttons
+            // control.
             level: "info".to_owned(),
             level_label: "INFO".to_owned(),
             filter: "connect".to_owned(),
             following: false,
             total: 2,
             first_visible: 0,
-            // Las frases van LITERALES y no por `t()`, que es lo que hace del
-            // golden una foto del cable; se copian de `i18n/es.ftl` a mano, así
-            // que hay que mantenerlas al día — dijeron «la ventana» hasta que
-            // #328 las hizo también de `ntc`, que no es una ventana.
+            // These phrases go in LITERAL and not through `t()`, which is
+            // what makes the golden a snapshot of the wire; they are copied
+            // from `i18n/es.ftl` by hand, so they have to be kept up to
+            // date — they said "the window" until #328 also made them
+            // `ntc`'s, which is not a window.
             dropped_note:
                 "este proceso descartó 17 líneas viejas · te perdiste 4 líneas del daemon"
                     .to_owned(),
@@ -1347,8 +1357,8 @@ fn slots_de_referencia() -> Vec<SlotView> {
             sources_available: true,
             source_note: "el nivel es el del daemon: global a sus clientes y solo sube".to_owned(),
         })),
-        // El visor acoplado (#291, puente 51): el MISMO `ViewerView` que el
-        // grande, dentro de un hueco, y su gemelo sin fichero con la nota.
+        // The docked viewer (#291, bridge 51): the SAME `ViewerView` as the
+        // big one, inside a slot, and its twin with no file and the note.
         SlotView::Preview(Box::new(norte_ui_host::dto::PreviewSlotView {
             slot_id: 11,
             viewer: Some(visor_de_referencia()),
@@ -1359,9 +1369,9 @@ fn slots_de_referencia() -> Vec<SlotView> {
             viewer: None,
             note: "directorio".to_owned(),
         })),
-        // La línea de tiempo (#359, puente 78): una fila del humano y un lote
-        // de agente sin vuelta con el nombre enmascarado, porque el renderer
-        // pinta las dos distinto.
+        // The timeline (#359, bridge 78): one row from the human and one
+        // agent batch with no undo path with the name masked, because the
+        // renderer paints the two differently.
         SlotView::Timeline(Box::new(norte_ui_host::dto::TimelineSlotView {
             slot_id: 14,
             title: "Línea de tiempo".to_owned(),
@@ -1387,9 +1397,10 @@ fn slots_de_referencia() -> Vec<SlotView> {
             empty: "todavía no se ha hecho nada".to_owned(),
             footer: "1 entradas se deshacen".to_owned(),
         })),
-        // El panel de un PLUGIN (fase 3): tramos con estilo y zonas SIN su
-        // comando — el renderer dice dónde se pulsó y el host resuelve qué
-        // era, así que por el cable no viaja nada ejecutable.
+        // A PLUGIN's panel (phase 3): styled spans and zones WITHOUT their
+        // command — the renderer says where it was clicked and the host
+        // works out what it was, so nothing executable travels over the
+        // wire.
         SlotView::Panel(Box::new(norte_ui_host::dto::PanelSlotView {
             slot_id: 13,
             title: "status".to_owned(),
@@ -1413,9 +1424,10 @@ fn slots_de_referencia() -> Vec<SlotView> {
                 width: 4,
             }],
         })),
-        // Y uno todavía SIN marco: la primera petición en vuelo, o un plugin
-        // que falló. Es la forma que el renderer tiene que saber pintar —
-        // borde y título, nada dentro— y la que se veía en cada arranque.
+        // And one still WITHOUT a frame: the first request in flight, or a
+        // plugin that failed. It is the shape the renderer has to know how
+        // to paint — border and title, nothing inside — and the one seen on
+        // every startup.
         SlotView::Panel(Box::new(norte_ui_host::dto::PanelSlotView {
             slot_id: 14,
             title: "status".to_owned(),
@@ -1430,8 +1442,8 @@ fn slots_de_referencia() -> Vec<SlotView> {
     ]
 }
 
-/// «Ir a» (puente 77): una cabecera y dos filas, una de ellas marcada como
-/// hostil, porque el renderer pinta las tres distinto.
+/// "Go to" (bridge 77): a header and two rows, one of them marked hostile,
+/// because the renderer paints the three differently.
 fn ir_a_de_referencia() -> norte_ui_host::dto::GotoView {
     use norte_ui_host::dto::GotoLineView;
     norte_ui_host::dto::GotoView {
@@ -1456,8 +1468,9 @@ fn ir_a_de_referencia() -> norte_ui_host::dto::GotoView {
     }
 }
 
-/// El selector de perfiles: uno activo y otro que no carga, porque las dos
-/// filas dicen cosas distintas y el renderer las pinta distinto.
+/// The profile picker: one active and another that fails to load, because
+/// the two rows say different things and the renderer paints them
+/// differently.
 fn perfiles_de_referencia() -> norte_ui_host::dto::ProfilePickerView {
     norte_ui_host::dto::ProfilePickerView {
         rows: vec![
@@ -1485,8 +1498,8 @@ fn perfiles_de_referencia() -> norte_ui_host::dto::ProfilePickerView {
     }
 }
 
-/// La barra de menús con uno DESPLEGADO: la fixture tiene que llevar las dos
-/// mitades, porque son las dos que el renderer pinta.
+/// The menu bar with one DROPPED DOWN: the fixture has to carry both
+/// halves, because those are the two the renderer paints.
 fn asistente_de_referencia() -> norte_ui_host::dto::WizardView {
     norte_ui_host::dto::WizardView {
         title: "Bienvenido a norte · 1/3 · teclas".to_owned(),
@@ -1497,8 +1510,8 @@ fn asistente_de_referencia() -> norte_ui_host::dto::WizardView {
     }
 }
 
-/// Uno pulsable, uno que no, y el de tareas con su barra (puente 92): las
-/// formas que el renderer pinta.
+/// One clickable, one not, and the tasks one with its bar (bridge 92): the
+/// shapes the renderer paints.
 fn elementos_de_estado_de_referencia() -> Vec<norte_ui_host::dto::StatusItemView> {
     use norte_ui_host::dto::{StatusItemView, StatusProgressView};
     vec![
@@ -1534,8 +1547,9 @@ fn barra_de_paneles_de_referencia() -> norte_ui_host::dto::PanelBarView {
     norte_ui_host::dto::PanelBarView {
         bar: true,
         names: true,
-        // Columna en la referencia (puente 84): un booleano que el golden
-        // fija a `false` no distingue «lo manda» de «no existe».
+        // A column in the reference (bridge 84): a boolean the golden fixes
+        // to `false` would not distinguish "it is set" from "it does not
+        // exist".
         vertical: true,
         buttons: vec![
             PanelButtonView {
@@ -1671,15 +1685,17 @@ fn snapshot_de_referencia() -> ViewSnapshot {
         columns: Some(columnas_de_referencia()),
         picker: Some(selector_de_referencia()),
         viewer: Some(visor_de_referencia()),
-        // Con plan, como el resto de overlays de esta foto: si va a `None`,
-        // el sitio del campo dentro del snapshot no lo clava nadie.
+        // With a plan, like the rest of this snapshot's overlays: if it went
+        // to `None`, nobody would pin down the field's place inside the
+        // snapshot.
         ai_rename: Some(plan_ia_de_referencia()),
         organize: Some(arbol_de_organizar_de_referencia()),
         locale: "es".to_owned(),
     }
 }
 
-/// El tema de referencia: dos roles y un efecto que este renderer no pinta.
+/// The reference theme: two roles and one effect this renderer does not
+/// paint.
 fn tema_de_referencia() -> norte_ui_host::dto::ThemeView {
     use norte_ui_host::dto::{ThemeRoleView, ThemeView};
     ThemeView {
@@ -1703,8 +1719,8 @@ fn tema_de_referencia() -> norte_ui_host::dto::ThemeView {
     }
 }
 
-/// La búsqueda de referencia: dos hallazgos, uno con nombre hostil, y
-/// todavía corriendo.
+/// The reference search: two hits, one with a hostile name, and still
+/// running.
 fn busqueda_de_referencia() -> norte_ui_host::dto::SearchView {
     use norte_ui_host::dto::{SearchRowView, SearchView};
     SearchView {
@@ -1736,8 +1752,8 @@ fn busqueda_de_referencia() -> norte_ui_host::dto::SearchView {
     }
 }
 
-/// El plan de referencia: una copia y un borrado de árbol, con el modo a la
-/// vista y un bloqueo.
+/// The reference plan: a copy and a tree delete, with the mode in view and
+/// a lock.
 fn sincronizacion_de_referencia() -> norte_ui_host::dto::SyncView {
     use norte_ui_host::dto::{SyncStepView, SyncView};
     SyncView {
@@ -1786,8 +1802,8 @@ fn sincronizacion_de_referencia() -> norte_ui_host::dto::SyncView {
         ],
         blockers: vec![norte_ui_host::dto::SyncBlockerView {
             label: "el destino es de solo lectura".to_owned(),
-            // La RAÍZ se dice, no se calla: un bloqueo del árbol entero con
-            // la ruta vacía no dice dónde pasa.
+            // The ROOT is said, not kept quiet: a lock on the whole tree
+            // with an empty path does not say where it happens.
             path: "todo el \u{e1}rbol".to_owned(),
             path_hostile: false,
         }],
@@ -1798,11 +1814,11 @@ fn sincronizacion_de_referencia() -> norte_ui_host::dto::SyncView {
             cause: "permiso denegado".to_owned(),
             path: "docs/a.md".to_owned(),
             path_hostile: false,
-            // `either` se PINTA: en un panel donde una ruta sin calificar
-            // significa «del origen», callarlo es afirmar el origen.
+            // `either` is PAINTED: in a pane where an unqualified path
+            // means "from the source", keeping it quiet asserts the source.
             anchor: "either".to_owned(),
-            // `either` se DICE: callarlo en un panel donde una ruta sin
-            // calificar significa «del origen» es afirmar el origen.
+            // `either` is SAID: keeping it quiet in a pane where an
+            // unqualified path means "from the source" asserts the source.
             anchor_label: "en cualquiera de los dos".to_owned(),
         }],
         status: "2 pasos \u{b7} este plan no se puede aprobar".to_owned(),
@@ -1812,8 +1828,8 @@ fn sincronizacion_de_referencia() -> norte_ui_host::dto::SyncView {
     }
 }
 
-/// La comparación de referencia: una fila igual y un huérfano de la izquierda
-/// con nombre hostil, y una categoría escondida.
+/// The reference comparison: one matching row and one orphan on the left
+/// with a hostile name, and one hidden category.
 fn comparacion_de_referencia() -> norte_ui_host::dto::CompareView {
     use norte_ui_host::dto::{CompareFaceView, CompareFilterView, CompareRowView, CompareView};
     let cara = |name: &str, hostile: bool, size: &str| CompareFaceView {
@@ -1847,8 +1863,8 @@ fn comparacion_de_referencia() -> norte_ui_host::dto::CompareView {
                 confidence: "cierto".to_owned(),
                 criterion: "presence".to_owned(),
                 reason: None,
-                // Sin tama\u{f1}o: un hu\u{e9}rfano sin hidratar no lo sabe, y eso
-                // viaja como AUSENCIA y no como un cero fabricado.
+                // No size: an unhydrated orphan does not know it, and that
+                // travels as ABSENCE, not as a manufactured zero.
                 left: Some(cara("caf\u{fffd}.txt", true, "")),
                 right: None,
                 paired_under: Some("los dos nombres se escriben distinto".to_owned()),
@@ -1868,8 +1884,8 @@ fn comparacion_de_referencia() -> norte_ui_host::dto::CompareView {
     }
 }
 
-/// El selector de disposiciones de referencia: una de fábrica que comparte
-/// nombre con un preset de teclado, y una del usuario que no parsea.
+/// The reference layout picker: a factory one that shares a name with a
+/// keyboard preset, and a user one that fails to parse.
 fn disposiciones_de_referencia() -> norte_ui_host::dto::LayoutPickerView {
     use norte_ui_host::dto::{LayoutPickerView, LayoutRowView};
     LayoutPickerView {
@@ -1897,12 +1913,12 @@ fn disposiciones_de_referencia() -> norte_ui_host::dto::LayoutPickerView {
     }
 }
 
-/// El selector de COLUMNAS de referencia.
+/// The reference COLUMNS picker.
 ///
-/// Sus cuatro filas son los cuatro casos que el modelo distingue: la fija
-/// —el nombre—, una builtin con formato ciclable, un `attr:` cuyo formato lo
-/// clava el esquema, y un id que NO parsea, que se preserva porque es
-/// intención de configuración del usuario.
+/// Its four rows are the four cases the model distinguishes: the fixed one
+/// — the name —, a builtin with a cyclable format, an `attr:` whose format
+/// is pinned down by the schema, and an id that does NOT parse, which is
+/// preserved because it is the user's configuration intent.
 fn columnas_de_referencia() -> norte_ui_host::dto::ColumnsPickerView {
     use norte_ui_host::dto::{ColumnsPickerRowView, ColumnsPickerView};
     ColumnsPickerView {
@@ -1947,14 +1963,14 @@ fn columnas_de_referencia() -> norte_ui_host::dto::ColumnsPickerView {
         ],
         cursor: 1,
         note: "se aplica a esta ventana; no se guarda".to_owned(),
-        // El pie sale del KEYMAP (#287), así que aquí va uno pintado: lo que
-        // el corpus clava es que viaja por el cable, no qué teclas ata este
-        // preset.
+        // The footer comes from the KEYMAP (#287), so a painted one goes
+        // here: what the corpus pins down is that it travels over the wire,
+        // not which keys this preset binds.
         hint: "Espacio activa · Shift+↑ mueve · Ctrl+S ordena".to_owned(),
     }
 }
 
-/// Un selector de referencia: volúmenes, con uno de solo lectura.
+/// A reference picker: volumes, with one read-only.
 fn selector_de_referencia() -> norte_ui_host::dto::PickerView {
     use norte_ui_host::dto::{PickerRowView, PickerView};
     PickerView {
@@ -1970,17 +1986,17 @@ fn selector_de_referencia() -> norte_ui_host::dto::PickerView {
     }
 }
 
-/// El panel de sesiones de agente: una sesión cuyo id se pinta distinto de
-/// lo que es —es una clave opaca del daemon, no un identificador con
-/// charset— y otra limpia.
+/// The agent sessions panel: one session whose id is painted differently
+/// from what it is — it is an opaque key from the daemon, not a charset
+/// identifier — and another clean one.
 fn agentes_de_referencia() -> norte_ui_host::dto::AgentsView {
     norte_ui_host::dto::AgentsView {
         rows: vec![
             norte_ui_host::dto::AgentRowView {
                 session: "agente\u{fffd}1".to_owned(),
                 session_hostile: true,
-                // Con un deshacer EN MARCHA: la fila lo dice, y `u` sobre
-                // ella se rehúsa.
+                // With an undo IN PROGRESS: the row says so, and `u` on it
+                // is refused.
                 undoing: true,
                 counts: "pidió 7, aprobadas desde aquí 3".to_owned(),
                 last_op: "delete".to_owned(),
@@ -1997,19 +2013,19 @@ fn agentes_de_referencia() -> norte_ui_host::dto::AgentsView {
         ],
         cursor: 0,
         generation: 4,
-        // Con alguna OLVIDADA: el tope existe y decirlo es lo que impide que
-        // una lista recortada se lea como completa.
+        // With one FORGOTTEN: the cap exists, and saying so is what keeps a
+        // trimmed list from reading as complete.
         forgotten: 2,
         note: "solo las sesiones que esta ventana ha visto".to_owned(),
         empty: "ningún agente ha pedido permiso".to_owned(),
     }
 }
 
-/// La salida de un comando de extensión: lo que imprimió un tercero, ya
-/// enmascarado, acotado, y diciendo que se cortó.
-/// La salida de un programa (#312, puente 52): el comparador, con una línea
-/// enmascarada y la salida cortada, que son los dos campos que el renderer
-/// pinta distinto.
+/// An extension command's output: what a third party printed, already
+/// masked, capped, and saying it was cut off.
+/// A program's output (#312, bridge 52): the comparator, with one masked
+/// line and the output cut off, which are the two fields the renderer
+/// paints differently.
 fn programa_de_referencia() -> norte_ui_host::dto::ProgramOutputView {
     norte_ui_host::dto::ProgramOutputView {
         title_key: "program-output-compare".to_owned(),
@@ -2031,10 +2047,10 @@ fn programa_de_referencia() -> norte_ui_host::dto::ProgramOutputView {
 
 fn salida_de_referencia() -> norte_ui_host::dto::ExtensionOutputView {
     norte_ui_host::dto::ExtensionOutputView {
-        // El nombre de la extensión enmascarado Y marcado, con el texto
-        // LIMPIO: es el caso que una sola bandera para las tres cadenas no
-        // podía expresar — la bandera salía del texto, así que un manifiesto
-        // hostil con salida ASCII se pintaba sin insignia.
+        // The extension's name masked AND marked, with CLEAN text: it is the
+        // case a single flag for the three strings could not express — the
+        // flag leaked from the text, so a hostile manifest with ASCII output
+        // was painted with no badge.
         plugin: norte_ui_host::dto::MaskedTextView {
             text: "ACME\u{fffd}FTP".to_owned(),
             hostile: true,
@@ -2044,17 +2060,16 @@ fn salida_de_referencia() -> norte_ui_host::dto::ExtensionOutputView {
             text: "Saludar".to_owned(),
             hostile: false,
         },
-        // Y por LÍNEAS: un salto de línea es un control C0, así que
-        // enmascarar la salida entera marcaba como hostil cualquier salida de
-        // más de una línea.
+        // And by LINE: a line break is a C0 control, so masking the whole
+        // output marked any output longer than one line as hostile.
         lines: vec!["hola".to_owned(), "mundo".to_owned()],
         text_hostile: false,
         truncated: true,
     }
 }
 
-/// El gestor de extensiones de referencia: una extensión aprobada y
-/// encendida, otra que no, un directorio que no cargó y una ficha abierta.
+/// The reference extensions manager: one approved and enabled extension,
+/// another that is not, a directory that failed to load and an open card.
 fn extensiones_de_referencia() -> norte_ui_host::dto::ExtensionsView {
     use norte_ui_host::dto::{
         ExtensionConfigRowView, ExtensionDetailView, ExtensionErrorView, ExtensionRowView,
@@ -2139,10 +2154,10 @@ fn extensiones_de_referencia() -> norte_ui_host::dto::ExtensionsView {
     }
 }
 
-/// Los ajustes de referencia: una entrada del registro con su valor efectivo,
-/// y una sección de ubicaciones con una que falta.
-/// Las dos secciones de ajustes de la vista de referencia, aparte porque la
-/// función entera se pasaba del tope de líneas del lint.
+/// The reference settings: a registry entry with its effective value, and a
+/// locations section with one missing.
+/// The reference view's two settings sections, kept apart because the whole
+/// function was going over the lint's line cap.
 fn secciones_de_ajustes_de_referencia() -> Vec<norte_ui_host::dto::SettingsSectionView> {
     use norte_ui_host::dto::{PathRowView, SettingRowView, SettingsSectionView};
     vec![
@@ -2157,8 +2172,8 @@ fn secciones_de_ajustes_de_referencia() -> Vec<norte_ui_host::dto::SettingsSecti
                 default: "auto".to_owned(),
                 hostile: false,
                 restart_required: true,
-                // Una lista CERRADA: el renderer pinta un desplegable y
-                // no tiene que saber de dónde salen los valores.
+                // A CLOSED list: the renderer paints a dropdown and does
+                // not need to know where the values come from.
                 control: "choice".to_owned(),
                 choices: vec!["auto".to_owned(), "always".to_owned(), "never".to_owned()],
                 min: None,
@@ -2169,16 +2184,17 @@ fn secciones_de_ajustes_de_referencia() -> Vec<norte_ui_host::dto::SettingsSecti
         SettingsSectionView::Settings {
             key: "appearance".to_owned(),
             title: "Apariencia".to_owned(),
-            // Un valor que el USUARIO escribió en su `norte.toml` con un
-            // override bidi dentro: llega enmascarado, marcado, y con el
-            // punto de «esto no es de fábrica».
+            // A value the USER wrote in their `norte.toml` with a bidi
+            // override inside: it arrives masked, marked, and with the dot
+            // that says "this is not factory".
             rows: vec![SettingRowView {
                 id: "ui.font".to_owned(),
                 name: "Tipografía".to_owned(),
                 desc: "La fuente de la ventana".to_owned(),
                 value: "Fira\u{fffd}Code".to_owned(),
-                // Vacío de fábrica: la ventana lo enseña como marcador,
-                // y aquí queda fijado que un defecto puede ser vacío.
+                // Empty by factory default: the window shows it as a
+                // placeholder, and this pins down that a default can be
+                // empty.
                 default: String::new(),
                 hostile: true,
                 restart_required: true,
@@ -2224,15 +2240,15 @@ fn ajustes_de_referencia() -> norte_ui_host::dto::SettingsView {
                 title: "Comportamiento".to_owned(),
                 visible: 1,
             },
-            // Una sección que el filtro vació: sigue en el índice, apagada.
+            // A section the filter emptied out: it stays in the index, dim.
             SectionIndexView {
                 key: "open-with".to_owned(),
                 title: "Abrir con".to_owned(),
                 visible: 0,
             },
         ],
-        // El teclado en el ÍNDICE: es el lado que el renderer tiene que
-        // saber pintar vivo, y el otro apagado.
+        // The keyboard on the INDEX: it is the side the renderer has to
+        // know how to paint live, and the other one dim.
         focus: "index".to_owned(),
         cursor: 0,
         query: "fira".to_owned(),
@@ -2241,8 +2257,8 @@ fn ajustes_de_referencia() -> norte_ui_host::dto::SettingsView {
     }
 }
 
-/// La ayuda de referencia: una página con prosa, una marca viva ya resuelta,
-/// un enlace, la hoja de teclado y una fila que este frontend no ejecuta.
+/// The reference help: a page with prose, a live mark already resolved, a
+/// link, the keyboard sheet, and a row this frontend does not execute.
 fn ayuda_de_referencia() -> norte_ui_host::dto::HelpView {
     use norte_ui_host::dto::{
         HelpActionView, HelpBlockView, HelpFocusView, HelpKeyRowView, HelpSidebarRowView,
@@ -2279,7 +2295,7 @@ fn ayuda_de_referencia() -> norte_ui_host::dto::HelpView {
                     },
                     HelpSpanView::Link {
                         text: "Marcar".to_owned(),
-                        // La fila que lo sigue: la segunda acción de la vista.
+                        // The row that follows it: the view's second action.
                         action: Some(1),
                     },
                 ],
@@ -2333,7 +2349,7 @@ fn ayuda_de_referencia() -> norte_ui_host::dto::HelpView {
         filter: "cop".to_owned(),
         filtering: true,
         can_back: true,
-        // Puente 76: la petición de desplazar el cuerpo, con su número.
+        // Bridge 76: the request to scroll the body, with its number.
         scroll: Some(norte_ui_host::dto::HelpScrollView {
             to: norte_ui_host::dto::HelpScrollTo::PageDown,
             seq: 3,
@@ -2421,27 +2437,31 @@ fn el_sobre() {
     check_family("envelope.json", &[("shutdown", e)]);
 }
 
-/// Una acción con una etiqueta que este host no conoce NO se interpreta.
+/// An action with a tag this host does not know is NOT interpreted.
 #[test]
 fn una_accion_desconocida_se_rechaza() {
     let crudo = r#"{"action":"format_disk","slot_id":1}"#;
     let out: Result<UiAction, _> = serde_json::from_str(crudo);
-    assert!(out.is_err(), "una acción desconocida no se acepta");
+    assert!(out.is_err(), "an unknown action is not accepted");
 }
 
-/// Un sobre de una versión futura se detecta ANTES de mirar el payload.
+/// An envelope from a future version is detected BEFORE looking at the
+/// payload.
 #[test]
 fn un_sobre_futuro_no_se_interpreta() {
     let e: BridgeEnvelope<UiUpdate> = serde_json::from_str(
         r#"{"bridge_version":9999,"instance_id":"host-1","sequence":0,
             "payload":{"update":"notice","notice":"shutdown","incomplete":false}}"#,
     )
-    .expect("el sobre se lee");
-    assert!(!e.is_supported(), "otra versión del contrato no se aplica");
+    .expect("the envelope reads");
+    assert!(
+        !e.is_supported(),
+        "a different contract version does not apply"
+    );
 }
 
-/// Lo serializado no lleva rutas nativas ni representaciones de depuración:
-/// el renderer no puede recibir autoridad sobre un path por accidente.
+/// What gets serialized carries no native paths nor debug representations:
+/// the renderer must not receive authority over a path by accident.
 #[test]
 fn nada_serializado_lleva_una_ruta_cruda() {
     let json = std::fs::read_to_string(
@@ -2451,17 +2471,17 @@ fn nada_serializado_lleva_una_ruta_cruda() {
     for prohibido in ["VPath", "PathBuf", "OsString", "wire:", "file:///"] {
         assert!(
             !json.contains(prohibido),
-            "el bridge no debe llevar {prohibido}"
+            "the bridge must not carry {prohibido}"
         );
     }
 }
 
-/// TODOS los cambios, uno a uno.
+/// ALL the changes, one by one.
 ///
-/// La familia de `updates.json` clava dos parches de ejemplo, y eso dejaba
-/// variantes de [`ViewChange`] que jamás se serializaban en ningún test —
-/// que es como una de ellas puede resultar IMPOSIBLE de serializar sin que
-/// nada se ponga rojo. Aquí la cobertura 1:1 es contra la lista de variantes.
+/// The `updates.json` family nails down two example patches, and that left
+/// [`ViewChange`] variants that were never serialized in any test — which is
+/// how one of them can end up IMPOSSIBLE to serialize with nothing turning
+/// red. Here, 1:1 coverage is against the list of variants.
 #[test]
 fn cada_cambio_cruza_el_bridge() {
     let mut casos = cambios_del_listado();
@@ -2469,7 +2489,7 @@ fn cada_cambio_cruza_el_bridge() {
     check_family("changes.json", &casos);
 }
 
-/// Los que describen un LISTADO.
+/// The ones that describe a LISTING.
 fn cambios_del_listado() -> Vec<(&'static str, ViewChange)> {
     vec![
         (
@@ -2593,7 +2613,7 @@ fn cambios_de_overlay() -> Vec<(&'static str, ViewChange)> {
     ]
 }
 
-/// Los que describen la PANTALLA: disposición, overlays y estado global.
+/// The ones that describe the SCREEN: layout, overlays and global state.
 fn cambios_de_pantalla() -> Vec<(&'static str, ViewChange)> {
     let mut casos = cambios_de_overlay();
     casos.extend(cambios_de_listado());
@@ -2601,10 +2621,11 @@ fn cambios_de_pantalla() -> Vec<(&'static str, ViewChange)> {
     casos
 }
 
-/// Los que describen un LISTADO: sus filas y su cabecera.
+/// The ones that describe a LISTING: its rows and its header.
 ///
-/// Aparte del resto porque `cambios_de_pantalla` se pasó de las cien líneas
-/// al añadir la cabecera, y porque estos dos viajan juntos en el mismo parche.
+/// Kept apart from the rest because `cambios_de_pantalla` was going over a
+/// hundred lines once the header was added, and because these two travel
+/// together in the same patch.
 fn cambios_de_listado() -> Vec<(&'static str, ViewChange)> {
     vec![
         (
@@ -2614,16 +2635,16 @@ fn cambios_de_listado() -> Vec<(&'static str, ViewChange)> {
                 generation: 5,
                 first_visible: 40,
                 rows: vec![fila(41, "otro.txt", false)],
-                // Con la columna ABIERTA, que es como aterrizan los iconos:
-                // un parche de filas es lo que la abre en el renderer.
+                // With the icon column OPEN, which is how icons land: a rows
+                // patch is what opens it in the renderer.
                 icon_column: true,
                 total_rows: Some(120),
             },
         ),
         (
-            // La cabecera viaja con las filas, y sus cuatro textos son de
-            // TERCEROS —una ruta, dos frases con un número, y un nombre
-            // reinterpretado—, así que su forma de cable se fija aquí.
+            // The header travels with the rows, and its four texts come
+            // from THIRD PARTIES — a path, two phrases with a number, and a
+            // reinterpreted name — so its wire shape is pinned down here.
             "browser_header",
             ViewChange::BrowserHeader {
                 slot_id: 1,
@@ -2650,8 +2671,8 @@ fn cambios_de_listado() -> Vec<(&'static str, ViewChange)> {
     ]
 }
 
-/// Todo lo demás que puede cambiar de la pantalla.
-#[expect(clippy::too_many_lines, reason = "lista de literales, sin lógica")]
+/// Everything else about the screen that can change.
+#[expect(clippy::too_many_lines, reason = "list of literals, no logic")]
 fn cambios_del_resto() -> Vec<(&'static str, ViewChange)> {
     vec![
         ("layout", ViewChange::Layout(disposicion_de_referencia())),
@@ -2766,19 +2787,19 @@ fn cambios_del_resto() -> Vec<(&'static str, ViewChange)> {
             "tasks",
             ViewChange::Tasks {
                 tasks: vec![task_de_referencia()],
-                // El cursor del panel de procesos viaja CON el tablero: una
-                // fila que caduca desplaza al resto, y el corpus tiene que
-                // fijar los dos juntos.
+                // The processes panel's cursor travels WITH the board: a row
+                // expiring shifts the rest, and the corpus has to pin both
+                // down together.
                 cursor: Some(0),
             },
         ),
-        // El tablero VACÍO, que es la única forma en la que ese cursor sale
-        // `null`. Va aparte y no es duplicado: `null` es lo que el renderer
-        // tiene que distinguir de «no me lo han dicho», y sin un caso que lo
-        // fije, poner un `skip_serializing_if = "Option::is_none"` —una
-        // limpieza de lo más natural— convertiría todo tablero vacío en un
-        // campo AUSENTE y dejaría el resalte encendido sobre la nada, con la
-        // suite entera en verde.
+        // The EMPTY board, which is the only shape in which that cursor
+        // comes out `null`. Kept apart and not a duplicate: `null` is what
+        // the renderer has to distinguish from "I was not told", and
+        // without a case pinning it down, a `skip_serializing_if =
+        // "Option::is_none"` — the most natural cleanup there is — would
+        // turn every empty board into an ABSENT field and leave the
+        // highlight lit on nothing, with the whole suite green.
         (
             "tasks_vacio",
             ViewChange::Tasks {
@@ -2789,16 +2810,16 @@ fn cambios_del_resto() -> Vec<(&'static str, ViewChange)> {
     ]
 }
 
-/// Ningún número del corpus se sale de donde un `f64` es exacto (#258).
+/// No number from the corpus goes past where an `f64` is exact (#258).
 ///
-/// El renderer los recibe como `number` de JavaScript, que es un `f64`: por
-/// encima de 2^53 dos enteros distintos son el mismo. Hoy todos son
-/// contadores pequeños y esto pasa de sobra; existe para que el día que
-/// alguien meta un hash o un id aleatorio en un `u64` del puente, el corpus
-/// se ponga rojo antes de que dos filas colisionen en silencio.
+/// The renderer receives them as JavaScript's `number`, which is an `f64`:
+/// above 2^53 two different integers are the same one. Today they are all
+/// small counters and this passes with plenty of room; it exists so that the
+/// day someone puts a hash or a random id into a bridge `u64`, the corpus
+/// turns red before two rows collide in silence.
 #[test]
 fn ningun_numero_del_puente_pasa_de_donde_f64_es_exacto() {
-    /// 2^53: el último entero que un `f64` representa sin vecinos perdidos.
+    /// 2^53: the last integer an `f64` represents with no lost neighbors.
     const TOPE: u64 = 1 << 53;
 
     fn recorre(v: &Value, donde: &str, malos: &mut Vec<String>) {
@@ -2838,90 +2859,93 @@ fn ningun_numero_del_puente_pasa_de_donde_f64_es_exacto() {
     }
     assert!(
         malos.is_empty(),
-        "un número del puente pasa de 2^53 y el renderer lo redondearía: {malos:?}"
+        "a bridge number goes past 2^53 and the renderer would round it off: {malos:?}"
     );
 }
 
-/// La FORMA del corpus, resumida en un número, y ese número vive al lado de
-/// `BRIDGE_VERSION`.
+/// The corpus's SHAPE, summarized into a number, and that number lives next
+/// to `BRIDGE_VERSION`.
 ///
-/// El test de contrato del renderer ya caza que las dos constantes de versión
-/// —la de Rust y la de TypeScript— se separen. Lo que nadie cazaba es
-/// re-bendecir el corpus SIN subir ninguna de las dos: en este puente toda
-/// forma nueva es incompatible, porque la versión se compara por igualdad
-/// exacta y un renderer de otra queda fuera con una pantalla fatal. Así que un
-/// campo añadido, renombrado o quitado sin bump es un renderer viejo leyendo
-/// `undefined` en silencio.
+/// The renderer's contract test already catches the two version constants —
+/// Rust's and TypeScript's — drifting apart. What nobody caught was
+/// re-blessing the corpus WITHOUT bumping either one: on this bridge every
+/// new shape is incompatible, because the version is compared by exact
+/// equality and a renderer on a different one is shut out with a fatal
+/// screen. So a field added, renamed or removed with no bump is an old
+/// renderer silently reading `undefined`.
 ///
-/// Se resume la FORMA y no el contenido: el conjunto de rutas de claves, con
-/// los índices de array aplanados. Un valor que cambia —otro nombre de
-/// fichero de ejemplo, otro número— no obliga a nada; un campo que aparece o
-/// se va, sí.
+/// What is summarized is the SHAPE, not the content: the set of key paths,
+/// with array indices flattened. A value that changes — a different sample
+/// file name, a different number — obligates nothing; a field that appears
+/// or leaves does.
 ///
-/// Cuando esto se pone rojo, el arreglo NO es actualizar el número a secas:
-/// es subir `BRIDGE_VERSION` (y su espejo en `ui/src/types.ts`), escribir qué
-/// cambió en el registro de versiones de `bridge.rs`, y entonces actualizarlo.
+/// When this turns red, the fix is NOT just updating the number: it is
+/// bumping `BRIDGE_VERSION` (and its mirror in `ui/src/types.ts`), writing
+/// what changed in `bridge.rs`'s version log, and only then updating it.
 #[test]
 fn la_forma_del_corpus_no_cambia_sin_subir_el_puente() {
-    /// El resumen bendecido. Se actualiza A MANO y en el mismo commit que el
-    /// bump, que es justo la parada que este test existe para forzar.
-    // Puente 70: el panel que pinta un PLUGIN (`SlotView::Panel` con sus
-    // `lines`/`hits`) y el clic sobre una de sus zonas (`UiAction::PanelClick`,
-    // que manda la CELDA y no un comando; fase 3).
-    // Puente 74: `MenuItemView.section` y `.role` (ADR 0125).
-    // Puente 75: `HelpSpanView::Link.action`, la fila que sigue el enlace.
-    // Puente 76: `HelpView.scroll`, la petición de desplazar el cuerpo.
-    // Puente 77: `GotoView` («ir a», #357) en la foto y en su cambio.
-    // Puente 78: `SlotView::Timeline` (la línea de tiempo, #359).
-    // Puente 79: una extensión que no cargó lleva el id con el que se
-    // desinstala (`ExtensionErrorView.id`, ADR 0113).
-    // Puente 80: `View::row_stripes` (el pijama del listado) y
-    // `ViewerView::image_zoom` (el zoom de una imagen).
-    // Puente 81: los ajustes por secciones — `SettingsView.index` (el índice
-    // de la izquierda), `.query`, `.shown` y `.total` (el buscador y sus dos
-    // cifras), y `SettingRowView.modified` (el punto de «esto no es de
-    // fábrica»), más las acciones `settings_query`,
-    // `settings_jump_section` y `settings_reset`.
-    // Puente 82: `SettingsView.focus` (qué mitad tiene el teclado) y
-    // `SettingsSectionView::Settings.key` (la clave estable, para emparejar
-    // una sección con su fila del índice sin casar rótulos traducidos).
-    // Puente 83: los CONTROLES. `SettingRowView` gana `control`, `choices`,
-    // `min` y `max` —lo que un interruptor, un desplegable o un campo
-    // numérico necesitan saber— y la acción `settings_set` pone un valor
-    // concreto en vez de ciclar.
-    //   Y `default`: el valor de fábrica, que la ventana enseña como
-    //   marcador de un campo vacío — «vacío» no es un hueco, es ese valor.
-    // Puente 84: se va la barra de teclas (`View::key_bar`, el cambio
-    // `key_bar`); la de paneles gana `vertical` (columna o fila) y cada
-    // botón `count`, la cifra de su insignia.
-    // Puente 85: `View::status_items` y su cambio, la mitad derecha de la
-    // barra de estado (ADR 0132).
-    // Puente 86: `View::layout_buttons`, los botones de disposición (ADR
-    // 0133).
-    // Puente 87: la unidad de la barra de sitios gana `free`, `mount` y
-    // `kind` (captura del 2026-09-21).
-    // Puente 88: `TabGroupView.panels`, el grupo de paneles (ADR 0134).
-    // Puente 89: `mark_ruler` en el listado y su cabecera (ADR 0135).
-    // (El 90 no aparece: añadió una ACCIÓN —`move_slot`— y este resumen solo
-    // mira las FORMAS que viajan dentro de una foto.)
-    // Puente 91: un diálogo puede ser un FORMULARIO (ADR 0143).
-    // `DialogView.fields`, con `DialogFieldView` y sus tres clases de control
-    // (`text`, `toggle`, `cycle`); de vuelta, `dialog_field` con
-    // `DialogFieldValue`. Ausente y vacío = el diálogo de siempre, así que un
-    // diálogo sin formulario sigue cruzando byte a byte como en el 90.
+    /// The blessed summary. Updated BY HAND and in the same commit as the
+    /// bump, which is exactly the stop this test exists to force.
+    // Bridge 70: the panel that paints a PLUGIN (`SlotView::Panel` with its
+    // `lines`/`hits`) and clicking one of its zones (`UiAction::PanelClick`,
+    // which sends the CELL and not a command; phase 3).
+    // Bridge 74: `MenuItemView.section` and `.role` (ADR 0125).
+    // Bridge 75: `HelpSpanView::Link.action`, the row the link follows.
+    // Bridge 76: `HelpView.scroll`, the request to scroll the body.
+    // Bridge 77: `GotoView` ("go to", #357) in the snapshot and its change.
+    // Bridge 78: `SlotView::Timeline` (the timeline, #359).
+    // Bridge 79: an extension that failed to load carries the id it is
+    // uninstalled with (`ExtensionErrorView.id`, ADR 0113).
+    // Bridge 80: `View::row_stripes` (the listing's striping) and
+    // `ViewerView::image_zoom` (an image's zoom).
+    // Bridge 81: settings by section — `SettingsView.index` (the left-hand
+    // index), `.query`, `.shown` and `.total` (the search box and its two
+    // figures), and `SettingRowView.modified` (the dot for "this is not
+    // factory"), plus the `settings_query`, `settings_jump_section` and
+    // `settings_reset` actions.
+    // Bridge 82: `SettingsView.focus` (which half has the keyboard) and
+    // `SettingsSectionView::Settings.key` (the stable key, to pair a section
+    // with its index row without matching translated labels).
+    // Bridge 83: the CONTROLS. `SettingRowView` gains `control`, `choices`,
+    // `min` and `max` — what a switch, a dropdown or a numeric field need to
+    // know — and the `settings_set` action puts a concrete value instead of
+    // cycling.
+    //   And `default`: the factory value, which the window shows as the
+    //   placeholder for an empty field — "empty" is not a gap, it is that
+    //   value.
+    // Bridge 84: the key bar goes away (`View::key_bar`, the `key_bar`
+    // change); the panel bar gains `vertical` (column or row) and each
+    // button gains `count`, its badge's figure.
+    // Bridge 85: `View::status_items` and its change, the status bar's
+    // right half (ADR 0132).
+    // Bridge 86: `View::layout_buttons`, the layout buttons (ADR 0133).
+    // Bridge 87: the places bar's drive gains `free`, `mount` and `kind`
+    // (captured 2026-09-21).
+    // Bridge 88: `TabGroupView.panels`, the tab group (ADR 0134).
+    // Bridge 89: `mark_ruler` in the listing and its header (ADR 0135).
+    // (90 does not appear: it added an ACTION — `move_slot` — and this
+    // summary only looks at the SHAPES that travel inside a snapshot.)
+    // Bridge 91: a dialog can be a FORM (ADR 0143).
+    // `DialogView.fields`, with `DialogFieldView` and its three control
+    // classes (`text`, `toggle`, `cycle`); on the way back, `dialog_field`
+    // with `DialogFieldValue`. Absent and empty = the usual dialog, so a
+    // dialog with no form still crosses byte for byte as in 90.
     //
-    // 92 (ADR 0146): `StatusItemView.progress`, con `StatusProgressView`
-    // (`percent`, `phase`). Ausente en los demás items, que cruzan como en 91.
+    // 92 (ADR 0146): `StatusItemView.progress`, with `StatusProgressView`
+    // (`percent`, `phase`). Absent in the other items, which cross as in 91.
     //
-    // 93 (ADR 0147): `TaskStateView::Paused`, un valor más del mismo campo.
-    // 94 (ADR 0148): `BrowserSlotView.progress` y el cambio `slot_progress`.
+    // 93 (ADR 0147): `TaskStateView::Paused`, one more value of the same
+    // field.
+    // 94 (ADR 0148): `BrowserSlotView.progress` and the `slot_progress`
+    // change.
     const FORMA: u64 = 7_145_087_327_109_203_787;
 
     let mut rutas: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for fichero in ["changes.json", "updates.json", "variants.json", "acks.json"] {
         for (caso, valor) in load(fichero) {
-            // El nombre del CASO no entra: añadir un caso más de una forma que
-            // ya se conoce no cambia el contrato con el renderer.
+            // The CASE's name does not count: adding one more case of an
+            // already-known shape does not change the contract with the
+            // renderer.
             let _ = caso;
             formas(&valor, fichero, &mut rutas);
         }
@@ -2929,13 +2953,13 @@ fn la_forma_del_corpus_no_cambia_sin_subir_el_puente() {
     let calculada = resumen(&rutas);
     assert_eq!(
         calculada, FORMA,
-        "la forma del corpus cambió. Si es un campo nuevo del puente: sube \
-         `BRIDGE_VERSION` y su espejo en `ui/src/types.ts`, escribe el porqué \
-         en el registro de `bridge.rs`, y pon {calculada} aquí."
+        "the corpus's shape changed. If it is a new bridge field: bump \
+         `BRIDGE_VERSION` and its mirror in `ui/src/types.ts`, write why in \
+         `bridge.rs`'s log, and put {calculada} here."
     );
 }
 
-/// Todas las rutas de clave de un JSON, con los índices de array aplanados.
+/// Every key path of a JSON, with array indices flattened.
 fn formas(v: &Value, prefijo: &str, out: &mut std::collections::BTreeSet<String>) {
     match v {
         Value::Object(m) => {
@@ -2950,15 +2974,15 @@ fn formas(v: &Value, prefijo: &str, out: &mut std::collections::BTreeSet<String>
                 formas(x, &format!("{prefijo}[]"), out);
             }
         }
-        // Un escalar no aporta forma: su RUTA ya se apuntó arriba.
+        // A scalar contributes no shape: its PATH was already noted above.
         _ => {}
     }
 }
 
-/// Un resumen estable de un conjunto de cadenas. FNV-1a: no hace falta que
-/// sea criptográfico —esto detecta despistes, no ataques— y sí que dé el
-/// mismo número en cualquier máquina y versión de Rust, que es lo que
-/// `DefaultHasher` no promete.
+/// A stable summary of a set of strings. FNV-1a: it does not need to be
+/// cryptographic — this catches slip-ups, not attacks — and it does need to
+/// give the same number on any machine and Rust version, which
+/// `DefaultHasher` does not promise.
 fn resumen(rutas: &std::collections::BTreeSet<String>) -> u64 {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
     for r in rutas {
@@ -2972,15 +2996,16 @@ fn resumen(rutas: &std::collections::BTreeSet<String>) -> u64 {
     h
 }
 
-/// Cada VARIANTE de los enums del puente cruza al menos una vez (#257).
+/// Every VARIANT of the bridge's enums crosses at least once (#257).
 ///
-/// La cobertura de `UiAction` ya la vigila el compilador (`tag_de_accion` es
-/// un `match` exhaustivo sin comodín). Los enums que viajan DENTRO de una
-/// foto no la tenían: `SlotState::Error` —el camino de error de un listado—
-/// no se serializó jamás, `TaskStateView` solo cruzaba `running`, y `RowKind`
-/// solo `file`, mientras el renderer decide la afordancia de carpeta mirando
-/// `dir`. Aquí cada familia se nombra con un `match` exhaustivo, así que una
-/// variante nueva no compila hasta que alguien le da su fixture.
+/// `UiAction`'s coverage is already watched over by the compiler
+/// (`tag_de_accion` is an exhaustive `match` with no wildcard). The enums
+/// that travel INSIDE a snapshot did not have that: `SlotState::Error` — a
+/// listing's error path — was never serialized, `TaskStateView` only ever
+/// crossed as `running`, and `RowKind` only as `file`, while the renderer
+/// decides the folder affordance by looking at `dir`. Here each family is
+/// named with an exhaustive `match`, so a new variant does not compile until
+/// someone gives it its fixture.
 mod variantes {
     use super::{RowKind, SlotState, TaskStateView, check_family, fila};
     use norte_ui_host::dto::{
@@ -3023,24 +3048,25 @@ mod variantes {
         }
     }
 
-    /// Las FORMAS vacías, que son las que un renderer lee mal sin que nada se
-    /// queje: un `None` se pinta igual que un campo que no llegó.
+    /// The EMPTY SHAPES, which are the ones a renderer misreads with nothing
+    /// complaining: a `None` is painted the same as a field that never
+    /// arrived.
     fn formas_vacias() -> Vec<(&'static str, serde_json::Value)> {
         vec![
-            // Los tres estados de la comprobación del destino, y los tres en
-            // el corpus a propósito: son la única cosa del diálogo donde la
-            // AUSENCIA de una línea afirma algo (que el destino confina), así
-            // que un renderer que confundiera `checking` con `done` sin
-            // avisos lo haría en silencio. La variante llena clava además el
-            // nombre de wire del vector, que con todas las fixtures vacías no
-            // aparecía en el corpus.
+            // The destination check's three states, and all three in the
+            // corpus on purpose: they are the only thing in the dialog where
+            // the ABSENCE of a line asserts something (that the destination
+            // confines), so a renderer that confused `checking` with a
+            // warning-free `done` would do it in silence. The full variant
+            // also pins down the vector's wire name, which with all the
+            // fixtures empty did not appear in the corpus.
             (
                 "dest_check_not_asked",
                 serde_json::to_value(norte_ui_host::dto::DestCheckView::NotAsked).expect("json"),
             ),
-            // Las tres clases de campo de un formulario (puente 91): el
-            // interruptor y el ciclo llevan datos dentro del tag, así que su
-            // forma de wire no aparece en ninguna otra fixture.
+            // A form field's three classes (bridge 91): the switch and the
+            // cycle carry data inside the tag, so their wire shape does not
+            // appear in any other fixture.
             (
                 "dialog_field_kind_text",
                 serde_json::to_value(norte_ui_host::dto::DialogFieldKind::Text).expect("json"),
@@ -3057,12 +3083,12 @@ mod variantes {
                 })
                 .expect("json"),
             ),
-            // Y las tres formas de TOCAR un campo. Aquí y no entre las
-            // acciones porque aquel corpus se llama como el tag de wire de la
-            // acción —uno por variante de `UiAction`, y `dialog_field` es una
-            // sola—, así que las dos que no llevan payload no tendrían dónde
-            // aparecer: un desliz en su `tag` pasaría toda la suite de Rust y
-            // se rompería solo dentro de la ventana.
+            // And the three ways of TOUCHING a field. Here and not among the
+            // actions, because that corpus is named after the action's wire
+            // tag — one per `UiAction` variant, and `dialog_field` is only
+            // one — so the two that carry no payload would have nowhere to
+            // appear: a slip in their `tag` would pass the whole Rust suite
+            // and only break inside the window.
             (
                 "dialog_field_value_text",
                 serde_json::to_value(norte_ui_host::action::DialogFieldValue::Text {
@@ -3101,11 +3127,12 @@ mod variantes {
                 })
                 .expect("json"),
             ),
-            // La pantalla de arranque LLENA (puente 69). En el corpus solo
-            // aparecía como `null` —ningún caso la abre—, y una forma que no
-            // se pinta en ninguna fixture no la vigila el guardián: se podían
-            // renombrar sus filas o quitarle el plazo sin que nada se pusiera
-            // rojo. Con este caso, sus campos son contrato como el resto.
+            // The FULL splash screen (bridge 69). In the corpus it only ever
+            // appeared as `null` — no case opens it — and a shape that is
+            // not painted in any fixture is not watched by the guard: its
+            // rows could be renamed or its deadline dropped with nothing
+            // turning red. With this case, its fields are a contract like
+            // the rest.
             (
                 "splash_lleno",
                 serde_json::to_value(norte_ui_host::dto::SplashView {
@@ -3140,11 +3167,11 @@ mod variantes {
         .collect()
     }
 
-    /// Las formas vacías del REPARTO y del listado: colocaciones, celdas sin
-    /// valor, el salto rápido y lo que un diálogo deja sin poner.
+    /// The empty shapes of LAYOUT and of the listing: placements, cells
+    /// with no value, the quick jump, and what a dialog leaves unset.
     ///
-    /// Separadas de las anteriores solo por tamaño: una lista de cien líneas
-    /// no se lee, y el corte cae donde cambia el tema.
+    /// Separated from the previous ones only by size: a hundred-line list
+    /// is not readable, and the cut falls where the topic changes.
     fn formas_vacias_de_reparto() -> Vec<(&'static str, serde_json::Value)> {
         vec![
             (
@@ -3215,8 +3242,9 @@ mod variantes {
     fn cada_variante_de_enum_tiene_su_fixture() {
         let estados = vec![
             SlotState::Ready,
-            // CON destino, que es la mitad que hace legible que el cuerpo
-            // siga enseñando el listado anterior mientras se espera.
+            // WITH a destination, which is the half that makes it readable
+            // that the body keeps showing the previous listing while it
+            // waits.
             SlotState::Loading {
                 verb_key: "busy-listing".to_owned(),
                 target_display: "⟨mem⟩/casa/docs".to_owned(),

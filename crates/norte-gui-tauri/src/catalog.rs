@@ -1,10 +1,10 @@
-//! Lo que el renderer necesita UNA vez: los textos y los colores, ya resueltos.
+//! What the renderer needs ONCE: the strings and the colors, already resolved.
 //!
-//! Las dos cosas viajan resueltas EN RUST y por el mismo motivo. Los textos,
-//! porque traducir es elegir plural, orden y forma, y hacerlo dos veces es
-//! tener dos catálogos que divergen. Los colores, porque el tema es un
-//! documento del proyecto con sus roles y sus fallbacks, y un renderer que se
-//! los inventara pintaría otro norte.
+//! Both things travel resolved IN RUST, and for the same reason. Strings,
+//! because translating means choosing plural, order and form, and doing that
+//! twice means having two catalogues that diverge. Colors, because the theme
+//! is a project document with its own roles and fallbacks, and a renderer
+//! that made them up would paint a different norte.
 
 use std::collections::BTreeMap;
 
@@ -13,125 +13,130 @@ use norte_theme::Theme;
 use norte_ui_host::{BRIDGE_VERSION, InstanceId};
 use serde::{Deserialize, Serialize};
 
-/// El paquete de arranque del renderer.
+/// The renderer's startup bundle.
 ///
-/// **Es el quinto mensaje del cable y el único que no vivía en
-/// `norte-ui-host`**, así que ni el puente versionado ni su corpus golden lo
-/// cubrían (#259). Sigue aquí —lo que lleva son textos traducidos y colores,
-/// que son cosa de quien pinta y no del host—, pero ya no viaja sin red:
-/// `Deserialize` y un caso en `tests/catalogo_wire.rs` clavan su forma.
+/// **It is the wire's fifth message and the only one that did not live in
+/// `norte-ui-host`**, so neither the versioned bridge nor its golden corpus
+/// covered it (#259). It stays here — what it carries is translated strings
+/// and colors, which is the painter's business, not the host's — but it no
+/// longer travels without a net: `Deserialize` and a case in
+/// `tests/catalogo_wire.rs` pin its shape.
 ///
-/// Su `bridge_version` es INFORMATIVO. La compatibilidad la decide el
-/// renderer sobre el sobre que está a punto de interpretar
-/// (`session.ts`), que ya lleva la suya: confiar para eso en un mensaje
-/// lateral sería creerse un número que no acompaña a los datos.
-// `PartialEq` sin `Eq`: `font_size` es un `f32` porque la configuración acepta
-// una parte fraccionaria a propósito (un `14.5` escrito a mano se puede editar
-// desde la pantalla de ajustes), y un float no es `Eq`. Aquí solo se compara
-// en tests.
+/// Its `bridge_version` is INFORMATIONAL. Compatibility is decided by the
+/// renderer over the envelope it is about to interpret (`session.ts`), which
+/// already carries its own: trusting a side message for that would mean
+/// believing a number that does not travel with the data.
+// `PartialEq` without `Eq`: `font_size` is an `f32` because the configuration
+// deliberately accepts a fractional part (a hand-written `14.5` can be edited
+// from the settings screen), and a float is not `Eq`. Here it is only compared
+// in tests.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct HostCatalog {
-    /// La versión del contrato que habla este host, para diagnóstico.
+    /// The contract version this host speaks, for diagnostics.
     ///
-    /// No es lo que decide si el renderer sigue: eso lo dice el sobre.
+    /// It is not what decides whether the renderer continues: the envelope
+    /// says that.
     pub bridge_version: u32,
-    /// La instancia viva. Un mensaje de otra no se interpreta.
+    /// The live instance. A message from another one is not interpreted.
     pub instance_id: String,
-    /// El idioma negociado.
+    /// The negotiated language.
     pub locale: String,
-    /// Clave Fluent → texto ya traducido.
+    /// Fluent key → already-translated text.
     pub strings: BTreeMap<String, String>,
-    /// Nombre de variable CSS (sin `--`) → color `#rrggbb`.
+    /// CSS variable name (without `--`) → `#rrggbb` color.
     pub theme: BTreeMap<String, String>,
-    /// El renderer tiene que MEDIRSE en vez de esperar a un humano.
+    /// The renderer has to MEASURE ITSELF instead of waiting on a human.
     ///
-    /// Lo enciende `NORTE_GUI_MEASURE=1`, y solo sirve para la tarea 3.6: una
-    /// pasada guionizada de teclas y scroll que apunta latencias y las manda
-    /// por el comando `metrics` (que solo existe con la feature del mismo
-    /// nombre, o sea, no en el binario que se publica).
+    /// Switched on by `NORTE_GUI_MEASURE=1`, and only used by task 3.6: a
+    /// scripted pass of keys and scroll that records latencies and sends them
+    /// through the `metrics` command (which only exists with the feature of
+    /// the same name, i.e. not in the published binary).
     pub measure: bool,
-    /// Cuánto se espera antes de ENSEÑAR que se está esperando, en ms.
+    /// How long to wait before SHOWING that it is waiting, in ms.
     ///
-    /// Viaja en vez de estar escrito en el CSS porque es una decisión
-    /// compartida con el terminal: `norte_frontend::busy::THRESHOLD`, con su
-    /// razonamiento —por debajo la operación acaba antes de que el ojo la
-    /// registre y lo único que queda es un parpadeo—. Un número repetido en
-    /// una hoja de estilos es el tercer sitio donde cambiarlo y el primero
-    /// donde olvidarse.
+    /// It travels instead of being written into the CSS because it is a
+    /// decision shared with the terminal: `norte_frontend::busy::THRESHOLD`,
+    /// with its reasoning — below that, the operation finishes before the eye
+    /// registers it and all that is left is a flicker. A number repeated in a
+    /// stylesheet is the third place to change it and the first place to
+    /// forget.
     pub busy_threshold_ms: u64,
-    /// Lo que esta ventana pinta y no es color: fuentes y movimiento.
+    /// What this window paints that is not color: fonts and motion.
     pub appearance: Appearance,
-    /// No hay `norte.toml` de usuario todavía (spec 2026-09-10): el renderer
-    /// abre el asistente de primer arranque al pintar la primera foto. Lo
-    /// decide el arranque, que es quien mira el disco; `NORTE_NO_WIZARD` lo
-    /// apaga, como en el terminal. Con `default`: un catálogo anterior no lo
-    /// trae, y no traerlo es «no es el primero».
+    /// There is no user `norte.toml` yet (spec 2026-09-10): the renderer opens
+    /// the first-run wizard when it paints the first frame. Startup decides
+    /// this, since it is the one that looks at disk; `NORTE_NO_WIZARD` turns
+    /// it off, as in the terminal. With `default`: an earlier catalogue does
+    /// not carry it, and not carrying it means "this is not the first run".
     #[serde(default)]
     pub first_run: bool,
-    /// Esta ventana arranca sin pantalla de inicio (ADR 0115): `--no-splash`
-    /// o `NORTE_NO_SPLASH`. Lo decide el arranque, que es quien ve la línea
-    /// de órdenes y el entorno; el renderer solo calla el aviso de arranque.
-    /// Con `default`: un catálogo anterior no lo trae, y no traerlo es «sí,
-    /// enséñala si la configuración la quiere».
+    /// This window starts without a splash screen (ADR 0115): `--no-splash`
+    /// or `NORTE_NO_SPLASH`. Startup decides this, since it is the one that
+    /// sees the command line and the environment; the renderer only silences
+    /// the startup notice. With `default`: an earlier catalogue does not
+    /// carry it, and not carrying it means "yes, show it if the configuration
+    /// wants it".
     #[serde(default)]
     pub no_splash: bool,
-    /// `[ui] theme_light` / `theme_dark` ya resueltos a variables (spec
-    /// 2026-09-11, V6): el renderer aplica el que casa con
-    /// `prefers-color-scheme`, y `theme` cuando no hay variante para ese
-    /// lado. `None` = solo `theme`.
+    /// `[ui] theme_light` / `theme_dark`, already resolved to variables (spec
+    /// 2026-09-11, V6): the renderer applies the one that matches
+    /// `prefers-color-scheme`, and `theme` when there is no variant for that
+    /// side. `None` = `theme` only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub theme_light: Option<BTreeMap<String, String>>,
-    /// La variante oscura; ver [`Self::theme_light`].
+    /// The dark variant; see [`Self::theme_light`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub theme_dark: Option<BTreeMap<String, String>>,
 }
 
-/// `[ui] font`, `mono_font`, `font_size` y `reduce_motion`, para el renderer.
+/// `[ui] font`, `mono_font`, `font_size` and `reduce_motion`, for the renderer.
 ///
-/// Las cuatro se cargaban, se validaban, se ofrecían en la pantalla de ajustes
-/// —con `applies_live: true`— y no las leía NADIE: en el terminal no aplican
-/// (una terminal no elige su fuente) y en la ventana no llegaban a cruzar.
-/// `reduce_motion` además es un compromiso de accesibilidad de la spec §17.
+/// The four were loaded, validated, offered on the settings screen — with
+/// `applies_live: true` — and read by NOBODY: they do not apply in the
+/// terminal (a terminal does not choose its font) and in the window they
+/// never made it across. `reduce_motion` is also an accessibility commitment
+/// from spec §17.
 ///
-/// Viajan en el CATÁLOGO y no en la foto porque no son estado de pantalla:
-/// son de arranque y de recarga, como el tema, y por el mismo camino se
-/// aplican en caliente al cambiar de perfil.
+/// They travel in the CATALOGUE and not in the frame because they are not
+/// screen state: they are startup and reload state, like the theme, and they
+/// apply live on a profile change by the same path.
 ///
-/// Ningún campo lleva `skip_serializing_if`: ausente y `null` tienen que
-/// significar lo mismo aquí —«no lo dice la configuración»— y la única forma
-/// de garantizarlo es que el campo viaje siempre.
+/// No field carries `skip_serializing_if`: absent and `null` have to mean the
+/// same thing here — "the configuration does not say" — and the only way to
+/// guarantee that is for the field to always travel.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Appearance {
-    /// Familia para el texto de interfaz. `None` = la del sistema.
+    /// Family for interface text. `None` = the system's.
     #[serde(default)]
     pub font: Option<String>,
-    /// Familia monoespaciada, para lo que se alinea en columnas. `None` = la
-    /// que trae la hoja de estilos.
+    /// Monospace family, for what aligns in columns. `None` = the one the
+    /// stylesheet ships.
     #[serde(default)]
     pub mono_font: Option<String>,
-    /// Tamaño base en px, ya validado a `[8, 32]` por la configuración.
+    /// Base size in px, already validated to `[8, 32]` by the configuration.
     ///
-    /// No es solo texto más grande: la rejilla de esta ventana se reparte en
-    /// CELDAS, así que el alto de fila y el ancho de columna salen de aquí. Un
-    /// tamaño que solo cambiara la letra la dejaría desbordando su fila.
+    /// It is not just bigger text: this window's grid is laid out in CELLS,
+    /// so row height and column width come from here. A size that only
+    /// changed the glyph would leave it overflowing its row.
     #[serde(default)]
     pub font_size: Option<f32>,
-    /// Quien pide menos movimiento no ve animaciones. `None` = manda lo que
-    /// diga el sistema (`prefers-reduced-motion`), que es el default correcto:
-    /// la configuración solo puede AÑADIR la petición, nunca contradecir a
-    /// quien ya la hizo en su escritorio.
+    /// Whoever asks for less motion sees no animations. `None` = whatever the
+    /// system says (`prefers-reduced-motion`) rules, which is the correct
+    /// default: the configuration can only ADD the request, never contradict
+    /// someone who already made it on their desktop.
     #[serde(default)]
     pub reduce_motion: Option<bool>,
-    /// `[ui] titlebar = "custom"` (ADR 0136): la ventana arrancó sin la barra
-    /// del escritorio, y la de menús hace de barra de título — se arrastra y
-    /// lleva minimizar, maximizar y cerrar. De ARRANQUE: la decoración se
-    /// quita al crear la ventana, así que cambiarla pide reiniciar.
+    /// `[ui] titlebar = "custom"` (ADR 0136): the window started without the
+    /// desktop's bar, and the menu bar acts as the title bar — it is
+    /// draggable and carries minimize, maximize and close. STARTUP-ONLY: the
+    /// decoration is removed when the window is created, so changing it asks
+    /// for a restart.
     #[serde(default)]
     pub custom_titlebar: bool,
 }
 
 impl Appearance {
-    /// Los cuatro escalares de `[ui]`, tal y como los dejó la configuración.
+    /// The four `[ui]` scalars, exactly as the configuration left them.
     #[must_use]
     pub fn de(cfg: &norte_config::CommonConfig) -> Self {
         Self {
@@ -144,13 +149,13 @@ impl Appearance {
     }
 }
 
-/// Construye el paquete para esta instancia, este idioma y este tema.
+/// Builds the bundle for this instance, this language and this theme.
 #[must_use]
 pub fn catalogo(instance: &InstanceId, lang: Lang, theme: &Theme) -> HostCatalog {
     let mut strings = BTreeMap::new();
     for id in norte_i18n::message_ids(lang) {
-        let texto = norte_i18n::t_in(lang, &id);
-        strings.insert(id, texto);
+        let text = norte_i18n::t_in(lang, &id);
+        strings.insert(id, text);
     }
     HostCatalog {
         bridge_version: BRIDGE_VERSION,
@@ -173,12 +178,12 @@ pub fn catalogo(instance: &InstanceId, lang: Lang, theme: &Theme) -> HostCatalog
 }
 
 impl HostCatalog {
-    /// El mismo catálogo con la apariencia que dice la configuración.
+    /// The same catalogue with the appearance the configuration says.
     ///
-    /// Aparte de [`catalogo`] y no un parámetro más porque los sitios que
-    /// construyen un catálogo sin configuración son casi todos —los tests— y
-    /// un cuarto argumento que la mitad de los llamantes rellena con un
-    /// `Default` es un argumento que se olvida en el que importa.
+    /// Separate from [`catalogo`] and not one more parameter because the
+    /// places that build a catalogue without a configuration are almost all
+    /// of them — the tests — and a fourth argument that half the callers fill
+    /// with a `Default` is an argument that gets forgotten where it matters.
     #[must_use]
     pub fn con_apariencia(mut self, cfg: &norte_config::CommonConfig) -> Self {
         self.appearance = Appearance::de(cfg);
@@ -186,21 +191,21 @@ impl HostCatalog {
     }
 }
 
-/// Los roles del tema, como variables CSS.
+/// The theme's roles, as CSS variables.
 ///
-/// La correspondencia vive en el HOST (`pickers::roles_de_tema`) desde que su
-/// selector de tema elige: entonces el host tiene que resolver por nombre un
-/// tema que nadie le pasó, y dos listas —una para pintar y otra para
-/// enseñar— acabarían diciendo cosas distintas del mismo tema. Aquí solo se
-/// le da la forma que la webview espera.
+/// The mapping lives in the HOST (`pickers::roles_de_tema`) ever since its
+/// theme picker started choosing: the host then has to resolve by name a
+/// theme nobody handed it, and two lists — one to paint and one to show —
+/// would end up saying different things about the same theme. Here it is
+/// only given the shape the webview expects.
 #[must_use]
 pub fn variables(theme: &Theme) -> BTreeMap<String, String> {
     let mut v: BTreeMap<String, String> = norte_ui_host::pickers::roles_de_tema(theme)
         .into_iter()
         .collect();
-    // `[effects] backdrop` (spec 2026-09-11, V6): el único efecto que esta
-    // ventana interpreta hoy. Viaja como la variable que `#dialogs` lee;
-    // cualquier otro valor —o su ausencia— es el velo de siempre.
+    // `[effects] backdrop` (spec 2026-09-11, V6): the only effect this window
+    // interprets today. It travels as the variable `#dialogs` reads; any
+    // other value — or its absence — is the usual veil.
     if theme.effect_str("backdrop") == Some("blur") {
         v.insert("dialog-backdrop".to_owned(), "blur(6px)".to_owned());
     }
@@ -211,58 +216,61 @@ pub fn variables(theme: &Theme) -> BTreeMap<String, String> {
 mod tests {
     use super::*;
 
-    /// El catálogo trae texto TRADUCIDO, no la clave: el renderer no tiene
-    /// catálogo propio que consultar.
+    /// The catalogue carries TRANSLATED text, not the key: the renderer has
+    /// no catalogue of its own to consult.
     #[test]
-    fn los_textos_vienen_resueltos() {
+    fn strings_come_already_resolved() {
         let c = catalogo(&InstanceId::new("i"), Lang::Es, &Theme::preset_default());
         assert_eq!(c.bridge_version, BRIDGE_VERSION);
-        assert!(!c.strings.is_empty(), "hay catálogo");
-        for (clave, texto) in c.strings.iter().take(20) {
-            assert!(!texto.is_empty(), "{clave} sin texto");
+        assert!(!c.strings.is_empty(), "there is a catalogue");
+        for (key, text) in c.strings.iter().take(20) {
+            assert!(!text.is_empty(), "{key} has no text");
         }
     }
 
-    /// Dos idiomas, dos catálogos: el que se manda es el negociado.
+    /// Two languages, two catalogues: the one sent is the negotiated one.
     #[test]
-    fn el_idioma_manda() {
+    fn the_language_rules() {
         let es = catalogo(&InstanceId::new("i"), Lang::Es, &Theme::preset_default());
         let en = catalogo(&InstanceId::new("i"), Lang::En, &Theme::preset_default());
         assert_eq!(es.locale, "es");
         assert_eq!(en.locale, "en");
-        assert_ne!(es.strings, en.strings, "no es el mismo catálogo");
+        assert_ne!(es.strings, en.strings, "not the same catalogue");
     }
 
-    /// Los colores salen del tema, en la forma que el CSS entiende.
+    /// The colors come from the theme, in the shape CSS understands.
     #[test]
-    fn los_colores_son_del_tema() {
+    fn colors_come_from_the_theme() {
         let t = Theme::preset("catppuccin-mocha")
-            .expect("parsea")
-            .expect("preset de fábrica");
+            .expect("parses")
+            .expect("factory preset");
         let v = variables(&t);
-        for (nombre, valor) in &v {
+        for (name, value) in &v {
             assert!(
-                valor.starts_with('#') && valor.len() == 7,
-                "{nombre} = {valor} no es #rrggbb"
+                value.starts_with('#') && value.len() == 7,
+                "{name} = {value} is not #rrggbb"
             );
         }
-        assert!(v.contains_key("fg"), "al menos el texto normal está");
+        assert!(v.contains_key("fg"), "at least the normal text is there");
     }
 
-    /// `[effects] backdrop = "blur"` cruza como la variable del velo; un
-    /// tema sin efectos no la lleva, y el renderer cae al velo de siempre.
+    /// `[effects] backdrop = "blur"` crosses as the veil's variable; a theme
+    /// without effects does not carry it, and the renderer falls back to the
+    /// usual veil.
     #[test]
-    fn el_desenfoque_del_tema_cruza_como_variable() {
-        let con = Theme::preset_default();
+    fn theme_blur_crosses_as_a_variable() {
+        let with_blur = Theme::preset_default();
         assert_eq!(
-            variables(&con).get("dialog-backdrop").map(String::as_str),
+            variables(&with_blur)
+                .get("dialog-backdrop")
+                .map(String::as_str),
             Some("blur(6px)"),
-            "el preset de fábrica lo pide"
+            "the factory preset asks for it"
         );
-        let sin = Theme::preset("nord").expect("parsea").expect("preset");
+        let without_blur = Theme::preset("nord").expect("parses").expect("preset");
         assert!(
-            !variables(&sin).contains_key("dialog-backdrop"),
-            "sin `[effects]`, sin variable"
+            !variables(&without_blur).contains_key("dialog-backdrop"),
+            "no `[effects]`, no variable"
         );
     }
 }

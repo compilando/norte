@@ -304,13 +304,14 @@ keymap = [
             "the reason is a Fluent id and must be TRANSLATED: {:?}",
             p.reason
         );
-        // Y ahora SÍ tiene texto de ayuda: el comando existe, solo que este
-        // build no lo ejecuta. La fila lo nombra en cristiano y explica por
-        // qué la tecla no hará nada, que es más de lo que se podía decir
-        // cuando la capacidad no estaba construida.
-        // `t_in` y no `t`: el panel se construyó con `Lang::En` explícito, y
-        // `t` traduce con el idioma GLOBAL —que sale del entorno—. Comparar
-        // uno contra otro era verde solo donde `LANG` ya era inglés.
+        // And now it DOES have help text: the command exists, this build
+        // just does not run it. The row names it in plain words and
+        // explains why the key will do nothing, which is more than could be
+        // said when the capability was not built yet.
+        // `t_in` and not `t`: the panel was built with `Lang::En` explicit,
+        // and `t` translates with the GLOBAL language — which comes from the
+        // environment. Comparing one against the other was green only where
+        // `LANG` was already English.
         assert_eq!(
             p.label,
             norte_i18n::t_in(norte_i18n::Lang::En, "help-cmd-pane-pack")

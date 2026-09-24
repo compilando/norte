@@ -1,208 +1,209 @@
-// Versionado: 0.1.0 → 0.2.0 añadió la interfaz `provider` + world
-// `norte-provider` (#30 stage 2); 0.2.0 → 0.3.0 añadió el camino de escritura
+// Versioning: 0.1.0 → 0.2.0 added the `provider` interface + world
+// `norte-provider` (#30 stage 2); 0.2.0 → 0.3.0 added the write path
 // (writer resource + open-writer/make-dir/remove/rename); 0.3.0 → 0.4.0 (#30
-// stage 3c) tiene DOS rupturas para un guest de `provider`, ambas cubiertas por
-// el único bump (0.4.0 nunca se publicó):
-//   1. `configure(provider-config)`: un provider que ESTABLECE SU PROPIA
-//      conexión (FTP sobre wasi:sockets) recibe endpoint+credenciales+base. Un
-//      guest a 0.3.0 no exporta `configure` → no satisface el world 0.4.0.
-//   2. `caps` pasó de 1 a 3 campos (`case-sensitive`, `case-preserving`): los
-//      records WIT no tienen campos opcionales ni defaults, así que cambia la
-//      forma canónica-ABI de `capabilities() -> caps` — ROMPEDOR por sí solo.
-// Es seguro porque `provider` es pre-release y no hay guests publicados — el bump
-// de minor bajo 0.x codifica exactamente "ruptura permitida".
-// AVISO (no del todo aditivo para el resto): previewer/command/host-log no
-// cambian de TEXTO, pero la versión del paquete viaja en cada nombre de interfaz
-// versionado (`norte:plugin/previewer@0.4.0`…). Bajo el semver de wasmtime para
-// 0.x, un guest de terceros previewer/command compilado contra `@0.3.0` NO
-// instancia en el host 0.4.0. Es la deuda conocida del paquete compartido (ADR
-// 0032): cuando `provider` se estabilice se separa a su propio paquete vía
-// layout `wit/deps/` (el wit-parser del árbol, 0.239, no soporta paquetes
-// anidados), y solo entonces la superficie estable deja de romperse con
+// stage 3c) has TWO breaks for a `provider` guest, both covered by the
+// single bump (0.4.0 was never published):
+//   1. `configure(provider-config)`: a provider that ESTABLISHES ITS OWN
+//      connection (FTP over wasi:sockets) receives endpoint+credentials+base. A
+//      0.3.0 guest does not export `configure` → does not satisfy the 0.4.0
+//      world.
+//   2. `caps` went from 1 to 3 fields (`case-sensitive`, `case-preserving`): WIT
+//      records have no optional fields or defaults, so the canonical ABI shape
+//      of `capabilities() -> caps` changes — BREAKING on its own.
+// It is safe because `provider` is pre-release and there are no published guests
+// — the minor bump under 0.x encodes exactly "breakage allowed".
+// WARNING (not entirely additive for the rest): previewer/command/host-log do
+// not change TEXT, but the package's version travels in every versioned
+// interface name (`norte:plugin/previewer@0.4.0`…). Under wasmtime's semver for
+// 0.x, a third-party previewer/command guest compiled against `@0.3.0` does NOT
+// instantiate on the 0.4.0 host. This is the shared package's known debt (ADR
+// 0032): once `provider` stabilizes it splits into its own package via the
+// `wit/deps/` layout (the tree's wit-parser, 0.239, does not support nested
+// packages), and only then does the stable surface stop breaking alongside
 // `provider`. protocol-guardian.
 //
-// 0.4.0 → 0.5.0 (P2 Task 3): añade la interfaz `host-config` (settings
-// VALIDADAS de `[config]`, P2) importada por AMBOS worlds. Es aditiva SOLO en
-// el sentido estrecho de LINKING wasmtime: el `Linker` del host puede ofrecer
-// una función más de las que un componente concreto importa sin que eso, por
-// sí mismo, rompa nada (un import de más en el linker nunca es el problema;
-// solo un import NO resuelto lo es). Pero el MISMO "AVISO" de arriba se aplica
-// igual de fuerte aquí, y no es solo teórico: VERIFICADO empíricamente para
-// este bump — un `.wasm` de `command-demo` compilado ANTES de este cambio
-// (paquete 0.4.0, sin `host-config`) fue probado contra el host YA en 0.5.0 y
-// la instanciación FALLA:
+// 0.4.0 → 0.5.0 (P2 Task 3): adds the `host-config` interface (VALIDATED
+// `[config]` settings, P2) imported by BOTH worlds. It is additive ONLY in
+// the narrow sense of wasmtime LINKING: the host's `Linker` can offer one
+// more function than a specific component imports without that, by itself,
+// breaking anything (an extra import in the linker is never the problem;
+// only an UNRESOLVED import is). But the SAME "WARNING" above applies just
+// as strongly here, and it is not just theoretical: empirically VERIFIED for
+// this bump — a `command-demo` `.wasm` compiled BEFORE this change
+// (package 0.4.0, without `host-config`) was tested against the host ALREADY
+// on 0.5.0 and instantiation FAILS:
 //   "component imports instance `norte:plugin/host-log@0.4.0`, but a matching
 //   implementation was not found in the linker"
-// Es decir, el guest viejo pide `host-log@0.4.0` (el nombre versionado que
-// llevaba grabado al compilar) y el linker del host 0.5.0 solo ofrece
-// `host-log@0.5.0` — rompe por el LADO DE IMPORT, no solo el de export como
-// advertía el análisis original. Confirma la deuda del paquete compartido
-// (ADR 0032): CUALQUIER bump de este `package` invalida TODOS los artefactos
-// `.wasm` ya compilados, aditivo o no en su contenido textual. Dentro de este
-// repo no importa (los guests de `examples-wasm/` se recompilan siempre desde
-// el WIT actual, vía symlink) — importaría el día que un plugin de terceros
-// exista de verdad.
+// That is, the old guest asks for `host-log@0.4.0` (the versioned name it had
+// baked in when compiled) and the 0.5.0 host's linker only offers
+// `host-log@0.5.0` — it breaks on the IMPORT SIDE, not just the export side as
+// the original analysis warned. This confirms the shared package's debt
+// (ADR 0032): ANY bump of this `package` invalidates ALL already-compiled
+// `.wasm` artifacts, additive or not in their textual content. Within this
+// repo it does not matter (the `examples-wasm/` guests are always recompiled
+// from the current WIT, via symlink) — it would matter the day a real
+// third-party plugin exists.
 //
-// 0.5.0 → 0.6.0 (2026-07-24, G3 plan / ADR 0037 "Plugin data-out v2"): el host
-// pinta datos estructurados en vez de texto plano. TRES cambios:
-//   1. `previewer` gana un export REQUERIDO, `render-styled` (devuelve
-//      `styled-text` — líneas de spans con `role`/`fg` opcionales) hermano de
-//      `render`. REQUERIDO porque los exports de una interfaz WIT son
-//      todo-o-nada — un guest no puede implementar la mitad de `previewer`. Un
-//      guest de solo-texto lo satisface trivialmente envolviendo su propio
-//      `render` en un span por línea (sin rol ni color).
-//   2. Dos worlds NUEVOS, `norte-decorator` y `norte-columns`, con el MISMO
-//      patrón que `norte-provider` (world propio, interfaz propia, resueltos
-//      por `category` del manifiesto, no plegados en `norte-plugin`).
-//   3. `role: option<string>` en `span`/`decoration` NO se valida aquí — la
-//      validación contra el conjunto cerrado de `norte_theme::Role` vive en el
-//      HOST consumidor (`norte-core`), fuera de este paquete WIT (ADR 0037
-//      decisión 1): un rol desconocido degrada a `none`, nunca rompe.
+// 0.5.0 → 0.6.0 (2026-07-24, G3 plan / ADR 0037 "Plugin data-out v2"): the host
+// paints structured data instead of plain text. THREE changes:
+//   1. `previewer` gains a REQUIRED export, `render-styled` (returns
+//      `styled-text` — lines of spans with optional `role`/`fg`), a sibling of
+//      `render`. REQUIRED because a WIT interface's exports are
+//      all-or-nothing — a guest cannot implement half of `previewer`. A
+//      text-only guest satisfies it trivially by wrapping its own `render` in
+//      one span per line (no role or color).
+//   2. Two NEW worlds, `norte-decorator` and `norte-columns`, with the SAME
+//      pattern as `norte-provider` (its own world, its own interface, resolved
+//      by the manifest's `category`, not folded into `norte-plugin`).
+//   3. `role: option<string>` in `span`/`decoration` is NOT validated here — the
+//      validation against `norte_theme::Role`'s closed set lives in the
+//      consuming HOST (`norte-core`), outside this WIT package (ADR 0037
+//      decision 1): an unknown role degrades to `none`, it never breaks.
 //
-// AVISO (reafirma el AVISO de 0.4.0→0.5.0, ahora verificado DOS veces sobre
-// este mismo paquete): el bump 0.5.0 → 0.6.0 es "aditivo" en el sentido de que
-// ningún export/import EXISTENTE cambió de forma — pero la versión del
-// paquete viaja en el nombre de CADA interfaz versionada
-// (`norte:plugin/previewer@0.5.0` → `@0.6.0`, y también `host-log`/
-// `host-config`), así que CUALQUIER artefacto `.wasm` compilado contra 0.5.0
-// deja de instanciar contra el linker 0.6.0 — import no resuelto, el mismo
-// fallo que en el bump anterior. T2 de este plan recompila TODOS los guests
-// de `examples-wasm/` (vía symlink `wit -> ../../wit`, siempre desde el WIT
-// actual) y re-ejecuta `just build-ftp-wasm` para
-// `crates/norte-core/resources/ftp-provider.wasm` (embebido, ADR 0033) en el
-// MISMO cambio que sube el paquete — nunca por separado.
+// WARNING (reaffirms the 0.4.0→0.5.0 WARNING, now verified TWICE on
+// this same package): the 0.5.0 → 0.6.0 bump is "additive" in the sense that
+// no EXISTING export/import changed shape — but the package's version
+// travels in the name of EVERY versioned interface
+// (`norte:plugin/previewer@0.5.0` → `@0.6.0`, and also `host-log`/
+// `host-config`), so ANY `.wasm` artifact compiled against 0.5.0
+// stops instantiating against the 0.6.0 linker — unresolved import, the same
+// failure as the previous bump. T2 of this plan recompiles ALL the
+// `examples-wasm/` guests (via the `wit -> ../../wit` symlink, always from the
+// current WIT) and re-runs `just build-ftp-wasm` for
+// `crates/norte-core/resources/ftp-provider.wasm` (embedded, ADR 0033) in the
+// SAME change that bumps the package — never separately.
 //
-// 0.6.0 → 0.7.0 (2026-08-08, ADR 0041 decisión 4): EL PAQUETE SE PARTE EN TRES.
-// `host-log`/`host-config` pasan a `norte:host@0.1.0`; `provider` y su world
-// pasan a `norte:provider@0.1.0`; aquí se quedan previewer/command/decorator/
-// columns y sus tres worlds.
+// 0.6.0 → 0.7.0 (2026-08-08, ADR 0041 decision 4): THE PACKAGE SPLITS IN THREE.
+// `host-log`/`host-config` move to `norte:host@0.1.0`; `provider` and its world
+// move to `norte:provider@0.1.0`; previewer/command/decorator/columns and
+// their three worlds stay here.
 //
-// El motivo es el AVISO de arriba, repetido dos veces y nunca resuelto: la
-// versión del paquete viaja dentro del nombre de CADA interfaz, así que un
-// cambio en `provider` —que va a haber muchos, porque ADR 0041 decisión 3 dice
-// que los huecos se tapan cuando un plugin real los pida— dejaba de instanciar
-// a TODOS los previewers de terceros. Partido, un bump de `norte:provider` no
-// toca el nombre de `norte:plugin/previewer`.
+// The reason is the WARNING above, repeated twice and never resolved: the
+// package's version travels inside the name of EVERY interface, so a
+// change in `provider` — and there are going to be many, because ADR 0041
+// decision 3 says the gaps get filled in as a real plugin asks for them —
+// would stop ALL third-party previewers from instantiating. Split, a
+// `norte:provider` bump does not touch `norte:plugin/previewer`'s name.
 //
-// Esta partición es, ella misma, la última ruptura de todos los guests a la vez:
-// los nombres de host-log/host-config cambian de paquete. Los guests de
-// `examples-wasm/` se recompilan en este mismo cambio (symlink `wit`), igual
-// que `crates/norte-core/resources/ftp-provider.wasm` vía `just build-ftp-wasm`.
-// 0.7.0 → 0.8.0 (2026-08-16, roadmap ítem 6 / ADR 0057): `columns::column-values`
-// gana un parámetro `location: option<string>` — el token opaco con el que un
-// guest APROBADO lee bajo el directorio que se está listando (paquete nuevo
-// `norte:location@0.1.0`, importado por el world `norte-columns`).
+// This split is, itself, the last break for every guest at once:
+// host-log/host-config's names change package. The `examples-wasm/` guests
+// are recompiled in this same change (the `wit` symlink), same as
+// `crates/norte-core/resources/ftp-provider.wasm` via `just build-ftp-wasm`.
+// 0.7.0 → 0.8.0 (2026-08-16, roadmap item 6 / ADR 0057): `columns::column-values`
+// gains a `location: option<string>` parameter — the opaque token an
+// APPROVED guest uses to read under the directory being listed (new package
+// `norte:location@0.1.0`, imported by the `norte-columns` world).
 //
-// Es RUPTURA por partida doble y a propósito: cambia la firma de un export
-// existente —los records y las funciones WIT no tienen parámetros opcionales—
-// y, por el AVISO de arriba verificado ya tres veces, el bump del paquete
-// invalida igualmente todo `.wasm` compilado contra 0.7.0 por el lado de
-// IMPORT. Vale la pena porque sin ubicación no puede existir un plugin de
-// columnas que diga algo sobre el fichero y no solo sobre su nombre: el
-// primero que se quiere, el estado de git, necesita leer `.git/index`.
+// It is a DOUBLE break, on purpose: it changes an existing export's
+// signature — WIT records and functions have no optional parameters —
+// and, by the WARNING above, verified three times already, the package
+// bump equally invalidates every `.wasm` compiled against 0.7.0 on the
+// IMPORT side. It is worth it because without a location, a columns plugin
+// cannot exist that says something about the file and not just its name: the
+// first one wanted, git status, needs to read `.git/index`.
 //
-// El token es opaco y de un solo uso lógico (lo acuña el host por petición):
-// el guest no aprende la ruta, que es lo que hace que esto no sea un agujero
-// en la regla 9 sino una capacidad con su propio permiso.
+// The token is opaque and single-use in a logical sense (minted by the host per
+// request): the guest never learns the path, which is what makes this not a
+// hole in rule 9 but a capability with its own permission.
 //
-// 2026-09-03 (demo D2, ADR 0094): el world `norte-columns` importa
-// `norte:location@0.2.0` (`read-prefix`). Este paquete se queda en 0.8.0: no
-// cambia ninguna de SUS interfaces —`norte:plugin/previewer@0.8.0` sigue
-// llamándose igual—, así que un previewer compilado ayer sigue cargando. Un
-// guest de columnas compilado contra 0.1.0 importa un nombre que ya no existe
-// y el catálogo lo lista como desfasado, con las dos versiones.
+// 2026-09-03 (demo D2, ADR 0094): the `norte-columns` world imports
+// `norte:location@0.2.0` (`read-prefix`). This package stays at 0.8.0: it does
+// not change any of ITS interfaces — `norte:plugin/previewer@0.8.0` is still
+// called the same — so a previewer compiled yesterday still loads. A
+// columns guest compiled against 0.1.0 imports a name that no longer exists
+// and the catalog lists it as mismatched, with both versions.
 //
-// 0.8.0 → 0.9.0 (2026-09-03, demo D4 / ADR 0037 enmienda): `span` gana `bg`
-// y `preview-input` gana `columns`. Los pide el previewer de imagen: medios
-// bloques con dos píxeles por celda, y el ancho al que encoger. Los records
-// WIT no tienen campos opcionales, así que es RUPTURA para todo previewer y
-// command compilado contra 0.8.0 (syntect, la plantilla, markdown, los demos):
-// se recompilan aquí, y los de fuera se listan como desfasados (ADR 0094).
+// 0.8.0 → 0.9.0 (2026-09-03, demo D4 / ADR 0037 amendment): `span` gains `bg`
+// and `preview-input` gains `columns`. The image previewer needs them: half
+// blocks with two pixels per cell, and the width to shrink to. WIT records
+// have no optional fields, so it is a BREAK for every previewer and
+// command compiled against 0.8.0 (syntect, the template, markdown, the demos):
+// they are recompiled here, and the outside ones are listed as mismatched (ADR 0094).
 //
-// 0.9.0 → 0.10.0 (2026-09-10, ADR 0105): `decorator::decorate` recibe
-// `list<entry>` —nombre Y clase— en vez de `list<list<u8>>`. Lo pide la
-// columna de iconos: un nombre no dice si es carpeta. Cambia la firma de un
-// export de la interfaz `decorator`, así que es RUPTURA para todo decorador
-// compilado contra 0.9.0 (file-icons, el demo) y, por el nombre versionado,
-// para todo previewer/command/provider del paquete: los siete de este árbol
-// se recompilan con `just plugins force` y se reaprueban. Los de fuera se
-// listan como desfasados con las dos versiones (ADR 0094).
+// 0.9.0 → 0.10.0 (2026-09-10, ADR 0105): `decorator::decorate` receives
+// `list<entry>` — name AND class — instead of `list<list<u8>>`. The icon
+// column needs it: a name does not say whether it is a folder. It changes the
+// signature of a `decorator` interface export, so it is a BREAK for every decorator
+// compiled against 0.9.0 (file-icons, the demo) and, because of the versioned
+// name, for every previewer/command/provider of the package: the seven in this
+// tree are recompiled with `just plugins force` and re-approved. The outside
+// ones are listed as mismatched with both versions (ADR 0094).
 package norte:plugin@0.10.0;
 
-/// Genera una previsualización de UN recurso que el HOST ya leyó y le pasa
-/// (regla 9: el guest jamás toca el FS; recibe los bytes). Devuelve texto
-/// plano listo para pintar, o un error legible.
+/// Generates a preview of ONE resource the HOST already read and hands
+/// over (rule 9: the guest never touches the FS; it receives the bytes).
+/// Returns plain text ready to paint, or a readable error.
 interface previewer {
     record preview-input {
-        /// Mimetype detectado por el host.
+        /// Mimetype detected by the host.
         mimetype: string,
-        /// Contenido del recurso (el host lo leyó bajo fs-read=scoped).
+        /// Resource content (the host read it under fs-read=scoped).
         content: list<u8>,
-        /// Ancho del visor que va a pintar, en celdas (0.9.0, demo D4), o
-        /// `none` si quien pide no tiene visor (la CLI). Una PISTA: un
-        /// previewer de imagen la usa para decidir a cuántas celdas encoge;
-        /// uno de texto la ignora y el visor recorta como siempre.
+        /// Width of the viewer about to paint, in cells (0.9.0, demo D4), or
+        /// `none` if the requester has no viewer (the CLI). A HINT: an
+        /// image previewer uses it to decide how many cells to shrink to;
+        /// a text one ignores it and the viewer trims as always.
         columns: option<u32>,
     }
     render: func(input: preview-input) -> result<string, string>;
 
-    /// Un fragmento de texto con estilo OPCIONAL (ADR 0037 decisión 2): el
-    /// host pinta, el guest solo describe. `role` es un nombre semántico
-    /// (validado por el HOST consumidor contra `norte_theme::Role::REQUESTABLE`
-    /// — este paquete WIT no conoce ese conjunto cerrado, un guest puede
-    /// mandar cualquier string). Los roles pedibles son los de SIGNIFICADO
+    /// A fragment of text with an OPTIONAL style (ADR 0037 decision 2): the
+    /// host paints, the guest only describes. `role` is a semantic name
+    /// (validated by the consuming HOST against `norte_theme::Role::REQUESTABLE`
+    /// — this WIT package does not know that closed set, a guest can
+    /// send any string). The requestable roles are the ones of MEANING
     /// (`error`, `warning`, `info`, `title`, `match`, `regular`,
-    /// `hostile-badge`, `badge`, `muted`); el CROMO de la ventana y el ESTADO
-    /// (`selection`, `status-bar`, `mark`…) no lo son, y degradan a `none`
-    /// igual que un nombre desconocido. `fg` es un RGB crudo de respaldo
-    /// (un highlighter con su propia paleta fija). Cuando un span trae AMBOS,
-    /// el rol gana en el host (el tema del usuario manda sobre el color fijo
-    /// del plugin) — decisión de pintado, no de este WIT.
+    /// `hostile-badge`, `badge`, `muted`); the window's CHROME and STATE
+    /// (`selection`, `status-bar`, `mark`…) are not, and degrade to `none`
+    /// just like an unknown name. `fg` is a raw RGB fallback (a
+    /// highlighter with its own fixed palette). When a span carries BOTH,
+    /// the role wins on the host (the user's theme overrides the plugin's
+    /// fixed color) — a painting decision, not this WIT's.
     record span {
         text: string,
         role: option<string>,
         fg: option<tuple<u8, u8, u8>>,
-        /// Color de FONDO (0.9.0, demo D4): un previewer de imagen pinta cada
-        /// celda como un medio bloque `▀` con el píxel de arriba en `fg` y el
-        /// de abajo en `bg`. Sin rol que mande sobre él: los roles del tema
-        /// son de cromo y ninguno describe el fondo de un fragmento.
+        /// BACKGROUND color (0.9.0, demo D4): an image previewer paints each
+        /// cell as a `▀` half block with the top pixel in `fg` and the
+        /// bottom one in `bg`. No role overrides it: the theme's roles are
+        /// chrome and none of them describe a fragment's background.
         bg: option<tuple<u8, u8, u8>>,
     }
 
-    /// Una línea = una secuencia ORDENADA de spans.
+    /// A line = an ORDERED sequence of spans.
     type styled-line = list<span>;
 
-    /// Un preview con estilo = una secuencia ORDENADA de líneas.
+    /// A styled preview = an ORDERED sequence of lines.
     type styled-text = list<styled-line>;
 
-    /// Gemelo con estilo de `render` (ADR 0037 decisión 2): mismo `input`,
-    /// devuelve líneas de spans en vez de una cadena plana. REQUERIDO — los
-    /// exports de una interfaz WIT son todo-o-nada, así que un guest de solo
-    /// texto lo implementa envolviendo su propio `render` en UN span por
-    /// línea, sin `role` ni `fg` (ver el AVISO de cabecera de este paquete).
-    /// El HOST aplica topes de anti-DoS al resultado (nº de líneas, spans por
-    /// línea, bytes por span y bytes totales — ADR 0037 tabla de decisión 1)
-    /// DESPUÉS de que esta función retorne; una violación se rechaza entera
-    /// (fail-closed), nunca se trunca a medias.
+    /// Styled twin of `render` (ADR 0037 decision 2): same `input`,
+    /// returns lines of spans instead of a plain string. REQUIRED — a WIT
+    /// interface's exports are all-or-nothing, so a text-only guest
+    /// implements it by wrapping its own `render` in ONE span per
+    /// line, with no `role` or `fg` (see this package's header WARNING).
+    /// The HOST applies anti-DoS caps to the result (line count, spans per
+    /// line, bytes per span and total bytes — ADR 0037 decision table 1)
+    /// AFTER this function returns; a violation is rejected whole
+    /// (fail-closed), never truncated halfway.
     render-styled: func(input: preview-input) -> result<styled-text, string>;
 }
 
-/// Ejecuta un comando aportado por el plugin. `arg` es texto libre del
-/// invocador; devuelve un mensaje para la barra de estado, o un error.
+/// Runs a command the plugin contributes. `arg` is free text from the
+/// invoker; returns a message for the status bar, or an error.
 interface command {
     run: func(id: string, arg: string) -> result<string, string>;
 }
 
-/// Decora entradas visibles con un badge/rol tipo "git status" (ADR 0037
-/// decisión 2, categoría de manifiesto `decorator`). Mundo propio
-/// (`norte-decorator`), NO plegado en `norte-plugin` — mismo patrón que
+/// Decorates visible entries with a "git status"-like badge/role (ADR 0037
+/// decision 2, manifest category `decorator`). Its own world
+/// (`norte-decorator`), NOT folded into `norte-plugin` — same pattern as
 /// `provider`.
 interface decorator {
-    /// Qué clase de entrada es, tal como el host la listó (0.10.0, ADR
-    /// 0105). Un decorador de ICONOS lo necesita: un nombre no dice si es
-    /// una carpeta, y `/bcds` sin icono al lado de `main.rs` con el suyo era
-    /// la queja. `other` = dispositivo, socket, o una clase de protocolo
-    /// futuro: el guest la trata como fichero.
+    /// What class of entry it is, as the host listed it (0.10.0, ADR
+    /// 0105). An ICON decorator needs it: a name does not say whether it
+    /// is a folder, and `/bcds` with no icon next to `main.rs` with its own
+    /// was the complaint. `other` = device, socket, or a future protocol
+    /// class: the guest treats it as a file.
     enum entry-kind {
         file,
         dir,
@@ -210,60 +211,60 @@ interface decorator {
         other,
     }
 
-    /// Una entrada de la página: su nombre crudo (regla 1: bytes, jamás
-    /// `string`) y su clase.
+    /// A page entry: its raw name (rule 1: bytes, never
+    /// `string`) and its class.
     record entry {
         name: list<u8>,
         kind: entry-kind,
     }
 
-    /// `badge` = texto corto (el HOST lo acota a 8 chars TRAS enmascarar,
-    /// ADR 0037 tabla de decisión 1; este WIT no impone esa longitud) o
-    /// `none` = sin badge para esa entrada. `role` = nombre semántico
-    /// (validado host-side contra `Role::REQUESTABLE`, igual que
-    /// `span::role`). En qué HUECO de la
-    /// fila se pinta —icono a la izquierda del nombre, o insignia a la
-    /// derecha— lo dice el manifiesto (`[[contributions.decorator]] slot`),
-    /// no el guest: es una decisión de pantalla, no de dato.
+    /// `badge` = short text (the HOST caps it at 8 chars AFTER masking,
+    /// ADR 0037 decision table 1; this WIT does not impose that length) or
+    /// `none` = no badge for that entry. `role` = semantic name
+    /// (validated host-side against `Role::REQUESTABLE`, same as
+    /// `span::role`). Which SLOT of the
+    /// row it is painted in — icon to the left of the name, or badge to the
+    /// right — is decided by the manifest (`[[contributions.decorator]] slot`),
+    /// not the guest: it is a screen decision, not a data one.
     record decoration {
         badge: option<string>,
         role: option<string>,
     }
 
-    /// `entries` = las entradas de la página VISIBLE actual, en el orden en
-    /// que el host la lista. El resultado es POSICIONAL 1:1 con `entries` —
-    /// el host jamás reordena ni dispersa (ADR 0037 tabla de decisión 1):
-    /// `result[i]` decora `entries[i]`. Llamado en lote por página, nunca
-    /// por entrada.
+    /// `entries` = the entries of the current VISIBLE page, in the order the
+    /// host lists it. The result is POSITIONAL 1:1 with `entries` —
+    /// the host never reorders nor sparses it (ADR 0037 decision table 1):
+    /// `result[i]` decorates `entries[i]`. Called in a batch per page, never
+    /// per entry.
     decorate: func(entries: list<entry>) -> list<decoration>;
 }
 
-/// Aporta valores computados para UNA columna del listado (ADR 0037 decisión
-/// 2, categoría de manifiesto `columns`). Mundo propio (`norte-columns`).
+/// Contributes computed values for ONE listing column (ADR 0037 decision
+/// 2, manifest category `columns`). Its own world (`norte-columns`).
 interface columns {
-    /// `id` identifica la columna (el manifiesto declara sus columnas
-    /// aportadas; el host pasa el id de la que está pintando). `entries` =
-    /// mismo contrato posicional que `decorator::decorate`. Cada celda es
-    /// `option<string>`: `none` = "esta columna no aplica a esta entrada"
-    /// (p. ej. "duración" sobre un fichero que no es media), distinguible de
-    /// un valor real vacío — NUNCA se omite del vector, siempre 1:1 con
+    /// `id` identifies the column (the manifest declares its contributed
+    /// columns; the host passes the id of the one it is painting). `entries` =
+    /// same positional contract as `decorator::decorate`. Each cell is
+    /// `option<string>`: `none` = "this column does not apply to this entry"
+    /// (e.g. "duration" over a file that is not media), distinguishable from
+    /// an actual empty value — NEVER omitted from the vector, always 1:1 with
     /// `entries`.
     ///
-    /// `location` (0.8.0) es el token OPACO de la ubicación que se está
-    /// listando, para un guest al que se le aprobó la capacidad `location`;
-    /// `none` = no se le aprobó, o el host no pudo abrir el directorio. Un
-    /// guest que reciba `none` tiene que seguir contestando —con celdas
-    /// `none`— en vez de fallar: la columna se queda vacía, el panel no.
-    /// La ubicación que el host abrió para esta llamada: el token opaco con
-    /// el que se lee, y el `prefix` —relativo a esa raíz— del directorio que
-    /// se está listando.
+    /// `location` (0.8.0) is the OPAQUE token of the location being
+    /// listed, for a guest approved for the `location` capability;
+    /// `none` = it was not approved, or the host could not open the directory. A
+    /// guest that receives `none` still has to keep answering — with `none`
+    /// cells — instead of failing: the column stays empty, not the panel.
+    /// The location the host opened for this call: the opaque token used
+    /// to read it, and the `prefix` — relative to that root — of the directory
+    /// being listed.
     ///
-    /// Los dos hacen falta porque la raíz NO tiene por qué ser el directorio
-    /// visible: un plugin puede declarar en su manifiesto un `marcador` de
-    /// raíz de proyecto (`.git`, por ejemplo) y entonces el host abre el
-    /// ANCESTRO que lo contiene. Sin `prefix`, el guest no sabría qué parte
-    /// de esa raíz está mirando el usuario; con él, no necesita —ni puede—
-    /// subir por su cuenta.
+    /// Both are needed because the root does NOT have to be the visible
+    /// directory: a plugin can declare a project-root `marker` in its
+    /// manifest (`.git`, for example) and then the host opens the
+    /// nearest ANCESTOR that contains it. Without `prefix`, the guest would
+    /// not know which part of that root the user is looking at; with it, it
+    /// neither needs to — nor can — go up on its own.
     record location-ref {
         token: string,
         prefix: list<u8>,
@@ -273,10 +274,10 @@ interface columns {
                         entries: list<list<u8>>) -> list<option<string>>;
 }
 
-/// El world que un plugin de norte implementa. Un plugin concreto exporta las
-/// interfaces de su categoría; en M4-P2 el world exige AMBAS (`previewer` y
-/// `command`) — un guest de una sola categoría implementa la otra como
-/// no-soportada. Worlds por-categoría = deuda P2b.
+/// The world a norte plugin implements. A specific plugin exports the
+/// interfaces of its category; in M4-P2 the world requires BOTH (`previewer`
+/// and `command`) — a guest of a single category implements the other as
+/// not-supported. Per-category worlds = P2b debt.
 world norte-plugin {
     import norte:host/host-log@0.1.0;
     import norte:host/host-config@0.1.0;
@@ -284,9 +285,9 @@ world norte-plugin {
     export command;
 }
 
-/// World de un plugin-decorator (ADR 0037 decisión 2): expone `decorator` e
-/// importa `host-log`/`host-config`. Separado de `norte-plugin` y de
-/// `norte-provider` — un guest decorator no implementa previewer/command/
+/// World of a plugin-decorator (ADR 0037 decision 2): exposes `decorator` and
+/// imports `host-log`/`host-config`. Separate from `norte-plugin` and
+/// `norte-provider` — a decorator guest does not implement previewer/command/
 /// provider.
 world norte-decorator {
     import norte:host/host-log@0.1.0;
@@ -294,15 +295,16 @@ world norte-decorator {
     export decorator;
 }
 
-/// World de un plugin-columns (ADR 0037 decisión 2): expone `columns` e
-/// importa `host-log`/`host-config`. Mismo patrón que `norte-decorator`.
+/// World of a plugin-columns (ADR 0037 decision 2): exposes `columns` and
+/// imports `host-log`/`host-config`. Same pattern as `norte-decorator`.
 world norte-columns {
     import norte:host/host-log@0.1.0;
     import norte:host/host-config@0.1.0;
-    // Importado SIEMPRE: el linker del host ofrece la interfaz a todo guest de
-    // columnas, y lo que decide si SIRVE algo es la capacidad aprobada del
-    // manifiesto (un token `none`, o un error por token desconocido). Un
-    // import de más en el linker nunca rompe nada; uno no resuelto sí.
+    // ALWAYS imported: the host's linker offers the interface to every columns
+    // guest, and what decides whether it SERVES anything is the manifest's
+    // approved capability (a `none` token, or an unknown-token error). An
+    // extra import in the linker never breaks anything; an unresolved one
+    // does.
     import norte:location/location@0.2.0;
     export columns;
 }

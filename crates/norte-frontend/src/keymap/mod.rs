@@ -1,16 +1,16 @@
-//! Motor de keymap PURO compartido por los frontends (ADR 0006/0007/0043/0044):
-//! mapa `(contexto, secuencia) → comando`, capas estilo Yazi, prefix-free
-//! validado al cargar — la resolución es un scan lineal determinista sobre el
-//! efectivo (≤ centenas de bindings), sin timeouts. Tecla NEUTRA (sin
-//! crossterm/gpui): cada frontend convierte su evento nativo a [`Chord`] con
-//! [`Chord::new`].
+//! PURE keymap engine shared by the frontends (ADR 0006/0007/0043/0044): a
+//! `(context, sequence) -> command` map, Yazi-style layers, prefix-free
+//! validated at load time — resolution is a deterministic linear scan over
+//! the effective map (at most a few hundred bindings), no timeouts. NEUTRAL
+//! key (no crossterm/gpui): each frontend converts its native event to
+//! [`Chord`] with [`Chord::new`].
 //!
-//! ADR 0044 añade el prefijo numérico (`5j`) y las dos reglas de carga que lo
-//! acompañan: el contador viaja CON el comando ([`Count`]) y es el frontend
-//! quien repite el despacho, así que ninguna firma de comando cambia; un
-//! dígito 1-9 no puede ser binding con contadores activos, y `Tab` está
-//! reservada a `pane.switch` en Browse (la regla mira el PRIMER acorde de la
-//! secuencia).
+//! ADR 0044 adds the numeric prefix (`5j`) and the two load rules that come
+//! with it: the count travels WITH the command ([`Count`]) and it is the
+//! frontend that repeats the dispatch, so no command signature changes; a
+//! digit 1-9 cannot be a binding while counts are enabled, and `Tab` is
+//! reserved for `pane.switch` in Browse (the rule looks at the FIRST chord
+//! of the sequence).
 
 pub mod catalogue;
 mod chord;
@@ -40,122 +40,123 @@ pub use resolve::{Count, Resolution, Resolver};
 
 use layer::RawSection;
 
-/// Error de carga o parseo de un keymap. Diagnóstico SIEMPRE accionable:
-/// la config rota es un error claro, jamás comportamiento raro.
+/// A keymap load or parse error. ALWAYS an actionable diagnostic: broken
+/// config is a clear error, never odd behavior.
 #[derive(Debug, thiserror::Error)]
 pub enum KeymapError {
-    /// El TOML no parsea o tiene claves desconocidas.
-    #[error("keymap.toml inválido: {0}")]
+    /// The TOML does not parse or has unknown keys.
+    #[error("invalid keymap.toml: {0}")]
     Toml(String),
-    /// Una tecla no se entiende (`"megatecla"`, `"ctrl+"`, `"f99"`).
-    #[error("tecla inválida: {chord:?}")]
+    /// A key is not understood (`"megatecla"`, `"ctrl+"`, `"f99"`).
+    #[error("invalid key: {chord:?}")]
     BadChord {
-        /// El texto que no parseó.
+        /// The text that did not parse.
         chord: String,
     },
-    /// Un binding con secuencia vacía.
-    #[error("binding con secuencia vacía (run = {run:?})")]
+    /// A binding with an empty sequence.
+    #[error("binding with an empty sequence (run = {run:?})")]
     EmptySequence {
-        /// El comando del binding vacío.
+        /// The empty binding's command.
         run: String,
     },
-    /// El comando no existe (typo o versión vieja).
-    #[error("comando desconocido: {run:?}")]
+    /// The command does not exist (typo or old version).
+    #[error("unknown command: {run:?}")]
     UnknownCommand {
-        /// El nombre que no se reconoce.
+        /// The unrecognized name.
         run: String,
     },
-    /// `shift+<char>` jamás matchearía (el char YA codifica shift): se
-    /// rechaza con diagnóstico en vez de ser un binding muerto.
+    /// `shift+<char>` would never match (the char ALREADY encodes shift):
+    /// rejected with a diagnostic instead of being a dead binding.
     #[error(
-        "{chord:?}: shift no se combina con caracteres — escribe la tecla ya «shifteada» (\"G\", \"plus\")"
+        "{chord:?}: shift does not combine with characters — write the key already \"shifted\" (\"G\", \"plus\")"
     )]
     ShiftWithChar {
-        /// El texto ofensor.
+        /// The offending text.
         chord: String,
     },
-    /// La capa trae la lista equivocada: un preset define `keymap`; la capa
-    /// de usuario define `prepend_keymap`/`append_keymap` (modelo Yazi).
-    /// Ignorarlo en silencio sería config rota sin error.
-    #[error("la capa {layer} no admite {key} (preset: keymap; usuario: prepend/append)")]
+    /// The layer carries the wrong list: a preset defines `keymap`; a user
+    /// layer defines `prepend_keymap`/`append_keymap` (Yazi model). Silently
+    /// ignoring it would be broken config with no error.
+    #[error("the {layer} layer does not accept {key} (preset: keymap; usuario: prepend/append)")]
     WrongLayerKey {
-        /// `"preset"` o `"usuario"`.
+        /// `"preset"` or `"usuario"`.
         layer: &'static str,
-        /// La clave que sobra.
+        /// The extra key.
         key: &'static str,
     },
-    /// `dialog_from` y una sección `[dialog]` propia a la vez (K2b): dos
-    /// respuestas a la misma pregunta, y elegir una en silencio dejaría al
-    /// usuario con un contexto de overlays que no escribió.
-    #[error("dialog_from = {name:?} junto a un [dialog] {list} propio: elige una de las dos")]
+    /// `dialog_from` and an own `[dialog]` section at once (K2b): two
+    /// answers to the same question, and silently picking one would leave
+    /// the user with an overlay context they did not write.
+    #[error("dialog_from = {name:?} together with its own [dialog] {list}: pick one of the two")]
     DialogFromAndDialog {
-        /// El preset que se pretendía heredar.
+        /// The preset it meant to inherit from.
         name: String,
-        /// Cuál de las tres listas de la sección lo desencadenó — sin esto el
-        /// mensaje manda a buscar un `keymap` que quizá no existe.
+        /// Which of the section's three lists triggered it — without this
+        /// the message sends the reader looking for a `keymap` that may not
+        /// exist.
         list: &'static str,
     },
-    /// `dialog_from` nombra algo que no es un preset de fábrica (typo, o un
-    /// preset de otra versión).
-    #[error("dialog_from = {name:?}: no hay ningún preset de fábrica con ese nombre ({known})")]
+    /// `dialog_from` names something that is not a factory preset (typo, or
+    /// a preset from another version).
+    #[error("dialog_from = {name:?}: no factory preset has that name ({known})")]
     UnknownDialogFrom {
-        /// El nombre que no resuelve.
+        /// The name that does not resolve.
         name: String,
-        /// Los que sí, separados por comas (viene de `presets::NAMES`).
+        /// The ones that do, comma-separated (comes from `presets::NAMES`).
         known: String,
     },
-    /// El preset heredado hereda a su vez: la herencia es de UN nivel, sin
-    /// cadenas — si no, el `[dialog]` efectivo depende de un salto que no se
-    /// ve leyendo el fichero.
+    /// The inherited preset itself inherits: inheritance is ONE level, no
+    /// chains — otherwise the effective `[dialog]` would depend on a hop
+    /// invisible from reading the file.
     #[error(
-        "dialog_from = {name:?}, pero ese preset hereda a su vez de {then:?}: la herencia de [dialog] es de un solo nivel"
+        "dialog_from = {name:?}, but that preset in turn inherits from {then:?}: [dialog] inheritance is one level only"
     )]
     DialogFromChain {
-        /// El preset nombrado por el fichero que se está cargando.
+        /// The preset named by the file being loaded.
         name: String,
-        /// A quién hereda ESE, que es lo que cierra la cadena.
+        /// Who THAT one inherits from, which is what closes the chain.
         then: String,
     },
-    /// `esc` dentro de una secuencia multi-tecla: inalcanzable, porque
-    /// `Esc` SIEMPRE cancela un pendiente (solo vale como binding suelto).
-    #[error("esc solo puede ligarse como tecla suelta, no dentro de {sequence:?}")]
+    /// `esc` inside a multi-key sequence: unreachable, because `Esc` ALWAYS
+    /// cancels a pending one (only valid as a lone binding).
+    #[error("esc can only be bound as a lone key, not inside {sequence:?}")]
     EscInSequence {
-        /// La secuencia ofensora.
+        /// The offending sequence.
         sequence: String,
     },
-    /// Una secuencia es prefijo estricto de otra: prohibido (ADR 0006 —
-    /// sin timeouts, la resolución debe ser determinista).
-    #[error("secuencias ambiguas: {shorter:?} es prefijo de {longer:?}")]
+    /// A sequence is a strict prefix of another: forbidden (ADR 0006 — with
+    /// no timeouts, resolution must be deterministic).
+    #[error("ambiguous sequences: {shorter:?} is a prefix of {longer:?}")]
     AmbiguousPrefix {
-        /// La secuencia corta (la que se dispararía siempre).
+        /// The short sequence (the one that would always fire).
         shorter: String,
-        /// La secuencia larga (la inalcanzable).
+        /// The long sequence (the unreachable one).
         longer: String,
     },
-    /// Un dígito abre la secuencia de un binding en un contexto cuyo preset
-    /// habilita los contadores numéricos (K2a). Las dos cosas no pueden ser
-    /// ciertas a la vez, y elegir en silencio por el usuario es como un
-    /// keymap se vuelve impredecible. El `0` está exento: un contador jamás
-    /// empieza por cero, así que nunca se disputan la tecla.
+    /// A digit opens a binding's sequence in a context whose preset enables
+    /// numeric counts (K2a). The two things cannot both be true, and
+    /// silently picking one for the user is how a keymap becomes
+    /// unpredictable. `0` is exempt: a count never starts with zero, so the
+    /// two never compete for the key.
     #[error(
-        "{chord:?} no puede ser tecla y contador a la vez: está ligada a {run:?} y el preset activa contadores (el 0 sí es ligable)"
+        "{chord:?} cannot be a key and a count at once: it is bound to {run:?} and the preset enables counts (0 is bindable)"
     )]
     DigitBoundWithCounts {
-        /// El chord ofensor, tal y como se escribe.
+        /// The offending chord, as written.
         chord: String,
-        /// A qué está ligado.
+        /// What it is bound to.
         run: String,
     },
-    /// Un binding toma una tecla que la especificación reserva (§12: `Tab`
-    /// cambia de panel). Un preset que imita a otro programa DOCUMENTA la
-    /// diferencia; no se queda con la tecla.
-    #[error("{chord:?} está reservada para {reserved_for} (spec §12) y no puede ligarse a {run:?}")]
+    /// A binding takes a key the specification reserves (§12: `Tab` switches
+    /// panes). A preset imitating another program DOCUMENTS the difference;
+    /// it does not keep the key.
+    #[error("{chord:?} is reserved for {reserved_for} (spec §12) and cannot be bound to {run:?}")]
     SacredKey {
-        /// El chord reservado, tal y como se escribe.
+        /// The reserved chord, as written.
         chord: String,
-        /// El comando para el que está reservado.
+        /// The command it is reserved for.
         reserved_for: &'static str,
-        /// Lo que el binding ofensor intentaba ejecutar en su lugar.
+        /// What the offending binding tried to run instead.
         run: String,
     },
 }
@@ -259,10 +260,11 @@ pub fn unavailable_message(command: &str, why: Availability) -> String {
     unavailable_message_in(command, why, norte_i18n::active())
 }
 
-/// [`unavailable_message`] en un idioma DADO.
+/// [`unavailable_message`] in a GIVEN language.
 ///
-/// La barra de estado de la ventana cambiaba de idioma según qué mensaje le
-/// tocara: los suyos salen con el del host y éste salía con el del proceso.
+/// The window's status bar used to change language depending on which
+/// message it got: its own come out in the host's, and this one came out
+/// in the process's.
 #[must_use]
 pub fn unavailable_message_in(command: &str, why: Availability, lang: norte_i18n::Lang) -> String {
     match why {
@@ -367,14 +369,14 @@ mod preset_commands_tests {
     /// Orthodox binds `app.quit` in `[global]` (ADR 0006: global merges
     /// into every screen), so `Browse` must see it.
     #[test]
-    fn orthodox_browse_contiene_app_quit() {
+    fn orthodox_browse_contains_app_quit() {
         let v = preset_commands(Screen::Browse);
         assert!(v.contains(&"app.quit".to_owned()), "{v:?}");
     }
 
     /// Every bundled preset binds `y` to `dialog.approve` in `[dialog]`.
     #[test]
-    fn dialog_contiene_dialog_approve() {
+    fn dialog_contains_dialog_approve() {
         let v = preset_commands(Screen::Dialog);
         assert!(v.contains(&"dialog.approve".to_owned()), "{v:?}");
     }
@@ -385,7 +387,7 @@ mod tests {
     use super::*;
 
     fn eff(preset: &str, user: Option<&str>) -> Result<Effective, KeymapError> {
-        const COMANDOS: &[&str] = &[
+        const COMMANDS: &[&str] = &[
             "app.quit",
             "pane.switch",
             "cursor.up",
@@ -396,7 +398,7 @@ mod tests {
         ];
         let preset = parse_keymap(preset)?;
         let user = user.map(parse_keymap).transpose()?;
-        Effective::build(&preset, user.as_ref(), COMANDOS)
+        Effective::build(&preset, user.as_ref(), COMMANDS)
     }
 
     /// A `Resolution::Run` with NO count — what every assertion written before
@@ -434,7 +436,7 @@ mod tests {
                 KeyCode::Enter
             )
         );
-        // Mayúscula: el char YA codifica shift.
+        // Uppercase: the char ALREADY encodes shift.
         assert_eq!(
             parse_chord("G").unwrap(),
             Chord::new(Mods::default(), KeyCode::Char('G'))
@@ -450,7 +452,7 @@ mod tests {
             )
         );
         for s in ["", "ctrl+", "megatecla", "ctrl+ctrl+c", "f99"] {
-            assert!(parse_chord(s).is_err(), "{s:?} debe fallar");
+            assert!(parse_chord(s).is_err(), "{s:?} must fail");
         }
     }
 
@@ -478,8 +480,8 @@ mod tests {
                 KeyCode::Char('+')
             )
         );
-        // …y bajo los modificadores nuevos igual: `plus` sigue siendo la
-        // única grafía, el separador no cambia de significado.
+        // …and under the new modifiers too: `plus` is still the only
+        // spelling, the separator does not change meaning.
         assert_eq!(
             parse_chord("cmd+plus").unwrap(),
             Chord::new(
@@ -493,7 +495,7 @@ mod tests {
         assert_eq!(
             parse_chord("mod+plus").unwrap(),
             parse_chord("ctrl+plus").unwrap(),
-            "la política por defecto es Ctrl"
+            "the default policy is Ctrl"
         );
         assert!(matches!(
             parse_chord("cmd++"),
@@ -560,17 +562,18 @@ mod tests {
             parse_chord("cmd+cmd+x"),
             Err(KeymapError::BadChord { .. })
         ));
-        // rust-reviewer MINOR-10: `cmd`+`mod` se rechaza SIEMPRE, no solo
-        // bajo la política Cmd (donde sería la misma tecla dos veces). Este
-        // test pinaba antes lo contrario —«legal bajo la política por
-        // defecto»— y eso hacía que la validez de un chord dependiera del
-        // sistema operativo: cargaba en Linux y reventaba en macOS, que es la
-        // asimetría que la decisión 8 del ADR 0043 dice evitar.
+        // rust-reviewer MINOR-10: `cmd`+`mod` is ALWAYS rejected, not only
+        // under the Cmd policy (where it would be the same key twice). This
+        // test used to pin the opposite — "legal under the default policy"
+        // — and that made a chord's validity depend on the operating
+        // system: it loaded on Linux and blew up on macOS, which is the
+        // asymmetry ADR 0043's decision 8 says to avoid.
         assert!(matches!(
             parse_chord("cmd+mod+x"),
             Err(KeymapError::BadChord { .. })
         ));
-        // Y el orden no importa: es la combinación lo que se rechaza.
+        // And the order does not matter: it is the combination that is
+        // rejected.
         assert!(matches!(
             parse_chord("mod+cmd+x"),
             Err(KeymapError::BadChord { .. })
@@ -670,10 +673,9 @@ mod tests {
 
     #[test]
     fn chord_new_normaliza_shift_en_chars_pero_no_en_otras_teclas() {
-        // Un evento nativo con Char('G')+shift: el chord canónico descarta
-        // shift (el char ya lo codifica) — paridad con el viejo
-        // `Chord::from_event` de la TUI (ahora el comportamiento por
-        // defecto de `Chord::new`).
+        // A native event with Char('G')+shift: the canonical chord drops
+        // shift (the char already encodes it) — parity with the TUI's old
+        // `Chord::from_event` (now `Chord::new`'s default behavior).
         let c = Chord::new(
             Mods {
                 shift: true,
@@ -682,7 +684,7 @@ mod tests {
             KeyCode::Char('G'),
         );
         assert_eq!(c, Chord::new(Mods::default(), KeyCode::Char('G')));
-        // En teclas no-char, shift ES información.
+        // On non-char keys, shift IS information.
         let f = Chord::new(
             Mods {
                 shift: true,
@@ -704,8 +706,8 @@ mod tests {
 
     #[test]
     fn parse_chord_rechaza_tokens_multi_codepoint_sin_partir() {
-        // Un token que NO es exactamente un char (é descompuesto = e+U+0301,
-        // o un emoji ZWJ) se rechaza limpio, jamás se trunca a medias.
+        // A token that is NOT exactly one char (decomposed é = e+U+0301, or
+        // a ZWJ emoji) is cleanly rejected, never truncated halfway.
         assert!(matches!(
             parse_chord("e\u{0301}"),
             Err(KeymapError::BadChord { .. })
@@ -732,17 +734,17 @@ mod tests {
         assert_eq!(
             r.push(parse_chord("g").unwrap()),
             Resolution::Pending(1),
-            "prefijo válido: espera"
+            "valid prefix: waits"
         );
         assert_eq!(r.push(parse_chord("g").unwrap()), run("cursor.top"));
-        // Tras ejecutar, el estado queda limpio.
+        // After running, the state is clean.
         assert_eq!(r.push(parse_chord("G").unwrap()), run("cursor.bottom"));
-        // Tecla sin binding: reset silencioso.
+        // Key with no binding: silent reset.
         assert_eq!(r.push(parse_chord("z").unwrap()), Resolution::Reset);
-        // Prefijo pendiente + tecla que no continúa: reset (no ejecuta nada).
+        // Pending prefix + a key that does not continue it: reset (runs nothing).
         r.push(parse_chord("g").unwrap());
         assert_eq!(r.push(parse_chord("q").unwrap()), Resolution::Reset);
-        // q suelto (contexto global) sí corre.
+        // A lone q (global context) does run.
         assert_eq!(r.push(parse_chord("q").unwrap()), run("app.quit"));
     }
 
@@ -758,9 +760,9 @@ mod tests {
         let eff = eff(preset, None).unwrap();
         let mut r = Resolver::new(eff.clone());
         r.push(parse_chord("g").unwrap());
-        // Con secuencia pendiente, Esc SIEMPRE cancela (jamás ejecuta binding).
+        // With a pending sequence, Esc ALWAYS cancels (never runs a binding).
         assert_eq!(r.push(parse_chord("esc").unwrap()), Resolution::Reset);
-        // Sin pendiente, Esc es una tecla más.
+        // With nothing pending, Esc is just another key.
         assert_eq!(r.push(parse_chord("esc").unwrap()), run("app.quit"));
     }
 
@@ -775,26 +777,26 @@ mod tests {
         "#;
         match eff(preset, None) {
             Err(KeymapError::AmbiguousPrefix { .. }) => {}
-            other => panic!("esperaba AmbiguousPrefix, fue {other:?}"),
+            other => panic!("expected AmbiguousPrefix, got {other:?}"),
         }
     }
 
     #[test]
     fn shift_con_char_es_error_diagnosticable() {
-        // Un binding "shift+g" jamás matchearía (el chord canónico descarta
-        // shift en chars): rechazo al parsear, no binding muerto.
+        // A "shift+g" binding would never match (the canonical chord drops
+        // shift on chars): rejected at parse time, not a dead binding.
         match parse_chord("shift+g") {
             Err(KeymapError::ShiftWithChar { .. }) => {}
-            other => panic!("esperaba ShiftWithChar, fue {other:?}"),
+            other => panic!("expected ShiftWithChar, got {other:?}"),
         }
         assert!(parse_chord("ctrl+shift+c").is_err());
-        // En teclas no-char, shift es legítimo.
+        // On non-char keys, shift is legitimate.
         assert!(parse_chord("shift+f5").is_ok());
     }
 
     #[test]
     fn lista_equivocada_en_una_capa_es_error() {
-        // Usuario con `keymap` (en vez de prepend/append): error, no silencio.
+        // User with `keymap` (instead of prepend/append): an error, not silence.
         let preset = r#"
             [pane]
             keymap = [{ on = ["j"], run = "cursor.down" }]
@@ -807,26 +809,26 @@ mod tests {
             Err(KeymapError::WrongLayerKey {
                 layer: "usuario", ..
             }) => {}
-            other => panic!("esperaba WrongLayerKey usuario, fue {other:?}"),
+            other => panic!("expected WrongLayerKey usuario, got {other:?}"),
         }
-        // Preset con prepend: mismo trato.
-        let preset_malo = r#"
+        // Preset with prepend: same treatment.
+        let bad_preset = r#"
             [pane]
             prepend_keymap = [{ on = ["j"], run = "cursor.down" }]
         "#;
-        match eff(preset_malo, None) {
+        match eff(bad_preset, None) {
             Err(KeymapError::WrongLayerKey {
                 layer: "preset", ..
             }) => {}
-            other => panic!("esperaba WrongLayerKey preset, fue {other:?}"),
+            other => panic!("expected WrongLayerKey preset, got {other:?}"),
         }
     }
 
     #[test]
     fn la_especificidad_de_contexto_prevalece_sobre_la_capa() {
-        // ADR 0006 (desambiguado en fase 4): las capas se fusionan POR
-        // contexto; entre contextos gana el específico. Un append de usuario
-        // en [pane] pisa al keymap [global] del preset…
+        // ADR 0006 (disambiguated in phase 4): layers merge PER context;
+        // between contexts the specific one wins. A user append in [pane]
+        // beats the preset's [global] keymap…
         let preset = r#"
             [global]
             keymap = [{ on = ["q"], run = "app.quit" }]
@@ -844,13 +846,13 @@ mod tests {
         assert_eq!(
             r.push(parse_chord("q").unwrap()),
             run("cursor.up"),
-            "pane.append gana a global.keymap (especificidad > capa)"
+            "pane.append beats global.keymap (specificity > layer)"
         );
-        // …y un prepend de usuario en [global] NO pisa al keymap [pane].
+        // …and a user prepend in [global] does NOT beat the [pane] keymap.
         assert_eq!(
             r.push(parse_chord("j").unwrap()),
             run("cursor.down"),
-            "global.prepend no pisa a pane.keymap"
+            "global.prepend does not beat pane.keymap"
         );
     }
 
@@ -862,7 +864,7 @@ mod tests {
         "#;
         match eff(preset, None) {
             Err(KeymapError::EscInSequence { .. }) => {}
-            other => panic!("esperaba EscInSequence, fue {other:?}"),
+            other => panic!("expected EscInSequence, got {other:?}"),
         }
     }
 
@@ -874,17 +876,17 @@ mod tests {
         "#;
         match eff(preset, None) {
             Err(KeymapError::UnknownCommand { .. }) => {}
-            other => panic!("esperaba UnknownCommand, fue {other:?}"),
+            other => panic!("expected UnknownCommand, got {other:?}"),
         }
     }
 
-    /// M4 Lua (T8, espejado): un binding a `lua:<nombre>` pasa la validación
-    /// aunque el nombre no esté en `known_commands` — el registro Lua es
-    /// dinámico (runtime); un comando lua no registrado NO es error de
-    /// keymap. El NOMBRE sí se valida con el mismo charset que
-    /// `norte.command` (`[a-z0-9._-]{1,64}`): un binding a un nombre que
-    /// jamás podría registrarse es config rota diagnosticable, no un binding
-    /// muerto en silencio.
+    /// M4 Lua (T8, mirrored): a binding to `lua:<name>` passes validation
+    /// even when the name is not in `known_commands` — the Lua registry is
+    /// dynamic (runtime); an unregistered lua command is NOT a keymap
+    /// error. The NAME itself IS validated with the same charset as
+    /// `norte.command` (`[a-z0-9._-]{1,64}`): a binding to a name that
+    /// could never register is diagnosable broken config, not a silently
+    /// dead binding.
     #[test]
     fn lua_prefijado_pasa_la_validacion_de_comandos() {
         let preset = r#"
@@ -892,31 +894,31 @@ mod tests {
             keymap = [{ on = ["x"], run = "lua:mi-comando.v2" }]
         "#;
         let kf = parse_keymap(preset).unwrap();
-        let con_host =
-            Effective::build(&kf, None, &[LUA_HOST]).expect("lua: con nombre válido pasa");
-        let mut r = Resolver::new(con_host);
+        let with_host =
+            Effective::build(&kf, None, &[LUA_HOST]).expect("lua: with a valid name passes");
+        let mut r = Resolver::new(with_host);
         assert_eq!(
             r.push(parse_chord("x").unwrap()),
             run("lua:mi-comando.v2"),
-            "el binding resuelve al comando lua: completo"
+            "the binding resolves to the whole lua: command"
         );
 
-        // ADR 0110: el mismo binding en un frontend SIN host de Lua valida
-        // igual, pero no se anuncia como ejecutable.
-        let sin_host = eff(preset, None).expect("sin host también carga");
-        let mut r = Resolver::new(sin_host);
+        // ADR 0110: the same binding in a frontend WITHOUT a Lua host
+        // validates the same way, but is not announced as runnable.
+        let without_host = eff(preset, None).expect("without a host it still loads");
+        let mut r = Resolver::new(without_host);
         assert_eq!(
             r.push(parse_chord("x").unwrap()),
             Resolution::Unavailable {
                 command: "lua:mi-comando.v2".to_owned(),
                 why: Availability::NotHere,
             },
-            "sin LUA_HOST la tecla dice que aquí no está"
+            "with no LUA_HOST the key says it is not here"
         );
 
-        // Nombres fuera del charset [a-z0-9._-]{1,64}: error de CARGA.
-        let largo = format!("lua:{}", "a".repeat(65));
-        for bad in ["lua:", "lua:Mayuscula", "lua:con espacio", largo.as_str()] {
+        // Names outside the [a-z0-9._-]{1,64} charset: a LOAD error.
+        let long = format!("lua:{}", "a".repeat(65));
+        for bad in ["lua:", "lua:Mayuscula", "lua:con espacio", long.as_str()] {
             let preset = format!(
                 r#"
                 [pane]
@@ -925,7 +927,7 @@ mod tests {
             );
             match eff(&preset, None) {
                 Err(KeymapError::UnknownCommand { .. }) => {}
-                other => panic!("esperaba UnknownCommand para {bad:?}, fue {other:?}"),
+                other => panic!("expected UnknownCommand for {bad:?}, got {other:?}"),
             }
         }
     }
@@ -952,17 +954,17 @@ mod tests {
         assert_eq!(
             r.push(parse_chord("j").unwrap()),
             run("cursor.top"),
-            "prepend PISA al preset"
+            "prepend BEATS the preset"
         );
         assert_eq!(
             r.push(parse_chord("k").unwrap()),
             run("cursor.up"),
-            "append NO pisa una secuencia existente"
+            "append does NOT beat an existing sequence"
         );
         assert_eq!(
             r.push(parse_chord("x").unwrap()),
             run("app.quit"),
-            "append añade lo nuevo"
+            "append adds the new one"
         );
     }
 
@@ -985,7 +987,7 @@ mod tests {
 
     #[test]
     fn capas_multiples_se_pliegan_por_precedencia() {
-        // Capas en precedencia ASCENDENTE: sistema, usuario.
+        // Layers in ASCENDING precedence: system, user.
         const COMANDOS: &[&str] = &[
             "app.quit",
             "cursor.up",
@@ -993,7 +995,7 @@ mod tests {
             "cursor.top",
             "cursor.bottom",
         ];
-        // ADR 0007: prepends de capas superiores primero; appends igual.
+        // ADR 0007: higher layers' prepends first; same for appends.
         let preset = parse_keymap(
             r#"
             [pane]
@@ -1001,7 +1003,7 @@ mod tests {
         "#,
         )
         .unwrap();
-        let sistema = parse_keymap(
+        let system = parse_keymap(
             r#"
             [pane]
             prepend_keymap = [{ on = ["j"], run = "cursor.up" }]
@@ -1009,7 +1011,7 @@ mod tests {
         "#,
         )
         .unwrap();
-        let usuario = parse_keymap(
+        let user = parse_keymap(
             r#"
             [pane]
             prepend_keymap = [{ on = ["j"], run = "cursor.top" }]
@@ -1017,17 +1019,17 @@ mod tests {
         "#,
         )
         .unwrap();
-        let eff = Effective::build_layered(&preset, &[sistema, usuario], COMANDOS).unwrap();
+        let eff = Effective::build_layered(&preset, &[system, user], COMANDOS).unwrap();
         let mut r = Resolver::new(eff);
         assert_eq!(
             r.push(parse_chord("j").unwrap()),
             run("cursor.top"),
-            "el prepend de la capa MÁS alta gana"
+            "the HIGHEST layer's prepend wins"
         );
         assert_eq!(
             r.push(parse_chord("x").unwrap()),
             run("cursor.bottom"),
-            "entre appends también gana la capa más alta"
+            "among appends the highest layer wins too"
         );
     }
 
@@ -1045,22 +1047,22 @@ mod tests {
         "#,
         )
         .unwrap();
-        // En Browse, el q global manda y enter existe.
+        // In Browse, global's q rules and enter exists.
         let browse = Effective::build_for(&preset, &[], COMANDOS, Screen::Browse).unwrap();
         let mut r = Resolver::new(browse);
         assert_eq!(r.push(parse_chord("q").unwrap()), run("app.quit"));
         assert_eq!(r.push(parse_chord("enter").unwrap()), run("nav.enter"));
-        // En Viewer, su q específico PISA al global y enter NO existe.
+        // In Viewer, its specific q BEATS global's and enter does NOT exist.
         let viewer = Effective::build_for(&preset, &[], COMANDOS, Screen::Viewer).unwrap();
         let mut r = Resolver::new(viewer);
         assert_eq!(r.push(parse_chord("q").unwrap()), run("cursor.top"));
         assert_eq!(r.push(parse_chord("enter").unwrap()), Resolution::Reset);
     }
 
-    /// La ayuda se construye del keymap EFECTIVO: los bindings expuestos
-    /// reflejan preset + capas EN ORDEN de precedencia, y un binding
-    /// sombreado aparece UNA vez con el comando que gana (lo que la tecla
-    /// hace de verdad, no lo que el preset dice).
+    /// Help is built from the EFFECTIVE keymap: the exposed bindings
+    /// reflect preset + layers IN PRECEDENCE ORDER, and a shadowed binding
+    /// appears ONCE with the command that wins (what the key really does,
+    /// not what the preset says).
     #[test]
     fn bindings_expuestos_reflejan_las_capas() {
         const COMANDOS: &[&str] = &["cursor.down", "cursor.up", "cursor.top"];
@@ -1084,31 +1086,32 @@ mod tests {
         .unwrap();
         let eff = Effective::build_layered(&preset, std::slice::from_ref(&user), COMANDOS).unwrap();
         let b = eff.bindings();
-        // Sombreado: "j" UNA sola vez y gana el prepend del usuario.
-        let jotas: Vec<_> = b.iter().filter(|(seq, _)| seq == "j").collect();
-        assert_eq!(jotas.len(), 1, "binding sombreado duplicado: {b:?}");
-        assert_eq!(jotas[0].1, "cursor.top", "debe ganar la capa del usuario");
-        // Orden de precedencia: prepend del usuario antes que el preset.
+        // Shadowed: "j" appears ONCE and the user's prepend wins.
+        let js: Vec<_> = b.iter().filter(|(seq, _)| seq == "j").collect();
+        assert_eq!(js.len(), 1, "duplicated shadowed binding: {b:?}");
+        assert_eq!(js[0].1, "cursor.top", "the user layer must win");
+        // Precedence order: the user's prepend before the preset.
         let pos = |wanted: &str| b.iter().position(|(seq, _)| seq == wanted).unwrap();
-        assert!(pos("j") < pos("k"), "prepend antes que preset: {b:?}");
+        assert!(pos("j") < pos("k"), "prepend before preset: {b:?}");
         assert!(
             b.iter()
                 .any(|(seq, cmd)| seq == "g g" && *cmd == "cursor.top"),
-            "el append del usuario aparece en la ayuda: {b:?}"
+            "the user's append appears in the help: {b:?}"
         );
     }
 
-    /// ALTA (security review M4 Lua): `./.norte/keymap.toml` carga SIN trust,
-    /// así que un repo hostil podría rebindear una tecla común (`j`, `enter`)
-    /// a un comando `lua:` del init.lua de USUARIO (sin sandbox, sin
-    /// confirmación, con cwd = el repo hostil). Los bindings `lua:`
-    /// originados en la capa de PROYECTO se DESCARTAN (contados para el
-    /// aviso de barra); los rebinds de proyecto a builtins siguen
-    /// funcionando; el mismo binding en una capa de usuario SÍ resuelve.
+    /// HIGH (security review M4 Lua): `./.norte/keymap.toml` loads WITHOUT
+    /// trust, so a hostile repo could rebind a common key (`j`, `enter`) to
+    /// a `lua:` command from the USER's init.lua (no sandbox, no
+    /// confirmation, with cwd = the hostile repo). `lua:` bindings
+    /// originating in the PROJECT layer are DISCARDED (counted for the bar
+    /// warning); project rebinds to builtins keep working; the same
+    /// binding in a user layer DOES resolve.
     #[test]
     fn lua_de_keymap_de_proyecto_se_descarta_con_aviso() {
-        // Un frontend que HOSPEDA Lua (ADR 0110): sin `LUA_HOST`, el binding
-        // de usuario se diría no disponible y este test no probaría el descarte.
+        // A frontend that HOSTS Lua (ADR 0110): with no `LUA_HOST`, the
+        // user binding would say it is not available and this test would
+        // not prove the discard.
         const COMANDOS: &[&str] = &["cursor.down", "cursor.up", LUA_HOST];
         let preset = parse_keymap(
             r#"
@@ -1117,58 +1120,57 @@ mod tests {
         "#,
         )
         .unwrap();
-        let capa = r#"
+        let layer = r#"
             [pane]
             prepend_keymap = [{ on = ["j"], run = "lua:pwn" }]
         "#;
 
-        // Capa de PROYECTO: el binding lua: se descarta — la tecla cae al
-        // builtin del preset — y queda contado para el aviso.
-        let mut proyecto = parse_keymap(capa).unwrap();
-        proyecto.mark_project();
-        let eff = Effective::build_layered(&preset, std::slice::from_ref(&proyecto), COMANDOS)
-            .expect("descartar no es error de carga");
-        assert_eq!(eff.discarded_lua_bindings(), 1, "contado para el aviso");
+        // PROJECT layer: the lua: binding is discarded — the key falls
+        // back to the preset's builtin — and is counted for the warning.
+        let mut project = parse_keymap(layer).unwrap();
+        project.mark_project();
+        let eff = Effective::build_layered(&preset, std::slice::from_ref(&project), COMANDOS)
+            .expect("discarding is not a load error");
+        assert_eq!(eff.discarded_lua_bindings(), 1, "counted for the warning");
         let mut r = Resolver::new(eff);
         assert_eq!(
             r.push(parse_chord("j").unwrap()),
             run("cursor.down"),
-            "la tecla cae al builtin, jamás al lua: del proyecto"
+            "the key falls back to the builtin, never to the project's lua:"
         );
 
-        // El MISMO binding en capa de USUARIO (sin marcar): resuelve normal.
-        let usuario = parse_keymap(capa).unwrap();
-        let eff =
-            Effective::build_layered(&preset, std::slice::from_ref(&usuario), COMANDOS).unwrap();
+        // The SAME binding in a USER layer (unmarked): resolves normally.
+        let user = parse_keymap(layer).unwrap();
+        let eff = Effective::build_layered(&preset, std::slice::from_ref(&user), COMANDOS).unwrap();
         assert_eq!(eff.discarded_lua_bindings(), 0);
         let mut r = Resolver::new(eff);
         assert_eq!(
             r.push(parse_chord("j").unwrap()),
             run("lua:pwn"),
-            "en capa de usuario el binding lua: es legítimo"
+            "in a user layer the lua: binding is legitimate"
         );
 
-        // Rebind de proyecto a un BUILTIN: sigue funcionando (el descarte es
-        // SOLO de `lua:` — config de proyecto inocua no se rompe).
-        let mut proyecto = parse_keymap(
+        // Project rebind to a BUILTIN: keeps working (the discard is ONLY
+        // for `lua:` — harmless project config is not broken).
+        let mut project = parse_keymap(
             r#"
             [pane]
             prepend_keymap = [{ on = ["x"], run = "cursor.up" }]
         "#,
         )
         .unwrap();
-        proyecto.mark_project();
+        project.mark_project();
         let eff =
-            Effective::build_layered(&preset, std::slice::from_ref(&proyecto), COMANDOS).unwrap();
+            Effective::build_layered(&preset, std::slice::from_ref(&project), COMANDOS).unwrap();
         assert_eq!(eff.discarded_lua_bindings(), 0);
         let mut r = Resolver::new(eff);
         assert_eq!(r.push(parse_chord("x").unwrap()), run("cursor.up"));
     }
 
-    /// Nuevo (GUI-c T1): el motor NO conoce comandos concretos — valida
-    /// contra la lista `known_commands` que le pasa el CALLER (cada
-    /// frontend tiene su propio catálogo). Con "foo.bar" en la lista: OK;
-    /// sin él, `UnknownCommand`.
+    /// New (GUI-c T1): the engine does NOT know concrete commands — it
+    /// validates against the `known_commands` list the CALLER passes it
+    /// (each frontend has its own catalogue). With "foo.bar" in the list:
+    /// OK; without it, `UnknownCommand`.
     #[test]
     fn build_valida_contra_el_known_commands_dado() {
         let preset = parse_keymap(
@@ -1176,24 +1178,24 @@ mod tests {
 keymap = [{ on = ["x"], run = "foo.bar" }]"#,
         )
         .unwrap();
-        // Con "foo.bar" conocido: OK.
+        // With "foo.bar" known: OK.
         assert!(Effective::build(&preset, None, &["foo.bar"]).is_ok());
-        // Sin él: UnknownCommand (el motor NO conoce comandos concretos).
+        // Without it: UnknownCommand (the engine does NOT know concrete commands).
         assert!(matches!(
             Effective::build(&preset, None, &["otro.cmd"]),
             Err(KeymapError::UnknownCommand { .. })
         ));
     }
 
-    /// Regresión GUI-c T2 review: una tecla que el FRONTEND no modela
-    /// (p. ej. crossterm `BackTab`/`Media`, adaptada a `None`) debe romper
-    /// cualquier secuencia multi-tecla en curso — el viejo `from_event`
-    /// SIEMPRE empujaba al resolver (aunque fuera con un chord exótico que
-    /// jamás casaba), lo que producía un `Miss` y limpiaba el pending. Un
-    /// adaptador que devuelve `Option` y un caller que simplemente
-    /// descarta el `None` deja el pending INTERNO intacto — `reset()` es
-    /// el equivalente explícito al `Miss` que el adaptador ya no puede
-    /// producir por sí solo.
+    /// GUI-c T2 review regression: a key the FRONTEND does not model (e.g.
+    /// crossterm `BackTab`/`Media`, adapted to `None`) must break any
+    /// multi-key sequence in progress — the old `from_event` ALWAYS pushed
+    /// into the resolver (even with an exotic chord that never matched),
+    /// which produced a `Miss` and cleared the pending state. An adapter
+    /// that returns `Option`, with a caller that simply discards the
+    /// `None`, leaves the INTERNAL pending state intact — `reset()` is the
+    /// explicit equivalent of the `Miss` the adapter can no longer produce
+    /// on its own.
     #[test]
     fn reset_rompe_la_secuencia_pendiente() {
         let kf = parse_keymap(
@@ -1208,9 +1210,9 @@ keymap = [{ on = ["g", "g"], run = "cursor.top" }]"#,
             Resolution::Pending(_)
         ));
         r.reset();
-        // Tras reset, un solo 'g' vuelve a estar pendiente (la secuencia
-        // se rompió: si NO se hubiera roto, este segundo 'g' dispararía
-        // Run("cursor.top") en vez de Pending(1)).
+        // After reset, a single 'g' is pending again (the sequence broke:
+        // if it had NOT broken, this second 'g' would fire
+        // Run("cursor.top") instead of Pending(1)).
         assert!(matches!(
             r.push(Chord::new(Mods::default(), KeyCode::Char('g'))),
             Resolution::Pending(_)
@@ -1239,22 +1241,22 @@ keymap = [{ on = ["g", "g"], run = "cursor.top" }]"#,
                 .find(|(seq, _, _)| seq == "f1")
                 .map(|(_, run, avail)| (*run, *avail)),
             Some(("app.help", Availability::NotHere)),
-            "el binding ya no se filtra: sobrevive marcado — {all:?}"
+            "the binding is no longer filtered out: it survives marked — {all:?}"
         );
-        // …y sigue sin EJECUTARSE: `bindings()` solo lista lo ejecutable.
+        // …and it still does NOT RUN: `bindings()` only lists what is runnable.
         assert!(
             !eff.bindings().iter().any(|(seq, _)| seq == "f1"),
             "{all:?}"
         );
-        // Una CAPA que bindea el mismo comando ajeno tampoco falla ya.
+        // A LAYER that binds the same foreign command no longer fails either.
         let layer =
             parse_keymap("[pane]\nprepend_keymap = [{ on = [\"z\"], run = \"app.help\" }]\n")
                 .unwrap();
         assert!(
             Effective::build_for(&preset, &[layer], &known, Screen::Browse).is_ok(),
-            "un comando del catálogo no es un typo, venga de donde venga"
+            "a catalogue command is not a typo, wherever it comes from"
         );
-        // Lo que sí sigue muriendo: un nombre que el catálogo no conoce.
+        // What still dies: a name the catalogue does not know.
         let typo =
             parse_keymap("[pane]\nprepend_keymap = [{ on = [\"z\"], run = \"app.hlep\" }]\n")
                 .unwrap();
@@ -1264,9 +1266,9 @@ keymap = [{ on = ["g", "g"], run = "cursor.top" }]"#,
         ));
     }
 
-    /// El nombre `lua:` se valida por CHARSET antes que nada: un `lua:` con
-    /// nombre inválido (fuera de `[a-z0-9._-]{1,64}`) no tiene forma de
-    /// colarse por la puerta del catálogo — un `lua:` jamás está en él.
+    /// The `lua:` name is validated by CHARSET before anything else: a
+    /// `lua:` with an invalid name (outside `[a-z0-9._-]{1,64}`) has no way
+    /// to sneak in through the catalogue's door — a `lua:` is never in it.
     #[test]
     fn lua_invalido_sigue_siendo_error() {
         let preset = parse_keymap(
@@ -1276,7 +1278,7 @@ keymap = [{ on = ["x"], run = "lua:Bad Name" }]"#,
         .unwrap();
         match Effective::build_for(&preset, &[], &[], Screen::Browse) {
             Err(KeymapError::UnknownCommand { .. }) => {}
-            other => panic!("esperaba UnknownCommand, fue {other:?}"),
+            other => panic!("expected UnknownCommand, got {other:?}"),
         }
     }
 
@@ -1323,7 +1325,7 @@ keymap = [{ on = ["x"], run = "lua:Bad Name" }]"#,
                 assert!(message.contains("lua:bad name!"), "{message}");
             }
             d @ KeymapDiagnostic::UnknownCommand { .. } => {
-                panic!("esperaba Structural, fue {d:?}")
+                panic!("expected Structural, got {d:?}")
             }
         }
     }
@@ -1362,7 +1364,7 @@ append_keymap = [{ on = ["g", "g"], run = "cursor.top" }]"#,
         let known = ["cursor.top"];
         match Effective::build_for(&preset, &[layer], &known, Screen::Browse) {
             Err(KeymapError::AmbiguousPrefix { .. }) => {}
-            other => panic!("esperaba AmbiguousPrefix, fue {other:?}"),
+            other => panic!("expected AmbiguousPrefix, got {other:?}"),
         }
     }
 
@@ -1388,26 +1390,27 @@ keymap = [{ on = ["x"], run = "app.quit" }]"#,
         .unwrap();
         let known = ["app.quit"];
         let eff = Effective::build_for(&preset, &[], &known, Screen::Browse)
-            .expect("pane.x no disponible, global.x conocido");
+            .expect("pane.x unavailable, global.x known");
         let all = eff.bindings_all();
         let hits: Vec<_> = all.iter().filter(|(seq, _, _)| seq == "x").collect();
-        assert_eq!(hits.len(), 1, "el dedup deja UNA por secuencia: {all:?}");
-        assert_eq!(hits[0].1, "pane.pack", "gana el contexto específico");
-        // No disponible, y da igual POR QUÉ: lo que se prueba es que la
-        // sombra la echa igual. (Era `NotBuilt` hasta que #132 dejó la tabla
-        // sin comandos `Planned`; hoy es `NotHere`.)
+        assert_eq!(hits.len(), 1, "dedup leaves ONE per sequence: {all:?}");
+        assert_eq!(hits[0].1, "pane.pack", "the specific context wins");
+        // Unavailable, and WHY does not matter: what is being tested is that
+        // the shadow drops it just the same. (It used to be `NotBuilt` until
+        // #132 left the table with no `Planned` commands; today it is
+        // `NotHere`.)
         assert!(!matches!(hits[0].2, Availability::Here), "{:?}", hits[0].2);
-        // El `app.quit` de `[global]` sigue SOMBREADO: no aflora.
+        // `[global]`'s `app.quit` stays SHADOWED: it does not surface.
         assert!(
             !eff.bindings().iter().any(|(seq, _)| seq == "x"),
-            "la tecla no ejecuta nada — dirá por qué: {all:?}"
+            "the key runs nothing — it will say why: {all:?}"
         );
     }
 
-    /// Un chord ilegible (`"megatecla"`) en un binding cuyo comando TAMBIÉN
-    /// es desconocido: el parseo de la secuencia corre ANTES de consultar el
-    /// catálogo (`raw.on.iter().map(parse_chord)`), así que `BadChord` gana —
-    /// la config estructuralmente rota jamás se declara «no disponible».
+    /// An unreadable chord (`"megatecla"`) in a binding whose command is
+    /// ALSO unknown: the sequence parse runs BEFORE consulting the
+    /// catalogue (`raw.on.iter().map(parse_chord)`), so `BadChord` wins —
+    /// structurally broken config is never declared "unavailable".
     #[test]
     fn chord_malo_gana_al_comando_desconocido() {
         let preset = parse_keymap(
@@ -1417,12 +1420,12 @@ keymap = [{ on = ["megatecla"], run = "gui.unknown" }]"#,
         .unwrap();
         match Effective::build_for(&preset, &[], &[], Screen::Browse) {
             Err(KeymapError::BadChord { .. }) => {}
-            other => panic!("esperaba BadChord, fue {other:?}"),
+            other => panic!("expected BadChord, got {other:?}"),
         }
     }
 
-    /// H1 (#24): el contexto `dialog` existe — un preset con [dialog]
-    /// construye y resuelve para `Screen::Dialog`.
+    /// H1 (#24): the `dialog` context exists — a preset with [dialog]
+    /// builds and resolves for `Screen::Dialog`.
     #[test]
     fn dialog_context_se_parsea_y_construye() {
         let preset =
@@ -1437,7 +1440,7 @@ keymap = [{ on = ["megatecla"], run = "gui.unknown" }]"#,
         );
     }
 
-    /// Una capa de usuario extiende [dialog] con prepend y GANA.
+    /// A user layer extends [dialog] with prepend and WINS.
     #[test]
     fn capa_puede_extender_dialog() {
         let preset =
@@ -1460,7 +1463,7 @@ keymap = [{ on = ["megatecla"], run = "gui.unknown" }]"#,
         );
     }
 
-    /// Capa con `keymap` completo en [dialog]: error, como en el resto.
+    /// A layer with a full `keymap` in [dialog]: an error, as in the rest.
     #[test]
     fn has_full_keymap_ve_dialog() {
         let layer =
@@ -1502,9 +1505,11 @@ keymap = [{ on = ["megatecla"], run = "gui.unknown" }]"#,
             ("delete", "Delete"),
         ] {
             assert_eq!(
-                parse_chord(raw).expect("chord del catálogo").to_string(),
+                parse_chord(raw)
+                    .expect("chord from the catalogue")
+                    .to_string(),
                 raw,
-                "el fixture tiene que ser lo que `Display` escribe de verdad"
+                "the fixture has to be what `Display` really writes"
             );
             assert_eq!(paint_chord(raw), painted, "{raw}");
         }
@@ -1529,15 +1534,15 @@ keymap = [{ on = ["megatecla"], run = "gui.unknown" }]"#,
             "漢",
         ] {
             let painted = paint_chord(chord);
-            let key = painted.rsplit('+').next().expect("siempre hay tecla");
-            let bound = chord.rsplit('+').next().expect("siempre hay tecla");
-            assert_eq!(key, bound, "{chord} → {painted}: la TECLA no se toca");
+            let key = painted.rsplit('+').next().expect("there is always a key");
+            let bound = chord.rsplit('+').next().expect("there is always a key");
+            assert_eq!(key, bound, "{chord} -> {painted}: the KEY is not touched");
         }
         assert_eq!(paint_chord("ctrl+k"), "Ctrl+k");
         assert_eq!(
             paint_chord("G"),
             "G",
-            "…y la mayúscula ligada sigue mayúscula"
+            "…and a bound uppercase letter stays uppercase"
         );
     }
 
@@ -1558,7 +1563,7 @@ keymap = [{ on = ["megatecla"], run = "gui.unknown" }]"#,
             assert_eq!(
                 paint_chord(raw),
                 raw,
-                "{raw:?} no se reconoce: pasa tal cual"
+                "{raw:?} is not recognized: passes through as is"
             );
         }
     }
@@ -1567,13 +1572,13 @@ keymap = [{ on = ["megatecla"], run = "gui.unknown" }]"#,
     /// is kept as `NotHere` instead of being filtered away in silence — the
     /// H3f bug.
     ///
-    /// **Y es la única cobertura viva de «un binding que no se puede ejecutar
-    /// SOBREVIVE marcado».** Había un test gemelo con un comando `Planned`,
-    /// que era el caso de un preset fiel a Total Commander cuando un tercio de
-    /// él nombraba cosas sin construir. #132 construyó la última, la tabla se
-    /// quedó sin `Planned`, y un test sobre datos que ya no existen no prueba
-    /// nada: se retiró. Cuando vuelva a haber una capacidad prometida, su
-    /// gemelo vuelve con ella.
+    /// **And it is the only live coverage of "a binding that cannot run
+    /// SURVIVES marked".** There used to be a twin test with a `Planned`
+    /// command, which was the case of a preset faithful to Total Commander
+    /// when a third of it named things not yet built. #132 built the last
+    /// one, the table ran out of `Planned` entries, and a test over data
+    /// that no longer exists proves nothing: it was retired. When a
+    /// promised capability exists again, its twin comes back with it.
     #[test]
     fn un_comando_live_que_este_frontend_no_implementa_es_not_here() {
         let preset = parse_keymap(
@@ -1588,7 +1593,7 @@ keymap = [ { on = ["f1"], run = "app.help" } ]
         let (_, _, avail) = all
             .iter()
             .find(|(_, run, _)| *run == "app.help")
-            .expect("no puede desaparecer");
+            .expect("cannot disappear");
         assert_eq!(*avail, Availability::NotHere);
     }
 
@@ -1648,10 +1653,10 @@ keymap = [ { on = ["alt+f1"], run = "pane.pack" } ]
         let eff = Effective::build_for(&preset, &[], &["pane.refresh"], Screen::Browse).unwrap();
         let all = eff.bindings_all();
         let hits: Vec<_> = all.iter().filter(|(seq, _, _)| seq == "alt+f1").collect();
-        assert_eq!(hits.len(), 1, "el dedup deja UNA por secuencia: {all:?}");
-        assert_eq!(hits[0].1, "pane.pack", "gana el contexto específico");
-        // No disponible; el porqué da igual aquí (`NotBuilt` hasta que #132
-        // vació la lista de `Planned`, `NotHere` ahora).
+        assert_eq!(hits.len(), 1, "dedup leaves ONE per sequence: {all:?}");
+        assert_eq!(hits[0].1, "pane.pack", "the specific context wins");
+        // Unavailable; why does not matter here (`NotBuilt` until #132
+        // emptied the `Planned` list, `NotHere` now).
         assert!(!matches!(hits[0].2, Availability::Here), "{:?}", hits[0].2);
     }
 
@@ -1691,14 +1696,14 @@ keymap = [ { on = ["alt+f1"], run = "pane.pack" } ]
         match r.push(chord) {
             Resolution::Unavailable { command, why } => {
                 assert_eq!(command, "pane.pack");
-                // `NotHere` desde #132: el comando existe y este frontend
-                // no lo implementa. Lo que se prueba es que la tecla
-                // resuelve a «no disponible» y NO ejecuta nada.
+                // `NotHere` since #132: the command exists and this
+                // frontend does not implement it. What is being tested is
+                // that the key resolves to "unavailable" and runs NOTHING.
                 assert!(matches!(why, Availability::NotHere), "{why:?}");
             }
-            other => panic!("esperaba Unavailable, salió {other:?}"),
+            other => panic!("expected Unavailable, got {other:?}"),
         }
-        assert!(r.pending().is_empty(), "la secuencia debe quedar limpia");
+        assert!(r.pending().is_empty(), "the sequence must come out clean");
     }
 
     /// The message must NAME the command and, when the reason exists, carry it —
@@ -1794,9 +1799,9 @@ keymap = [ { on = ["alt+f1"], run = "pane.pack" } ]
                 d.name.bytes().all(|b| b.is_ascii_lowercase()
                     || b.is_ascii_digit()
                     || matches!(b, b'.' | b'-')),
-                "{} no es ASCII seguro — el mensaje de indisponibilidad lo \
-                 interpola SIN enmascarar y esa es la única razón por la que \
-                 puede",
+                "{} is not ASCII-safe — the unavailability message \
+                 interpolates it WITHOUT masking and that is the only reason \
+                 it can",
                 d.name
             );
         }
@@ -1817,9 +1822,9 @@ keymap = [ { on = ["alt+f1"], run = "pane.pack" } ]
             let kf = parse_keymap(&format!(
                 "[pane]\nkeymap = [{{ on = [\"alt+f1\"], run = \"{escaped}\" }}]\n"
             ))
-            .unwrap_or_else(|e| panic!("{}: el TOML debe parsear: {e}", h.id));
+            .unwrap_or_else(|e| panic!("{}: the TOML must parse: {e}", h.id));
             let err = Effective::build_for(&kf, &[], &["pane.copy"], Screen::Browse)
-                .expect_err(&format!("{}: debe fallar la carga — {}", h.id, h.why));
+                .expect_err(&format!("{}: loading must fail — {}", h.id, h.why));
             assert!(
                 matches!(err, KeymapError::UnknownCommand { .. }),
                 "{}: {err:?}",
@@ -1836,17 +1841,17 @@ keymap = [ { on = ["alt+f1"], run = "pane.pack" } ]
         // the day someone widens the Lua charset this fails instead of the
         // status line.
         for hostile in ["lua:aa\u{202E}bb", "lua:x\u{0007}y", "lua:ñ"] {
-            let name = hostile.strip_prefix("lua:").expect("prefijo lua:");
+            let name = hostile.strip_prefix("lua:").expect("lua: prefix");
             assert!(
                 !valid_lua_name(name),
-                "{hostile}: un nombre lua con hazards debe ser rechazado por el charset"
+                "{hostile}: a lua name with hazards must be rejected by the charset"
             );
         }
         let m = count_ignored_message("lua:mi-script.v2", 3);
         assert!(
             !m.chars().any(|c| c.is_control()
                 || matches!(c, '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}')),
-            "el mensaje de contador ignorado no puede llevar hazards: {m:?}"
+            "the ignored-count message cannot carry hazards: {m:?}"
         );
     }
 
@@ -1942,19 +1947,19 @@ keymap = [ { on = ["alt+f1"], run = "pane.pack" } ]
                 let painted = paint_chord(&raw);
                 assert!(
                     !painted.chars().any(norte_encoding::is_terminal_hazard),
-                    "[{}] hazard crudo tras pintar {raw:?}: {painted:?}",
+                    "[{}] raw hazard after painting {raw:?}: {painted:?}",
                     hazard.id
                 );
                 assert!(
                     painted.contains('\u{FFFD}'),
-                    "[{}] el hazard debe quedar en U+FFFD: {painted:?}",
+                    "[{}] the hazard must come out as U+FFFD: {painted:?}",
                     hazard.id
                 );
             }
         }
     }
 
-    // --- K2a: el contador numérico -------------------------------------
+    // --- K2a: the numeric count -----------------------------------------
 
     /// `5j` runs the command five times. The count rides WITH the command; the
     /// frontend is what repeats, so no command signature changes.
@@ -2327,7 +2332,7 @@ keymap = [ { on = ["0"], run = "cursor.top" } ]
         )
         .unwrap();
         Effective::build_for(&preset, &[], &["cursor.top"], Screen::Browse)
-            .expect("0 con contadores es legal");
+            .expect("0 with counts is legal");
     }
 
     /// "Digit" means ASCII 0-9 and nothing else, in BOTH paths — they share
@@ -2339,21 +2344,21 @@ keymap = [ { on = ["0"], run = "cursor.top" } ]
     /// and then resolves as a count, or the reverse.
     #[test]
     fn un_digito_no_ascii_es_una_tecla_normal_en_los_dos_caminos() {
-        for exotico in ['\u{0665}', '\u{FF15}'] {
+        for exotic in ['\u{0665}', '\u{FF15}'] {
             let preset = parse_keymap(&format!(
-                "counts = true\n\n[pane]\nkeymap = [ {{ on = [\"{exotico}\"], run = \"cursor.down\" }} ]\n"
+                "counts = true\n\n[pane]\nkeymap = [ {{ on = [\"{exotic}\"], run = \"cursor.down\" }} ]\n"
             ))
             .unwrap();
             let eff = Effective::build_for(&preset, &[], &["cursor.down"], Screen::Browse)
-                .unwrap_or_else(|e| panic!("{exotico:?} debe poder ligarse: {e:?}"));
+                .unwrap_or_else(|e| panic!("{exotic:?} must be bindable: {e:?}"));
             let mut r = Resolver::new(eff);
             assert_eq!(
-                r.push(parse_chord(&exotico.to_string()).unwrap()),
+                r.push(parse_chord(&exotic.to_string()).unwrap()),
                 Resolution::Run {
                     command: "cursor.down".to_owned(),
                     count: Count::None,
                 },
-                "{exotico:?} no abre un contador: es una tecla"
+                "{exotic:?} does not open a count: it is a key"
             );
         }
     }
@@ -2373,7 +2378,7 @@ keymap = [ { on = ["g", "5"], run = "cursor.top" } ]
         )
         .unwrap();
         Effective::build_for(&preset, &[], &["cursor.top"], Screen::Browse)
-            .expect("un dígito no inicial es una tecla más");
+            .expect("a non-initial digit is just another key");
     }
 
     /// Specification §12: Tab switches panes and a preset may not take it.
@@ -2421,7 +2426,7 @@ keymap = [ { on = ["tab"], run = "dialog.pane" } ]
         )
         .unwrap();
         Effective::build_for(&preset, &[], &["dialog.pane"], Screen::Dialog)
-            .expect("tab en dialog es legal");
+            .expect("tab in dialog is legal");
     }
 
     /// A user layer cannot take Tab either — the rule is about the effective
@@ -2505,97 +2510,97 @@ keymap = [ { on = ["tab"], run = "cursor.down" } ]
     #[test]
     fn los_dos_cargadores_denuncian_el_mismo_defecto() {
         const KNOWN: &[&str] = &["app.quit", "cursor.down", "cursor.top", "pane.switch"];
-        // (nombre, preset, capa de usuario)
-        let casos: &[(&str, &str, Option<&str>)] = &[
+        // (name, preset, user layer)
+        let cases: &[(&str, &str, Option<&str>)] = &[
             (
-                "tecla inválida",
+                "invalid key",
                 "[pane]\nkeymap = [{ on = [\"megatecla\"], run = \"cursor.down\" }]\n",
                 None,
             ),
             (
-                "secuencia vacía",
+                "empty sequence",
                 "[pane]\nkeymap = [{ on = [], run = \"cursor.down\" }]\n",
                 None,
             ),
             (
-                "esc dentro de una secuencia",
+                "esc inside a sequence",
                 "[pane]\nkeymap = [{ on = [\"esc\", \"a\"], run = \"cursor.down\" }]\n",
                 None,
             ),
             (
-                "comando desconocido",
+                "unknown command",
                 "[pane]\nkeymap = [{ on = [\"x\"], run = \"typo.no-existe\" }]\n",
                 None,
             ),
             (
-                "nombre lua fuera del charset",
+                "lua name outside the charset",
                 "[pane]\nkeymap = [{ on = [\"x\"], run = \"lua:Nombre Malo\" }]\n",
                 None,
             ),
             (
-                "prefijo ambiguo",
+                "ambiguous prefix",
                 "[pane]\nkeymap = [\n { on = [\"z\"], run = \"cursor.down\" },\n { on = [\"z\", \"z\"], run = \"cursor.top\" },\n]\n",
                 None,
             ),
             (
-                "clave en la capa equivocada",
+                "key in the wrong layer",
                 "[pane]\nkeymap = [{ on = [\"j\"], run = \"cursor.down\" }]\n",
                 Some("[pane]\nkeymap = [{ on = [\"k\"], run = \"cursor.top\" }]\n"),
             ),
             (
-                "la capa enciende los contadores",
+                "the layer enables counts",
                 "[pane]\nkeymap = [{ on = [\"j\"], run = \"cursor.down\" }]\n",
                 Some(
                     "counts = true\n[pane]\nprepend_keymap = [{ on = [\"k\"], run = \"cursor.top\" }]\n",
                 ),
             ),
             (
-                "dígito ligado con contadores",
+                "digit bound with counts",
                 "counts = true\n[pane]\nkeymap = [{ on = [\"5\"], run = \"cursor.down\" }]\n",
                 None,
             ),
             (
-                "tab repinada",
+                "tab rebound",
                 "[pane]\nkeymap = [{ on = [\"tab\"], run = \"cursor.down\" }]\n",
                 None,
             ),
             (
-                "tab abriendo una secuencia",
+                "tab opening a sequence",
                 "[pane]\nkeymap = [{ on = [\"tab\", \"j\"], run = \"cursor.down\" }]\n",
                 None,
             ),
         ];
-        for (nombre, preset_src, layer_src) in casos {
-            let preset = parse_keymap(preset_src).unwrap_or_else(|e| panic!("{nombre}: {e}"));
+        for (name, preset_src, layer_src) in cases {
+            let preset = parse_keymap(preset_src).unwrap_or_else(|e| panic!("{name}: {e}"));
             let layers: Vec<KeymapFile> = layer_src
                 .iter()
-                .map(|s| parse_keymap(s).unwrap_or_else(|e| panic!("{nombre}: capa: {e}")))
+                .map(|s| parse_keymap(s).unwrap_or_else(|e| panic!("{name}: layer: {e}")))
                 .collect();
             let e = Effective::build_for(&preset, &layers, KNOWN, Screen::Browse)
                 .err()
-                .unwrap_or_else(|| panic!("{nombre}: build_for lo aceptó"));
+                .unwrap_or_else(|| panic!("{name}: build_for accepted it"));
             let d = Effective::build_diagnostics(&preset, &layers, KNOWN, Screen::Browse);
-            let mismo = d.iter().any(|f| match f {
+            let same = d.iter().any(|f| match f {
                 KeymapDiagnostic::Structural { message } => *message == e.to_string(),
-                // El único hallazgo que NO se renderiza desde el error: el
-                // nombre desconocido llano es recuperable, así que viaja
-                // tipado. Se compara el `run`, que es lo que lo identifica.
+                // The only finding that is NOT rendered from the error: a
+                // plain unknown name is recoverable, so it travels typed.
+                // The `run` is compared, which is what identifies it.
                 KeymapDiagnostic::UnknownCommand { run } => {
                     matches!(&e, KeymapError::UnknownCommand { run: r } if r == run)
                 }
             });
             assert!(
-                mismo,
-                "{nombre}: build_for dijo {e:?}, el diagnóstico dijo {d:?}"
+                same,
+                "{name}: build_for said {e:?}, the diagnostic said {d:?}"
             );
         }
 
-        // Y el otro lado del contrato: lo que `build_for` acepta no puede
-        // dejar hallazgos. Las dos reglas de K2a tienen una forma LEGAL cada
-        // una (el `0` ligado con contadores encendidos, `tab` en su comando
-        // reservado) y un falso positivo aquí llenaría `norte doctor` de
-        // ruido sobre un keymap sano.
-        let limpio = parse_keymap(
+        // And the other side of the contract: what `build_for` accepts
+        // cannot leave findings. K2a's two rules each have a LEGAL shape
+        // (`0` bound with counts on, `tab` on its reserved command), and a
+        // false positive here would fill `norte doctor` with noise about a
+        // healthy keymap.
+        let clean = parse_keymap(
             r#"
 counts = true
 
@@ -2607,78 +2612,79 @@ keymap = [
 ]
 "#,
         )
-        .expect("el keymap limpio parsea");
-        Effective::build_for(&limpio, &[], KNOWN, Screen::Browse).expect("build_for lo acepta");
-        let d = Effective::build_diagnostics(&limpio, &[], KNOWN, Screen::Browse);
-        assert!(d.is_empty(), "falso positivo del diagnóstico: {d:?}");
+        .expect("the clean keymap parses");
+        Effective::build_for(&clean, &[], KNOWN, Screen::Browse).expect("build_for accepts it");
+        let d = Effective::build_diagnostics(&clean, &[], KNOWN, Screen::Browse);
+        assert!(d.is_empty(), "diagnostic false positive: {d:?}");
     }
 
     /// The three bundled presets must survive both rules unchanged.
     #[test]
     fn los_presets_de_fabrica_pasan_las_dos_reglas_nuevas() {
         for name in presets::NAMES {
-            let src = presets::source(name).expect("NAMES resuelve");
-            let kf = parse_keymap(src).expect("preset parsea");
+            let src = presets::source(name).expect("NAMES resolves");
+            let kf = parse_keymap(src).expect("preset parses");
             for screen in [Screen::Browse, Screen::Viewer, Screen::Dialog] {
                 let known = preset_commands(screen);
                 let known: Vec<&str> = known.iter().map(String::as_str).collect();
                 Effective::build_for(&kf, &[], &known, screen)
-                    .unwrap_or_else(|e| panic!("{name} en {screen:?}: {e:?}"));
+                    .unwrap_or_else(|e| panic!("{name} in {screen:?}: {e:?}"));
             }
         }
     }
 
-    /// **Las superficies PROPIAS de norte tienen tecla en TODOS los presets.**
+    /// **norte's OWN surfaces have a key in ALL presets.**
     ///
-    /// Un preset es una transcripción del gestor original, y esos gestores no
-    /// tenían pantalla de ajustes, ni gestor de extensiones, ni paleta de
-    /// comandos: no había nada que transcribir, así que cuatro de los siete
-    /// (`krusader`, `far`, `norton`, `total-commander`) salieron SIN ninguna
-    /// de las tres. El efecto para quien los usa es que la configuración de
-    /// norte no se alcanza desde el teclado — ni siquiera por la paleta, que
-    /// es la vía por la que se llega a un comando sin tecla.
+    /// A preset is a transcription of the original manager, and those
+    /// managers had no settings screen, no extension manager and no command
+    /// palette: there was nothing to transcribe, so four of the seven
+    /// (`krusader`, `far`, `norton`, `total-commander`) came out with NONE
+    /// of the three. The effect for whoever uses them is that norte's own
+    /// configuration cannot be reached from the keyboard — not even through
+    /// the palette, which is the path to a command with no key.
     ///
-    /// Fidelidad es transcribir lo que el original TENÍA, no callar lo que
-    /// norte tiene de más. Este test es la línea que lo impide en el siguiente
-    /// preset que entre.
+    /// Fidelity is transcribing what the original HAD, not silencing what
+    /// norte has on top. This test is the line that stops that in the next
+    /// preset that comes in.
     #[test]
     fn todo_preset_alcanza_las_superficies_propias_de_norte() {
-        // `app.help` va en la lista a propósito aunque hoy lo tengan los
-        // siete: es la que más se echa en falta cuando falta, y el test tiene
-        // que decirlo antes que el usuario.
+        // `app.help` is in the list on purpose even though all seven have
+        // it today: it is the one most missed when it is missing, and the
+        // test has to say so before the user does.
         const IMPRESCINDIBLES: &[&str] =
             &["app.help", "app.settings", "app.extensions", "app.palette"];
         let known = preset_commands(Screen::Browse);
         let known: Vec<&str> = known.iter().map(String::as_str).collect();
         for name in presets::NAMES {
-            let src = presets::source(name).expect("NAMES resuelve");
-            let kf = parse_keymap(src).expect("preset parsea");
+            let src = presets::source(name).expect("NAMES resolves");
+            let kf = parse_keymap(src).expect("preset parses");
             let eff = Effective::build_for(&kf, &[], &known, Screen::Browse)
                 .unwrap_or_else(|e| panic!("{name}: {e:?}"));
             for cmd in IMPRESCINDIBLES {
                 assert!(
                     eff.bindings().iter().any(|(_, c)| c == cmd),
-                    "preset {name}: `{cmd}` no tiene tecla, así que esa pantalla \
-                     no se alcanza desde el teclado"
+                    "preset {name}: `{cmd}` has no key, so that screen cannot \
+                     be reached from the keyboard"
                 );
             }
         }
     }
 
-    /// **Marcar moviéndose está en los SIETE, o no está.**
+    /// **Marking while moving is in all SEVEN, or in none.**
     ///
-    /// La familia entera (`shift`+flechas, `shift`+página, `shift`+extremos)
-    /// se añadió de una vez, y ese es justo el momento en que un preset se
-    /// queda atrás sin que nada lo diga: el catálogo anuncia el comando, la
-    /// hoja de referencia lo imprime, la paleta lo ofrece, y el teclado de
-    /// quien usa ese preset no hace nada. Ha pasado tres veces (#228, #250, y
-    /// los nueve `ctrl+<MAYÚSCULA>` que seis presets llevaban y ningún
-    /// terminal entrega).
+    /// The whole family (`shift`+arrows, `shift`+page, `shift`+ends) was
+    /// added all at once, and that is exactly the moment a preset falls
+    /// behind with nothing saying so: the catalogue announces the command,
+    /// the reference sheet prints it, the palette offers it, and the
+    /// keyboard of whoever uses that preset does nothing. It has happened
+    /// three times (#228, #250, and the nine `ctrl+<UPPERCASE>` six presets
+    /// carried that no terminal delivers).
     ///
-    /// Va aparte de `todo_preset_alcanza_las_superficies_propias_de_norte`
-    /// porque el argumento es otro: aquello son pantallas que ningún original
-    /// tenía; esto es una familia que los originales SÍ tienen —Krusader la
-    /// documenta entera— y que ninguno de los siete puede permitirse a medias.
+    /// Kept apart from `todo_preset_alcanza_las_superficies_propias_de_norte`
+    /// because the argument is different: that one is about screens no
+    /// original had; this is a family the originals DO have — Krusader
+    /// documents it whole — and that none of the seven can afford to have
+    /// half of.
     #[test]
     fn los_siete_presets_marcan_moviendose() {
         const FAMILIA: &[&str] = &[
@@ -2691,38 +2697,38 @@ keymap = [
         let known = preset_commands(Screen::Browse);
         let known: Vec<&str> = known.iter().map(String::as_str).collect();
         for name in presets::NAMES {
-            let src = presets::source(name).expect("NAMES resuelve");
-            let kf = parse_keymap(src).expect("preset parsea");
+            let src = presets::source(name).expect("NAMES resolves");
+            let kf = parse_keymap(src).expect("preset parses");
             let eff = Effective::build_for(&kf, &[], &known, Screen::Browse)
                 .unwrap_or_else(|e| panic!("{name}: {e:?}"));
             for cmd in FAMILIA {
                 assert!(
                     eff.bindings().iter().any(|(_, c)| c == cmd),
-                    "preset {name}: `{cmd}` no tiene tecla — la familia de marcar \
-                     moviéndose entra en los siete o en ninguno"
+                    "preset {name}: `{cmd}` has no key — the marking-while-moving \
+                     family goes in all seven or in none"
                 );
             }
         }
     }
 
-    /// **Un comando del núcleo sin tecla en un preset es una DECISIÓN o un
-    /// descuido, y aquí se separan los dos** (#228).
+    /// **A core command with no key in a preset is a DECISION or an
+    /// oversight, and here the two are told apart** (#228).
     ///
-    /// El de al lado —[`todo_preset_alcanza_las_superficies_propias_de_norte`]—
-    /// exige tecla siempre, porque una pantalla propia de norte no la tenía
-    /// ningún original y callarla es perder la pantalla. Estos seis son
-    /// distintos: son comandos que los originales SÍ podían tener, así que
-    /// inventarle un acorde a un preset cuyo sentido entero es la fidelidad es
-    /// peor que dejar el hueco — la hoja de referencia imprime `—` y el
-    /// usuario se entera.
+    /// The test next to this one —
+    /// [`todo_preset_alcanza_las_superficies_propias_de_norte`] — always
+    /// demands a key, because no original had a screen of norte's own and
+    /// silencing it means losing the screen. These six are different: they
+    /// are commands the originals COULD have had, so inventing a chord for
+    /// a preset whose entire point is fidelity is worse than leaving the
+    /// gap — the reference sheet prints `—` and the user finds out.
     ///
-    /// Lo que no puede pasar es que el hueco sea un olvido. Cada excepción va
-    /// en la tabla con su motivo; el preset lo cuenta largo en su cabecera.
-    /// Añadir un preset, o perder una tecla, sale ROJO aquí.
+    /// What cannot happen is the gap being an oversight. Every exception
+    /// goes in the table with its reason; the preset tells it at length in
+    /// its header. Adding a preset, or losing a key, turns RED here.
     #[test]
     fn cada_hueco_del_nucleo_en_un_preset_esta_decidido() {
-        /// Los seis del inventario de #228: los que el catálogo llama núcleo y
-        /// que los cuatro presets importados podían haber traído.
+        /// The six from #228's inventory: the ones the catalogue calls core
+        /// and that the four imported presets could have brought.
         const NUCLEO: &[&str] = &[
             "pane.compare-dirs",
             "pane.sync-dirs",
@@ -2731,85 +2737,86 @@ keymap = [
             "pane.mirror",
             "pane.pull",
         ];
-        /// `(preset, comando, por qué NO se ata)`. El motivo está aquí para
-        /// que quien borre una fila tenga que leerlo antes.
+        /// `(preset, command, why it is NOT bound)`. The reason is here so
+        /// that whoever deletes a row has to read it first.
         const ACEPTADOS: &[(&str, &str, &str)] = &[
             (
                 "far",
                 "pane.compare-dirs",
-                "«Compare folders» de Far vive en el desplegable de F9 sin acorde propio, \
-                 y Shift+F2 —el que toman los demás de Total Commander— ya es «Unpack files»",
+                "Far's \"Compare folders\" lives in the F9 dropdown with no chord of its own, \
+                 and Shift+F2 — the one the rest take from Total Commander — is already \
+                 \"Unpack files\"",
             ),
             (
                 "far",
                 "pane.sync-dirs",
-                "Far no trae sincronizador de carpetas en el producto: Advanced Compare es \
-                 un plugin, así que no hay tecla que transcribir",
+                "Far ships no folder syncer in the product: Advanced Compare is a plugin, \
+                 so there is no key to transcribe",
             ),
             (
                 "far",
                 "pane.mirror",
-                "gesto propio de norte: ninguna de las dos fuentes transcritas nombra \
-                 «manda el otro panel a esta ruta»",
+                "a gesture of norte's own: neither transcribed source names \
+                 \"send the other pane to this path\"",
             ),
-            ("far", "pane.pull", "lo mismo que `pane.mirror`, al revés"),
+            ("far", "pane.pull", "the same as `pane.mirror`, reversed"),
             (
                 "norton",
                 "pane.compare-dirs",
-                "«Compare directories» era entrada del menú Commands y no sobrevive fuente \
-                 de primera mano que diga si tenía acorde",
+                "\"Compare directories\" was a Commands menu entry, and no first-hand source \
+                 survives saying whether it had a chord",
             ),
             (
                 "norton",
                 "pane.sync-dirs",
-                "NC no tenía sincronizador: no hay ni entrada de menú de la que colgar una \
-                 conjetura",
+                "NC had no syncer: there is not even a menu entry to hang a guess on",
             ),
             (
                 "norton",
                 "pane.rename",
-                "el F6 de NC («RenMov») es renombrar y mover en UNA tecla, y está atado a \
-                 `pane.move`, cuyo diálogo trae el nombre de destino editable",
+                "NC's F6 (\"RenMov\") is rename-and-move in ONE key, and it is bound to \
+                 `pane.move`, whose dialog carries an editable destination name",
             ),
             (
                 "norton",
                 "pane.mirror",
-                "gesto propio de norte, y este preset es el que menos fuente tiene",
+                "a gesture of norte's own, and this preset is the one with the least source",
             ),
-            ("norton", "pane.pull", "lo mismo que `pane.mirror`"),
+            ("norton", "pane.pull", "the same as `pane.mirror`"),
             (
                 "total-commander",
                 "pane.mirror",
-                "la familia atestiguada de TC manda al otro panel el directorio de la \
-                 ENTRADA bajo el cursor, que es la dirección ya atada en `pane.pull`",
+                "TC's attested family sends the other pane the directory of the entry \
+                 UNDER THE CURSOR, which is the direction already bound to `pane.pull`",
             ),
         ];
         let known = preset_commands(Screen::Browse);
         let known: Vec<&str> = known.iter().map(String::as_str).collect();
-        let mut sobran: Vec<(&str, &str)> = Vec::new();
+        let mut extra: Vec<(&str, &str)> = Vec::new();
         for name in presets::NAMES {
-            let src = presets::source(name).expect("NAMES resuelve");
-            let kf = parse_keymap(src).expect("preset parsea");
+            let src = presets::source(name).expect("NAMES resolves");
+            let kf = parse_keymap(src).expect("preset parses");
             let eff = Effective::build_for(&kf, &[], &known, Screen::Browse)
                 .unwrap_or_else(|e| panic!("{name}: {e:?}"));
             for cmd in NUCLEO {
-                let atado = eff.bindings().iter().any(|(_, c)| c == cmd);
-                let aceptado = ACEPTADOS.iter().any(|(p, c, _)| p == name && c == cmd);
+                let bound = eff.bindings().iter().any(|(_, c)| c == cmd);
+                let accepted = ACEPTADOS.iter().any(|(p, c, _)| p == name && c == cmd);
                 assert!(
-                    atado || aceptado,
-                    "preset {name}: `{cmd}` no tiene tecla y no está en la tabla de huecos \
-                     decididos. O se ata, o se apunta ahí con el motivo — un comando que solo \
-                     se alcanza por la paleta es un comando que nadie alcanza"
+                    bound || accepted,
+                    "preset {name}: `{cmd}` has no key and is not in the table of decided \
+                     gaps. Either bind it, or note it there with the reason — a command only \
+                     reachable through the palette is a command nobody reaches"
                 );
-                if atado && aceptado {
-                    sobran.push((name, cmd));
+                if bound && accepted {
+                    extra.push((name, cmd));
                 }
             }
         }
         assert!(
-            sobran.is_empty(),
-            "estas filas de la tabla ya no describen nada —el preset SÍ ata el comando— y una \
-             excepción que no excluye nada es la que sobrevive a que alguien la lea: {sobran:?}"
+            extra.is_empty(),
+            "these table rows no longer describe anything — the preset DOES bind the \
+             command — and an exception that excludes nothing is the one that survives \
+             someone reading it: {extra:?}"
         );
     }
 
@@ -2827,8 +2834,8 @@ keymap = [
         let known = preset_commands(Screen::Browse);
         let known: Vec<&str> = known.iter().map(String::as_str).collect();
         for name in presets::NAMES {
-            let src = presets::source(name).expect("NAMES resuelve");
-            let kf = parse_keymap(src).expect("preset parsea");
+            let src = presets::source(name).expect("NAMES resolves");
+            let kf = parse_keymap(src).expect("preset parses");
             let eff = Effective::build_for(&kf, &[], &known, Screen::Browse)
                 .unwrap_or_else(|e| panic!("{name}: {e:?}"));
             assert_eq!(eff.counts(), *name == "vim", "preset {name}");

@@ -1,10 +1,11 @@
-//! La hoja de atributos (fase A): a quién sigue, y sobre todo qué NO lee.
+//! The attributes sheet (phase A): who it follows, and above all what it
+//! does NOT read.
 //!
-//! Igual que el visor acoplado, se prueba sin daemon: la decisión vive en la
-//! lib, así que «un hueco oculto no pide nada» deja de ser una regla escrita
-//! en un spec y pasa a ser lo único que el código puede hacer. Y aquí hay una
-//! regla más fuerte todavía: la hoja no pide NUNCA, ni visible. Lo que enseña
-//! ya está en el listado.
+//! Same as the docked viewer, it is tested with no daemon: the decision
+//! lives in the lib, so "a hidden slot requests nothing" stops being a rule
+//! written in a spec and becomes the only thing the code can do. And here
+//! there is an even stronger rule: the sheet NEVER requests, not even when
+//! visible. What it shows is already in the listing.
 
 use norte_frontend::layout::Resolved;
 use norte_proto::{Entry, EntryKind, Segment, VPath};
@@ -16,14 +17,14 @@ const H: u16 = 30;
 
 fn vp(wire: &str) -> VPath {
     let _ = norte_i18n::force(norte_i18n::Lang::Es);
-    VPath::parse(wire).expect("wire válido")
+    VPath::parse(wire).expect("valid wire")
 }
 
 fn entry(dir: &VPath, nombre: &[u8], kind: EntryKind) -> Entry {
     Entry {
         attrs: std::collections::BTreeMap::new(),
         path: dir
-            .join(Segment::new(nombre.to_vec()).expect("segmento"))
+            .join(Segment::new(nombre.to_vec()).expect("segment"))
             .clone(),
         kind,
         size: Some(7),
@@ -55,26 +56,26 @@ fn resolver(app: &mut App) -> Resolved {
     norte_tui::ui::resolved_for(app, area)
 }
 
-/// Con la hoja abierta y el cursor sobre algo, hay objetivo, y viaja con su
-/// HUECO: una respuesta aplicada por posición aterriza en quien ocupe ese
-/// sitio al llegar (la lección de la fase C de P6).
+/// With the sheet open and the cursor on something, there is a target, and
+/// it travels with its SLOT: an answer applied by position lands on
+/// whoever occupies that spot when it arrives (P6 phase C's lesson).
 #[test]
 fn el_objetivo_lleva_el_hueco_de_la_hoja() {
     let mut app = app_de_prueba();
     app.toggle_metadata();
     app.panes[0].set_cursor(1);
     let res = resolver(&mut app);
-    let (hueco, w) = want(&app, &res).expect("hay objetivo");
+    let (hueco, w) = want(&app, &res).expect("there is a target");
     assert_eq!(Some(hueco), app.metadata_slot());
     let Want::Entry(e, subir) = w else {
-        panic!("una entrada")
+        panic!("an entry")
     };
-    assert!(!subir, "el cursor está en una entrada de verdad");
+    assert!(!subir, "the cursor is on a real entry");
     assert_eq!(e.path, vp("file:///izq/uno.txt"));
 }
 
-/// La entrada que enseña es la que el listado YA tiene: mismo tamaño, misma
-/// fecha, mismos bytes. Esto es lo que hace que la hoja no cueste una lectura.
+/// The entry it shows is the one the listing ALREADY has: same size, same
+/// date, same bytes. This is what makes the sheet cost no read.
 #[test]
 fn lo_que_ensena_sale_del_listado_y_no_de_una_peticion() {
     let mut app = app_de_prueba();
@@ -82,17 +83,18 @@ fn lo_que_ensena_sale_del_listado_y_no_de_una_peticion() {
     app.panes[0].set_cursor(1);
     let del_listado = app.panes[0].selected().expect("cursor").clone();
     let res = resolver(&mut app);
-    let (_, w) = want(&app, &res).expect("objetivo");
+    let (_, w) = want(&app, &res).expect("target");
     assert_eq!(w, Want::Entry(Box::new(del_listado), false));
 }
 
-/// Con la fila `..` encendida —que es lo de fábrica— el cursor nace encima de
-/// ella, y la hoja la DESCRIBE en vez de vaciarse.
+/// With the `..` row on — the factory default — the cursor is born on it,
+/// and the sheet DESCRIBES it instead of going empty.
 ///
-/// La misma regla que en la ventana, y por la misma razón: `selected()` calla
-/// sobre esa fila porque no es un operando, pero la hoja no opera, describe.
-/// Preguntando por el operando el panel salía vacío en cada arranque y
-/// después de cada `cd`, que es como se ve un panel roto.
+/// The same rule as the window's, and for the same reason: `selected()`
+/// stays silent about that row because it is not an operand, but the sheet
+/// does not operate, it describes. Asking for the operand left the panel
+/// empty on every startup and after every `cd`, which is what a broken
+/// panel looks like.
 #[test]
 fn sobre_la_fila_de_subir_la_hoja_la_describe() {
     let mut app = app_de_prueba();
@@ -100,49 +102,51 @@ fn sobre_la_fila_de_subir_la_hoja_la_describe() {
     app.toggle_metadata();
     assert!(
         app.panes[0].is_parent_row(app.panes[0].cursor()),
-        "el cursor nace sobre `..`"
+        "the cursor is born on `..`"
     );
     let res = resolver(&mut app);
-    let (_, w) = want(&app, &res).expect("hay objetivo");
+    let (_, w) = want(&app, &res).expect("there is a target");
     let Want::Entry(e, subir) = w else {
-        panic!("una entrada, no la nota de vacío")
+        panic!("an entry, not the empty note")
     };
-    assert!(subir, "y va marcada como la fila de subir");
-    assert_eq!(e.path, vp("file:///"), "su ruta es la del padre");
+    assert!(subir, "and it is marked as the parent row");
+    assert_eq!(e.path, vp("file:///"), "its path is the parent's");
 
-    // Y esas filas son las mismas que pinta la ventana: la lista la decide el
-    // crate compartido, no cada renderer.
+    // And those rows are the same ones the window paints: the shared crate
+    // decides the list, not each renderer.
     let filas = norte_frontend::metadata::sheet(&e, subir, None, norte_i18n::Lang::Es);
     assert_eq!(
         filas.iter().map(|f| f.value.as_str()).collect::<Vec<_>>(),
-        // `file` sin authority no se anuncia: es el caso por defecto, y su
-        // etiqueta no distinguía nada de nada.
+        // `file` with no authority is not announced: it is the default
+        // case, and its label did not distinguish anything from anything.
         ["..", "carpeta", "/"]
     );
 }
 
-/// La hoja DICE a qué listado sigue, y lo dice también cuando cambia el foco.
+/// The sheet SAYS which listing it follows, and says so also when focus
+/// changes.
 ///
-/// La misma respuesta que da la ventana en `follows_display` (ADR 0077):
-/// «Detalles» a secas no dice de qué son los detalles, y con dos listados
-/// abiertos la única forma de saberlo era mover el cursor y mirar.
+/// The same answer the window gives in `follows_display` (ADR 0077): a
+/// bare "Details" does not say whose details they are, and with two
+/// listings open the only way to know was to move the cursor and look.
 #[test]
 fn la_hoja_dice_a_que_listado_sigue() {
     let mut app = app_de_prueba();
     app.toggle_metadata();
     let res = resolver(&mut app);
-    let (ruta, hostil) = norte_tui::metadata::follows(&app, &res).expect("hay hueco colocado");
+    let (ruta, hostil) = norte_tui::metadata::follows(&app, &res).expect("there is a placed slot");
     assert_eq!(ruta, "/izq");
     assert!(!hostil);
 
     app.set_focus(1);
     let res = resolver(&mut app);
-    let (otra, _) = norte_tui::metadata::follows(&app, &res).expect("sigue colocada");
-    assert_eq!(otra, "/der", "sigue al ACTIVO, y lo dice");
+    let (otra, _) = norte_tui::metadata::follows(&app, &res).expect("still placed");
+    assert_eq!(otra, "/der", "it follows the ACTIVE one, and says so");
 }
 
-/// Un hueco detrás de una pestaña no produce objetivo. Es el mismo invariante
-/// que el preview, y se prueba igual porque una fuga así solo la ve un test.
+/// A slot behind a tab produces no target. It is the same invariant as the
+/// preview's, and is tested the same way because only a test sees a leak
+/// like that.
 #[test]
 fn una_hoja_oculta_no_produce_objetivo() {
     let mut app = app_de_prueba();
@@ -151,7 +155,7 @@ fn una_hoja_oculta_no_produce_objetivo() {
     let res = resolver(&mut app);
     assert!(want(&app, &res).is_some());
 
-    let hueco = app.metadata_slot().expect("abierta");
+    let hueco = app.metadata_slot().expect("open");
     app.layout = app.layout.wrap_in_tabs(hueco);
     app.layout = app.layout.add_tab(
         hueco,
@@ -163,12 +167,13 @@ fn una_hoja_oculta_no_produce_objetivo() {
     let res = resolver(&mut app);
     assert!(
         !res.placements.iter().any(|(id, _)| *id == hueco),
-        "el hueco quedó oculto de verdad"
+        "the slot really is hidden"
     );
-    assert!(want(&app, &res).is_none(), "lo que no se ve no enseña nada");
+    assert!(want(&app, &res).is_none(), "what is not seen shows nothing");
 }
 
-/// Sin cursor no se queda lo de antes puesto: se dice que no hay nada debajo.
+/// With no cursor, what was there before does not stick: it says there is
+/// nothing underneath.
 #[test]
 fn un_listado_vacio_dice_que_no_hay_nada() {
     let dir = vp("file:///vacio");
@@ -178,31 +183,31 @@ fn un_listado_vacio_dice_que_no_hay_nada() {
     );
     app.toggle_metadata();
     let res = resolver(&mut app);
-    let (_, w) = want(&app, &res).expect("hay respuesta");
+    let (_, w) = want(&app, &res).expect("there is an answer");
     assert_eq!(w, Want::Note("metadata-empty"));
 }
 
-/// Sigue al rol `active`: cambiar de listado cambia lo que enseña, sin tocar
-/// el layout.
+/// It follows the `active` role: switching listings changes what it shows,
+/// without touching the layout.
 #[test]
 fn cambiar_de_listado_cambia_lo_que_ensena() {
     let mut app = app_de_prueba();
     app.toggle_metadata();
     app.panes[0].set_cursor(1);
     let res = resolver(&mut app);
-    let (_, a) = want(&app, &res).expect("objetivo");
+    let (_, a) = want(&app, &res).expect("target");
     app.set_focus(1);
     let res = resolver(&mut app);
-    let (_, b) = want(&app, &res).expect("objetivo");
+    let (_, b) = want(&app, &res).expect("target");
     let (Want::Entry(a, _), Want::Entry(b, _)) = (a, b) else {
-        panic!("dos entradas")
+        panic!("two entries")
     };
     assert_eq!(a.path, vp("file:///izq/uno.txt"));
     assert_eq!(b.path, vp("file:///der/dos.txt"));
 }
 
-/// Un nombre que no es UTF-8 llega byte a byte: la hoja no lo reinterpreta ni
-/// lo pierde por el camino.
+/// A name that is not UTF-8 arrives byte for byte: the sheet neither
+/// reinterprets it nor loses it along the way.
 #[test]
 fn un_nombre_no_utf8_llega_entero() {
     let dir = vp("file:///izq");
@@ -213,36 +218,37 @@ fn un_nombre_no_utf8_llega_entero() {
     );
     app.toggle_metadata();
     let res = resolver(&mut app);
-    let (_, w) = want(&app, &res).expect("objetivo");
+    let (_, w) = want(&app, &res).expect("target");
     assert_eq!(w, Want::Entry(Box::new(hostile), false));
 }
 
-/// La hoja NO se lleva el teclado NUNCA: sigue al cursor, y con las flechas
-/// dentro dejaría de seguir a nada. Dos estados, abrir y cerrar.
+/// The sheet NEVER takes the keyboard: it follows the cursor, and with the
+/// arrows inside it would stop following anything. Two states, open and
+/// close.
 ///
-/// Tenía tres, y el del medio era falso: ponía un `KeyOwner` que no consumía
-/// nadie, así que la hoja cogía el borde de foco mientras las flechas seguían
-/// moviendo el listado de al lado, y hacía falta una tercera pulsación para
-/// cerrar lo que la segunda no había enfocado (#243).
+/// It used to have three, and the middle one was fake: it set a `KeyOwner`
+/// nobody consumed, so the sheet took the focus border while the arrows
+/// kept moving the neighboring listing, and a third press was needed to
+/// close what the second had not focused (#243).
 #[test]
 fn la_hoja_no_se_lleva_el_teclado_nunca() {
     let mut app = app_de_prueba();
     app.toggle_metadata();
-    assert!(app.metadata_slot().is_some(), "abierta");
+    assert!(app.metadata_slot().is_some(), "open");
     assert_eq!(
         app.key_owner(),
         KeyOwner::Panes,
-        "el cursor sigue siendo tuyo"
+        "the cursor is still yours"
     );
 
     app.toggle_metadata();
-    assert!(app.metadata_slot().is_none(), "la segunda cierra");
+    assert!(app.metadata_slot().is_none(), "the second one closes it");
     assert_eq!(app.key_owner(), KeyOwner::Panes);
 }
 
-/// El panel de procesos hace lo contrario, y a propósito: se abre para actuar
-/// sobre una tarea, así que toma el teclado de entrada y la segunda pulsación
-/// cierra. La franja de tareas no se toca en ningún momento.
+/// The processes panel does the opposite, on purpose: it opens to act on a
+/// task, so it takes the keyboard on entry and the second press closes it.
+/// The tasks strip is not touched at any point.
 #[test]
 fn el_panel_de_procesos_toma_el_teclado_al_abrir() {
     let mut app = app_de_prueba();
@@ -258,11 +264,11 @@ fn el_panel_de_procesos_toma_el_teclado_al_abrir() {
         .count();
 
     app.toggle_processes();
-    assert!(app.processes_slot().is_some(), "abierto");
+    assert!(app.processes_slot().is_some(), "open");
     assert_eq!(app.key_owner(), KeyOwner::Processes);
 
     app.toggle_processes();
-    assert!(app.processes_slot().is_none(), "cerrado");
+    assert!(app.processes_slot().is_none(), "closed");
     assert_eq!(app.key_owner(), KeyOwner::Panes);
 
     let tasks_despues = app
@@ -275,11 +281,11 @@ fn el_panel_de_procesos_toma_el_teclado_al_abrir() {
                 .is_some_and(|k| k.as_str() == "tasks")
         })
         .count();
-    assert_eq!(tasks_antes, tasks_despues, "la franja sigue donde estaba");
+    assert_eq!(tasks_antes, tasks_despues, "the strip stays where it was");
 }
 
-/// Cerrar cualquiera de los dos devuelve el árbol de antes, sin dejar un
-/// `Split` degenerado detrás.
+/// Closing either of the two returns the earlier tree, with no degenerate
+/// `Split` left behind.
 #[test]
 fn cerrar_devuelve_el_arbol_de_antes() {
     let mut app = app_de_prueba();
@@ -287,9 +293,9 @@ fn cerrar_devuelve_el_arbol_de_antes() {
 
     app.toggle_metadata();
     app.toggle_metadata();
-    assert_eq!(app.layout, before, "la hoja no dejó rastro");
+    assert_eq!(app.layout, before, "the sheet left no trace");
 
     app.toggle_processes();
     app.toggle_processes();
-    assert_eq!(app.layout, before, "el panel de procesos tampoco");
+    assert_eq!(app.layout, before, "neither did the processes panel");
 }

@@ -191,10 +191,10 @@ impl Estado {
             .into_iter()
             .filter(|(l, _)| self.log_panel.matches(l))
             .collect();
-        let desde = self.log_panel.window_start(visibles.len(), self.log_filas);
+        let start = self.log_panel.window_start(visibles.len(), self.log_filas);
         let ventana = visibles
             .iter()
-            .skip(desde)
+            .skip(start)
             .take(self.log_filas)
             .map(|(l, s)| Self::linea_de_registro(l, *s));
         crate::dto::LogSlotView {
@@ -227,7 +227,7 @@ impl Estado {
             ),
             following: self.log_panel.following(),
             total: visibles.len() as u64,
-            first_visible: desde as u64,
+            first_visible: start as u64,
             dropped_note: self.nota_de_descartes(fuente),
             capturing: self.nota_de_captura(fuente),
             source: clamp_display(norte_i18n::t_in(

@@ -345,7 +345,7 @@ impl Estado {
             );
         }
         let dir = self.hueco().pane.dir().clone();
-        let donde = Self::linea_de_ruta(&dir);
+        let location_line = Self::linea_de_ruta(&dir);
         let id = ModalId(self.siguiente_modal);
         self.siguiente_modal += 1;
         let vista = DialogView {
@@ -356,7 +356,7 @@ impl Estado {
             asker: None,
             deadline: None,
             deadline_at_ms: None,
-            body: vec![donde],
+            body: vec![location_line],
             overflow_note: String::new(),
             overflow_hostile: false,
             choices: vec![
@@ -415,13 +415,13 @@ impl Estado {
                 );
             }
         };
-        let donde = Self::linea_de_ruta(&dest_dir);
+        let location_line = Self::linea_de_ruta(&dest_dir);
         let id = ModalId(self.siguiente_modal);
         self.siguiente_modal += 1;
         let vista = DialogView {
             id,
             title_key: "modal-split-title".to_owned(),
-            destination: Some(donde),
+            destination: Some(location_line),
             subject: None,
             asker: None,
             deadline: None,
@@ -622,7 +622,7 @@ impl Estado {
 
     pub(super) fn pedir_mkdir(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let dir = self.hueco().pane.dir().clone();
-        let donde = Self::linea_de_ruta(&dir);
+        let location_line = Self::linea_de_ruta(&dir);
         let id = ModalId(self.siguiente_modal);
         self.siguiente_modal += 1;
         let vista = DialogView {
@@ -636,7 +636,7 @@ impl Estado {
             asker: None,
             deadline: None,
             deadline_at_ms: None,
-            body: vec![donde],
+            body: vec![location_line],
             overflow_note: String::new(),
             overflow_hostile: false,
             choices: vec![
@@ -824,7 +824,7 @@ impl Estado {
                 fuera,
             );
         }
-        let donde = Self::linea_de_ruta(&dir);
+        let location_line = Self::linea_de_ruta(&dir);
         let id = ModalId(self.siguiente_modal);
         self.siguiente_modal += 1;
         let vista = DialogView {
@@ -835,7 +835,7 @@ impl Estado {
             asker: None,
             deadline: None,
             deadline_at_ms: None,
-            body: vec![donde],
+            body: vec![location_line],
             overflow_note: String::new(),
             overflow_hostile: false,
             choices: vec![

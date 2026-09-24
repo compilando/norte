@@ -305,7 +305,7 @@ mod tests {
     /// #139: properties come from the LISTING, and over a folder they
     /// request the one thing the listing doesn't know.
     #[test]
-    fn las_propiedades_de_una_carpeta_piden_contarla() {
+    fn a_folders_properties_ask_to_count_it() {
         let mut app = app_with_entries(&["a.txt"]);
         // Over a file there's nothing to count: its size is already there.
         assert!(app.open_properties().is_none());
@@ -318,7 +318,7 @@ mod tests {
     /// and showing that number here would be answering a different
     /// question.
     #[test]
-    fn el_recuento_ajeno_no_entra_en_el_dialogo() {
+    fn a_foreign_count_does_not_enter_the_dialog() {
         use norte_proto::TaskId;
 
         let mut app = app_with_entries(&["a.txt"]);
@@ -339,7 +339,7 @@ mod tests {
     /// With no dialog open, a count has nowhere to go and says so: it's
     /// what makes the run loop send the number to the status bar.
     #[test]
-    fn sin_dialogo_el_recuento_no_encuentra_donde_ir() {
+    fn with_no_dialog_the_count_has_nowhere_to_go() {
         let mut app = app_with_entries(&["a.txt"]);
         assert!(!app.properties_sized(norte_proto::TaskId::new(1), 10, 1));
     }
@@ -348,7 +348,7 @@ mod tests {
     /// active, sorts ascending if new — and ONLY over the focused panel: the
     /// order belongs to one listing, like the cursor.
     #[test]
-    fn una_tecla_de_orden_solo_toca_el_panel_con_el_foco() {
+    fn a_sort_key_only_touches_the_panel_with_focus() {
         use norte_frontend::{SortColumn, SortDir};
 
         let mut app = app_dos_panes();
@@ -376,7 +376,7 @@ mod tests {
     /// And `dirs_first` isn't touched by any sort key: it's a preference,
     /// not a column criterion.
     #[test]
-    fn una_tecla_de_orden_no_toca_los_directorios_primero() {
+    fn a_sort_key_does_not_touch_dirs_first() {
         use norte_frontend::SortColumn;
 
         let mut app = app_dos_panes();
@@ -390,7 +390,7 @@ mod tests {
     /// #108 b4: `apply_scheme_sort` applies the config's order to the pane
     /// per its scheme — the cd hook and startup go through here.
     #[test]
-    fn apply_scheme_sort_ordena_por_la_config() {
+    fn apply_scheme_sort_orders_by_the_config() {
         use norte_frontend::columns::ColumnsSettings;
         let dir = VPath::parse("mem:///").unwrap();
         let mk = |n: &str, size: Option<u64>| {
@@ -433,7 +433,7 @@ mod tests {
     /// CONSUMES it (mc/TC batch doctrine); a rename (cursor) never touches
     /// the marks, and neither does Esc.
     #[test]
-    fn el_submit_de_un_item_consume_la_marca_y_el_rename_no() {
+    fn submitting_an_item_consumes_the_mark_and_rename_does_not() {
         let dir = VPath::parse("mem:///").unwrap();
         let mk = |n: &str| Entry {
             attrs: std::collections::BTreeMap::new(),
@@ -599,7 +599,7 @@ mod tests {
     /// the `dialog` context through a routing bug, it would still be inert
     /// there.
     #[test]
-    fn dialog_action_es_siempre_none_para_mark_pattern() {
+    fn dialog_action_is_always_none_for_mark_pattern() {
         let m = Modal::MarkPattern {
             mark: true,
             pattern: String::new(),

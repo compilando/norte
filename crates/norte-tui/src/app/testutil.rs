@@ -46,7 +46,7 @@ pub fn app_dos_panes() -> App {
 
 /// Some caps or other: what's tested is the per-scheme CACHE, not which
 /// flags the provider carries.
-pub fn caps_de_test() -> norte_proto::Capabilities {
+pub fn test_caps() -> norte_proto::Capabilities {
     norte_proto::Capabilities {
         flags: norte_proto::CapabilityFlags::RENAME_ATOMIC,
         max_path: None,
@@ -93,7 +93,7 @@ pub fn app_with_two_panes(names: &[&str], dst: &str) -> App {
 }
 
 /// A `connection.degraded` notice like the wire's (#44).
-pub fn degradacion_de_test(scheme: &str, host: &str) -> norte_proto::methods::ConnectionDegraded {
+pub fn test_degraded(scheme: &str, host: &str) -> norte_proto::methods::ConnectionDegraded {
     norte_proto::methods::ConnectionDegraded {
         scheme: scheme.to_owned(),
         host: host.to_owned(),
@@ -104,11 +104,7 @@ pub fn degradacion_de_test(scheme: &str, host: &str) -> norte_proto::methods::Co
 
 /// A one-sided (orphan) comparison row with the requested kind and size, for
 /// the `compare_size_probe_targets` tests (#157).
-pub fn fila_huerfana(
-    id: u64,
-    kind: EntryKind,
-    size: Option<u64>,
-) -> norte_proto::methods::CompareRow {
+pub fn orphan_row(id: u64, kind: EntryKind, size: Option<u64>) -> norte_proto::methods::CompareRow {
     use norte_proto::methods::{CompareConfidence, CompareCriterion, CompareVerdict};
     norte_proto::methods::CompareRow {
         id,

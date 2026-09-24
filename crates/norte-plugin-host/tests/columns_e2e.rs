@@ -1,20 +1,20 @@
-//! E2E de la interfaz WIT `columns` (ADR 0037 decisión 2, world
-//! `norte-columns`): compila el guest REAL `examples-wasm/columns-demo` a
-//! `wasm32-wasip2` y lo ejecuta a través de
-//! [`PluginRuntime::instantiate_columns`], verificando el contrato
-//! POSICIONAL 1:1 (ADR 0037 tabla de decisión 1: `result[i]` valora
-//! `entries[i]`, nunca reordenado ni disperso) contra un guest que valora la
-//! columna `"name-len"` con el largo en bytes del nombre, y responde `none`
-//! para toda la página cuando se le pide un id de columna que no declara.
+//! E2E of the WIT `columns` interface (ADR 0037 decision 2, world
+//! `norte-columns`): compiles the REAL guest `examples-wasm/columns-demo`
+//! to `wasm32-wasip2` and runs it through
+//! [`PluginRuntime::instantiate_columns`], verifying the POSITIONAL 1:1
+//! contract (ADR 0037 decision table 1: `result[i]` values `entries[i]`,
+//! never reordered nor sparse) against a guest that values the
+//! `"name-len"` column with the name's length in bytes, and answers `none`
+//! for the whole page when asked for a column id it does not declare.
 //!
-//! SKIP si el target `wasm32-wasip2` no está instalado.
+//! SKIP if the `wasm32-wasip2` target is not installed.
 
 use norte_plugin_host::{Capabilities, PluginRuntime};
 
 mod support;
 
-/// La ubicación tal y como cruza al guest: token y prefijo vacío (la raíz ES
-/// el directorio visible en estos tests).
+/// The location as it crosses to the guest: token and empty prefix (the
+/// root IS the visible directory in these tests).
 fn loc(token: &str) -> norte_plugin_host::columns_iface::LocationRef {
     norte_plugin_host::columns_iface::LocationRef {
         token: token.to_owned(),
@@ -31,68 +31,71 @@ fn columns_wit_e2e_positional_roundtrip_wasm_real() {
     let rt = PluginRuntime::new().expect("PluginRuntime::new");
     let mut inst = rt
         .instantiate_columns(&wasm, Capabilities::default())
-        .expect("instanciar el columns");
+        .expect("instantiate the columns guest");
 
     let entries: Vec<Vec<u8>> = vec![b"a.rs".to_vec(), b"README.md".to_vec(), b"x".to_vec()];
     let out = inst
         .column_values("name-len", None, &entries)
-        .expect("column_values sin trap");
+        .expect("column_values without a trap");
 
-    assert_eq!(out.len(), entries.len(), "positional 1:1, nunca disperso");
+    assert_eq!(out.len(), entries.len(), "positional 1:1, never sparse");
     assert_eq!(out[0].as_deref(), Some("4"), "\"a.rs\" = 4 bytes");
     assert_eq!(out[1].as_deref(), Some("9"), "\"README.md\" = 9 bytes");
     assert_eq!(out[2].as_deref(), Some("1"), "\"x\" = 1 byte");
 
-    // Un id de columna que el guest NO declara: `none` para TODA la página,
-    // nunca se adivina ni se omite del vector posicional.
+    // A column id the guest does NOT declare: `none` for the WHOLE page,
+    // never guessed nor omitted from the positional vector.
     let unknown = inst
-        .column_values("no-declarada", None, &entries)
-        .expect("column_values sin trap");
+        .column_values("not-declared", None, &entries)
+        .expect("column_values without a trap");
     assert_eq!(unknown, vec![None, None, None]);
 
-    // Un lote VACÍO es un caso límite legítimo (página sin entradas visibles).
+    // An EMPTY batch is a legitimate edge case (a page with no visible
+    // entries).
     let empty = inst
         .column_values("name-len", None, &[])
-        .expect("lote vacío sin trap");
+        .expect("empty batch without a trap");
     assert!(empty.is_empty());
 }
 
-/// ADR 0057: un guest SIN la capacidad `location` aprobada no resuelve ni un
-/// byte, y el host no llega siquiera a mirar el token — el mismo criterio que
-/// `fs-read` scoped. El guest sigue contestando: celdas vacías, no una traba.
+/// ADR 0057: a guest WITHOUT the `location` capability approved resolves
+/// not a single byte, and the host does not even look at the token — the
+/// same criterion as scoped `fs-read`. The guest keeps answering: empty
+/// cells, not a jam.
 #[test]
-fn sin_la_capability_el_host_niega_antes_de_tocar_nada_wasm_real() {
+fn without_the_capability_the_host_denies_before_touching_anything_wasm_real() {
     let Some(wasm) = support::build_guest("columns-demo") else {
         return;
     };
-    let espia = std::sync::Arc::new(support::SpyLocation::default());
+    let spy = std::sync::Arc::new(support::SpyLocation::default());
     let rt = PluginRuntime::new().expect("PluginRuntime::new");
     let mut inst = rt
         .instantiate_columns_with_location(
             &wasm,
-            Capabilities::default(), // sin `location`
-            Some(espia.clone()),
+            Capabilities::default(), // without `location`
+            Some(spy.clone()),
         )
-        .expect("instanciar el columns");
+        .expect("instantiate the columns guest");
 
     let out = inst
         .column_values("stat-size", Some(&loc("tok")), &[b"a.txt".to_vec()])
-        .expect("column_values sin trap");
-    assert_eq!(out, vec![None], "sin capacidad, celda vacía");
-    assert_eq!(espia.calls(), 0, "el host no resolvió ni un byte");
+        .expect("column_values without a trap");
+    assert_eq!(out, vec![None], "without the capability, an empty cell");
+    assert_eq!(spy.calls(), 0, "the host did not resolve a single byte");
 }
 
-/// Con la capacidad aprobada Y un resolutor inyectado, el guest lee de verdad.
+/// With the capability approved AND an injected resolver, the guest
+/// really reads.
 #[test]
-fn con_la_capability_el_guest_lee_bajo_el_token_wasm_real() {
+fn with_the_capability_the_guest_reads_under_the_token_wasm_real() {
     let Some(wasm) = support::build_guest("columns-demo") else {
         return;
     };
-    let espia = std::sync::Arc::new(support::SpyLocation::default());
+    let spy = std::sync::Arc::new(support::SpyLocation::default());
     let rt = PluginRuntime::new().expect("PluginRuntime::new");
     let mut inst = rt
-        .instantiate_columns_with_location(&wasm, support::caps_con_location(), Some(espia.clone()))
-        .expect("instanciar el columns");
+        .instantiate_columns_with_location(&wasm, support::caps_with_location(), Some(spy.clone()))
+        .expect("instantiate the columns guest");
 
     let out = inst
         .column_values(
@@ -100,29 +103,30 @@ fn con_la_capability_el_guest_lee_bajo_el_token_wasm_real() {
             Some(&loc("tok")),
             &[b"a.txt".to_vec(), b"no".to_vec()],
         )
-        .expect("column_values sin trap");
+        .expect("column_values without a trap");
     assert_eq!(
         out,
         vec![Some("42".to_owned()), None],
-        "lo que el host resuelve llega tal cual; lo que no, celda vacía"
+        "what the host resolves arrives as-is; what it doesn't, an empty cell"
     );
-    assert_eq!(espia.calls(), 2, "una llamada por entrada");
+    assert_eq!(spy.calls(), 2, "one call per entry");
 }
 
-/// Sin token —el host no pudo abrir el directorio— el guest tampoco falla.
+/// Without a token — the host could not open the directory — the guest
+/// does not fail either.
 #[test]
-fn sin_token_el_guest_sigue_contestando_wasm_real() {
+fn without_a_token_the_guest_keeps_answering_wasm_real() {
     let Some(wasm) = support::build_guest("columns-demo") else {
         return;
     };
-    let espia = std::sync::Arc::new(support::SpyLocation::default());
+    let spy = std::sync::Arc::new(support::SpyLocation::default());
     let rt = PluginRuntime::new().expect("PluginRuntime::new");
     let mut inst = rt
-        .instantiate_columns_with_location(&wasm, support::caps_con_location(), Some(espia.clone()))
-        .expect("instanciar el columns");
+        .instantiate_columns_with_location(&wasm, support::caps_with_location(), Some(spy.clone()))
+        .expect("instantiate the columns guest");
     let out = inst
         .column_values("stat-size", None, &[b"a.txt".to_vec()])
-        .expect("column_values sin trap");
+        .expect("column_values without a trap");
     assert_eq!(out, vec![None]);
-    assert_eq!(espia.calls(), 0);
+    assert_eq!(spy.calls(), 0);
 }

@@ -474,7 +474,7 @@ async fn the_first_esc_closes_the_card_and_the_second_the_manager() {
 
 /// Two extensions for the buttons (bridge 61): one approved and enabled, and
 /// one unapproved.
-fn dos_para_gobernar() -> Arc<Falso> {
+fn two_to_govern() -> Arc<Falso> {
     arbol_con_plugins(
         vec![extension("acme.ftp", "FTP de ACME", true), {
             let mut p = extension("org.norte.demo", "Demo", false);
@@ -492,7 +492,7 @@ fn dos_para_gobernar() -> Arc<Falso> {
 /// around consent.
 #[tokio::test]
 async fn the_approve_button_opens_the_same_question_as_the_key() {
-    let backend = dos_para_gobernar();
+    let backend = two_to_govern();
     let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
     h.dispatch(tecla("F12")).await.expect("host alive");
@@ -557,7 +557,7 @@ async fn the_approve_button_opens_the_same_question_as_the_key() {
 /// deletes; afterward the catalogue is re-requested and the row is gone.
 #[tokio::test]
 async fn uninstalling_asks_and_only_yes_deletes() {
-    let backend = dos_para_gobernar();
+    let backend = two_to_govern();
     let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
     h.dispatch(tecla("F12")).await.expect("host alive");
@@ -641,7 +641,7 @@ async fn uninstalling_asks_and_only_yes_deletes() {
 /// there was no way to ask for it from the window.
 #[tokio::test]
 async fn a_broken_extension_is_shown_and_only_uninstalls() {
-    let Ok(mut f) = Arc::try_unwrap(dos_para_gobernar()) else {
+    let Ok(mut f) = Arc::try_unwrap(two_to_govern()) else {
         panic!("the freshly made double is not shared");
     };
     f.errores_de_carga = vec![
@@ -722,7 +722,7 @@ async fn a_broken_extension_is_shown_and_only_uninstalls() {
 /// like with the key.
 #[tokio::test]
 async fn enabling_an_unapproved_one_via_button_is_refused() {
-    let backend = dos_para_gobernar();
+    let backend = two_to_govern();
     let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
     h.dispatch(tecla("F12")).await.expect("host alive");
@@ -765,7 +765,7 @@ async fn enabling_an_unapproved_one_via_button_is_refused() {
 /// page, like `F1` on the row in the terminal.
 #[tokio::test]
 async fn the_help_button_opens_that_extensions_page() {
-    let backend = dos_para_gobernar();
+    let backend = two_to_govern();
     let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
     h.dispatch(tecla("F12")).await.expect("host alive");

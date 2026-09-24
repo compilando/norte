@@ -1,4 +1,4 @@
-//! `connections.toml`: SOLO referencias (regla 10), nunca secretos (ADR 0015 B).
+//! `connections.toml`: ONLY references (rule 10), never secrets (ADR 0015 B).
 //!
 //! ```toml
 //! [connections.trabajo]
@@ -19,173 +19,176 @@ use serde::Deserialize;
 
 use crate::error::ConnectError;
 
-/// Fichero `connections.toml` parseado.
+/// Parsed `connections.toml` file.
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConnectionsFile {
-    /// Conexiones por nombre.
+    /// Connections by name.
     #[serde(default)]
     pub connections: BTreeMap<String, ConnectionSpec>,
 }
 
-/// Una conexión remota: referencia, jamás el secreto (ADR 0015).
+/// A remote connection: a reference, never the secret (ADR 0015).
 ///
-/// `deny_unknown_fields`: un campo inesperado (p. ej. un `password = "…"`
-/// inline que el usuario intente meter aquí) es un ERROR ruidoso, no se ignora
-/// en silencio — los secretos van al keyring/env/age, jamás a config plano.
+/// `deny_unknown_fields`: an unexpected field (e.g. an inline `password = "…"`
+/// the user tries to put here) is a LOUD ERROR, not silently ignored —
+/// secrets go to the keyring/env/age, never to plain config.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConnectionSpec {
-    /// `scheme://[user@]host[:port]` (para s3: `s3://bucket`, sin user/puerto).
+    /// `scheme://[user@]host[:port]` (for s3: `s3://bucket`, no user/port).
     pub url: String,
-    /// Método de auth. Default: `agent` (SSH agent / anónimo / cadena ambiente
-    /// de opendal en s3).
+    /// Auth method. Default: `agent` (SSH agent / anonymous / opendal's
+    /// ambient chain on s3).
     #[serde(default)]
     pub auth: AuthMethod,
-    /// Ruta a la clave privada (para `auth = "key"`). NUNCA el secreto en sí:
-    /// la passphrase de la clave se resuelve por el `SecretResolver`.
+    /// Path to the private key (for `auth = "key"`). NEVER the secret
+    /// itself: the key's passphrase is resolved by the `SecretResolver`.
     pub key: Option<PathBuf>,
-    /// Política TLS para FTP. Default: `require` (FTPS).
+    /// TLS policy for FTP. Default: `require` (FTPS).
     #[serde(default)]
     pub tls: TlsMode,
-    /// (s3) Región del bucket. Con endpoint AWS es obligatoria; con endpoint
-    /// custom (`MinIO`) se asume `us-east-1` si falta.
+    /// (s3) Bucket region. Mandatory with an AWS endpoint; with a custom
+    /// endpoint (`MinIO`) `us-east-1` is assumed if missing.
     #[serde(default)]
     pub region: Option<String>,
-    /// (s3) Endpoint del servicio (`https://minio.interno:9000`). Ausente =
-    /// AWS. http = opt-in visible (inseguro).
+    /// (s3) Service endpoint (`https://minio.interno:9000`). Absent = AWS.
+    /// http = visible opt-in (insecure).
     #[serde(default)]
     pub endpoint: Option<String>,
-    /// (s3) Access key id — NO es secreto (identificador público): puede ir en
-    /// config. El secret-access-key SÍ va por el `SecretResolver`.
+    /// (s3) Access key id — NOT a secret (public identifier): it can go in
+    /// config. The secret-access-key DOES go through the `SecretResolver`.
     #[serde(default)]
     pub access_key_id: Option<String>,
-    /// (s3) Estilo de direccionamiento. Default: virtual-host sin endpoint
-    /// (AWS), path con endpoint custom (convención `MinIO`).
+    /// (s3) Addressing style. Default: virtual-host without an endpoint
+    /// (AWS), path with a custom endpoint (`MinIO` convention).
     #[serde(default)]
     pub addressing: Option<AddressingStyle>,
-    /// Papelera lógica `.norte-trash/` en esta conexión (ADR 0019). Off por
-    /// defecto: el borrado degrada a permanente con aviso del frontend.
+    /// Logical `.norte-trash/` trash on this connection (ADR 0019). Off by
+    /// default: delete degrades to permanent with a frontend warning.
     #[serde(default)]
     pub logical_trash: bool,
-    /// (sftp, `auth = "key"`) Acepta una clave de cliente RSA (ADR 0150).
+    /// (sftp, `auth = "key"`) Accepts an RSA client key (ADR 0150).
     ///
-    /// Off por defecto: sin él RSA se rechaza como siempre (ADR 0015). Con él
-    /// se firma con el crate `rsa`, el camino de RUSTSEC-2023-0071 (Marvin)
-    /// que la 0015 cerró, así que es un riesgo ACEPTADO por conexión y no una
-    /// preferencia: cada conexión que firma con RSA lo avisa en el log, y
-    /// `norte doctor` lo recuerda mientras esté puesto. Solo rsa-sha2: un
-    /// servidor que únicamente acepta `ssh-rsa` (SHA-1) se rechaza igual.
+    /// Off by default: without it RSA is rejected as always (ADR 0015). With
+    /// it, signing goes through the `rsa` crate, the RUSTSEC-2023-0071
+    /// (Marvin) path that 0015 closed, so it is an ACCEPTED risk per
+    /// connection and not a preference: every connection that signs with RSA
+    /// warns about it in the log, and `norte doctor` keeps reminding while
+    /// it is set. Only rsa-sha2: a server that only accepts `ssh-rsa`
+    /// (SHA-1) is rejected all the same.
     #[serde(default)]
     pub allow_rsa: bool,
-    /// De dónde sale el secreto cuando los tres escalones de siempre no lo
-    /// tienen (#325).
+    /// Where the secret comes from when the usual three rungs do not have it
+    /// (#325).
     ///
-    /// Un valor CERRADO y no una expresión, y esto se decidió a propósito: una
-    /// gramática aquí invitaría a `${env:…}` y a `$(comando)` en un fichero que
-    /// se lee al arrancar, y la regla 10 existe justo para que ahí no pasen
-    /// cosas. Si algún día hace falta otra fuente se añade otro valor, no una
-    /// sintaxis.
+    /// A CLOSED value and not an expression, and this was decided on
+    /// purpose: a grammar here would invite `${env:…}` and `$(command)` in a
+    /// file that is read at startup, and rule 10 exists precisely so that
+    /// does not happen there. If another source is ever needed, add another
+    /// value, not a syntax.
     #[serde(default)]
     pub secret: SecretSource,
 }
 
-/// Cómo autenticarse.
+/// How to authenticate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum AuthMethod {
-    /// SSH agent (sftp), anónimo (ftp), o cadena ambiente de opendal (s3:
-    /// `AWS_*`/perfil/IMDS — el caso CI/corporativo).
+    /// SSH agent (sftp), anonymous (ftp), or opendal's ambient chain (s3:
+    /// `AWS_*`/profile/IMDS — the CI/corporate case).
     #[default]
     Agent,
-    /// Clave privada (`key = …`), passphrase por el resolver.
+    /// Private key (`key = …`), passphrase via the resolver.
     Key,
-    /// Contraseña por el resolver.
+    /// Password via the resolver.
     Password,
-    /// (s3) Access key: `access_key_id` en config + secret-access-key por el
-    /// resolver.
+    /// (s3) Access key: `access_key_id` in config + secret-access-key via
+    /// the resolver.
     ///
-    /// Es determinista porque las credenciales explícitas GANAN, no porque la
-    /// cadena ambiente esté apagada: `disable_config_load` solo apaga entorno,
-    /// perfil e IMDS, y en opendal 0.58 deja dentro SSO, web-identity, process
-    /// y ECS (#321). Lo que impide llegar a esa cadena es que el conector
-    /// rechaza un `access_key_id` o un secreto ausentes o VACÍOS (#320).
+    /// It is deterministic because explicit credentials WIN, not because the
+    /// ambient chain is off: `disable_config_load` only turns off env,
+    /// profile and IMDS, and in opendal 0.58 it leaves SSO, web-identity,
+    /// process and ECS in place (#321). What keeps that chain from being
+    /// reached is that the connector rejects an `access_key_id` or a secret
+    /// that is missing or EMPTY (#320).
     AccessKey,
 }
 
-/// De dónde sale el secreto de una conexión cuando no está donde se busca
-/// siempre (#325).
+/// Where a connection's secret comes from when it is not where it is always
+/// looked for (#325).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum SecretSource {
-    /// Solo los tres escalones de siempre: `NORTE_SECRET_<CONN>`, keyring,
-    /// `secrets.age`. Si ninguno lo tiene, la conexión falla — que es lo que
-    /// hacía norte hasta #325.
+    /// Only the usual three rungs: `NORTE_SECRET_<CONN>`, keyring,
+    /// `secrets.age`. If none has it, the connection fails — which is what
+    /// norte did until #325.
     #[default]
     Stored,
-    /// Y si ninguno lo tiene, PREGUNTARLO a quien está delante.
+    /// And if none has it, ASK whoever is at the keyboard.
     ///
-    /// El cuarto escalón y no el primero: una máquina de CI con la variable
-    /// puesta nunca ve un diálogo, y un portátil no necesita la variable. Lo
-    /// que se teclee vive en memoria mientras dure la sesión del daemon y no se
-    /// escribe en ninguna parte.
+    /// The fourth rung and not the first: a CI machine with the variable set
+    /// never sees a dialog, and a laptop does not need the variable. What
+    /// gets typed lives in memory for as long as the daemon's session lasts
+    /// and is not written anywhere.
     ///
-    /// **Solo con `auth = "password"` y `auth = "access-key"`.** Con `agent`
-    /// no hay secreto que pedir, y con `key` el secreto es la passphrase de la
-    /// clave, donde vacío y ausente son lo mismo — preguntar ahí sacaría un
-    /// diálogo cada vez que alguien usa una clave sin cifrar. `norte doctor`
-    /// avisa (`conn-secret-prompt-inert`) si la clave está puesta donde no
-    /// hace nada.
+    /// **Only with `auth = "password"` and `auth = "access-key"`.** With
+    /// `agent` there is no secret to ask for, and with `key` the secret is
+    /// the key's passphrase, where empty and absent are the same thing —
+    /// asking there would pop up a dialog every time someone uses an
+    /// unencrypted key. `norte doctor` warns (`conn-secret-prompt-inert`) if
+    /// this is set somewhere it does nothing.
     Prompt,
 }
 
-/// Estilo de direccionamiento S3 (ADR 0016 I).
+/// S3 addressing style (ADR 0016 I).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum AddressingStyle {
-    /// `https://bucket.host/key` (AWS por defecto).
+    /// `https://bucket.host/key` (AWS default).
     VirtualHost,
-    /// `https://host/bucket/key` (`MinIO` y S3-compatibles).
+    /// `https://host/bucket/key` (`MinIO` and S3-compatibles).
     Path,
 }
 
-/// Política TLS de FTP (ADR 0014/0015 F).
+/// FTP TLS policy (ADR 0014/0015 F).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum TlsMode {
-    /// FTPS obligatorio (AUTH TLS). Default seguro.
+    /// FTPS mandatory (AUTH TLS). Safe default.
     #[default]
     Require,
-    /// Intenta TLS; si el servidor RECHAZA `AUTH TLS`, cae a plano con aviso.
-    /// OJO: no protege ante un atacante ACTIVO (puede suprimir el AUTH y
-    /// recibir las credenciales en claro). Un fallo de handshake/validación
-    /// con el AUTH ya aceptado NO degrada (fail-closed: posible MITM).
+    /// Tries TLS; if the server REJECTS `AUTH TLS`, falls back to plain with
+    /// a warning. WATCH OUT: does not protect against an ACTIVE attacker (it
+    /// can suppress the AUTH and receive the credentials in the clear). A
+    /// handshake/validation failure with AUTH already accepted does NOT
+    /// degrade (fail-closed: possible MITM).
     Allow,
-    /// FTP plano (inseguro): opt-in EXPLÍCITO.
+    /// Plain FTP (insecure): EXPLICIT opt-in.
     Plain,
 }
 
-/// Endpoint extraído de una `url` (`scheme://[user@]host[:port]`).
+/// Endpoint extracted from a `url` (`scheme://[user@]host[:port]`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Endpoint {
     /// `sftp` | `ftp`.
     pub scheme: String,
-    /// Usuario, si la URL lo lleva.
+    /// User, if the URL carries one.
     pub user: Option<String>,
-    /// Host (sin `[]` de IPv6).
+    /// Host (without IPv6's `[]`).
     pub host: String,
-    /// Puerto, si la URL lo lleva.
+    /// Port, if the URL carries one.
     pub port: Option<u16>,
 }
 
 impl Endpoint {
-    /// `scheme://host[:puerto]` para ENSEÑAR, sin userinfo (#325).
+    /// `scheme://host[:port]` to SHOW, without userinfo (#325).
     ///
-    /// El usuario se cae a propósito: la misma redacción que
-    /// `ConnectionDegraded` aplica a su `host`, y por el mismo motivo — un
-    /// `user:pass@` en la URL no debe llegar a la pantalla ni al log
-    /// (regla 10). Lo que queda es lo que hace contestable un diálogo de
-    /// contraseña: A QUIÉN se la va a dar.
+    /// The user is dropped on purpose: the same redaction `ConnectionDegraded`
+    /// applies to its `host`, and for the same reason — a `user:pass@` in
+    /// the URL must not reach the screen or the log (rule 10). What is left
+    /// is what makes a password dialog answerable: WHO it is going to be
+    /// given to.
     ///
     /// ```
     /// # use norte_connect::ConnectionSpec;
@@ -203,23 +206,23 @@ impl Endpoint {
 }
 
 impl ConnectionSpec {
-    /// Parsea el `scheme://[user@]host[:port]` de la `url`.
+    /// Parses the `url`'s `scheme://[user@]host[:port]`.
     ///
     /// # Errors
-    /// Si la URL no tiene la forma esperada.
+    /// If the URL does not have the expected shape.
     pub fn endpoint(&self) -> Result<Endpoint, ConnectError> {
         parse_endpoint(&self.url)
     }
 
-    /// A dónde va de verdad esta conexión, para ENSEÑARLO al pedir el secreto
-    /// (#325). Sin userinfo, en ninguna de las dos mitades.
+    /// Where this connection really goes, to SHOW when asking for the secret
+    /// (#325). No userinfo, in either half.
     ///
-    /// No basta con la URL. En `s3` el «host» de la URL es el BUCKET, y el
-    /// servidor que va a recibir la credencial firmada es el `endpoint =` de
-    /// la entrada — que es justo la pieza que un `connections.toml` ajeno
-    /// puede apuntar a otro sitio. Enseñar solo `s3://mi-bucket` contaría la
-    /// mitad que no importa. Cuando hay endpoint explícito se enseñan las dos,
-    /// separadas por `@`.
+    /// The URL alone is not enough. In `s3` the URL's "host" is the BUCKET,
+    /// and the server that is going to receive the signed credential is the
+    /// entry's `endpoint =` — which is exactly the piece a foreign
+    /// `connections.toml` can point somewhere else. Showing only
+    /// `s3://mi-bucket` would tell the half that does not matter. When there
+    /// is an explicit endpoint, both are shown, separated by `@`.
     ///
     /// ```
     /// # use norte_connect::ConnectionSpec;
@@ -234,7 +237,7 @@ impl ConnectionSpec {
     /// ```
     ///
     /// # Errors
-    /// Si la URL no tiene la forma esperada.
+    /// If the URL does not have the expected shape.
     pub fn destination_display(&self) -> Result<String, ConnectError> {
         let base = self.endpoint()?.display();
         match self.endpoint.as_deref() {
@@ -244,72 +247,77 @@ impl ConnectionSpec {
     }
 }
 
-/// Quita el `user[:pass]@` de una URL de configuración, dejando el resto tal
-/// cual. Un `endpoint =` lo escribe una persona y puede llevar credenciales
-/// dentro; esto va a la pantalla y al log (regla 10).
+/// Strips the `user[:pass]@` from a config URL, leaving the rest as is. An
+/// `endpoint =` is written by a person and can carry credentials inside;
+/// this goes to the screen and the log (rule 10).
 fn sin_userinfo(url: &str) -> String {
-    let Some((scheme, resto)) = url.split_once("://") else {
-        // Sin esquema no hay authority que recortar: se devuelve entero, que
-        // es más honesto que adivinar dónde empieza.
+    let Some((scheme, rest)) = url.split_once("://") else {
+        // No scheme means no authority to trim: return it whole, which is
+        // more honest than guessing where it starts.
         return url.to_string();
     };
-    // El `@` de la authority es el ÚLTIMO antes de la primera `/`, porque una
-    // contraseña puede llevar arrobas.
-    let (authority, cola) = match resto.find('/') {
-        Some(i) => (&resto[..i], &resto[i..]),
-        None => (resto, ""),
+    // The authority's `@` is the LAST one before the first `/`, because a
+    // password can carry at-signs.
+    let (authority, tail) = match rest.find('/') {
+        Some(i) => (&rest[..i], &rest[i..]),
+        None => (rest, ""),
     };
-    let limpia = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
-    format!("{scheme}://{limpia}{cola}")
+    let clean = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
+    format!("{scheme}://{clean}{tail}")
 }
 
-/// Parser mínimo de `scheme://[user@]host[:port]` (sin path). Evita una dep de
-/// URL completa. El scheme es cualquiera válido para un `VPath`: el core
-/// decide después si lo sirve él o un provider plugin que lo declare.
+/// Minimal parser for `scheme://[user@]host[:port]` (no path). Avoids a
+/// full URL dependency. The scheme is anything valid for a `VPath`: the core
+/// decides afterward whether it serves it itself or a plugin provider that
+/// declares it.
 fn parse_endpoint(url: &str) -> Result<Endpoint, ConnectError> {
     let (scheme, rest) = url
         .split_once("://")
         .ok_or_else(|| ConnectError::InvalidUrl(url.to_string()))?;
-    // Solo authority: descarta cualquier `/path` accidental.
+    // Authority only: discards any accidental `/path`.
     let authority = rest.split('/').next().unwrap_or(rest);
-    // ÚLTIMO `@` (no el primero): un authority patológico `u@a:b@h` no debe
-    // colar un `:` en un tramo intermedio y caer luego por puerto inválido
-    // ecoando la URL con el secreto. Alinea con Authority::new de proto (#46).
+    // LAST `@` (not the first): a pathological authority `u@a:b@h` must not
+    // let a `:` in a middle segment sneak through and then fail on an
+    // invalid port while echoing the URL with the secret. Aligns with
+    // proto's Authority::new (#46).
     let (user, hostport) = match authority.rsplit_once('@') {
-        // `@` sin usuario (`sftp://@host`) es una URL malformada, no un host.
+        // `@` without a user (`sftp://@host`) is a malformed URL, not a host.
         Some(("", _)) => return Err(ConnectError::InvalidUrl(url.to_string())),
-        // `user:pass@host` NO se admite (regla 10: el secreto iría a config/
-        // logs). Mensaje ESTÁTICO, y este check va ANTES que el del scheme:
-        // ningún error posterior puede ecoar una URL con password (p. ej. el
-        // typo `ftps://u:pass@h` moriría por scheme ecoando el secreto).
+        // `user:pass@host` is NOT accepted (rule 10: the secret would go to
+        // config/logs). STATIC message, and this check goes BEFORE the
+        // scheme's: no later error can echo a URL with a password (e.g. the
+        // typo `ftps://u:pass@h` would otherwise die on scheme while echoing
+        // the secret).
         Some((u, _)) if u.contains(':') => {
             return Err(ConnectError::InvalidUrl(
-                "la URL no debe llevar password inline (user:pass@…); el secreto va por el \
-                 keyring/env/secrets.age"
+                "the URL must not carry an inline password (user:pass@…); the secret goes \
+                 through the keyring/env/secrets.age"
                     .to_string(),
             ));
         }
         Some((u, hp)) => (Some(u.to_string()), hp),
         None => (None, authority),
     };
-    // Cualquier scheme que un `VPath` pueda llevar: los del core y los que
-    // declare un provider plugin. La lista cerrada `sftp|ftp|s3` que hubo
-    // aquí hacía imposible que un plugin sirviera `webdav://` sin tocar este
-    // crate, que es justo lo que un plugin no puede tocar.
+    // Any scheme a `VPath` can carry: the core's and whatever a plugin
+    // provider declares. The closed `sftp|ftp|s3` list that used to be here
+    // made it impossible for a plugin to serve `webdav://` without touching
+    // this crate, which is exactly what a plugin must not touch.
     if norte_proto::Scheme::new(scheme).is_err() {
         return Err(ConnectError::InvalidUrl(url.to_string()));
     }
-    // s3://bucket: la authority es SOLO el bucket. Un `user@` en posición de
-    // usuario olería a credencial en la URL (regla 10) y el puerto va en el
-    // campo `endpoint`, no en la authority — ambos se rechazan.
+    // s3://bucket: the authority is ONLY the bucket. A `user@` in the user
+    // position would smell like a credential in the URL (rule 10) and the
+    // port goes in the `endpoint` field, not the authority — both are
+    // rejected.
     if scheme == "s3" && user.is_some() {
         return Err(ConnectError::InvalidUrl(
-            "s3://bucket no lleva user@ (las credenciales van por access_key_id + resolver)"
+            "s3://bucket does not carry user@ (credentials go through access_key_id + the \
+             resolver)"
                 .to_string(),
         ));
     }
-    // IPv6 SIEMPRE entre `[...]`; fuera de corchetes un `:` residual en el host
-    // sería un IPv6 sin corchetes (ambiguo) → inválido.
+    // IPv6 ALWAYS between `[...]`; outside brackets a leftover `:` in the
+    // host would be an unbracketed IPv6 (ambiguous) → invalid.
     let (host, port) = if let Some(rest) = hostport.strip_prefix('[') {
         let (h, tail) = rest
             .split_once(']')
@@ -331,15 +339,17 @@ fn parse_endpoint(url: &str) -> Result<Endpoint, ConnectError> {
     if scheme == "s3" {
         if port.is_some() {
             return Err(ConnectError::InvalidUrl(
-                "s3://bucket no lleva puerto en la authority; usa el campo `endpoint`".to_string(),
+                "s3://bucket does not carry a port in the authority; use the `endpoint` field"
+                    .to_string(),
             ));
         }
-        // El bucket se inyecta CRUDO en la URL (virtual-host: `//{bucket}.host`)
-        // sin percent-encoding: se valida con las reglas de nombrado de AWS,
-        // no con el charset laxo de `is_valid_host` (pensado para known_hosts).
+        // The bucket is injected RAW into the URL (virtual-host:
+        // `//{bucket}.host`) without percent-encoding: it is validated with
+        // AWS's naming rules, not with `is_valid_host`'s lax charset (meant
+        // for known_hosts).
         if !is_valid_bucket(&host) {
             return Err(ConnectError::InvalidUrl(
-                "nombre de bucket s3 inválido (3-63, minúsculas alfanuméricas + `-`/`.`, sin `..`)"
+                "invalid s3 bucket name (3-63, lowercase alphanumeric + `-`/`.`, no `..`)"
                     .to_string(),
             ));
         }
@@ -352,19 +362,19 @@ fn parse_endpoint(url: &str) -> Result<Endpoint, ConnectError> {
     })
 }
 
-/// Charset de hostname/IP (incl. IPv6 con zona: `:`/`%`). Excluye TODO lo que
-/// tiene significado en el formato `known_hosts` (`,` lista de hosts, espacio
-/// y nueva línea separadores, `#` comentario, `|` hash) y los caracteres de
-/// control: un host hostil no puede envenenar entradas ajenas vía `learn`.
+/// Hostname/IP charset (incl. IPv6 with a zone: `:`/`%`). Excludes EVERYTHING
+/// that has meaning in the `known_hosts` format (`,` host list, space and
+/// newline separators, `#` comment, `|` hash) and control characters: a
+/// hostile host cannot poison other entries via `learn`.
 fn is_valid_host(host: &str) -> bool {
     host.chars()
         .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '.' | '_' | ':' | '%'))
 }
 
-/// Reglas de nombrado de bucket S3 (subconjunto seguro): 3-63 bytes,
-/// minúsculas alfanuméricas + `-`/`.`, empieza y acaba alfanumérico, sin `..`
-/// (que rompería el virtual-host `//{bucket}.host`). No cubre la prohibición
-/// de formato-IP (irrelevante para inyección); AWS/opendal la rechazarían.
+/// S3 bucket naming rules (safe subset): 3-63 bytes, lowercase alphanumeric +
+/// `-`/`.`, starts and ends alphanumeric, no `..` (which would break the
+/// virtual-host `//{bucket}.host`). Does not cover the IP-format prohibition
+/// (irrelevant for injection); AWS/opendal would reject it anyway.
 fn is_valid_bucket(b: &str) -> bool {
     (3..=63).contains(&b.len())
         && b.bytes()
@@ -377,7 +387,7 @@ fn is_valid_bucket(b: &str) -> bool {
 fn parse_port(p: Option<&str>, url: &str) -> Result<Option<u16>, ConnectError> {
     match p {
         None | Some("") => Ok(None),
-        // El puerto 0 no es un puerto de destino válido.
+        // Port 0 is not a valid destination port.
         Some(p) => match p.parse::<u16>() {
             Ok(0) | Err(_) => Err(ConnectError::InvalidUrl(url.to_string())),
             Ok(n) => Ok(Some(n)),
@@ -386,15 +396,15 @@ fn parse_port(p: Option<&str>, url: &str) -> Result<Option<u16>, ConnectError> {
 }
 
 impl ConnectionsFile {
-    /// Carga `<dir>/connections.toml`. Si no existe, devuelve vacío (no es un
-    /// error: las conexiones son opcionales).
+    /// Loads `<dir>/connections.toml`. If it does not exist, returns empty
+    /// (not an error: connections are optional).
     ///
-    /// SÍNCRONO a propósito: es carga de config de BOOTSTRAP (una vez al
-    /// arranque, antes de entrar al runtime, o desde `spawn_blocking` si se
-    /// llama en contexto async). No es una ruta caliente; no hace I/O de red.
+    /// SYNCHRONOUS on purpose: this is BOOTSTRAP config loading (once at
+    /// startup, before entering the runtime, or from `spawn_blocking` if
+    /// called in an async context). Not a hot path; does no network I/O.
     ///
     /// # Errors
-    /// Si el fichero existe pero es TOML inválido o no legible.
+    /// If the file exists but is invalid or unreadable TOML.
     pub fn load(dir: &Path) -> Result<Self, ConnectError> {
         let path = dir.join("connections.toml");
         let text = match std::fs::read_to_string(&path) {
@@ -405,25 +415,28 @@ impl ConnectionsFile {
         toml::from_str(&text).map_err(|e| ConnectError::Config(e.to_string()))
     }
 
-    /// Igual, pero **una entrada inservible no se lleva por delante a las
-    /// demás** (#365).
+    /// Same, but **one unusable entry does not take the rest down with it**
+    /// (#365).
     ///
-    /// Devuelve las que sirven y, aparte, el nombre y el motivo de las que no.
+    /// Returns the usable ones and, separately, the name and reason of the
+    /// ones that are not.
     ///
-    /// La diferencia con [`Self::load`] importa porque las dos preguntas son
-    /// distintas y tienen respuestas distintas. Quien va a CONECTARSE necesita
-    /// la entrada entera o nada, y ahí un fallo es un fallo. Quien va a
-    /// LISTARLAS —un selector— pierde toda su lista por una sola entrada que
-    /// norte no sabe leer, con un error que no nombra ninguna conexión y no
-    /// apunta a nada que el lector pueda arreglar. Eso es peor que inútil:
-    /// esconde las diecinueve que sí valían.
+    /// The difference with [`Self::load`] matters because the two questions
+    /// are different and have different answers. Whoever is about to
+    /// CONNECT needs the whole entry or nothing, and there a failure is a
+    /// failure. Whoever is about to LIST them —a selector— loses its entire
+    /// list over a single entry norte cannot read, with an error that names
+    /// no connection and points at nothing the reader can fix. That is worse
+    /// than useless: it hides the nineteen that were fine.
     ///
-    /// Un fichero con un error de SINTAXIS sigue siendo un error entero, y
-    /// tiene que serlo: sin poder partirlo en entradas no hay nada que salvar,
-    /// y decir «no tienes ninguna» sobre una coma de más sería mentir.
+    /// A file with a SYNTAX error is still one whole error, and it has to
+    /// be: without being able to split it into entries there is nothing to
+    /// salvage, and saying "you have none" over one extra comma would be a
+    /// lie.
     ///
     /// # Errors
-    /// Si el fichero no es legible, o su TOML no parsea ni como tabla.
+    /// If the file is unreadable, or its TOML does not parse even as a
+    /// table.
     pub fn load_tolerante(dir: &Path) -> Result<(Self, Vec<(String, String)>), ConnectError> {
         let path = dir.join("connections.toml");
         let text = match std::fs::read_to_string(&path) {
@@ -433,34 +446,31 @@ impl ConnectionsFile {
             }
             Err(e) => return Err(ConnectError::Io(e)),
         };
-        let crudo: toml::Table =
+        let raw: toml::Table =
             toml::from_str(&text).map_err(|e| ConnectError::Config(e.to_string()))?;
-        let Some(tabla) = crudo.get("connections").and_then(toml::Value::as_table) else {
-            // Sin sección `connections` no hay nada, y no es un error: un
-            // fichero que solo trae otras secciones es un fichero válido.
+        let Some(table) = raw.get("connections").and_then(toml::Value::as_table) else {
+            // No `connections` section means nothing to do, and it is not an
+            // error: a file that only carries other sections is a valid
+            // file.
             return Ok((Self::default(), Vec::new()));
         };
-        let mut buenas = std::collections::BTreeMap::new();
-        let mut malas = Vec::new();
-        for (nombre, valor) in tabla {
-            match valor.clone().try_into::<ConnectionSpec>() {
+        let mut good = std::collections::BTreeMap::new();
+        let mut bad = Vec::new();
+        for (name, value) in table {
+            match value.clone().try_into::<ConnectionSpec>() {
                 Ok(spec) => {
-                    buenas.insert(nombre.clone(), spec);
+                    good.insert(name.clone(), spec);
                 }
-                // El motivo se guarda como TEXTO y va a la interfaz: es lo
-                // único que convierte «una de tus conexiones no vale» en algo
-                // accionable. No lleva secretos — lo que falla es la forma de
-                // la entrada, y `ConnectionSpec` referencia sus credenciales
-                // en vez de guardarlas (ADR 0015).
-                Err(e) => malas.push((nombre.clone(), e.to_string())),
+                // The reason is stored as TEXT and goes to the interface: it
+                // is the only thing that turns "one of your connections is
+                // no good" into something actionable. It carries no
+                // secrets — what fails is the shape of the entry, and
+                // `ConnectionSpec` references its credentials instead of
+                // storing them (ADR 0015).
+                Err(e) => bad.push((name.clone(), e.to_string())),
             }
         }
-        Ok((
-            Self {
-                connections: buenas,
-            },
-            malas,
-        ))
+        Ok((Self { connections: good }, bad))
     }
 }
 
@@ -470,12 +480,12 @@ mod tests {
 
     #[test]
     fn logical_trash_defaults_off_and_parses() {
-        // Ausente → false (default seguro, ADR 0019).
+        // Absent → false (safe default, ADR 0019).
         let f: ConnectionsFile =
             toml::from_str("[connections.a]\nurl = \"sftp://h\"\n").expect("parse");
         assert!(!f.connections["a"].logical_trash);
 
-        // Presente → true.
+        // Present → true.
         let f: ConnectionsFile =
             toml::from_str("[connections.b]\nurl = \"sftp://h\"\nlogical_trash = true\n")
                 .expect("parse");
@@ -484,7 +494,7 @@ mod tests {
 
     #[test]
     fn allow_rsa_defaults_off_and_parses() {
-        // Ausente → false: RSA sigue rechazado por defecto (ADR 0150).
+        // Absent → false: RSA is still rejected by default (ADR 0150).
         let f: ConnectionsFile =
             toml::from_str("[connections.a]\nurl = \"sftp://h\"\n").expect("parse");
         assert!(!f.connections["a"].allow_rsa);
@@ -533,11 +543,11 @@ mod tests {
         assert_eq!(ep.port, Some(2121));
     }
 
-    /// Un provider plugin sirve el scheme que declara, así que el parser de
-    /// conexiones no puede llevar la lista cerrada `sftp|ftp|s3`: `webdav://`
-    /// llega aquí antes de que nadie pregunte al catálogo. Lo que se exige es
-    /// que sea un scheme (el alfabeto de `norte_proto::Scheme`), no que sea
-    /// uno de los tres del core.
+    /// A plugin provider serves the scheme it declares, so the connection
+    /// parser cannot carry the closed `sftp|ftp|s3` list: `webdav://` gets
+    /// here before anyone asks the catalogue. What is required is that it be
+    /// a scheme (`norte_proto::Scheme`'s alphabet), not that it be one of
+    /// the core's three.
     #[test]
     fn endpoint_acepta_el_scheme_de_un_plugin() {
         let ep = parse_endpoint("webdav://u@files.example.com:8443").unwrap();
@@ -546,7 +556,7 @@ mod tests {
         assert_eq!(ep.host, "files.example.com");
         assert_eq!(ep.port, Some(8443));
         assert_eq!(parse_endpoint("memplug://host").unwrap().scheme, "memplug");
-        // Pero lo que no es un scheme sigue fuera: mayúsculas, vacío, barras.
+        // But what is not a scheme is still out: uppercase, empty, slashes.
         assert!(parse_endpoint("HTTP://host").is_err());
         assert!(parse_endpoint("://host").is_err());
         assert!(parse_endpoint("a/b://host").is_err());
@@ -556,41 +566,44 @@ mod tests {
     fn endpoint_invalido() {
         assert!(parse_endpoint("sin-scheme").is_err());
         assert!(parse_endpoint("sftp://host:noport").is_err());
-        assert!(parse_endpoint("sftp://").is_err()); // host vacío
-        assert!(parse_endpoint("sftp://@host").is_err()); // usuario vacío
-        assert!(parse_endpoint("sftp://host:0").is_err()); // puerto 0
-        assert!(parse_endpoint("sftp://::1").is_err()); // IPv6 sin corchetes
+        assert!(parse_endpoint("sftp://").is_err()); // empty host
+        assert!(parse_endpoint("sftp://@host").is_err()); // empty user
+        assert!(parse_endpoint("sftp://host:0").is_err()); // port 0
+        assert!(parse_endpoint("sftp://::1").is_err()); // IPv6 without brackets
     }
 
-    /// Un password inline en la URL (`user:pass@host`) se rechaza SIN ecoar
-    /// la URL: si se aceptara (o se ecoara en el error), el password acabaría
-    /// en connections.toml, en logs o en mensajes de error (regla 10).
+    /// An inline password in the URL (`user:pass@host`) is rejected WITHOUT
+    /// echoing the URL: if it were accepted (or echoed in the error), the
+    /// password would end up in connections.toml, in logs or in error
+    /// messages (rule 10).
     #[test]
     fn password_inline_en_url_rechazado_sin_eco() {
         let err = parse_endpoint("sftp://u:hunter2@h").unwrap_err();
         assert!(
             !format!("{err}").contains("hunter2"),
-            "el error no debe ecoar el password"
+            "the error must not echo the password"
         );
     }
 
-    /// El typo `ftps://` (scheme inválido) con password inline TAMPOCO ecoa
-    /// la URL: el check del userinfo va ANTES que el del scheme — si no, el
-    /// error de scheme llevaría el password a los logs (regla 10).
+    /// The `ftps://` typo (invalid scheme) with an inline password ALSO does
+    /// not echo the URL: the userinfo check runs BEFORE the scheme's — if it
+    /// did not, the scheme error would carry the password into the logs
+    /// (rule 10).
     #[test]
     fn scheme_invalido_con_password_inline_no_eco() {
         for url in ["ftps://u:hunter2@h", "http://u:hunter2@h"] {
             let err = parse_endpoint(url).unwrap_err();
             assert!(
                 !format!("{err}").contains("hunter2"),
-                "{url}: el error ecoa el password"
+                "{url}: the error echoes the password"
             );
         }
     }
 
-    /// El host no admite caracteres con significado en `known_hosts` (`,` lista
-    /// de hosts, espacio/nueva-línea separadores, `#` comentario, `|` hash) ni
-    /// de control: si se colaran, un `learn` podría envenenar entradas ajenas.
+    /// The host does not accept characters that have meaning in
+    /// `known_hosts` (`,` host list, space/newline separators, `#` comment,
+    /// `|` hash) or control characters: if they slipped through, a `learn`
+    /// could poison other entries.
     #[test]
     fn host_con_caracteres_de_formato_rechazado() {
         for url in [
@@ -601,13 +614,13 @@ mod tests {
             "sftp://a|b",
             "sftp://a\tb",
         ] {
-            assert!(parse_endpoint(url).is_err(), "{url:?} debería ser inválida");
+            assert!(parse_endpoint(url).is_err(), "{url:?} should be invalid");
         }
     }
 
     #[test]
     fn deny_unknown_rechaza_secreto_inline() {
-        // Un `password` inline (regla 10) debe ser ERROR, no ignorarse.
+        // An inline `password` (rule 10) must be an ERROR, not ignored.
         let toml = r#"
             [connections.x]
             url = "sftp://h"
@@ -641,8 +654,8 @@ mod tests {
         assert_eq!(ep.port, None);
     }
 
-    /// Los campos s3 son opcionales: un connections.toml de sftp/ftp sin ellos
-    /// sigue parseando con `deny_unknown_fields`.
+    /// The s3 fields are optional: an sftp/ftp connections.toml without them
+    /// still parses with `deny_unknown_fields`.
     #[test]
     fn campos_s3_opcionales_no_rompen_sftp() {
         let s: ConnectionSpec = toml::from_str(r#"url = "sftp://h""#).unwrap();
@@ -652,39 +665,40 @@ mod tests {
         assert_eq!(s.addressing, None);
     }
 
-    /// `s3://user@bucket` y `s3://bucket:9000` se rechazan: la authority de s3
-    /// es SOLO el bucket (user olería a credencial, el puerto va en `endpoint`).
+    /// `s3://user@bucket` and `s3://bucket:9000` are rejected: s3's
+    /// authority is ONLY the bucket (a user would smell like a credential,
+    /// the port goes in `endpoint`).
     #[test]
     fn s3_con_user_o_puerto_se_rechaza() {
         assert!(parse_endpoint("s3://user@bucket").is_err());
         assert!(parse_endpoint("s3://bucket:9000").is_err());
-        // El bucket desnudo sí vale.
+        // The bare bucket is fine.
         let ep = parse_endpoint("s3://mi-bucket").unwrap();
         assert_eq!(ep.host, "mi-bucket");
     }
 
-    /// Nombres de bucket inválidos (charset de AWS, no el laxo de `known_hosts`):
-    /// mayúsculas, `_`, `..`, extremos no-alfanuméricos, longitud fuera de 3-63.
+    /// Invalid bucket names (AWS's charset, not `known_hosts`'s lax one):
+    /// uppercase, `_`, `..`, non-alphanumeric ends, length outside 3-63.
     #[test]
     fn s3_bucket_invalido_se_rechaza() {
         for bad in [
-            "s3://MiBucket",   // mayúsculas
-            "s3://mi_bucket",  // guion bajo
-            "s3://mi..bucket", // doble punto (rompe virtual-host)
-            "s3://-bucket",    // empieza no-alfanumérico
-            "s3://bucket.",    // acaba no-alfanumérico
+            "s3://MiBucket",   // uppercase
+            "s3://mi_bucket",  // underscore
+            "s3://mi..bucket", // double dot (breaks virtual-host)
+            "s3://-bucket",    // starts non-alphanumeric
+            "s3://bucket.",    // ends non-alphanumeric
             "s3://ab",         // <3
-            "s3://a%evil",     // % (charset laxo de host, no de bucket)
+            "s3://a%evil",     // % (host's lax charset, not bucket's)
         ] {
-            assert!(parse_endpoint(bad).is_err(), "{bad:?} debería ser inválida");
+            assert!(parse_endpoint(bad).is_err(), "{bad:?} should be invalid");
         }
-        // Válidos típicos.
+        // Typical valid ones.
         assert!(parse_endpoint("s3://mi-bucket.prod").is_ok());
         assert!(parse_endpoint("s3://data123").is_ok());
     }
 
-    /// Un `secret_access_key` inline en connections.toml es ERROR (regla 10):
-    /// el secreto va por el resolver, jamás a config plano.
+    /// An inline `secret_access_key` in connections.toml is an ERROR (rule
+    /// 10): the secret goes through the resolver, never to plain config.
     #[test]
     fn secret_access_key_inline_rechazado() {
         let toml = r#"

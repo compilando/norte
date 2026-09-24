@@ -512,7 +512,7 @@ pub(crate) fn contenido_de_hueco(
     id: norte_frontend::layout::SlotId,
     mut rect: Rect,
 ) -> Rect {
-    if grupo_de_paneles(tree, id).is_some() && rect.height > 1 {
+    if panel_group(tree, id).is_some() && rect.height > 1 {
         rect.y = rect.y.saturating_add(1);
         rect.height -= 1;
     }
@@ -523,7 +523,7 @@ pub(crate) fn contenido_de_hueco(
 /// `id` lives in a tab alongside another panel. A group with a listing
 /// inside is a listing's own tab strip, and that one has its own strip.
 #[must_use]
-pub(crate) fn grupo_de_paneles(
+pub(crate) fn panel_group(
     tree: &norte_frontend::layout::Node,
     id: norte_frontend::layout::SlotId,
 ) -> Option<(Vec<norte_frontend::layout::SlotId>, usize)> {
@@ -539,7 +539,7 @@ pub(crate) fn grupo_de_paneles(
 /// and whether it is the one in front.
 pub(crate) struct PanelTab {
     /// The label, with a space on each side.
-    pub texto: String,
+    pub text: String,
     /// First column.
     pub x0: u16,
     /// Last column, inclusive.
@@ -547,18 +547,18 @@ pub(crate) struct PanelTab {
     /// The slot inside.
     pub slot: norte_frontend::layout::SlotId,
     /// Is the one shown.
-    pub activa: bool,
+    pub active: bool,
 }
 
 /// The frame's panel groups' tab strips (ADR 0134): the row and its tabs.
 /// ONE measurement for painting and for the mouse.
 #[must_use]
-pub(crate) fn tiras_de_paneles(app: &App, area: Rect) -> Vec<(Rect, Vec<PanelTab>)> {
+pub(crate) fn panel_tab_strips(app: &App, area: Rect) -> Vec<(Rect, Vec<PanelTab>)> {
     let res = resolved_frame(app, area);
     let lang = norte_i18n::active();
     let mut out = Vec::new();
     for (id, r) in &res.placements {
-        let Some((slots, active)) = grupo_de_paneles(&app.layout, *id) else {
+        let Some((slots, active)) = panel_group(&app.layout, *id) else {
             continue;
         };
         let rect = crate::panel::to_ratatui(*r);
@@ -597,11 +597,11 @@ pub(crate) fn tiras_de_paneles(app: &App, area: Rect) -> Vec<(Rect, Vec<PanelTab
                 continue;
             }
             tabs.push(PanelTab {
-                texto: text,
+                text,
                 x0: x,
                 x1: x.saturating_add(w).saturating_sub(1),
                 slot: *s,
-                activa: i == active,
+                active: i == active,
             });
             x = x.saturating_add(w);
         }
@@ -772,7 +772,7 @@ pub(crate) fn visor_split(app: &App, area: Rect) -> (Rect, Rect) {
 /// `terminal.draw` to know where to place the pixels. Review, CRITICAL 2:
 /// the first version returned the frame WITH borders (`visor_split(...).0`
 /// alone) — two cells too many per axis, right over the border and the
-/// scrollbars `barras_del_visor` paints there — so now it applies
+/// scrollbars `viewer_scrollbars` paints there — so now it applies
 /// `block_inner` (private, not exported) itself: matching the slot
 /// `draw_viewer` leaves empty is STRUCTURAL, not something to remember at
 /// every call site. It comes from `visor_split` (also private), the SAME

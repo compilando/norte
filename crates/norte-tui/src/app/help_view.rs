@@ -263,11 +263,11 @@ impl HelpView {
         } else {
             // The cursor is off screen: the arrow lands on the nearest action
             // that is on it, in the direction of travel, before any scroll.
-            let mut en_vista = (0..lines.len()).filter(|&i| visible(i));
+            let mut in_view = (0..lines.len()).filter(|&i| visible(i));
             let hit = if down {
-                en_vista.next()
+                in_view.next()
             } else {
-                en_vista.next_back()
+                in_view.next_back()
             };
             if let Some(i) = hit {
                 self.state.settle_action_cursor(i);
@@ -792,7 +792,7 @@ mod help_view_tests {
     /// the last heading, `]` goes to the end, and before the first one `[`
     /// goes to the start — a key that does nothing reads as broken.
     #[test]
-    fn los_saltos_de_seccion_van_de_encabezado_en_encabezado() {
+    fn section_jumps_go_from_heading_to_heading() {
         let mut view = HelpView::new(Lang::Es, Vec::new());
         view.state.open(&TopicId::new("panes"));
         refresh(&mut view, 60, 8);
@@ -921,7 +921,7 @@ mod help_view_tests {
     /// and without the distinction the whole cheatsheet would show up under
     /// an extension's name, reading as its documentation.
     #[test]
-    fn una_pagina_de_plugin_en_vuelo_sale_vacia_y_no_es_el_teclado() {
+    fn an_in_flight_plugin_page_comes_out_empty_and_is_not_the_keyboard() {
         let mut view = HelpView::new(Lang::En, vec![ratatui::text::Line::raw("  f5   copy")]);
         view.set_plugins(&[plugin("acme.ftp", "FTP")]);
         view.state.open(&TopicId::new("acme.ftp"));
@@ -952,11 +952,11 @@ mod help_view_tests {
         );
     }
 
-    /// El texto de terceros se enmascara y se acota en el PUNTO DE ENTRADA:
-    /// `PluginNode::title` promete llegar seguro y el modelo no enmascara nada
-    /// — filtra sobre lo que le den.
+    /// Third-party text is masked and bounded at the ENTRY POINT:
+    /// `PluginNode::title` promises to arrive safe and the model masks
+    /// nothing — it just filters whatever it's given.
     #[test]
-    fn el_nombre_de_un_plugin_entra_enmascarado_y_acotado() {
+    fn plugin_name_arrives_masked_and_bounded() {
         let mut view = HelpView::new(Lang::En, Vec::new());
         let mut p = plugin("acme.ftp", &format!("a\u{202E}{}", "x".repeat(5_000)));
         p.publisher = "AC\u{202E}ME".to_owned();
@@ -998,7 +998,7 @@ mod help_view_tests {
     /// the "Extensions" header — a page the reader can move onto, open and
     /// read, attached to a name that says nothing.
     #[test]
-    fn un_nombre_en_blanco_cae_al_id_del_plugin() {
+    fn a_blank_name_falls_back_to_the_plugin_id() {
         let mut view = HelpView::new(Lang::En, Vec::new());
         let mut p = plugin("acme.ftp", "\u{3164}\u{3164}");
         p.publisher = "\u{3164}".to_owned();
@@ -1045,7 +1045,7 @@ mod help_view_tests {
     /// as `parse_untrusted`'s command keys, which get rejected instead of
     /// rewritten.
     #[test]
-    fn un_id_que_no_es_de_plugin_se_descarta_en_la_entrada() {
+    fn an_id_that_is_not_a_plugins_is_discarded_at_entry() {
         let mut view = HelpView::new(Lang::En, Vec::new());
         let mut bidi = plugin("acme.\u{202E}ftp", "Bidi");
         bidi.publisher = "ACME".to_owned();
@@ -1083,7 +1083,7 @@ mod help_view_tests {
     /// as blank — because it's asked AFTER masking, when they're already
     /// `U+FFFD`. It's the order that lets one question cover both families.
     #[test]
-    fn un_nombre_de_espacios_de_ancho_cero_tambien_cae_al_id() {
+    fn a_name_of_zero_width_spaces_also_falls_back_to_the_id() {
         let mut view = HelpView::new(Lang::En, Vec::new());
         view.set_plugins(&[plugin("acme.ftp", "\u{200B}\u{200B}")]);
         assert!(view.state.rows().iter().any(|r| matches!(
@@ -1097,7 +1097,7 @@ mod help_view_tests {
     /// turn. Without the claim, a daemon that doesn't answer would get
     /// retried at frame rate.
     #[test]
-    fn la_pagina_se_pide_una_sola_vez_por_overlay() {
+    fn the_page_is_requested_only_once_per_overlay() {
         let mut view = HelpView::new(Lang::En, Vec::new());
         view.set_plugins(&[plugin("acme.ftp", "FTP")]);
         view.state.open(&TopicId::new("acme.ftp"));
@@ -1127,7 +1127,7 @@ mod help_view_tests {
     /// requesting for them would be a call to the daemon every frame for
     /// the whole reading session.
     #[test]
-    fn una_pagina_del_corpus_no_pide_nada() {
+    fn a_corpus_page_asks_for_nothing() {
         let mut view = HelpView::new(Lang::En, Vec::new());
         view.set_plugins(&[plugin("acme.ftp", "FTP")]);
         assert_eq!(
@@ -1192,7 +1192,7 @@ mod help_plugin_snapshot_tests {
     /// Demonstrated by changing the manifest with the SAME page bytes: if
     /// the painted text follows the manifest, the page isn't the source.
     #[test]
-    fn el_nombre_de_un_comando_sale_de_la_foto_no_de_la_pagina() {
+    fn a_commands_name_comes_from_the_snapshot_not_the_page() {
         let painted_with = |title: &str| -> String {
             let mut app = app();
             app.help = Some(crate::app::HelpView::new(norte_help::Lang::En, Vec::new()));
@@ -1247,7 +1247,7 @@ mod help_plugin_snapshot_tests {
     /// took, the reader would read a page whose rows promise what the app
     /// is going to refuse.
     #[test]
-    fn la_foto_llega_a_la_barra_y_al_resolver() {
+    fn the_snapshot_reaches_the_bar_and_the_resolver() {
         let mut app = app();
         app.help = Some(crate::app::HelpView::new(norte_help::Lang::En, Vec::new()));
         app.freeze_help_plugins(&[
@@ -1294,7 +1294,7 @@ mod help_plugin_snapshot_tests {
     /// the same fixture, and two frontends with their own spelling of the
     /// adversary is exactly the drift the corpus exists to not have.
     #[test]
-    fn un_id_invalido_no_entra_en_la_foto_del_resolver() {
+    fn an_invalid_id_does_not_enter_the_resolvers_snapshot() {
         let fixture = norte_testkit::corpus::hostile_names()
             .into_iter()
             .find(|n| n.id == "plugin_id_bidi_segment")
@@ -1330,7 +1330,7 @@ mod help_plugin_snapshot_tests {
     /// (`main::after_panes_refresh`) must NOT turn off plugin rows mid-read,
     /// nor the other way around.
     #[test]
-    fn recongelar_los_hechos_no_pierde_la_foto_de_plugins() {
+    fn refreezing_the_facts_does_not_lose_the_plugins_snapshot() {
         let mut app = app();
         app.help = Some(crate::app::HelpView::new(norte_help::Lang::En, Vec::new()));
         app.freeze_help_plugins(&[plugin("acme.ftp", true, true)]);

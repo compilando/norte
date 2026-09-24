@@ -384,7 +384,7 @@ mod tests {
     /// History popup (spec 2026-07-18): navigation with `PickerAction`,
     /// Confirm returns the destination and closes, Cancel closes.
     #[test]
-    fn nav_popup_historial_navega_confirma_y_cancela() {
+    fn nav_popup_history_navigates_confirms_and_cancels() {
         let mut app = app_dos_panes();
         app.history[0].push(vp("mem:///one"));
         app.history[0].push(vp("mem:///two"));
@@ -416,7 +416,7 @@ mod tests {
     /// warning and a `None` destination: Confirm over it is a no-op (the
     /// popup stays open).
     #[test]
-    fn nav_popup_hotlist_item_invalido_no_confirma() {
+    fn nav_popup_hotlist_invalid_item_does_not_confirm() {
         let _ = norte_i18n::force(norte_i18n::Lang::Es);
         let mut app = app_dos_panes();
         app.hotlist = vec![crate::config::HotlistItem {
@@ -439,7 +439,7 @@ mod tests {
     /// active closes the input (not the popup). `d`: the selected RAW name
     /// serves as key and the local delete refreshes the items.
     #[test]
-    fn nav_popup_hotlist_input_y_borrado() {
+    fn nav_popup_hotlist_input_and_deletion() {
         let mut app = app_dos_panes();
         app.hotlist = vec![
             crate::config::HotlistItem {
@@ -481,7 +481,7 @@ mod tests {
     /// item), never whatever now occupies that index in the new list (it
     /// would delete ANOTHER favorite: config loss).
     #[test]
-    fn d_con_popup_desincronizado_borra_el_mostrado() {
+    fn d_with_desynced_popup_clears_the_shown_one() {
         let mut app = app_dos_panes();
         app.hotlist = vec![
             crate::config::HotlistItem {
@@ -511,7 +511,7 @@ mod tests {
     /// and accepting without checking would overwrite a favorite pointing
     /// somewhere else.
     #[test]
-    fn el_input_de_nombre_se_prellena_con_el_dir_del_panel() {
+    fn the_name_input_prefills_with_the_panels_dir() {
         let mut app = crate::app::testutil::app_en("mem:///home/o/norte/src", "mem:///other");
         app.open_nav_popup(NavPopupKind::Hotlist);
         app.nav_popup_open_name_input();
@@ -537,7 +537,7 @@ mod tests {
     /// the cursor starts on the next one; removing and clearing rebuild the
     /// list.
     #[test]
-    fn la_historia_marca_el_actual_y_quitar_o_vaciar_la_rehacen() {
+    fn history_marks_the_current_one_and_remove_or_clear_redo_it() {
         let _ = norte_i18n::force(norte_i18n::Lang::Es);
         let mut app = app_dos_panes();
         let here = app.panes[0].dir().clone();
@@ -588,7 +588,7 @@ mod tests {
     /// D7: a SIDE's history navigates that side even if focus is on the
     /// other one, and opening on the other panel points at the focus.
     #[test]
-    fn la_historia_de_un_lado_congela_el_lado() {
+    fn one_sides_history_freezes_the_side() {
         let mut app = app_dos_panes();
         app.history[1].push(vp("mem:///right"));
         app.open_side_history(1);
@@ -600,7 +600,7 @@ mod tests {
 
     /// D6: popular entries are listed by visits.
     #[test]
-    fn los_populares_van_por_visitas() {
+    fn popular_ones_are_ranked_by_visits() {
         let mut app = app_dos_panes();
         app.popular.visit(&vp("mem:///little"));
         app.popular.visit(&vp("mem:///lots"));
@@ -615,7 +615,7 @@ mod tests {
     /// ROW (spec 2026-09-15 D2) — it used to do nothing — and there's no
     /// hotlist name to delete.
     #[test]
-    fn nav_popup_historial_anade_la_fila_como_favorito() {
+    fn nav_popup_history_adds_the_row_as_a_favorite() {
         let mut app = app_dos_panes();
         app.history[0].push(vp("mem:///one"));
         app.open_nav_popup(NavPopupKind::History);
@@ -631,7 +631,7 @@ mod tests {
     /// D2: the filter rebuilds the list, the cursor goes back to the start
     /// and removing it returns it whole.
     #[test]
-    fn el_filtro_de_la_historia_rehace_la_lista() {
+    fn the_history_filter_rebuilds_the_list() {
         let mut app = app_dos_panes();
         app.history[0].push(vp("mem:///photos/2024"));
         app.history[0].push(vp("mem:///invoices"));
@@ -650,7 +650,7 @@ mod tests {
     /// `hotlist_apply_saved` replaces by name keeping position or appends at
     /// the end (same semantics as persist/load) and refreshes the popup.
     #[test]
-    fn hotlist_apply_saved_reemplaza_o_anade() {
+    fn hotlist_apply_saved_replaces_or_adds() {
         let mut app = app_dos_panes();
         app.hotlist = vec![crate::config::HotlistItem {
             name: "one".into(),
@@ -672,7 +672,7 @@ mod tests {
     /// A HOSTILE path in the history comes out masked and with the badge as
     /// a prefix — never raw bidi/controls in the popup (spec §6).
     #[test]
-    fn nav_popup_sanea_paths_hostiles() {
+    fn nav_popup_sanitizes_hostile_paths() {
         let mut app = app_dos_panes();
         app.history[0].push(vp("mem:///evil%E2%80%AEdir"));
         app.open_nav_popup(NavPopupKind::History);
@@ -695,7 +695,7 @@ mod tests {
     /// `volume_item_display` spliced it in with `{}` and skipped
     /// `display_name` entirely, so a hostile `fs_type` reached the row raw.
     #[test]
-    fn volume_row_sanea_fs_type_hostil() {
+    fn volume_row_sanitizes_hostile_fs_type() {
         let vol = norte_proto::methods::Volume {
             mount: vp("mem:///media/usb"),
             label: None,
@@ -718,7 +718,7 @@ mod tests {
     /// gets above. Bytes `\xFF\xFE` are not valid UTF-8 in any position, so
     /// `display_name` must fall back to lossy rendering AND mark it hostile.
     #[test]
-    fn volume_row_sanea_label_no_utf8() {
+    fn volume_row_sanitizes_non_utf8_label() {
         let vol = norte_proto::methods::Volume {
             mount: vp("mem:///media/usb"),
             label: Some(vec![0xFF, 0xFE, b'X']),
@@ -813,7 +813,7 @@ mod tests {
     /// NO badge and say `volumes-size-unknown` rather than a bare zero — a
     /// zero here would read as "full", the opposite of "unknown".
     #[test]
-    fn volume_row_talla_ausente_no_es_cero() {
+    fn volume_row_missing_size_is_not_zero() {
         let vol = norte_proto::methods::Volume {
             mount: vp("mem:///media/usb"),
             label: Some(b"USB".to_vec()),
@@ -833,7 +833,7 @@ mod tests {
     /// review MINOR T5: an INVALID entry with a hostile name also carries
     /// the badge (before, `display_name`'s flag was discarded in that arm).
     #[test]
-    fn hotlist_invalida_con_name_hostil_lleva_badge() {
+    fn invalid_hotlist_with_hostile_name_carries_a_badge() {
         let mut app = app_dos_panes();
         app.hotlist = vec![crate::config::HotlistItem {
             name: "evil\u{202E}name".into(),

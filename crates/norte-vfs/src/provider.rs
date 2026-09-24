@@ -1,11 +1,11 @@
-//! El trait [`Provider`]: contrato único de todo backend de almacenamiento.
+//! The [`Provider`] trait: the single contract every storage backend has.
 //!
-//! Reglas del contrato (las verifica `provider_contract!` en `norte-testkit`):
-//! - Nombres = bytes ([`VPath`]); un provider jamás renormaliza ni "repara"
-//!   nombres en silencio.
-//! - Operaciones simples: sin recursión (la hace el core), sin políticas de
-//!   colisión (el core decide), sin seguir symlinks.
-//! - Errores mapeados a la taxonomía [`Error`] en el borde del provider.
+//! Contract rules (`provider_contract!` in `norte-testkit` verifies them):
+//! - Names = bytes ([`VPath`]); a provider never silently renormalizes or
+//!   "repairs" names.
+//! - Simple operations: no recursion (the core does it), no collision
+//!   policies (the core decides), never follows symlinks.
+//! - Errors mapped to the [`Error`] taxonomy at the provider's boundary.
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -15,19 +15,20 @@ use norte_proto::{AttrInfo, ByteRange, Capabilities, Entry, Error, Segment, VPat
 use crate::options::ListOptions;
 use crate::sink::ByteSink;
 
-/// Stream de entradas de un listado (`fs.list`), perezoso y cancelable
-/// soltándolo. Un error a mitad de stream termina el listado.
+/// Stream of entries from a listing (`fs.list`), lazy and cancellable by
+/// dropping it. An error mid-stream ends the listing.
 pub type EntryStream = BoxStream<'static, Result<Entry, Error>>;
 
-/// Stream de contenido de un archivo, en chunks [`Bytes`] del tamaño que el
-/// provider prefiera (el copy engine re-trocea si le hace falta).
+/// Stream of a file's content, in [`Bytes`] chunks of whatever size the
+/// provider prefers (the copy engine re-chunks if it needs to).
 pub type ByteStream = BoxStream<'static, Result<Bytes, Error>>;
 
-/// Un backend de almacenamiento (local, sftp, s3, archive, memoria).
+/// A storage backend (local, sftp, s3, archive, memory).
 ///
-/// Objeto-seguro: el core trabaja con `Box<dyn Provider>` registrados por
-/// scheme. Las operaciones compuestas (copy recursivo, move cross-provider,
-/// delete de árboles) NO viven aquí: son del copy engine de `norte-core`.
+/// Object-safe: the core works with `Box<dyn Provider>` registered by
+/// scheme. Composite operations (recursive copy, cross-provider move,
+/// deleting trees) do NOT live here: they belong to `norte-core`'s copy
+/// engine.
 ///
 /// ```
 /// use async_trait::async_trait;
@@ -71,112 +72,116 @@ pub type ByteStream = BoxStream<'static, Result<Bytes, Error>>;
 ///     }
 /// }
 ///
-/// // Objeto-seguro: el core registra providers así.
+/// // Object-safe: the core registers providers this way.
 /// let _boxed: Box<dyn Provider> = Box::new(NullProvider);
 ///
-/// // Default de `list_skipped` (#93): un backend que lista todo lo que
-/// // existe responde `Ok(None)` — nada que señalizar. `Some(0)` = contenedor
-/// // indexado sin omisiones; `Some(n)` = n entradas invisibles del listado.
+/// // `list_skipped`'s default (#93): a backend that lists everything that
+/// // exists answers `Ok(None)` — nothing to signal. `Some(0)` = an indexed
+/// // container with no omissions; `Some(n)` = n entries invisible to the listing.
 /// let p = VPath::parse("null:///").unwrap();
 /// let skipped = futures::executor::block_on(NullProvider.list_skipped(&p)).unwrap();
 /// assert_eq!(skipped, None);
 ///
-/// // Defaults del bloque 2 (#108): catálogo vacío, list_with ≡ list.
+/// // Block 2's defaults (#108): empty catalogue, list_with ≡ list.
 /// assert!(NullProvider.attrs().is_empty());
 /// ```
-// OJO mantenimiento: todo método NUEVO de este trait (aunque tenga default)
-// debe delegarse también en `SessionProvider` (norte-core/src/sessions.rs) —
-// si no, las sesiones remotas cacheadas servirían el DEFAULT en vez del
-// provider vivo, sin error de compilación. Hay un test de completitud allí.
+// MAINTENANCE NOTE: every NEW method on this trait (even one with a
+// default) must also be delegated in `SessionProvider`
+// (norte-core/src/sessions.rs) — otherwise cached remote sessions would
+// serve the DEFAULT instead of the live provider, with no compile error.
+// There's a completeness test there.
 #[async_trait]
 pub trait Provider: Send + Sync {
-    /// El scheme que sirve este provider (`file`, `sftp`, `mem`…).
+    /// The scheme this provider serves (`file`, `sftp`, `mem`…).
     fn scheme(&self) -> &str;
 
-    /// Capacidades declaradas; el core elige estrategia consultándolas.
+    /// Declared capabilities; the core picks its strategy by consulting them.
     fn capabilities(&self) -> Capabilities;
 
-    /// Capacidades REFINADAS para `p`: la misma declaración, corregida con lo
-    /// que el backend pueda averiguar de ESA ubicación — cómo pliega la caja
-    /// ese mount, si el directorio es un ext4/f2fs `+F`
-    /// ([`norte_proto::CapabilityFlags::FULL_FOLD`]), si una escritura bajo él puede
-    /// confinarse ([`norte_proto::CapabilityFlags::CONFINED_WRITES`]).
+    /// Capabilities REFINED for `p`: the same declaration, corrected with
+    /// whatever the backend can find out about THAT location — how that
+    /// mount folds case, whether the directory is an ext4/f2fs `+F`
+    /// ([`norte_proto::CapabilityFlags::FULL_FOLD`]), whether a write
+    /// under it can be confined
+    /// ([`norte_proto::CapabilityFlags::CONFINED_WRITES`]).
     ///
-    /// Es `async` porque la respuesta cuesta I/O: una sonda va en
-    /// `spawn_blocking` (regla dura 2), no en el runtime. El default responde
-    /// [`Self::capabilities`], que es lo correcto para cualquier backend cuyas
-    /// ubicaciones son todas iguales; sobreescribirlo es para el que sirve más
-    /// de un filesystem tras un mismo scheme (ADR 0054).
+    /// It's `async` because the answer costs I/O: a probe goes in
+    /// `spawn_blocking` (hard rule 2), not on the runtime. The default
+    /// answers [`Self::capabilities`], which is correct for any backend
+    /// whose locations are all alike; overriding it is for one that serves
+    /// more than one filesystem behind the same scheme (ADR 0054).
     ///
-    /// Una sonda que no sabe responder NO es error: se devuelve la
-    /// declaración. [`Capabilities`] no sabe decir «no lo sé» —un flag ausente
-    /// significa ausente— y eso es una decisión, no un olvido: la degradación
-    /// es exactamente el comportamiento declarado de siempre.
+    /// A probe that can't answer is NOT an error: the declaration is
+    /// returned. [`Capabilities`] can't say "I don't know" — an absent
+    /// flag means absent — and that's a decision, not an oversight: the
+    /// degradation is exactly the usual declared behavior.
     ///
-    /// Errores: los que produzca `p` ([`Error::NotFound`] si no existe).
+    /// Errors: whatever `p` produces ([`Error::NotFound`] if it doesn't exist).
     async fn capabilities_at(&self, p: &VPath) -> Result<Capabilities, Error> {
         let _ = p;
         Ok(self.capabilities())
     }
 
-    /// ¿Puede EXISTIR un nombre con estos bytes en este backend?
+    /// Can a name with these bytes EXIST on this backend?
     ///
-    /// Pura y sin I/O: son las reglas del sistema de ficheros, no el estado
-    /// del árbol. El default dice que sí a todo, que es lo correcto para
-    /// cualquier backend que acepte cualquier secuencia de bytes sin `/` ni
-    /// NUL — que es el caso de POSIX y el de la mayoría de los remotos.
+    /// Pure and I/O-free: these are the filesystem's rules, not the
+    /// tree's state. The default says yes to everything, which is correct
+    /// for any backend that accepts any byte sequence without `/` or
+    /// NUL — the case for POSIX and for most remotes.
     ///
-    /// Existe para el DESTINO de una copia o de una sincronización (#163):
-    /// nada comprobaba que un nombre legal bajo la raíz de origen lo fuera
-    /// bajo la de destino, así que `CON`, `f:ads` o un punto final —todos
-    /// legales en ext4— se descubrían al ejecutar. El peor de los cuatro es
-    /// `f:ads`: en NTFS **funciona** y escribe un flujo alternativo, con lo
-    /// que la copia dice que fue bien y el fichero no está.
+    /// Exists for the DESTINATION of a copy or a sync (#163): nothing
+    /// checked that a name legal under the source root was legal under
+    /// the destination's, so `CON`, `f:ads` or a trailing dot — all legal
+    /// on ext4 — used to be discovered at execution time. The worst of
+    /// the four is `f:ads`: on NTFS it **works** and writes an alternate
+    /// data stream, so the copy reports success and the file isn't there.
     ///
-    /// Quien lo implementa es quien conoce sus reglas, y por eso es del
-    /// provider y no de una tabla en el core: un `sftp` a un servidor Windows
-    /// y un `file://` en Linux no tienen las mismas, y el core no sabe cuál
-    /// hay al otro lado.
+    /// Whoever implements it is whoever knows its rules, and that's why
+    /// it belongs to the provider and not to a table in the core: an
+    /// `sftp` to a Windows server and a `file://` on Linux don't have the
+    /// same rules, and the core doesn't know what's on the other side.
     fn name_is_legal(&self, name: &[u8]) -> bool {
         let _ = name;
         true
     }
 
-    /// Abre `root` como RAÍZ CONFINADA: todo lo que se haga con el handle
-    /// direcciona segmentos RELATIVOS a ella y no puede salirse, sea cual sea
-    /// la forma del árbol por debajo — un componente INTERMEDIO que sea un
-    /// symlink hacia fuera falla en vez de redirigir la escritura (#164).
+    /// Opens `root` as a CONFINED ROOT: everything done with the handle
+    /// addresses segments RELATIVE to it and can't escape, whatever the
+    /// shape of the tree underneath — an INTERMEDIATE component that's a
+    /// symlink pointing outside fails instead of redirecting the write
+    /// (#164).
     ///
-    /// No es una comprobación antes de abrir: no hay ninguna ruta que
-    /// recomponer, que es lo que lo hace libre de la ventana TOCTOU que una
-    /// comprobación del lado del caller tiene por construcción.
+    /// It isn't a check before opening: there's no path left to
+    /// recompose, which is what makes it free of the TOCTOU window a
+    /// caller-side check has by construction.
     ///
-    /// Lo que se prohíbe es SALIRSE, no «que haya symlinks»: uno que apunte a
-    /// otro sitio dentro de la raíz se sigue, porque prohibirlo rompería
-    /// árboles legítimos sin ganar seguridad ninguna.
+    /// What's forbidden is ESCAPING, not "having symlinks": one pointing
+    /// somewhere else inside the root is followed, because forbidding it
+    /// would break legitimate trees without gaining any security.
     ///
-    /// [`Error::Unsupported`] (default) = este backend no sabe confinar. El
-    /// caller DEGRADA —no rechaza— y lo dice; ver
-    /// [`norte_proto::CapabilityFlags::CONFINED_WRITES`], que lo anuncia por
-    /// ubicación (ADR 0054).
+    /// [`Error::Unsupported`] (default) = this backend doesn't know how
+    /// to confine. The caller DEGRADES — it doesn't reject — and says so;
+    /// see [`norte_proto::CapabilityFlags::CONFINED_WRITES`], which
+    /// announces it per location (ADR 0054).
     ///
-    /// Errores: los de abrir `root` ([`Error::NotFound`] si no está).
+    /// Errors: whatever opening `root` produces ([`Error::NotFound`] if
+    /// it isn't there).
     ///
     /// ```
     /// # use norte_vfs::Provider;
     /// # use norte_proto::{Error, VPath};
     /// # async fn demo(p: &dyn Provider) {
-    /// let raiz = VPath::parse("mem:///destino").expect("wire");
-    /// match p.open_root(&raiz).await {
-    ///     // El backend confina: todo lo que se haga con el handle es
-    ///     // relativo a `raiz` y no puede salirse de ella.
+    /// let root_path = VPath::parse("mem:///destination").expect("wire");
+    /// match p.open_root(&root_path).await {
+    ///     // The backend confines: everything done with the handle is
+    ///     // relative to `root_path` and can't escape it.
     ///     Ok(root) => {
     ///         assert!(root.root_id().await.is_ok());
     ///     }
-    ///     // Y el que no sabe lo dice, en vez de fingir que sí: el caller
-    ///     // degrada al camino por ruta y lo cuenta.
+    ///     // And whoever doesn't know how says so, instead of faking it:
+    ///     // the caller degrades to the by-path route and counts it.
     ///     Err(Error::Unsupported) => {}
-    ///     Err(e) => panic!("open_root respondió {e:?}"),
+    ///     Err(e) => panic!("open_root answered {e:?}"),
     /// }
     /// # }
     /// ```
@@ -185,184 +190,193 @@ pub trait Provider: Send + Sync {
         Err(Error::Unsupported)
     }
 
-    /// Metadatos de un nodo. Symlinks: describe el LINK (kind `Symlink`),
-    /// jamás el destino.
+    /// A node's metadata. Symlinks: describes the LINK (kind `Symlink`),
+    /// never the target.
     async fn stat(&self, p: &VPath) -> Result<Entry, Error>;
 
-    /// Listado no recursivo de un directorio, como stream perezoso.
-    /// El orden es el del backend, sin garantía.
+    /// Non-recursive listing of a directory, as a lazy stream. The order
+    /// is the backend's, with no guarantee.
     async fn list(&self, p: &VPath) -> Result<EntryStream, Error>;
 
-    /// Total de entradas del CONTENEDOR bajo `p` omitidas de su índice
-    /// (#93): nombres que no mapean a segmentos `VPath` válidos o entradas
-    /// recortadas por límites anti-bomba (providers archive, ADR 0018 C2).
-    /// Es un total POR CONTENEDOR — las omitidas no tienen ruta
-    /// representable donde atribuirse, así que el mismo valor aplica a
-    /// cualquier dir de ese contenedor.
+    /// Total entries of the CONTAINER under `p` omitted from its index
+    /// (#93): names that don't map to valid `VPath` segments, or entries
+    /// trimmed by anti-bomb limits (archive providers, ADR 0018 C2). It's
+    /// a total PER CONTAINER — the omitted ones have no representable
+    /// path to be attributed to, so the same value applies to any dir of
+    /// that container.
     ///
-    /// `Ok(None)` (default) = no aplica: este backend lista todo lo que
-    /// existe (filesystems, remotos). `Ok(Some(0))` = contenedor indexado
-    /// sin omisiones. Los frontends solo señalizan `Some(n)` con `n > 0`.
+    /// `Ok(None)` (default) = doesn't apply: this backend lists
+    /// everything that exists (filesystems, remotes). `Ok(Some(0))` = an
+    /// indexed container with no omissions. Frontends only signal
+    /// `Some(n)` with `n > 0`.
     async fn list_skipped(&self, p: &VPath) -> Result<Option<u64>, Error> {
         let _ = p;
         Ok(None)
     }
 
-    /// Catálogo de atributos por entrada que este provider sabe materializar
-    /// (#108 bloque 2, ADR 0039). Default: ninguno. Un provider con catálogo
-    /// NO vacío DEBE sobreescribir [`Self::list_with`] y [`Self::stat_with`]
-    /// — la suite contractual fija el acuerdo de tipos declarado
-    /// ([`norte_proto::AttrType`]) contra los valores producidos.
+    /// Catalogue of per-entry attributes this provider knows how to
+    /// materialize (#108 block 2, ADR 0039). Default: none. A provider
+    /// with a NON-empty catalogue MUST override [`Self::list_with`] and
+    /// [`Self::stat_with`] — the contract suite pins down the agreement
+    /// between the declared type ([`norte_proto::AttrType`]) and the
+    /// values produced.
     ///
-    /// Los ids/labels de aquí son del lado provider; el daemon los envuelve
-    /// en `AttrCatalog::new` (que sanea) antes de tocar el wire, y el backend
-    /// embebido debe hacer lo mismo (ADR 0039 §4).
+    /// The ids/labels here are provider-side; the daemon wraps them in
+    /// `AttrCatalog::new` (which sanitizes) before touching the wire, and
+    /// the embedded backend must do the same (ADR 0039 §4).
     fn attrs(&self) -> &[AttrInfo] {
         &[]
     }
 
-    /// [`Self::list`] con opciones. El default ignora las opciones y produce
-    /// entradas peladas — correcto para cualquier provider con catálogo
-    /// vacío. Ausencia significa ausencia: un id pedido desconocido o no
-    /// producible se OMITE de `Entry::attrs`, jamás se fabrica.
+    /// [`Self::list`] with options. The default ignores the options and
+    /// produces bare entries — correct for any provider with an empty
+    /// catalogue. Absence means absence: an unknown or unproducible
+    /// requested id is OMITTED from `Entry::attrs`, never fabricated.
     async fn list_with(&self, p: &VPath, opt: &ListOptions) -> Result<EntryStream, Error> {
         let _ = opt;
         self.list(p).await
     }
 
-    /// [`Self::stat`] con opciones. Mismo contrato que [`Self::list_with`].
+    /// [`Self::stat`] with options. Same contract as [`Self::list_with`].
     async fn stat_with(&self, p: &VPath, opt: &ListOptions) -> Result<Entry, Error> {
         let _ = opt;
         self.stat(p).await
     }
 
-    /// Contenido de un archivo como stream de chunks. `range: None` = el
-    /// archivo completo; con rango, desde `offset` hasta `len` bytes (o EOF,
-    /// lo que llegue antes). `offset` más allá de EOF: stream vacío, no
-    /// error (semántica de `pread`). Lo exige el resume de M2 y el viewer
+    /// A file's content as a stream of chunks. `range: None` = the whole
+    /// file; with a range, from `offset` up to `len` bytes (or EOF,
+    /// whichever comes first). `offset` past EOF: empty stream, not an
+    /// error (`pread` semantics). Required by M2's resume and the viewer
     /// (ADR 0005).
     async fn read(&self, p: &VPath, range: Option<ByteRange>) -> Result<ByteStream, Error>;
 
-    /// Identidad REAL del nodo, si el backend la conoce: `(dev, ino)` en
-    /// unix, `(volumen, FileId)` en Windows, clave interna en providers
-    /// sintéticos. Es la base de los guards anti-autodestrucción del copy
-    /// engine y del visited set contra ciclos de symlinks (spec §17.9).
+    /// The node's REAL identity, if the backend knows one: `(dev, ino)` on
+    /// unix, `(volume, FileId)` on Windows, an internal key on synthetic
+    /// providers. It's the basis of the copy engine's
+    /// self-destruction guards and of the visited set against symlink
+    /// cycles (spec §17.9).
     ///
-    /// `follow` elige entre la identidad del PROPIO nodo (semántica lstat,
-    /// coherente con [`Self::stat`]) o la de su destino resuelto; sobre un
-    /// nodo que no es symlink ambas coinciden.
+    /// `follow` chooses between the identity of the node ITSELF (lstat
+    /// semantics, consistent with [`Self::stat`]) or that of its resolved
+    /// target; over a node that isn't a symlink both agree.
     ///
-    /// `Ok(None)` (default) = este backend no tiene identidad estable
-    /// (object storage, ftp): el caller degrada a heurísticas conservadoras
-    /// y las features que EXIGEN identidad (seguir dir-symlinks) responden
+    /// `Ok(None)` (default) = this backend has no stable identity (object
+    /// storage, ftp): the caller degrades to conservative heuristics and
+    /// features that REQUIRE identity (following dir-symlinks) answer
     /// `Unsupported`.
     ///
-    /// Errores: [`Error::NotFound`] si `p` no existe — o si es un symlink
-    /// roto con [`FollowLinks::Yes`].
+    /// Errors: [`Error::NotFound`] if `p` doesn't exist — or if it's a
+    /// broken symlink with [`FollowLinks::Yes`].
     async fn node_id(&self, p: &VPath, follow: FollowLinks) -> Result<Option<NodeId>, Error> {
         let _ = (p, follow);
         Ok(None)
     }
 
-    /// Bytes CRUDOS del destino de un symlink (relativo o absoluto, quizá
-    /// roto, quizá no-UTF8 — jamás se valida como `VPath` ni se resuelve).
+    /// RAW bytes of a symlink's target (relative or absolute, maybe
+    /// broken, maybe non-UTF8 — never validated as a `VPath` nor resolved).
     ///
-    /// Errores: [`Error::NotFound`] si `p` no existe;
-    /// [`Error::Conflict`] (`TypeMismatch`) si existe pero no es symlink;
-    /// [`Error::Unsupported`] si el provider no sabe de symlinks (default).
+    /// Errors: [`Error::NotFound`] if `p` doesn't exist;
+    /// [`Error::Conflict`] (`TypeMismatch`) if it exists but isn't a symlink;
+    /// [`Error::Unsupported`] if the provider doesn't know about symlinks (default).
     async fn read_link(&self, p: &VPath) -> Result<Vec<u8>, Error> {
         let _ = p;
         Err(Error::Unsupported)
     }
 
-    /// Mueve `p` (árbol entero si es dir) a la PAPELERA del provider —
-    /// recuperable (ADR 0009). Solo con la capability `TRASH`; sin ella:
-    /// [`Error::Unsupported`] (default) — el engine JAMÁS degrada a
-    /// borrado permanente por su cuenta.
+    /// Moves `p` (the whole tree if it's a dir) to the provider's TRASH —
+    /// recoverable (ADR 0009). Only with the `TRASH` capability; without
+    /// it: [`Error::Unsupported`] (default) — the engine NEVER degrades
+    /// to permanent deletion on its own.
     ///
-    /// Devuelve `Some(dest)` con el destino recuperable siempre que el provider
-    /// ELIJA ese destino y lo sepa nombrar — el core lo persiste como
-    /// `reversal_ref` para el undo. Lo hacen la papelera LÓGICA
-    /// (`.norte-trash/<id>/payload`) y la papelera freedesktop de
-    /// `norte-vfs-local` (`<Trash>/files/<nombre>`). `None` si la papelera es
-    /// del OS y no expone ruta estable (macOS, Windows) o es una papelera
-    /// "vanish" de test.
+    /// Returns `Some(dest)` with the recoverable destination whenever the
+    /// provider CHOOSES that destination and knows how to name it — the
+    /// core persists it as `reversal_ref` for undo. The LOGICAL trash
+    /// (`.norte-trash/<id>/payload`) and `norte-vfs-local`'s freedesktop
+    /// trash (`<Trash>/files/<name>`) do this. `None` if the trash is the
+    /// OS's and doesn't expose a stable path (macOS, Windows) or is a
+    /// "vanish" test trash.
     ///
-    /// **`None` no es un detalle cosmético**: sin `reversal_ref` el undo de una
-    /// sobrescritura tiene que casar por ruta ORIGINAL, y para cuando llega
-    /// ahí el candidato más reciente es el fichero que él mismo acaba de
-    /// enterrar. Por eso [`Provider::trash_restorable`] existe: el plan de una
-    /// sincronización marca IRREVERSIBLE todo lo que pase por una papelera que
-    /// no nombra su destino, antes de que nadie apruebe nada (regla dura 4).
+    /// **`None` isn't a cosmetic detail**: without a `reversal_ref`
+    /// undoing an overwrite has to match by ORIGINAL path, and by the
+    /// time it gets there the most recent candidate is the file it just
+    /// buried itself. That's why [`Provider::trash_restorable`] exists:
+    /// a sync's plan marks IRREVERSIBLE everything that goes through a
+    /// trash that doesn't name its destination, before anyone approves
+    /// anything (hard rule 4).
     ///
-    /// `id` lo genera el engine UNA vez por operación (#99): la papelera lógica
-    /// construye su entrada determinista `.norte-trash/<id>/` con él, de modo
-    /// que la operación es IDEMPOTENTE — un reintento tras un fallo transitorio
-    /// converge en la misma entrada (víctima ya movida + destino presente →
-    /// `Some(payload)`) en vez de crear una segunda o perder el `reversal_ref`.
-    /// Las papeleras nativas/vanish lo ignoran (sin destino recuperable).
+    /// `id` is generated by the engine ONCE per operation (#99): the
+    /// logical trash builds its deterministic `.norte-trash/<id>/` entry
+    /// with it, so the operation is IDEMPOTENT — a retry after a
+    /// transient failure converges on the same entry (victim already
+    /// moved + destination present → `Some(payload)`) instead of creating
+    /// a second one or losing the `reversal_ref`. Native/vanish trashes
+    /// ignore it (no recoverable destination).
     ///
-    /// Excepciones de plataforma conocidas (ADR 0009, issues #25/#26):
-    /// Windows puede DESTRUIR ítems no reciclables (auto-respuesta del
-    /// nuke warning); freedesktop cross-device degrada a copy+delete
-    /// interno (potencialmente largo e incancelable a mitad).
+    /// Known platform exceptions (ADR 0009, issues #25/#26): Windows can
+    /// DESTROY non-recyclable items (auto-answer to the nuke warning);
+    /// freedesktop cross-device degrades to internal copy+delete
+    /// (potentially long and uncancellable mid-way).
     async fn trash(&self, p: &VPath, id: &crate::trash::TrashId) -> Result<Option<VPath>, Error> {
         let _ = (p, id);
         Err(Error::Unsupported)
     }
 
-    /// ¿La papelera de este provider NOMBRA el destino de lo que entierra?
+    /// Does this provider's trash NAME the destination of what it buries?
     ///
-    /// Es una propiedad de la IMPLEMENTACIÓN, no de una víctima concreta, y por
-    /// eso no hace I/O: `true` significa "cuando `trash` va bien, contesta
-    /// `Some`". Quien planifica una mutación la usa para clasificar la reversa
-    /// ANTES de pedir aprobación (regla dura 4): sobre una papelera que
-    /// contesta `None` no hay undo posible, ni siquiera el de una copia, porque
-    /// deshacer una creación también pasa por la papelera (#65).
+    /// It's a property of the IMPLEMENTATION, not of a specific victim,
+    /// and that's why it does no I/O: `true` means "when `trash` goes
+    /// well, it answers `Some`". Whoever plans a mutation uses it to
+    /// classify the reversal BEFORE asking for approval (hard rule 4):
+    /// over a trash that answers `None` there's no possible undo, not
+    /// even a copy's, because undoing a creation also goes through the
+    /// trash (#65).
     ///
-    /// Un provider que conteste `true` puede aun así devolver `None` en un caso
-    /// concreto —el destino existe pero cae fuera de lo que ese provider sabe
-    /// nombrar—; el journal se queda entonces sin `reversal_ref` y el undo lo
-    /// BLOQUEA nombrando la ruta, que es lo honesto. Lo que no es legal es lo
-    /// contrario: prometer `false` y devolver `Some`, ni prometer `true` sin
-    /// tener nunca destino. La suite contractual lo comprueba.
+    /// A provider that answers `true` can still return `None` in a
+    /// specific case — the destination exists but falls outside what that
+    /// provider knows how to name —; the journal is then left without a
+    /// `reversal_ref` and undo BLOCKS it by naming the path, which is the
+    /// honest thing to do. What isn't legal is the opposite: promising
+    /// `false` and returning `Some`, or promising `true` and never having
+    /// a destination. The contract suite checks this.
     ///
-    /// Default `false`: quien no lo implemente no promete nada.
+    /// Default `false`: whoever doesn't implement it promises nothing.
     fn trash_restorable(&self) -> bool {
         false
     }
 
-    /// Devuelve a `original` lo que [`Provider::trash`] enterró en `dest`, con
-    /// los metadatos que la papelera hubiera dejado al lado.
+    /// Returns to `original` what [`Provider::trash`] buried at `dest`,
+    /// with whatever metadata the trash would have left alongside it.
     ///
-    /// El default es el movimiento a secas, que es lo que hace la papelera
-    /// LÓGICA. Lo sobrescribe quien deje metadatos fuera del payload — la
-    /// papelera freedesktop de `norte-vfs-local` tiene que llevarse también el
-    /// `info/<nombre>.trashinfo`, o la papelera del usuario queda con una
-    /// entrada que apunta a un fichero que ya no está.
+    /// The default is a plain move, which is what the LOGICAL trash does.
+    /// It's overridden by whoever leaves metadata outside the payload —
+    /// `norte-vfs-local`'s freedesktop trash also has to take along the
+    /// `info/<name>.trashinfo`, or the user's trash is left with an entry
+    /// pointing at a file that's no longer there.
     ///
-    /// El destino tiene que estar LIBRE: hereda el contrato no-replace de
-    /// [`Provider::rename`], porque restaurar pisando es perder lo que hubiera
-    /// llegado a esa ruta después.
+    /// The destination has to be FREE: it inherits [`Provider::rename`]'s
+    /// no-replace contract, because restoring by overwriting would lose
+    /// whatever had arrived at that path afterward.
     ///
     /// # Errors
-    /// Los de [`Provider::rename`]: [`Error::NotFound`] si `dest` ya no está,
-    /// [`Error::Conflict`] si `original` está ocupado.
+    /// Whatever [`Provider::rename`]'s: [`Error::NotFound`] if `dest` is
+    /// no longer there, [`Error::Conflict`] if `original` is occupied.
     async fn restore_from(&self, dest: &VPath, original: &VPath) -> Result<(), Error> {
         self.rename(dest, original).await
     }
 
-    /// GC de staging `.norte-partial` huérfano (ADR 0012, #11) en el directorio
-    /// `dir`: borra los parciales cuya antigüedad supera `older_than`. Los
-    /// reconoce por su FORMA exacta, no por prefijo suelto — un archivo real
-    /// `.norte-partial.backup` JAMÁS se toca. Devuelve cuántos borró.
+    /// GC of orphaned `.norte-partial` staging (ADR 0012, #11) in
+    /// directory `dir`: deletes partials whose age exceeds `older_than`.
+    /// Recognizes them by their exact SHAPE, not by a bare prefix — a real
+    /// `.norte-partial.backup` file is NEVER touched. Returns how many it
+    /// deleted.
     ///
-    /// Default no-op (`Ok(0)`): solo los providers con staging LOCAL lo
-    /// implementan. NO es una mutación de usuario → no pasa por el journal.
+    /// Default no-op (`Ok(0)`): only providers with LOCAL staging
+    /// implement it. It is NOT a user mutation → doesn't go through the
+    /// journal.
     ///
     /// # Errors
-    /// [`Error`] si `dir` no se puede listar; los fallos de borrado
-    /// individuales se cuentan como no-borrados, sin abortar el barrido.
+    /// [`Error`] if `dir` can't be listed; individual deletion failures
+    /// are counted as not-deleted, without aborting the sweep.
     async fn gc_partials(
         &self,
         dir: &VPath,
@@ -372,185 +386,195 @@ pub trait Provider: Send + Sync {
         Ok(0)
     }
 
-    /// Restaura desde la papelera NATIVA del OS el ítem cuya ruta original es
-    /// `original` (undo M3-2 de un `Trashed` sin `reversal_ref`, ADR 0009).
-    /// Default `Unsupported`. Solo el provider local lo implementa: casa por
-    /// ruta original el ítem MÁS RECIENTE y lo restaura. Falla limpio si la
-    /// plataforma no lista la papelera, no hay match, o el destino está ocupado.
+    /// Restores from the OS's NATIVE trash the item whose original path is
+    /// `original` (M3-2's undo of a `Trashed` with no `reversal_ref`, ADR
+    /// 0009). Default `Unsupported`. Only the local provider implements
+    /// it: matches by original path the MOST RECENT item and restores it.
+    /// Fails cleanly if the platform doesn't list the trash, there's no
+    /// match, or the destination is occupied.
     ///
-    /// **Es el camino de ADIVINAR, y por eso ya casi no se usa**: elegir "el más
-    /// reciente con esta ruta original" es exactamente lo que restauraba el
-    /// fichero equivocado al deshacer una sobrescritura. Desde que la papelera
-    /// freedesktop nombra su destino, un `trashed` de `file://` en Linux lleva
-    /// `reversal_ref` y el undo usa [`Provider::restore_from`]. Aquí quedan las
-    /// entradas viejas del journal y las plataformas cuya papelera no nombra
-    /// nada.
+    /// **It's the GUESSING path, and that's why it's barely used
+    /// anymore**: choosing "the most recent with this original path" is
+    /// exactly what restored the wrong file when undoing an overwrite.
+    /// Since the freedesktop trash names its destination, a `trashed` on
+    /// `file://` on Linux carries a `reversal_ref` and undo uses
+    /// [`Provider::restore_from`]. What's left here are the journal's old
+    /// entries and platforms whose trash names nothing.
     ///
     /// # Errors
-    /// [`Error::Unsupported`] (default y plataformas sin listado de papelera);
-    /// [`Error::NotFound`] sin match; [`Error::Conflict`] destino ocupado.
+    /// [`Error::Unsupported`] (default and platforms without trash
+    /// listing); [`Error::NotFound`] with no match; [`Error::Conflict`]
+    /// occupied destination.
     async fn restore_trashed(&self, original: &VPath) -> Result<(), Error> {
         let _ = original;
         Err(Error::Unsupported)
     }
 
-    /// Crea un symlink en `link` apuntando a `target` (bytes crudos, tal
-    /// cual — el provider no los interpreta). `kind` distingue archivo/dir
-    /// donde el OS lo exige (Windows); unix lo ignora.
+    /// Creates a symlink at `link` pointing at `target` (raw bytes, as is
+    /// — the provider doesn't interpret them). `kind` distinguishes
+    /// file/dir where the OS requires it (Windows); unix ignores it.
     ///
-    /// Si `link` ya existe: [`Error::Conflict`]. Providers sin symlinks:
-    /// [`Error::Unsupported`] (default) y SIN la capability `SYMLINKS`.
+    /// If `link` already exists: [`Error::Conflict`]. Providers without
+    /// symlinks: [`Error::Unsupported`] (default) and WITHOUT the
+    /// `SYMLINKS` capability.
     async fn symlink(&self, link: &VPath, target: &[u8], kind: SymlinkKind) -> Result<(), Error> {
         let _ = (link, target, kind);
         Err(Error::Unsupported)
     }
 
-    /// Abre un sink de escritura para un archivo NUEVO. Si el destino ya
-    /// existe: [`Error::Conflict`] — la política de sobrescritura es del core,
-    /// no del provider. Los bytes no son visibles en el path final hasta
-    /// [`ByteSink::commit`].
+    /// Opens a write sink for a NEW file. If the destination already
+    /// exists: [`Error::Conflict`] — the overwrite policy belongs to the
+    /// core, not the provider. The bytes aren't visible at the final path
+    /// until [`ByteSink::commit`].
     async fn write(&self, p: &VPath) -> Result<Box<dyn ByteSink>, Error>;
 
-    /// Abre un sink que REANUDA una escritura previa a `p` (ADR 0012):
-    /// devuelve el sink y cuántos bytes YA hay durables en el staging
-    /// (`0` = empieza de cero). El sink AÑADE después de esos bytes; el
-    /// engine lee el origen desde ese offset.
+    /// Opens a sink that RESUMES a previous write to `p` (ADR 0012):
+    /// returns the sink and how many bytes are ALREADY durable in the
+    /// staging (`0` = starts from scratch). The sink APPENDS after those
+    /// bytes; the engine reads the source from that offset.
     ///
-    /// La reanudación cross-invocación exige un staging con nombre ESTABLE
-    /// por destino (un provider que lo soporte lo reencuentra). Default:
-    /// `(write(p), 0)` — sin reanudación, empieza de cero (correcto y
-    /// seguro; el engine recopia entero).
+    /// Cross-invocation resumption requires a staging with a STABLE name
+    /// per destination (a provider that supports it finds it again).
+    /// Default: `(write(p), 0)` — no resume, starts from scratch (correct
+    /// and safe; the engine recopies the whole thing).
     ///
-    /// El destino final debe seguir sin existir: si ya existe, mismo
-    /// [`Error::Conflict`] que [`Self::write`].
+    /// The final destination must still not exist: if it already does,
+    /// the same [`Error::Conflict`] as [`Self::write`].
     async fn open_resumable(&self, p: &VPath) -> Result<(Box<dyn ByteSink>, u64), Error> {
         Ok((self.write(p).await?, 0))
     }
 
-    /// SHA-256 de los PRIMEROS `len` bytes del staging reanudable de `p`
-    /// (#35, `VerifyPolicy::Hash`): el engine lo compara con el hash del
-    /// mismo prefijo del ORIGEN antes de reanudar — si no casan, el origen
-    /// cambió bajo los pies y el parcial se descarta.
+    /// SHA-256 of the FIRST `len` bytes of `p`'s resumable staging (#35,
+    /// `VerifyPolicy::Hash`): the engine compares it against the hash of
+    /// the SAME prefix of the SOURCE before resuming — if they don't
+    /// match, the source changed under its feet and the partial is discarded.
     ///
-    /// `Ok(None)` = no hay digest disponible → el engine degrada `Hash` a
-    /// `Length` (descarta solo si el parcial es más largo que el origen). Dos
-    /// causas: el provider no expone digest (default), o NO hay staging para
-    /// `p` ahora mismo. Un provider con staging local (local/sftp) o multipart
-    /// (S3, `ETag` por parte) devuelve `Some`. `len` jamás excede lo que
-    /// `open_resumable` reportó como durable; si aun así lo excediera, se
-    /// hashea lo disponible y (si es menos) se devuelve `None`.
+    /// `Ok(None)` = no digest available → the engine degrades `Hash` to
+    /// `Length` (discards only if the partial is longer than the source).
+    /// Two causes: the provider exposes no digest (default), or there's
+    /// NO staging for `p` right now. A provider with local staging
+    /// (local/sftp) or multipart (S3, per-part `ETag`) returns `Some`.
+    /// `len` never exceeds what `open_resumable` reported as durable; if
+    /// it somehow did, whatever's available gets hashed and (if it's
+    /// less) `None` is returned.
     async fn partial_digest(&self, p: &VPath, len: u64) -> Result<Option<[u8; 32]>, Error> {
         let _ = (p, len);
         Ok(None)
     }
 
-    /// Crea UN directorio (el padre debe existir; `mkdir -p` lo compone el core).
-    /// Si ya existe: [`Error::Conflict`].
+    /// Creates ONE directory (the parent must exist; the core composes
+    /// `mkdir -p`). If it already exists: [`Error::Conflict`].
     async fn mkdir(&self, p: &VPath) -> Result<(), Error>;
 
-    /// Borra UN nodo: archivo, symlink o directorio VACÍO (el walk post-order
-    /// es del core). Directorio no vacío: [`Error::Conflict`].
+    /// Deletes ONE node: a file, a symlink or an EMPTY directory
+    /// (post-order walking belongs to the core). Non-empty directory:
+    /// [`Error::Conflict`].
     ///
-    /// GARANTÍA (contractual): sobre un symlink borra EL LINK, jamás su
-    /// target (semántica lstat/unlink). El copy engine confía en esto para
-    /// que mover un árbol con links expandidos no destruya los targets
-    /// (issue #19).
+    /// GUARANTEE (contractual): over a symlink it deletes THE LINK, never
+    /// its target (lstat/unlink semantics). The copy engine relies on
+    /// this so that moving a tree with expanded links doesn't destroy the
+    /// targets (issue #19).
     async fn remove(&self, p: &VPath) -> Result<(), Error>;
 
-    /// Renombra dentro de ESTE provider (cross-provider = copy+delete en el
-    /// core). Atómico si la capability `RENAME_ATOMIC` está declarada.
-    /// Si el destino existe: [`Error::Conflict`].
+    /// Renames within THIS provider (cross-provider = copy+delete in the
+    /// core). Atomic if the `RENAME_ATOMIC` capability is declared.
+    /// If the destination exists: [`Error::Conflict`].
     async fn rename(&self, from: &VPath, to: &VPath) -> Result<(), Error>;
 
-    /// Copia server-side de UN archivo si el backend la ofrece (S3 `CopyObject`,
-    /// reflink/clonefile…). `None` = "no sé hacerlo, hazlo por streaming";
-    /// solo se consulta si la capability `SERVER_COPY` está declarada.
+    /// Server-side copy of ONE file if the backend offers it (S3
+    /// `CopyObject`, reflink/clonefile…). `None` = "I don't know how to do
+    /// this, do it by streaming"; only consulted if the `SERVER_COPY`
+    /// capability is declared.
     ///
-    /// Si el destino ya existe: [`Error::Conflict`] — MISMA política que
-    /// [`Self::write`]. Un backend cuyo copy nativo sobrescribe por defecto
-    /// (S3 `CopyObject`) DEBE chequear antes; jamás sobrescritura silenciosa.
+    /// If the destination already exists: [`Error::Conflict`] — SAME
+    /// policy as [`Self::write`]. A backend whose native copy overwrites
+    /// by default (S3 `CopyObject`) MUST check first; never a silent
+    /// overwrite.
     ///
-    /// **Contrato de cancelación (#51, regla 3):** el caller puede DROPEAR
-    /// este future a medias (el engine lo racea contra su token). El
-    /// implementador garantiza que un drop jamás deja en el destino un
-    /// parcial VISIBLE sin marcar (S3 cumple: `CopyObject` es atómico y un
-    /// multipart incompleto no publica objeto). Un efecto que complete
-    /// server-side DESPUÉS del drop es ambigüedad aceptada (el engine la
-    /// documenta, familia #32). OJO con implementaciones sobre
-    /// `spawn_blocking` (reflink local futuro): el drop del future NO
-    /// detiene el hilo — la copia correría hasta el final SIEMPRE y el
-    /// "después del drop" pasaría de raza rara a caso determinista; esa
-    /// implementación necesita su propio punto de cancelación.
+    /// **Cancellation contract (#51, rule 3):** the caller may DROP this
+    /// future mid-way (the engine races it against its token). The
+    /// implementer guarantees a drop never leaves an unmarked VISIBLE
+    /// partial at the destination (S3 satisfies this: `CopyObject` is
+    /// atomic and an incomplete multipart doesn't publish an object). An
+    /// effect that completes server-side AFTER the drop is an accepted
+    /// ambiguity (the engine documents it, family #32). WATCH OUT for
+    /// implementations over `spawn_blocking` (a future local reflink):
+    /// dropping the future does NOT stop the thread — the copy would
+    /// ALWAYS run to completion and "after the drop" would go from a rare
+    /// race to a deterministic case; that implementation needs its own
+    /// cancellation point.
     async fn copy_native(&self, from: &VPath, to: &VPath) -> Option<Result<(), Error>> {
         let _ = (from, to);
         None
     }
 
-    /// Fija los permisos POSIX de `p` (#314, 0.60.0).
+    /// Sets `p`'s POSIX permissions (#314, 0.60.0).
     ///
-    /// `mode` son los doce bits de `chmod(2)` y NADA más: los de arriba dicen
-    /// de qué clase es el nodo, y eso no se cambia. El caller ya los ha
-    /// validado, pero un provider que reciba otros debe seguir rechazándolos
-    /// en vez de recortarlos — recortar cambia el permiso a uno que nadie
-    /// pidió.
+    /// `mode` is `chmod(2)`'s twelve bits and NOTHING else: the bits
+    /// above say what class of node it is, and that doesn't change. The
+    /// caller has already validated them, but a provider that receives
+    /// others must still reject them instead of trimming them — trimming
+    /// changes the permission to one nobody asked for.
     ///
-    /// Sobre un SYMLINK actúa sobre lo que el enlace apunta, que es lo que
-    /// hace `chmod(2)` y lo que espera quien lo pide desde un listado; un
-    /// provider sin esa distinción no tiene nada que decidir.
+    /// Over a SYMLINK it acts on what the link points at, which is what
+    /// `chmod(2)` does and what whoever asks for it from a listing
+    /// expects; a provider without that distinction has nothing to decide.
     ///
-    /// El default es `Unsupported`, y esa es la respuesta correcta para casi
-    /// todos: dentro de un `.zip` no hay permisos que cambiar y un bucket de
-    /// objetos no tiene modo. Quien lo implemente declara además
-    /// [`CapabilityFlags::POSIX_MODE`](norte_proto::CapabilityFlags), que es
-    /// lo que un frontend mira para apagar el gesto en vez de ofrecerlo y
-    /// fallar.
+    /// The default is `Unsupported`, and that's the right answer for
+    /// almost everyone: inside a `.zip` there are no permissions to
+    /// change and an object bucket has no mode. Whoever implements it
+    /// also declares
+    /// [`CapabilityFlags::POSIX_MODE`](norte_proto::CapabilityFlags),
+    /// which is what a frontend checks to turn off the gesture instead of
+    /// offering it and failing.
     ///
     /// # Errors
     ///
-    /// [`Error::Unsupported`] si esta ubicación no tiene permisos POSIX;
-    /// [`Error::NotFound`] si la ruta no está; el error del backend si no se
-    /// pudo (permiso denegado, sistema de solo lectura).
+    /// [`Error::Unsupported`] if this location has no POSIX permissions;
+    /// [`Error::NotFound`] if the path isn't there; the backend's error if
+    /// it couldn't (permission denied, read-only system).
     async fn set_mode(&self, p: &VPath, mode: u32) -> Result<(), Error> {
         let _ = (p, mode);
         Err(Error::Unsupported)
     }
 }
 
-/// Tipo del symlink a crear: Windows distingue archivo/directorio en la
-/// creación (`CreateSymbolicLinkW`); unix lo ignora.
+/// Type of symlink to create: Windows distinguishes file/directory at
+/// creation (`CreateSymbolicLinkW`); unix ignores it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SymlinkKind {
-    /// El destino es (o será) un archivo.
+    /// The target is (or will be) a file.
     File,
-    /// El destino es (o será) un directorio.
+    /// The target is (or will be) a directory.
     Dir,
-    /// El caller NO lo sabe (p. ej. el copy engine preservando un link de
-    /// otro provider, issue #18): el provider lo determina best-effort
-    /// resolviendo el target EN SU PROPIO árbol — target roto o
-    /// indeterminable degrada a `File` (documentado). En OS donde el kind
-    /// no importa (unix) equivale a `File` sin coste alguno.
+    /// The caller does NOT know (e.g. the copy engine preserving a link
+    /// from another provider, issue #18): the provider determines it
+    /// best-effort by resolving the target IN ITS OWN tree — a broken or
+    /// undeterminable target degrades to `File` (documented). On an OS
+    /// where the kind doesn't matter (unix) this is equivalent to `File`
+    /// at no cost.
     Unknown,
 }
 
-/// ¿Resolver symlinks al calcular la identidad de un nodo?
-/// (Parámetro de [`Provider::node_id`].)
+/// Resolve symlinks when computing a node's identity?
+/// (Parameter of [`Provider::node_id`].)
 ///
 /// ```
 /// use norte_vfs::FollowLinks;
-/// // `No` = identidad del propio link; `Yes` = la de su destino.
+/// // `No` = the link's own identity; `Yes` = its target's.
 /// assert_ne!(FollowLinks::No, FollowLinks::Yes);
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FollowLinks {
-    /// Identidad del propio nodo (semántica lstat, como `stat`).
+    /// The node's own identity (lstat semantics, like `stat`).
     No,
-    /// Identidad del destino resuelto; symlink roto = `NotFound`.
+    /// The resolved target's identity; a broken symlink = `NotFound`.
     Yes,
 }
 
-/// Identidad real de un nodo DENTRO de un provider: comparable y hashable,
-/// jamás interpretable ni serializable al wire (es un detalle del backend;
-/// comparar `NodeId` de providers distintos no significa nada).
+/// A node's real identity WITHIN a provider: comparable and hashable,
+/// never interpretable nor serializable to the wire (it's a backend
+/// detail; comparing `NodeId`s from different providers means nothing).
 ///
 /// ```
 /// use norte_vfs::NodeId;
@@ -560,213 +584,227 @@ pub enum FollowLinks {
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct NodeId {
-    /// Dominio de unicidad del índice (device unix, serial de volumen
-    /// Windows; 0 si el backend no distingue volúmenes).
+    /// Uniqueness domain of the index (unix device, Windows volume
+    /// serial; 0 if the backend doesn't distinguish volumes).
     pub volume: u64,
-    /// Índice del nodo dentro del volumen (`ino`; 128 bits cubren el
-    /// `FileId` de `ReFS`).
+    /// The node's index within the volume (`ino`; 128 bits cover `ReFS`'s
+    /// `FileId`).
     pub index: u128,
 }
 
-/// Operaciones bajo una raíz de las que no se puede salir (#164, ADR 0054).
+/// Operations under a root that can't be escaped (#164, ADR 0054).
 ///
-/// Se obtiene de [`Provider::open_root`]. `rel` es SIEMPRE relativo a esa raíz
-/// y jamás se compone con ella: quien resuelve es el backend, sosteniendo la
-/// raíz abierta, y por eso entre dos operaciones nadie puede sustituir un
-/// componente por un symlink que mande la siguiente a otro sitio.
+/// Obtained from [`Provider::open_root`]. `rel` is ALWAYS relative to
+/// that root and is never composed with it: the backend does the
+/// resolving, holding the root open, and that's why between two
+/// operations nobody can replace a component with a symlink that sends
+/// the next one somewhere else.
 ///
-/// Un `rel` que se saldría responde [`Error::Conflict`] con
-/// [`norte_proto::ConflictKind::EscapesRoot`] — jamás [`Error::NotFound`], que
-/// un caller contesta creando el padre, o sea haciendo exactamente lo que este
-/// trait existe para impedir.
+/// A `rel` that would escape answers [`Error::Conflict`] with
+/// [`norte_proto::ConflictKind::EscapesRoot`] — never [`Error::NotFound`],
+/// which a caller answers by creating the parent, i.e. doing exactly what
+/// this trait exists to prevent.
 ///
-/// Un `rel` VACÍO es la raíz misma, y NINGUNA de estas operaciones la
-/// direcciona: sin último segmento no hay nombre sobre el que actuar, así que
-/// responden [`Error::InvalidPath`]. Para preguntar por la raíz está
+/// An EMPTY `rel` is the root itself, and NONE of these operations
+/// address it: with no last segment there's no name to act on, so they
+/// answer [`Error::InvalidPath`]. To ask about the root there's
 /// [`Self::root_id`].
 ///
-/// # Lo que esta superficie NO cubre, y conviene no leerlo de más
+/// # What this surface does NOT cover, and it's worth not reading too much into it
 ///
-/// Desde #218 cubre también el `stat` que DECIDE una colisión y el `remove`
-/// que la ejecuta **en `norte_core::ops`**, que era la mitad destructiva de una
-/// sobrescritura y la única que seguía yendo por ruta. Quedan fuera, y son
-/// deuda escrita, no cobertura:
+/// Since #218 it also covers the `stat` that DECIDES a collision and the
+/// `remove` that carries it out **in `norte_core::ops`**, which was the
+/// destructive half of an overwrite and the only one still going by path.
+/// Left out, and this is written-down debt, not coverage:
 ///
-/// - **El borrado del ORIGEN de un `move` por copia**, que es igual de
-///   destructivo y va por ruta: el origen no cuelga de la raíz del destino, y
-///   confinarlo pediría abrir otra.
-/// - **`RenameAuto`**, que sondea nombres candidatos por ruta hasta mil veces
-///   antes de escribir. La escritura sí va confinada y es create-new, así que
-///   no es un escape; lo que puede es ELEGIR el nombre mirando otro árbol.
-/// - **`copy_native`**, que escribe por ruta puenteando la raíz entera. Hoy es
-///   inalcanzable —solo `norte-vfs-object` declara `SERVER_COPY` y ese
-///   provider no implementa `open_root`—, pero el día que un provider tenga
-///   los dos, todo esto se desactiva sin que nada chirríe.
-/// - **`DeleteTree` y `rename`.** Esquivan el agujero por razones propias
-///   —`DeleteTree` no desciende symlinks, la revalidación es un `lstat`—, que
-///   es distinto de estar confinados.
-/// - **Un symlink COPIADO que apunta fuera** queda dentro del árbol y es una
-///   trampa para cualquier caller que después escriba ahí SIN raíz confinada.
-///   Por aquí no se puede seguir —la resolución lo rechaza—, pero por ruta sí.
+/// - **Deleting the SOURCE of a copy-based `move`**, which is just as
+///   destructive and goes by path: the source doesn't hang off the
+///   destination's root, and confining it would mean opening another one.
+/// - **`RenameAuto`**, which probes candidate names by path up to a
+///   thousand times before writing. The write itself IS confined and is
+///   create-new, so it isn't an escape; what it can do is CHOOSE the name
+///   by looking at another tree.
+/// - **`copy_native`**, which writes by path, bypassing the whole root.
+///   Today it's unreachable — only `norte-vfs-object` declares
+///   `SERVER_COPY` and that provider doesn't implement `open_root` —, but
+///   the day a provider has both, all of this gets disarmed without
+///   anything creaking.
+/// - **`DeleteTree` and `rename`.** They dodge the hole for their own
+///   reasons — `DeleteTree` doesn't descend into symlinks, revalidation
+///   is an `lstat` —, which is different from being confined.
+/// - **A COPIED symlink pointing outside** stays inside the tree and is a
+///   trap for any caller that later writes there WITHOUT a confined root.
+///   It can't be followed through here — resolution rejects it —, but it
+///   can by path.
 #[async_trait]
 pub trait ConfinedRoot: Send + Sync {
-    /// Crea un directorio en `rel`. Mismo contrato que [`Provider::mkdir`].
+    /// Creates a directory at `rel`. Same contract as [`Provider::mkdir`].
     async fn mkdir(&self, rel: &[Segment]) -> Result<(), Error>;
 
-    /// Abre un sink para `rel`. Mismo contrato que [`Provider::write`],
-    /// publicación incluida: el paso de staging a definitivo va confinado
-    /// también, que es donde la garantía se escaparía si no.
+    /// Opens a sink for `rel`. Same contract as [`Provider::write`],
+    /// publication included: the step from staging to final is confined
+    /// too, which is where the guarantee would leak otherwise.
     async fn write(&self, rel: &[Segment]) -> Result<Box<dyn ByteSink>, Error>;
 
-    /// ¿Puede esta raíz continuar un parcial suyo? (#297)
+    /// Can this root continue a partial of its own? (#297)
     ///
-    /// El caller lo pregunta ANTES de elegir camino, porque de la respuesta
-    /// depende si al cancelar conserva el staging (`keep`) o lo tira
-    /// (`abort`). Contestar `true` sin que [`Self::open_resumable`] deje un
-    /// staging REENCONTRABLE deja un parcial por intento que nadie consume.
+    /// The caller asks this BEFORE choosing a path, because the answer
+    /// decides whether cancelling keeps the staging (`keep`) or throws it
+    /// away (`abort`). Answering `true` without [`Self::open_resumable`]
+    /// leaving a REDISCOVERABLE staging leaves a partial per attempt that
+    /// nobody consumes.
     ///
-    /// Default `false`: el default de `open_resumable` de aquí abajo devuelve
-    /// un `write` normal, cuyo staging no tiene por qué ser reencontrable.
+    /// Default `false`: the `open_resumable` default below returns a
+    /// normal `write`, whose staging has no reason to be rediscoverable.
     fn resumes(&self) -> bool {
         false
     }
 
-    /// Mismo contrato que [`Provider::open_resumable`]. Default: sin
-    /// reanudación, que es correcto y seguro (el engine recopia entero).
+    /// Same contract as [`Provider::open_resumable`]. Default: no resume,
+    /// which is correct and safe (the engine recopies the whole thing).
     async fn open_resumable(&self, rel: &[Segment]) -> Result<(Box<dyn ByteSink>, u64), Error> {
         Ok((self.write(rel).await?, 0))
     }
 
-    /// La identidad del NODO que esta raíz tiene abierto.
+    /// The identity of the NODE this root has open.
     ///
-    /// Existe para que el caller pueda comprobar que la raíz que le dieron es
-    /// la que él validó, y no otra. La ancla del confinamiento se consigue
-    /// abriendo una RUTA —`open_root` la resuelve como cualquier otra, symlinks
-    /// incluidos, porque un `~/copias -> /mnt/disco/copias` es legítimo y
-    /// negarlo rompería árboles de verdad—, así que entre validar esa ruta y
-    /// abrirla hay la misma ventana de siempre. Todo lo que va DESPUÉS queda
-    /// perfectamente confinado; lo que hay que descartar es que lo esté al
-    /// árbol equivocado.
+    /// Exists so the caller can check that the root it was given is the
+    /// one it validated, and not another. Confinement's anchor is gotten
+    /// by opening a PATH — `open_root` resolves it like any other,
+    /// symlinks included, because a `~/backups -> /mnt/disk/backups` is
+    /// legitimate and refusing it would break real trees —, so between
+    /// validating that path and opening it there's the usual window.
+    /// Everything AFTER that stays perfectly confined; what has to be
+    /// ruled out is that it's confined to the wrong tree.
     ///
-    /// `Ok(None)` = este backend no tiene identidad estable, igual que
-    /// [`Provider::node_id`]. Entonces no hay nada que comparar y el caller
-    /// decide con lo que tenga.
+    /// `Ok(None)` = this backend has no stable identity, same as
+    /// [`Provider::node_id`]. Then there's nothing to compare and the
+    /// caller decides with what it has.
     ///
     /// # Errors
-    /// Los de mirar el nodo ya abierto.
+    /// Whatever looking at the already-open node produces.
     async fn root_id(&self) -> Result<Option<NodeId>, Error> {
         Ok(None)
     }
 
-    /// La identidad del nodo que hay en `rel`, POR EL DESCRIPTOR de la raíz.
+    /// The identity of the node at `rel`, VIA the root's DESCRIPTOR.
     ///
-    /// Mismo contrato que [`Provider::node_id`] con
-    /// [`FollowLinks::No`] —describe el LINK, jamás su destino, igual que
-    /// [`Self::stat`]—, y existe por lo mismo que existe el resto de esta
-    /// interfaz: la ruta lógica puede haber dejado de llevar aquí.
+    /// Same contract as [`Provider::node_id`] with [`FollowLinks::No`] —
+    /// describes the LINK, never its target, same as [`Self::stat`] —,
+    /// and exists for the same reason the rest of this interface does:
+    /// the logical path may have stopped leading here.
     ///
-    /// Ese caso no es teórico, es #369. Una copia escribe por el descriptor de
-    /// la raíz de destino; si esa carpeta se renombra a la papelera con la
-    /// copia en marcha, el descriptor sigue valiendo y los bytes siguen
-    /// cayendo donde tienen que caer, pero `node_id(/destino/f0001)` contesta
-    /// [`Error::NotFound`] — la ruta ya no lleva ahí. Preguntar por ruta deja
-    /// sin identidad exactamente a las entradas que más la necesitan.
+    /// That case isn't theoretical, it's #369. A copy writes via the
+    /// destination root's descriptor; if that folder gets renamed to the
+    /// trash while the copy is in progress, the descriptor stays valid
+    /// and the bytes keep landing where they should, but
+    /// `node_id(/destination/f0001)` answers [`Error::NotFound`] — the
+    /// path no longer leads there. Asking by path leaves without
+    /// identity exactly the entries that need it most.
     ///
-    /// `Ok(None)` = este backend no tiene identidad estable, igual que
-    /// [`Provider::node_id`] y [`Self::root_id`]. Es el default, y quien lo
-    /// recibe decide con lo que tenga.
+    /// `Ok(None)` = this backend has no stable identity, same as
+    /// [`Provider::node_id`] and [`Self::root_id`]. It's the default, and
+    /// whoever gets it decides with what they have.
     ///
     /// # Errors
-    /// [`Error::NotFound`] si no hay nada en `rel`; los de mirar el nodo si no.
+    /// [`Error::NotFound`] if there's nothing at `rel`; whatever looking
+    /// at the node produces otherwise.
     async fn node_id(&self, rel: &[Segment]) -> Result<Option<NodeId>, Error> {
         let _ = rel;
         Ok(None)
     }
 
-    /// Crea un symlink en `rel` apuntando a `target`. Mismo contrato que
-    /// [`Provider::symlink`], `kind` incluido.
+    /// Creates a symlink at `rel` pointing at `target`. Same contract as
+    /// [`Provider::symlink`], `kind` included.
     ///
-    /// Está aquí porque copiar un symlink es CREAR uno en el destino, y esa
-    /// creación compone una ruta igual que las otras dos: sin este método, una
-    /// copia cuyo origen es un symlink se quedaría sin confinar y el agujero
-    /// seguiría abierto por el camino más corriente que hay de alcanzarlo.
+    /// It's here because copying a symlink is CREATING one at the
+    /// destination, and that creation composes a path just like the
+    /// other two: without this method, a copy whose source is a symlink
+    /// would be left unconfined and the hole would stay open through the
+    /// most common way there is to reach it.
     ///
-    /// Lo que se confina es DÓNDE cae el link, jamás a dónde apunta: un target
-    /// que sale de la raíz es un symlink roto o que apunta fuera, que es
-    /// exactamente lo que el origen decía y lo que `Preserve` promete copiar.
+    /// What's confined is WHERE the link lands, never where it points: a
+    /// target that leaves the root is a broken symlink or one pointing
+    /// outside, which is exactly what the source said and what
+    /// `Preserve` promises to copy.
     ///
     /// # Errors
-    /// [`Error::Conflict`] si `rel` está ocupado o se saldría de la raíz;
-    /// [`Error::Unsupported`] si este backend no sabe crear symlinks.
+    /// [`Error::Conflict`] if `rel` is occupied or would escape the root;
+    /// [`Error::Unsupported`] if this backend doesn't know how to create symlinks.
     async fn symlink(&self, rel: &[Segment], target: &[u8], kind: SymlinkKind)
     -> Result<(), Error>;
 
-    /// Mismo contrato que [`Provider::stat`]: describe el LINK, jamás su
-    /// destino.
+    /// Same contract as [`Provider::stat`]: describes the LINK, never its
+    /// target.
     async fn stat(&self, rel: &[Segment]) -> Result<Entry, Error>;
 
-    /// Borra la HOJA que hay en `rel`. Mismo contrato que [`Provider::remove`]
-    /// para un no-directorio (#218).
+    /// Deletes the LEAF at `rel`. Same contract as [`Provider::remove`]
+    /// for a non-directory (#218).
     ///
-    /// Existe porque una copia con `Overwrite` o `Newer` **destruye antes de
-    /// escribir**, y esa mitad se quedó fuera del confinamiento: el `write`
-    /// iba por el descriptor y el `remove` que lo precede iba por ruta. Con
-    /// `dest/sub` sustituido por un puente hacia otro árbol, el borrado se
-    /// llevaba un fichero de FUERA de la raíz aprobada y solo entonces el
-    /// write confinado se negaba — un fichero destruido, nada escrito en su
-    /// lugar, y una entrada de journal nombrando un sitio que no era.
+    /// Exists because a copy with `Overwrite` or `Newer` **destroys
+    /// before writing**, and that half was left out of confinement: the
+    /// `write` went via the descriptor and the `remove` preceding it went
+    /// by path. With `dest/sub` replaced by a bridge to another tree, the
+    /// deletion used to take a file from OUTSIDE the approved root and
+    /// only then would the confined write refuse — a destroyed file,
+    /// nothing written in its place, and a journal entry naming a place
+    /// that wasn't it.
     ///
-    /// Un directorio NO se borra por aquí: reemplazar un dir por una hoja es
-    /// `TypeMismatch`, que es una respuesta y no una política.
+    /// A directory is NOT deleted through here: replacing a dir with a
+    /// leaf is `TypeMismatch`, which is an answer and not a policy.
     ///
-    /// El default es [`Error::Unsupported`], y el llamante tiene que tratarlo
-    /// como tal: una raíz que no sabe borrar hace que `Overwrite` se RECHACE,
-    /// jamás que se caiga al borrado por ruta —eso sería reabrir el agujero
-    /// justo en el caso que esto existe para cerrar—.
+    /// The default is [`Error::Unsupported`], and the caller has to treat
+    /// it as such: a root that doesn't know how to delete makes
+    /// `Overwrite` get REJECTED, never fall back to by-path deletion —
+    /// that would reopen the hole exactly in the case this exists to close.
     ///
     /// # Errors
-    /// [`Error::Unsupported`] si este backend no sabe borrar confinado;
-    /// [`Error::NotFound`] si no hay nada en `rel`; los del borrado si no.
+    /// [`Error::Unsupported`] if this backend doesn't know how to do a
+    /// confined delete; [`Error::NotFound`] if there's nothing at `rel`;
+    /// whatever the deletion produces otherwise.
     async fn remove(&self, rel: &[Segment]) -> Result<(), Error> {
         let _ = rel;
         Err(Error::Unsupported)
     }
 
-    /// Borra el DIRECTORIO VACÍO que hay en `rel` (#296).
+    /// Deletes the EMPTY DIRECTORY at `rel` (#296).
     ///
-    /// Gemelo de [`Self::mkdir`], y separado de [`Self::remove`] por la misma
-    /// razón por la que `unlinkat` tiene `AT_REMOVEDIR`: son dos efectos
-    /// distintos y confundirlos es como se borra un árbol creyendo que se
-    /// borraba un fichero. Lo pide el borrado en post-orden de un `Mirror`,
-    /// que llega a cada directorio ya vacío.
+    /// Twin of [`Self::mkdir`], and separate from [`Self::remove`] for
+    /// the same reason `unlinkat` has `AT_REMOVEDIR`: they're two
+    /// distinct effects and confusing them is how a tree gets deleted
+    /// while believing a file was being deleted. A `Mirror`'s post-order
+    /// deletion asks for it, reaching each directory once it's already
+    /// empty.
     ///
-    /// Mismo default y mismo contrato para el llamante que `remove`: una raíz
-    /// que no sabe RECHAZA la operación, jamás cae al borrado por ruta.
+    /// Same default and same contract for the caller as `remove`: a root
+    /// that doesn't know how REJECTS the operation, never falls back to
+    /// by-path deletion.
     ///
     /// # Errors
-    /// [`Error::Unsupported`] si este backend no sabe; los del borrado si no —
-    /// incluido el que corresponda a un directorio que no está vacío.
+    /// [`Error::Unsupported`] if this backend doesn't know how; whatever
+    /// the deletion produces otherwise — including whatever corresponds
+    /// to a directory that isn't empty.
     async fn rmdir(&self, rel: &[Segment]) -> Result<(), Error> {
         let _ = rel;
         Err(Error::Unsupported)
     }
 
-    /// El digest de los primeros `len` bytes del parcial de `rel`, POR EL
-    /// DESCRIPTOR (#297 revisión).
+    /// The digest of the first `len` bytes of `rel`'s partial, VIA THE
+    /// DESCRIPTOR (#297 revision).
     ///
-    /// Gemelo de [`Provider::partial_digest`], y existe por lo mismo que
-    /// [`Self::stat`]: con un destino confinado, ése resuelve el nombre del
-    /// staging por RUTA, así que la única verificación que hay sobre los bytes
-    /// que se reanudan (`VerifyPolicy::Hash`) se hacía por la puerta que el
-    /// confinamiento cerró para el `stat` y el `remove`. Un componente
-    /// intermedio sustituido le da el digest de OTRO fichero, y `Hash` deja de
-    /// verificar nada.
+    /// Twin of [`Provider::partial_digest`], and exists for the same
+    /// reason as [`Self::stat`]: with a confined destination, that one
+    /// resolves the staging's name BY PATH, so the only verification
+    /// there is on the bytes being resumed (`VerifyPolicy::Hash`) used to
+    /// go through the door confinement closed for `stat` and `remove`. A
+    /// replaced intermediate component gives it the digest of ANOTHER
+    /// file, and `Hash` stops verifying anything.
     ///
-    /// `Ok(None)` = este backend no sabe (mismo contrato que el de
-    /// `Provider`), y entonces el caller degrada a `Length`.
+    /// `Ok(None)` = this backend doesn't know (same contract as
+    /// `Provider`'s), and then the caller degrades to `Length`.
     ///
     /// # Errors
-    /// Los de leer el parcial ya abierto.
+    /// Whatever reading the already-open partial produces.
     async fn partial_digest(&self, rel: &[Segment], len: u64) -> Result<Option<[u8; 32]>, Error> {
         let _ = (rel, len);
         Ok(None)

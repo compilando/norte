@@ -1,25 +1,26 @@
-//! Un anillo de líneas de log en memoria, para que un frontend las enseñe.
+//! An in-memory ring of log lines, for a frontend to display.
 //!
-//! El log existe desde #255 y va a un fichero. Eso sirve para investigar
-//! DESPUÉS, y no sirve para lo que pasa mientras miras: una conexión que falla
-//! en 240 ms deja en pantalla un «permiso denegado» que no dice nada, mientras
-//! el motivo exacto —«no se pudo resolver el secreto», «autenticación
-//! rechazada»— se escribe en un fichero que hay que ir a buscar a otra
-//! terminal. Esto es la otra mitad: las mismas líneas, en memoria, para
-//! pintarlas donde ya está el lector.
+//! The log has existed since #255 and goes to a file. That is useful for
+//! investigating AFTERWARDS, and no use for what happens while you watch: a
+//! connection that fails in 240ms leaves "permission denied" on screen,
+//! saying nothing, while the exact reason — "could not resolve the secret",
+//! "authentication rejected" — gets written to a file you have to go fetch
+//! from another terminal. This is the other half: the same lines, in memory,
+//! to paint where the reader already is.
 //!
-//! Vive en esta crate y no en la TUI porque la ventana necesita exactamente lo
-//! mismo, y porque el montaje del subscriber ya es de aquí.
+//! Lives in this crate and not in the TUI because the window needs exactly
+//! the same thing, and because the subscriber setup already lives here.
 //!
-//! # El cap de seguridad no es negociable
+//! # The security cap is not negotiable
 //!
-//! [`crate::logging`] documenta que `suppaftp` loguea `PASS <password>` a nivel
-//! TRACE del crate `log`, y por eso el filtro del fichero lleva una directiva
-//! `suppaftp=info` que gana a cualquier `RUST_LOG`. Este anillo lleva la MISMA
-//! cota, y aquí importa más: su nivel se sube en caliente desde la interfaz, o
-//! sea que sin la cota bastaría con que alguien pidiera DEBUG en el panel para
-//! que una contraseña de FTP apareciera en pantalla. La cota está en
-//! `bajo_cota`, y la prueba que la fija es la más importante del módulo.
+//! [`crate::logging`] documents that `suppaftp` logs `PASS <password>` at
+//! TRACE level of the `log` crate, and that is why the file's filter carries
+//! a `suppaftp=info` directive that beats any `RUST_LOG`. This ring carries
+//! the SAME cap, and here it matters more: its level is raised live from the
+//! interface, so without the cap it would take nothing more than someone
+//! requesting DEBUG in the panel for an FTP password to show up on screen.
+//! The cap lives in `under_cap`, and the test that pins it is the most
+//! important one in the module.
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
@@ -28,104 +29,103 @@ use std::sync::{Arc, Mutex, PoisonError};
 use tracing::{Level, Metadata};
 use tracing_subscriber::layer::{Context, Filter};
 
-/// Cuántas líneas guarda el anillo si nadie dice otra cosa.
+/// How many lines the ring holds if nobody says otherwise.
 ///
-/// 2000: suficiente para que quepa entera la sesión que estás depurando, poco
-/// para que la memoria no se note. Cuando se llena tira las viejas y lo DICE
-/// ([`LogRing::dropped`]): un panel que descarta en silencio miente sobre lo
-/// que hubo.
+/// 2000: enough for the whole session you are debugging to fit, little
+/// enough that the memory goes unnoticed. When it fills up it drops the old
+/// ones and SAYS SO ([`LogRing::dropped`]): a panel that silently discards
+/// lies about what there was.
 pub const RING_DEFAULT: usize = 2000;
 
-/// Los targets cuyo nivel puede subir el lector desde el panel.
+/// The targets whose level the reader may raise from the panel.
 ///
-/// **Lista blanca, y esto se corrigió tras una revisión.** La primera versión
-/// era una lista NEGRA con un solo nombre, `suppaftp`, porque es el que #43
-/// documentó como emisor de `PASS <contraseña>` en TRACE. Pero lo que protegía
-/// a todo lo demás era el filtro GLOBAL a INFO, y este módulo lo quitó del
-/// camino del anillo justo para poder subir el nivel en caliente. Con la lista
-/// negra, una tecla ponía en TRACE **todo el espacio de direcciones**: la TUI
-/// embebe el core, así que ahí dentro están `russh`, `rustls`, `hyper`,
-/// `reqwest` y `opendal`, que a ese nivel escriben cabeceras y búferes de red.
+/// **Allowlist, and this was fixed after a review.** The first version was a
+/// BLOCKLIST with a single name, `suppaftp`, because it is the one #43
+/// documented as emitting `PASS <password>` at TRACE. But what protected
+/// everything else was the GLOBAL filter at INFO, and this module took it out
+/// of the ring's path specifically to be able to raise the level live. With
+/// the blocklist, one keypress put **the entire address space** at TRACE: the
+/// TUI embeds the core, so `russh`, `rustls`, `hyper`, `reqwest` and `opendal`
+/// are in there, and at that level they write headers and network buffers.
 ///
-/// El argumento vale igual al revés: nadie abre este panel para leer tramas de
-/// hyper. Lo que se quiere ver es lo que hace norte. Así que sube de nivel lo
-/// NUESTRO, y lo de terceros se queda en INFO pase lo que pase — que es lo que
-/// hacía el filtro global que quitamos.
+/// The argument holds just as well the other way: nobody opens this panel to
+/// read hyper frames. What you want to see is what norte does. So OUR stuff
+/// gets raised, and third-party stuff stays at INFO no matter what — which is
+/// what the global filter we removed used to do.
 ///
-/// Son nombres de CRATE, y se comparan como tales: ver [`es_nuestro`].
-const NUESTRO: &[&str] = &["norte", "ntc"];
+/// These are CRATE names, and are compared as such: see [`is_ours`].
+const OURS: &[&str] = &["norte", "ntc"];
 
-/// El target cuyo TRACE lleva contraseñas (regla 10, #43). Redundante con la
-/// lista blanca —`suppaftp` no empieza por `norte`— y se queda como segundo
-/// cinturón: es la única cota que está documentada con un CVE detrás, y
-/// perderla al refactorizar la lista blanca sería silencioso.
-const TARGET_CON_SECRETOS: &str = "suppaftp";
+/// The target whose TRACE carries passwords (rule 10, #43). Redundant with
+/// the allowlist — `suppaftp` does not start with `norte` — and stays as a
+/// second belt: it is the only cap documented with a CVE behind it, and
+/// losing it while refactoring the allowlist would be silent.
+const TARGET_WITH_SECRETS: &str = "suppaftp";
 
-/// ¿Es este target NUESTRO? Por SEGMENTO de crate, nunca por prefijo crudo.
+/// Is this target OURS? By crate SEGMENT, never by raw prefix.
 ///
-/// Un `starts_with` sobre la cadena entera —que es lo que había— aceptaba
-/// `nortex` y `ntcp`: una dependencia futura con un nombre así habría entrado
-/// en TRACE, en un anillo cuyo nivel sube cualquier cliente local con una
-/// tecla y que se lee en pantalla. Y esta lista blanca es la ÚNICA cota que
-/// mantiene fuera el `PASS <contraseña>` de `suppaftp` (#43, regla 10), así
-/// que ensancharla por descuido es exactamente el fallo que no se ve.
+/// A `starts_with` over the whole string — which is what there was — accepted
+/// `nortex` and `ntcp`: a future dependency with such a name would have
+/// entered TRACE, in a ring whose level any local client can raise with a
+/// keypress and which gets read on screen. And this allowlist is the ONLY cap
+/// that keeps `suppaftp`'s `PASS <password>` out (#43, rule 10), so widening
+/// it by accident is exactly the failure that goes unseen.
 ///
-/// La forma de un target de verdad es `norte_core::connect`,
-/// `norte_vfs_local`, `ntc`: nombre de CRATE con guiones bajos, y detrás la
-/// ruta de módulo tras `::`. Así que se compara contra el primer segmento, y
-/// solo vale si es el nombre exacto (`norte`, `ntc`, el binario) o si continúa
-/// con `_` (`norte_core`, `ntc_algo`). `nortex` no continúa con `_` y queda
-/// fuera, que es el punto.
-fn es_nuestro(target: &str) -> bool {
-    let raiz = target.split("::").next().unwrap_or(target);
-    NUESTRO.iter().any(|nuestro| {
-        raiz == *nuestro
-            || raiz
-                .strip_prefix(*nuestro)
-                .is_some_and(|resto| resto.starts_with('_'))
+/// A real target's shape is `norte_core::connect`, `norte_vfs_local`, `ntc`:
+/// a CRATE name with underscores, and after it the module path following
+/// `::`. So it is compared against the first segment, and only counts if it
+/// is the exact name (`norte`, `ntc`, the binary) or if it continues with `_`
+/// (`norte_core`, `ntc_something`). `nortex` does not continue with `_` and is
+/// left out, which is the point.
+fn is_ours(target: &str) -> bool {
+    let root = target.split("::").next().unwrap_or(target);
+    OURS.iter().any(|ours| {
+        root == *ours
+            || root
+                .strip_prefix(*ours)
+                .is_some_and(|rest| rest.starts_with('_'))
     })
 }
 
-/// ¿Puede esta línea entrar en el anillo por encima de INFO?
+/// Can this line enter the ring above INFO?
 ///
-/// La cota va aquí y no en el filtro configurable a propósito: lo configurable
-/// se cambia desde la interfaz y esto no debe poder cambiarse desde ninguna
-/// parte.
-fn bajo_cota(target: &str, level: Level) -> bool {
+/// The cap lives here and not in the configurable filter on purpose: the
+/// configurable one is changed from the interface, and this must not be
+/// changeable from anywhere.
+fn under_cap(target: &str, level: Level) -> bool {
     if level <= Level::INFO {
-        // INFO y peores pasan siempre: es lo que el fichero registra por
-        // defecto, y es el nivel al que el anillo arranca.
+        // INFO and worse always pass: that is what the file logs by
+        // default, and it is the level the ring starts at.
         return true;
     }
-    // El segundo cinturón sigue siendo un `starts_with` crudo, y eso es
-    // deliberado: en una lista NEGRA lo ancho es lo seguro, así que un
-    // `suppaftp_algo` que no existe hoy ya estaría cubierto. En la lista
-    // BLANCA es al revés, y por eso ésa va por segmento ([`es_nuestro`]).
-    !target.starts_with(TARGET_CON_SECRETOS) && es_nuestro(target)
+    // The second belt is still a raw `starts_with`, and that is deliberate:
+    // in a BLOCKLIST, wide is safe, so a `suppaftp_something` that does not
+    // exist today would already be covered. In the ALLOWLIST it is the
+    // opposite, and that is why it goes by segment ([`is_ours`]).
+    !target.starts_with(TARGET_WITH_SECRETS) && is_ours(target)
 }
 
 pub use crate::logline::{LogLevel, LogLine};
 
-/// Lo que había después de un cursor, y lo que ese cursor se perdió.
+/// What there was after a cursor, and what that cursor missed.
 ///
-/// Existe para [`LogRing::since`], que a su vez existe para que un frontend
-/// pueda sondear sin repintar dos mil líneas por vuelta (ver
-/// [`LogRing::pushed`]): el cliente guarda `next` y en la siguiente vuelta
-/// pide desde ahí. `lost` es lo que hace ese sondeo honesto — sin él, un
-/// cliente lento que se queda atrás del anillo vería un salto en el
-/// contenido y no una explicación.
+/// Exists for [`LogRing::since`], which in turn exists so a frontend can poll
+/// without repainting two thousand lines per round (see [`LogRing::pushed`]):
+/// the client keeps `next` and asks from there next round. `lost` is what
+/// makes that polling honest — without it, a slow client that falls behind
+/// the ring would see a jump in the content with no explanation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Tail {
-    /// Las líneas posteriores al cursor, de la más vieja a la más nueva.
+    /// The lines after the cursor, oldest to newest.
     pub lines: Vec<LogLine>,
-    /// El cursor para la siguiente llamada.
+    /// The cursor for the next call.
     pub next: u64,
-    /// Cuántas líneas cayeron del anillo antes de que este cursor las viera.
+    /// How many lines fell off the ring before this cursor saw them.
     pub lost: u64,
 }
 
-/// De `tracing` al tipo que pinta el frontend.
-fn nivel_de(l: Level) -> LogLevel {
+/// From `tracing` to the type the frontend paints.
+fn level_of(l: Level) -> LogLevel {
     match l {
         Level::ERROR => LogLevel::Error,
         Level::WARN => LogLevel::Warn,
@@ -135,41 +135,41 @@ fn nivel_de(l: Level) -> LogLevel {
     }
 }
 
-/// Estado del anillo.
+/// Ring state.
 #[derive(Debug)]
 struct Ring {
     lines: VecDeque<LogLine>,
     cap: usize,
 }
 
-/// Anillo compartido entre la capa de `tracing` y quien lo pinta.
+/// Ring shared between the `tracing` layer and whoever paints it.
 ///
-/// `Clone` reparte el MISMO anillo (es un `Arc`): la capa escribe y el frontend
-/// lee sin coordinarse.
+/// `Clone` hands out the SAME ring (it is an `Arc`): the layer writes and the
+/// frontend reads with no coordination needed.
 #[derive(Debug, Clone)]
 pub struct LogRing {
     ring: Arc<Mutex<Ring>>,
-    /// Nivel mínimo que se guarda, cambiable en caliente desde la interfaz.
-    /// Un `u8` y no el `Level` porque tiene que ser atómico.
-    nivel: Arc<AtomicU8>,
-    /// Cuántas se han descartado por llenarse.
+    /// Minimum level being kept, changeable live from the interface. A `u8`
+    /// and not `Level` because it has to be atomic.
+    level: Arc<AtomicU8>,
+    /// How many have been discarded from filling up.
     dropped: Arc<AtomicU64>,
-    /// Cuántas líneas han ENTRADO en total, desde siempre.
+    /// How many lines have gone IN in total, ever.
     ///
-    /// Un contador que solo sube, para poder preguntar «¿ha cambiado algo?»
-    /// sin clonar el anillo. La ventana lo necesita porque su panel no se
-    /// repinta por frame como el de la TUI: tiene que sondear, y sondear con
-    /// [`LogRing::snapshot`] clonaría dos mil líneas por vuelta para casi
-    /// siempre descubrir que no hay nada nuevo.
+    /// A counter that only goes up, so one can ask "has anything changed?"
+    /// without cloning the ring. The window needs this because its panel
+    /// does not repaint per frame like the TUI's does: it has to poll, and
+    /// polling with [`LogRing::snapshot`] would clone two thousand lines per
+    /// round almost always just to find nothing new.
     ///
-    /// No vale la longitud: con el anillo lleno se queda fija en el tope y
-    /// deja de moverse justo cuando más está pasando.
+    /// The length will not do: with the ring full it stays fixed at the cap
+    /// and stops moving right when the most is happening.
     pushed: Arc<AtomicU64>,
 }
 
-/// `Level` no es representable como número en la API pública de `tracing`, así
-/// que se codifica aquí. Orden creciente de verbosidad.
-fn nivel_a_u8(l: Level) -> u8 {
+/// `Level` is not representable as a number in `tracing`'s public API, so it
+/// is encoded here. Increasing order of verbosity.
+fn level_to_u8(l: Level) -> u8 {
     match l {
         Level::ERROR => 0,
         Level::WARN => 1,
@@ -179,7 +179,7 @@ fn nivel_a_u8(l: Level) -> u8 {
     }
 }
 
-fn u8_a_nivel(n: u8) -> Level {
+fn u8_to_level(n: u8) -> Level {
     match n {
         0 => Level::ERROR,
         1 => Level::WARN,
@@ -190,10 +190,11 @@ fn u8_a_nivel(n: u8) -> Level {
 }
 
 impl LogRing {
-    /// Un anillo de `cap` líneas, guardando desde INFO.
+    /// A ring of `cap` lines, keeping from INFO.
     ///
-    /// Arranca en INFO y no en DEBUG porque el coste de un nivel verboso se
-    /// paga aunque nadie mire: lo sube quien abre el panel y lo pide.
+    /// Starts at INFO and not DEBUG because the cost of a verbose level is
+    /// paid even when nobody is watching: whoever opens the panel raises it
+    /// and asks for it.
     #[must_use]
     pub fn new(cap: usize) -> Self {
         Self {
@@ -201,49 +202,53 @@ impl LogRing {
                 lines: VecDeque::with_capacity(cap.min(RING_DEFAULT)),
                 cap: cap.max(1),
             })),
-            nivel: Arc::new(AtomicU8::new(nivel_a_u8(Level::INFO))),
+            level: Arc::new(AtomicU8::new(level_to_u8(Level::INFO))),
             dropped: Arc::new(AtomicU64::new(0)),
             pushed: Arc::new(AtomicU64::new(0)),
         }
     }
 
-    /// El nivel que se está guardando ahora mismo.
+    /// The level being kept right now.
     ///
-    /// En [`LogLevel`] y no en `tracing::Level` porque quien lo pregunta y lo
-    /// cambia es un frontend, y un frontend de presentación no compila
-    /// `tracing` (ver [`crate::logline`]).
+    /// In [`LogLevel`] and not `tracing::Level` because whoever asks and
+    /// changes it is a frontend, and a presentation frontend does not
+    /// compile `tracing` (see [`crate::logline`]).
     #[must_use]
     pub fn level(&self) -> LogLevel {
-        nivel_de(u8_a_nivel(self.nivel.load(Ordering::Relaxed)))
+        level_of(u8_to_level(self.level.load(Ordering::Relaxed)))
     }
 
-    /// Sube el nivel a `l` si hace falta, y NUNCA lo baja.
+    /// Raises the level to `l` if needed, and NEVER lowers it.
     ///
-    /// El invariante vive aquí y no en quien llama, y eso se corrigió tras una
-    /// revisión: estaba documentado en `LogPanel::show_level`, que devolvía el
-    /// nivel mínimo a capturar y confiaba en que el llamante lo comparase y
-    /// subiera. `#[must_use]` obliga a ATAR el valor, no a hacer nada con él —
-    /// y en cuanto la ventana fuera el segundo llamante, copiaría un `let _ =`
-    /// y su panel filtraría a DEBUG unas líneas que nadie capturó.
+    /// The invariant lives here and not in the caller, and that was fixed
+    /// after a review: it used to be documented on `LogPanel::show_level`,
+    /// which returned the minimum level to capture and trusted the caller to
+    /// compare and raise it. `#[must_use]` forces you to BIND the value, not
+    /// do something with it — and as soon as the window became the second
+    /// caller, it would have copied a `let _ =` and its panel would have
+    /// filtered out DEBUG lines that nobody captured.
     ///
-    /// No baja a propósito: ir a DEBUG, volver a WARN y pedir DEBUG otra vez
-    /// tiene que enseñar lo de en medio. Quien quiera bajarlo de verdad usa
-    /// [`Self::set_level`], y hoy solo lo hace cerrar el panel.
+    /// Does not lower on purpose: going to DEBUG, back to WARN, and asking
+    /// for DEBUG again must show what happened in between. Whoever really
+    /// wants to lower it uses [`Self::set_level`], and today only closing the
+    /// panel does.
     pub fn raise_to(&self, l: LogLevel) {
         if self.level() < l {
             self.set_level(l);
         }
     }
 
-    /// Fija el nivel EN CALIENTE, hacia arriba o hacia abajo.
+    /// Sets the level LIVE, up or down.
     ///
-    /// Lo que ya se descartó no vuelve: subir a DEBUG enseña los DEBUG de ahora
-    /// en adelante, no los de antes. Quien lo pinta tiene que decirlo, porque un
-    /// panel que se llena a medias tras pedir más detalle parece roto.
+    /// What was already discarded does not come back: raising to DEBUG shows
+    /// the DEBUGs from now on, not the earlier ones. Whoever paints it has to
+    /// say so, because a panel that fills up halfway after asking for more
+    /// detail looks broken.
     ///
-    /// Para el camino normal —«enséñame más»— usa [`Self::raise_to`]. Bajar es
-    /// una decisión aparte, y hoy solo la toma cerrar el panel: sin ella, una
-    /// pulsación dejaba el proceso capturando TRACE el resto de la sesión.
+    /// For the normal path — "show me more" — use [`Self::raise_to`].
+    /// Lowering is a separate decision, and today only closing the panel
+    /// makes it: without it, one keypress would leave the process capturing
+    /// TRACE for the rest of the session.
     pub fn set_level(&self, l: LogLevel) {
         let tracing_level = match l {
             LogLevel::Error => Level::ERROR,
@@ -252,119 +257,121 @@ impl LogRing {
             LogLevel::Debug => Level::DEBUG,
             LogLevel::Trace => Level::TRACE,
         };
-        self.nivel
-            .store(nivel_a_u8(tracing_level), Ordering::Relaxed);
-        // El nivel estático que `tracing` cachea por callsite sale de
-        // `max_level_hint`, así que cambiarlo sin invalidar esa caché dejaría
-        // los `debug!` cortados por el atajo barato aunque el anillo ya los
-        // quiera. Las dos cosas van juntas o ninguna sirve.
+        self.level
+            .store(level_to_u8(tracing_level), Ordering::Relaxed);
+        // The static level `tracing` caches per callsite comes from
+        // `max_level_hint`, so changing it without invalidating that cache
+        // would leave `debug!`s cut off by the cheap shortcut even though the
+        // ring already wants them. The two go together or neither works.
         tracing::callsite::rebuild_interest_cache();
     }
 
-    /// Cuántas líneas se han tirado por falta de sitio.
+    /// How many lines have been dropped for lack of room.
     #[must_use]
     pub fn dropped(&self) -> u64 {
         self.dropped.load(Ordering::Relaxed)
     }
 
-    /// Cuántas líneas han entrado en total, para detectar cambios barato.
+    /// How many lines have gone in in total, to detect changes cheaply.
     ///
-    /// Solo sube. Comparar dos lecturas dice si hay algo nuevo sin tomar el
-    /// candado del anillo ni clonar nada.
+    /// Only goes up. Comparing two reads says whether there is anything new
+    /// without taking the ring's lock or cloning anything.
     #[must_use]
     pub fn pushed(&self) -> u64 {
         self.pushed.load(Ordering::Relaxed)
     }
 
-    /// Cuántas líneas cabe guardar aquí dentro.
+    /// How many lines fit in here.
     ///
-    /// Es la historia MÁS PROFUNDA que se puede pedir, y por eso viaja en la
-    /// respuesta de `log.tail` (ADR 0092): quien pinta el registro puede decir
-    /// «esto es todo lo que hay» en vez de insinuar que hay más. Cota
-    /// SUPERIOR y no promesa — quien sirve el anillo recorta además lo que
-    /// entrega en una vuelta, así que una sola llamada con este tamaño puede
-    /// volver corta.
+    /// This is the DEEPEST history that can be requested, and that is why it
+    /// travels in `log.tail`'s response (ADR 0092): whoever paints the log
+    /// can say "this is everything there is" instead of implying there is
+    /// more. An UPPER cap, not a promise — whoever serves the ring also trims
+    /// what it delivers per round, so a single call with this size can come
+    /// back short.
     ///
-    /// No es [`Self::pushed`] ni la longitud de ahora: las dos se mueven, y
-    /// ésta es la única de las tres que dice dónde está el fondo.
+    /// It is neither [`Self::pushed`] nor the current length: both of those
+    /// move, and this is the only one of the three that says where the
+    /// bottom is.
     #[must_use]
     pub fn capacity(&self) -> usize {
         self.ring.lock().unwrap_or_else(PoisonError::into_inner).cap
     }
 
-    /// Copia de las líneas, de la más vieja a la más nueva.
+    /// A copy of the lines, oldest to newest.
     ///
-    /// Una copia y no un préstamo: el candado no puede quedarse tomado
-    /// mientras se pinta un frame, porque quien escribe es cualquier hilo del
-    /// runtime y bloquearlo por pintar convertiría el panel en un freno.
+    /// A copy, not a borrow: the lock cannot stay held while a frame is
+    /// painted, because whoever writes is any runtime thread, and blocking it
+    /// to paint would turn the panel into a brake.
     #[must_use]
     pub fn snapshot(&self) -> Vec<LogLine> {
         let r = self.ring.lock().unwrap_or_else(PoisonError::into_inner);
         r.lines.iter().cloned().collect()
     }
 
-    /// Lo que hay después de `cursor`, hasta `max` líneas.
+    /// What there is after `cursor`, up to `max` lines.
     ///
-    /// `cursor` no es un índice en `lines`: es la posición de
-    /// [`Self::pushed`] la última vez que quien pregunta miró. Eso es lo que
-    /// hace posible decir cuánto se perdió — un índice en el `VecDeque` ya no
-    /// significa nada en cuanto una línea vieja sale por el otro lado.
+    /// `cursor` is not an index into `lines`: it is the position of
+    /// [`Self::pushed`] the last time whoever is asking looked. That is what
+    /// makes it possible to say how much was lost — an index into the
+    /// `VecDeque` stops meaning anything as soon as an old line falls off the
+    /// other end.
     ///
-    /// La aritmética: `pushed` solo sube y `lines.len()` es lo que sobrevive,
-    /// así que la línea más vieja que queda tiene posición
-    /// `base = pushed - len`. Un cursor por debajo de `base` se perdió
-    /// `base - cursor` líneas, y es justo lo que [`Tail::lost`] cuenta — la
-    /// alternativa, callarlo, es la misma mentira que
-    /// [`Self::dropped`] existe para no contar. Un cursor por ENCIMA de
-    /// `pushed` —un daemon que se reinició bajo un cliente que conservó su
-    /// cursor de antes— no es un pánico ni un hueco: se trata como si fuera
-    /// `pushed`, sin nada nuevo y sin nada perdido, porque no hay manera de
-    /// saber qué había ahí y afirmar un hueco sería mentir en la otra
-    /// dirección.
+    /// The arithmetic: `pushed` only goes up and `lines.len()` is what
+    /// survives of it, so the oldest line remaining has position
+    /// `base = pushed - len`. A cursor below `base` lost `base - cursor`
+    /// lines, and that is exactly what [`Tail::lost`] counts — the
+    /// alternative, staying silent about it, is the same lie
+    /// [`Self::dropped`] exists to avoid. A cursor ABOVE `pushed` — a daemon
+    /// that restarted under a client that kept its earlier cursor — is
+    /// neither a panic nor a gap: it is treated as if it were `pushed`, with
+    /// nothing new and nothing lost, because there is no way to know what was
+    /// there and claiming a gap would be lying in the other direction.
     ///
-    /// `base`, `pushed` y la copia de `lines` se leen bajo el MISMO candado:
-    /// leer `pushed` fuera de él permitiría que un escritor concurrente
-    /// metiera líneas entre una lectura y la otra, y `lost` saldría mal —
-    /// intermitente, que en este módulo es un bicho y no ruido.
+    /// `base`, `pushed` and the copy of `lines` are read under the SAME lock:
+    /// reading `pushed` outside it would let a concurrent writer slip lines
+    /// in between one read and the other, and `lost` would come out wrong —
+    /// intermittently, which in this module is a bug, not noise.
     ///
-    /// # Ejemplos
+    /// # Examples
     ///
     /// ```
     /// use norte_config::logring::{LogRing, ring_layer};
     /// use tracing_subscriber::prelude::*;
     ///
-    /// let anillo = LogRing::new(10);
-    /// let sub = tracing_subscriber::registry().with(ring_layer(&anillo));
+    /// let ring = LogRing::new(10);
+    /// let sub = tracing_subscriber::registry().with(ring_layer(&ring));
     /// tracing::subscriber::with_default(sub, || {
-    ///     tracing::info!("conectando");
+    ///     tracing::info!("connecting");
     /// });
     ///
-    /// let tail = anillo.since(0, 10);
+    /// let tail = ring.since(0, 10);
     /// assert_eq!(tail.lines.len(), 1);
-    /// assert_eq!(tail.next, 1, "la próxima llamada pide desde aquí");
-    /// assert_eq!(tail.lost, 0, "nada se perdió: el cursor no iba rancio");
+    /// assert_eq!(tail.next, 1, "the next call asks from here");
+    /// assert_eq!(tail.lost, 0, "nothing was lost: the cursor was not stale");
     /// ```
     #[must_use]
     pub fn since(&self, cursor: u64, max: usize) -> Tail {
-        // `pushed` y `r.lines` bajo el MISMO candado (ver el rustdoc): leerlos
-        // por separado dejaría una ventana para que `push` metiera una línea
-        // entre las dos lecturas y `base` desencajara.
+        // `pushed` and `r.lines` under the SAME lock (see the rustdoc):
+        // reading them separately would leave a window for `push` to slip a
+        // line in between the two reads and throw `base` off.
         let r = self.ring.lock().unwrap_or_else(PoisonError::into_inner);
         let pushed = self.pushed.load(Ordering::Relaxed);
-        // Invariante: `pushed` nunca decrece y `lines.len()` es lo que
-        // sobrevivió de él, así que `pushed >= lines.len()` siempre — la resta
-        // no puede desbordar por abajo.
+        // Invariant: `pushed` never decreases and `lines.len()` is what
+        // survived of it, so `pushed >= lines.len()` always — the
+        // subtraction cannot underflow.
         let base = pushed - r.lines.len() as u64;
         let cursor = cursor.min(pushed);
         let lost = base.saturating_sub(cursor);
-        // `cursor` ya está acotado a `pushed`, y `base <= pushed`, así que
-        // `cursor.max(base) >= base` siempre — la resta tampoco desborda.
+        // `cursor` is already capped at `pushed`, and `base <= pushed`, so
+        // `cursor.max(base) >= base` always — this subtraction cannot
+        // underflow either.
         let start = cursor.max(base) - base;
-        // `start` no cabe siempre en `usize` en un objetivo de 32 bits; el
-        // `unwrap_or(usize::MAX)` es seguro porque el vector real jamás
-        // supera `usize::MAX` elementos, así que un `start` que no cabe ya
-        // es mayor que `r.lines.len()` — saltárselo entero da la misma lista
-        // vacía que saltarse el `start` real habría dado.
+        // `start` does not always fit in `usize` on a 32-bit target; the
+        // `unwrap_or(usize::MAX)` is safe because the real vector never
+        // exceeds `usize::MAX` elements, so a `start` that does not fit is
+        // already greater than `r.lines.len()` — skipping it entirely gives
+        // the same empty list that skipping the real `start` would have.
         let lines: Vec<LogLine> = r
             .lines
             .iter()
@@ -376,27 +383,26 @@ impl LogRing {
         Tail { lines, next, lost }
     }
 
-    /// ¿Cuántas líneas de nivel `l` o peor retiene el anillo?
+    /// How many lines of level `l` or worse does the ring hold?
     ///
-    /// Sin clonar nada, que es el punto: la barra de paneles lo pregunta en
-    /// CADA frame para poner la cifra en el botón del registro, y contestarlo
-    /// con [`Self::snapshot`] clonaba dos mil líneas —con sus dos `String`—
-    /// diez veces por segundo, disputándole el candado al hilo que escribe.
-    /// Contar es la misma pasada que preguntar si hay alguna: el anillo está
-    /// acotado.
+    /// Without cloning anything, which is the point: the panel bar asks this
+    /// on EVERY frame to put the figure on the log button, and answering it
+    /// with [`Self::snapshot`] cloned two thousand lines — with their two
+    /// `String`s each — ten times a second, fighting the writing thread for
+    /// the lock. Counting is the same pass as asking whether there is any:
+    /// the ring is bounded.
     #[must_use]
     pub fn count_at_or_above(&self, l: LogLevel) -> usize {
         let r = self.ring.lock().unwrap_or_else(PoisonError::into_inner);
-        r.lines.iter().filter(|linea| linea.level <= l).count()
+        r.lines.iter().filter(|line| line.level <= l).count()
     }
 
-    /// Mete una línea, tirando la más vieja si no cabe.
+    /// Pushes a line, dropping the oldest one if it does not fit.
     fn push(&self, line: LogLine) {
-        // `into_inner` y no descartar: dentro hay un `VecDeque` de datos, sin
-        // ningún invariante que un pánico pudiera haber roto a medias. Antes,
-        // un candado envenenado dejaba el panel enseñando «nada que enseñar»
-        // para siempre — que es exactamente la mentira que este módulo dice no
-        // querer contar.
+        // `into_inner`, not discarding: inside there is a `VecDeque` of
+        // data, with no invariant a panic could have broken halfway. Before,
+        // a poisoned lock left the panel showing "nothing to show" forever —
+        // exactly the lie this module says it does not want to tell.
         let mut r = self.ring.lock().unwrap_or_else(PoisonError::into_inner);
         if r.lines.len() == r.cap {
             r.lines.pop_front();
@@ -407,30 +413,29 @@ impl LogRing {
     }
 }
 
-/// El filtro del anillo: su nivel configurable MÁS la cota de seguridad.
+/// The ring's filter: its configurable level PLUS the security cap.
 ///
-/// Es un `Filter` POR CAPA y no el filtro global del registro, y ahí está el
-/// asunto entero: con un filtro global a INFO, los `DEBUG` no se emiten y
-/// ningún panel puede enseñarlos después — filtrar en la ventana lo que nunca
-/// se registró es imposible. Con el filtro por capa, el fichero conserva su
-/// nivel y el anillo tiene el suyo.
+/// It is a PER-LAYER `Filter`, not the registry's global filter, and that is
+/// the whole point: with a global filter at INFO, `DEBUG`s are not emitted
+/// and no panel can show them afterwards — filtering, in the window, what was
+/// never logged is impossible. With the per-layer filter, the file keeps its
+/// level and the ring has its own.
 pub struct RingFilter(LogRing);
 
 impl<S> Filter<S> for RingFilter {
     fn enabled(&self, meta: &Metadata<'_>, _: &Context<'_, S>) -> bool {
-        bajo_cota(meta.target(), *meta.level())
-            && nivel_a_u8(*meta.level()) <= self.0.nivel.load(Ordering::Relaxed)
+        under_cap(meta.target(), *meta.level())
+            && level_to_u8(*meta.level()) <= self.0.level.load(Ordering::Relaxed)
     }
 
-    /// El tope estático que ve todo el proceso.
+    /// The static ceiling the whole process sees.
     ///
-    /// Sin esto, `Filtered` devuelve `None` = «sin tope», y entonces el nivel
-    /// máximo del proceso entero pasa a ser TRACE: cada `debug!` de cada crate
-    /// —incluidos `hyper` y `russh` durante una transferencia— deja de cortarse
-    /// por la comprobación barata y recorre la cadena de filtros. Es una
-    /// regresión silenciosa de rendimiento que trajo el paso a filtros por
-    /// capa, y va emparejada con la invalidación de caché de
-    /// [`LogRing::set_level`].
+    /// Without this, `Filtered` returns `None` = "no ceiling", and then the
+    /// whole process's maximum level becomes TRACE: every `debug!` from every
+    /// crate — including `hyper` and `russh` during a transfer — stops being
+    /// cut off by the cheap check and walks the filter chain. It is a silent
+    /// performance regression that the move to per-layer filters brought, and
+    /// it goes hand in hand with [`LogRing::set_level`]'s cache invalidation.
     fn max_level_hint(&self) -> Option<tracing_subscriber::filter::LevelFilter> {
         Some(match self.0.level() {
             LogLevel::Error => tracing_subscriber::filter::LevelFilter::ERROR,
@@ -442,11 +447,11 @@ impl<S> Filter<S> for RingFilter {
     }
 
     fn callsite_enabled(&self, meta: &'static Metadata<'static>) -> tracing::subscriber::Interest {
-        // `sometimes` y no `always`/`never`: el nivel cambia en caliente, así
-        // que la respuesta de este callsite no se puede cachear. Cuesta una
-        // comparación por evento y es lo que hace posible subir a DEBUG sin
-        // reiniciar.
-        if bajo_cota(meta.target(), *meta.level()) {
+        // `sometimes`, not `always`/`never`: the level changes live, so this
+        // callsite's answer cannot be cached. It costs one comparison per
+        // event, and that is what makes raising to DEBUG without restarting
+        // possible.
+        if under_cap(meta.target(), *meta.level()) {
             tracing::subscriber::Interest::sometimes()
         } else {
             tracing::subscriber::Interest::never()
@@ -454,7 +459,7 @@ impl<S> Filter<S> for RingFilter {
     }
 }
 
-/// La capa que escribe en el anillo.
+/// The layer that writes into the ring.
 pub struct RingLayer(LogRing);
 
 impl<S> tracing_subscriber::Layer<S> for RingLayer
@@ -462,24 +467,24 @@ where
     S: tracing::Subscriber,
 {
     fn on_event(&self, event: &tracing::Event<'_>, _: Context<'_, S>) {
-        let mut visitor = Aplanador::default();
+        let mut visitor = Flattener::default();
         event.record(&mut visitor);
         let meta = event.metadata();
         self.0.push(LogLine {
-            epoch_ms: ahora_ms(),
-            level: nivel_de(*meta.level()),
+            epoch_ms: now_ms(),
+            level: level_of(*meta.level()),
             target: meta.target().to_string(),
-            message: visitor.texto(),
+            message: visitor.text(),
         });
     }
 }
 
-/// La capa del anillo, YA con su cota puesta.
+/// The ring's layer, ALREADY with its cap in place.
 ///
-/// Devuelve una capa compuesta y no la pareja (capa, filtro): con la pareja, el
-/// rustdoc prometía que no se podía instalar la capa sin su cota y el tipo no
-/// lo impedía —bastaba con tirar el filtro—. Una regla 10 que depende de que el
-/// llamante no se equivoque no es una regla.
+/// Returns a composed layer, not the pair (layer, filter): with the pair, the
+/// rustdoc promised the layer could not be installed without its cap, and the
+/// type did not enforce it — dropping the filter was all it took. A rule 10
+/// that depends on the caller not making a mistake is not a rule.
 #[must_use]
 pub fn ring_layer<S>(ring: &LogRing) -> impl tracing_subscriber::Layer<S>
 where
@@ -489,89 +494,89 @@ where
     RingLayer(ring.clone()).with_filter(RingFilter(ring.clone()))
 }
 
-/// Aplana el mensaje y los campos de un evento a una línea.
+/// Flattens an event's message and fields into one line.
 ///
-/// El campo `message` va primero y sin nombre (es la frase); el resto va
-/// detrás como `clave=valor`, que es lo mismo que hace el formato del fichero,
-/// para que las dos superficies digan lo mismo.
+/// The `message` field goes first and unnamed (it is the sentence); the rest
+/// follows as `key=value`, which is the same thing the file's format does, so
+/// the two surfaces say the same thing.
 #[derive(Default)]
-struct Aplanador {
-    mensaje: String,
-    campos: String,
+struct Flattener {
+    message: String,
+    fields: String,
 }
 
-/// Tope de una línea guardada.
+/// Cap on a stored line.
 ///
-/// El anillo acotaba LÍNEAS y no bytes, y el mensaje no tiene tope: hay sitios
-/// que formatean con `Debug` un valor ajeno —el error de un proveedor de IA,
-/// por ejemplo, que es texto que decide un servidor remoto y viaja en un WARN,
-/// dentro de lo que se captura por defecto—. Dos mil de esos son cientos de
-/// megas residentes, y clonados en cada frame. Se corta y se DICE.
-const MAX_LINEA: usize = 2048;
+/// The ring bounded LINES, not bytes, and the message has no cap: there are
+/// places that format a foreign value with `Debug` — an AI provider's error,
+/// say, which is text a remote server decides and travels in a WARN, within
+/// what is captured by default. Two thousand of those are hundreds of
+/// megabytes resident, and cloned every frame. It gets cut and SAYS SO.
+const MAX_LINE: usize = 2048;
 
-/// Lo que se añade a una línea cortada.
-const CORTADA: &str = "… (cortada)";
+/// What gets appended to a cut line.
+const CUT_MARKER: &str = "… (cut)";
 
-impl Aplanador {
-    fn texto(self) -> String {
-        let entero = if self.campos.is_empty() {
-            self.mensaje
-        } else if self.mensaje.is_empty() {
-            self.campos
+impl Flattener {
+    fn text(self) -> String {
+        let whole = if self.fields.is_empty() {
+            self.message
+        } else if self.message.is_empty() {
+            self.fields
         } else {
-            format!("{} {}", self.mensaje, self.campos)
+            format!("{} {}", self.message, self.fields)
         };
-        cortar(entero)
+        cut(whole)
     }
 }
 
-/// Corta a [`MAX_LINEA`] por un límite de CARÁCTER, y lo marca.
+/// Cuts to [`MAX_LINE`] at a CHARACTER boundary, and marks it.
 ///
-/// Por carácter y no por byte: cortar a mitad de una secuencia UTF-8 daría un
-/// `String` inválido (pánico) o, peor, unos bytes que el enmascarado de la
-/// terminal ya no reconocería como lo que eran.
-fn cortar(mut s: String) -> String {
-    if s.len() <= MAX_LINEA {
+/// By character, not by byte: cutting mid-UTF-8-sequence would give an
+/// invalid `String` (panic) or, worse, bytes the terminal's masking would no
+/// longer recognize for what they were.
+fn cut(mut s: String) -> String {
+    if s.len() <= MAX_LINE {
         return s;
     }
-    let corte = (0..=MAX_LINEA)
+    let boundary = (0..=MAX_LINE)
         .rev()
         .find(|i| s.is_char_boundary(*i))
         .unwrap_or(0);
-    s.truncate(corte);
-    s.push_str(CORTADA);
+    s.truncate(boundary);
+    s.push_str(CUT_MARKER);
     s
 }
 
-impl tracing::field::Visit for Aplanador {
+impl tracing::field::Visit for Flattener {
     fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
         use std::fmt::Write as _;
         if field.name() == "message" {
-            let _ = write!(self.mensaje, "{value:?}");
+            let _ = write!(self.message, "{value:?}");
         } else {
-            if !self.campos.is_empty() {
-                self.campos.push(' ');
+            if !self.fields.is_empty() {
+                self.fields.push(' ');
             }
-            let _ = write!(self.campos, "{}={value:?}", field.name());
+            let _ = write!(self.fields, "{}={value:?}", field.name());
         }
     }
 
     fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
         use std::fmt::Write as _;
         if field.name() == "message" {
-            self.mensaje.push_str(value);
+            self.message.push_str(value);
         } else {
-            if !self.campos.is_empty() {
-                self.campos.push(' ');
+            if !self.fields.is_empty() {
+                self.fields.push(' ');
             }
-            let _ = write!(self.campos, "{}={value}", field.name());
+            let _ = write!(self.fields, "{}={value}", field.name());
         }
     }
 }
 
-/// Milisegundos desde la época. Un reloj hacia atrás da 0, no un pánico: una
-/// línea de log con hora rara es mejor que un frontend caído.
-fn ahora_ms() -> i64 {
+/// Milliseconds since the epoch. A clock running backward gives 0, not a
+/// panic: a log line with a weird time is better than a crashed frontend.
+fn now_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .ok()
@@ -583,59 +588,60 @@ fn ahora_ms() -> i64 {
 mod tests {
     use super::*;
 
-    fn linea(level: Level, target: &str, msg: &str) -> LogLine {
+    fn line(level: Level, target: &str, msg: &str) -> LogLine {
         LogLine {
             epoch_ms: 0,
-            level: nivel_de(level),
+            level: level_of(level),
             target: target.to_string(),
             message: msg.to_string(),
         }
     }
 
-    /// La cifra del botón del registro: cuenta lo de ese nivel O PEOR, y
-    /// nada más. Un `WARN` cuenta para `Warn`, un `ERROR` también, un `INFO`
-    /// no.
+    /// The log button's figure: it counts that level OR WORSE, and nothing
+    /// else. A `WARN` counts toward `Warn`, an `ERROR` too, an `INFO` does
+    /// not.
     #[test]
-    fn cuenta_las_lineas_de_un_nivel_o_peor() {
+    fn counts_lines_of_a_level_or_worse() {
         let ring = LogRing::new(8);
         assert_eq!(ring.count_at_or_above(LogLevel::Warn), 0);
-        ring.push(linea(Level::INFO, "a", "hola"));
-        ring.push(linea(Level::WARN, "a", "ojo"));
-        ring.push(linea(Level::ERROR, "a", "mal"));
+        ring.push(line(Level::INFO, "a", "hello"));
+        ring.push(line(Level::WARN, "a", "watch out"));
+        ring.push(line(Level::ERROR, "a", "bad"));
         assert_eq!(ring.count_at_or_above(LogLevel::Warn), 2);
         assert_eq!(ring.count_at_or_above(LogLevel::Error), 1);
     }
 
-    /// LA prueba del módulo (regla 10, #43): `suppaftp` loguea `PASS
-    /// <password>` a TRACE, y el nivel de este anillo se sube desde la
-    /// INTERFAZ. Sin la cota, pedir DEBUG en el panel pondría una contraseña
-    /// de FTP en la pantalla.
+    /// THE test of the module (rule 10, #43): `suppaftp` logs `PASS
+    /// <password>` at TRACE, and this ring's level is raised from the
+    /// INTERFACE. Without the cap, asking for DEBUG in the panel would put an
+    /// FTP password on screen.
     #[test]
-    fn la_cota_de_suppaftp_no_la_levanta_ni_pedir_trace() {
-        for nivel in [Level::TRACE, Level::DEBUG] {
+    fn the_suppaftp_cap_is_not_lifted_even_by_asking_for_trace() {
+        for level in [Level::TRACE, Level::DEBUG] {
             assert!(
-                !bajo_cota("suppaftp", nivel),
-                "{nivel} de suppaftp entró en el anillo"
+                !under_cap("suppaftp", level),
+                "{level} of suppaftp entered the ring"
             );
             assert!(
-                !bajo_cota("suppaftp::command", nivel),
-                "un módulo hijo de suppaftp se coló en {nivel}"
+                !under_cap("suppaftp::command", level),
+                "a child module of suppaftp snuck in at {level}"
             );
         }
-        // Lo que sí pasa: sus INFO y peores, y lo NUESTRO a cualquier nivel.
-        assert!(bajo_cota("suppaftp", Level::INFO));
-        assert!(bajo_cota("suppaftp", Level::WARN));
-        assert!(bajo_cota("norte_core::connect", Level::TRACE));
+        // What does pass: its INFO and worse, and OUR stuff at any level.
+        assert!(under_cap("suppaftp", Level::INFO));
+        assert!(under_cap("suppaftp", Level::WARN));
+        assert!(under_cap("norte_core::connect", Level::TRACE));
     }
 
-    /// Lo de TERCEROS no sube de INFO por mucho que el lector pida TRACE, y
-    /// esto es el arreglo de un BLOCKER: la TUI embebe el core, así que en el
-    /// mismo proceso están `russh`, `rustls`, `hyper` y `opendal`, que a ese
-    /// nivel escriben cabeceras y búferes de red. Antes lo tapaba el filtro
-    /// global a INFO; este módulo lo quitó del camino para poder subir el nivel
-    /// en caliente, y sin lista blanca una tecla lo abría entero.
+    /// THIRD-PARTY stuff does not rise above INFO no matter how much the
+    /// reader asks for TRACE, and this is the fix for a BLOCKER: the TUI
+    /// embeds the core, so `russh`, `rustls`, `hyper` and `opendal` are in the
+    /// same process, and at that level they write headers and network
+    /// buffers. Before, the global filter at INFO covered for it; this
+    /// module took it out of the way to raise the level live, and without an
+    /// allowlist a single keypress opened all of it.
     #[test]
-    fn lo_de_terceros_no_sube_de_info_aunque_se_pida_trace() {
+    fn third_party_stuff_does_not_rise_above_info_even_if_trace_is_requested() {
         for target in [
             "russh::client",
             "russh_sftp::protocol",
@@ -645,22 +651,22 @@ mod tests {
             "opendal::services::s3",
             "h2::codec",
         ] {
-            for nivel in [Level::DEBUG, Level::TRACE] {
+            for level in [Level::DEBUG, Level::TRACE] {
                 assert!(
-                    !bajo_cota(target, nivel),
-                    "«{target}» entró en el anillo en {nivel}"
+                    !under_cap(target, level),
+                    "\"{target}\" entered the ring at {level}"
                 );
             }
-            // Sus avisos y errores SÍ: son los que explican un fallo.
-            assert!(bajo_cota(target, Level::INFO), "{target}");
-            assert!(bajo_cota(target, Level::WARN), "{target}");
-            assert!(bajo_cota(target, Level::ERROR), "{target}");
+            // Its warnings and errors DO: they are what explains a failure.
+            assert!(under_cap(target, Level::INFO), "{target}");
+            assert!(under_cap(target, Level::WARN), "{target}");
+            assert!(under_cap(target, Level::ERROR), "{target}");
         }
     }
 
-    /// Y lo nuestro sí sube, que es para lo que existe el panel.
+    /// And our stuff does rise, which is what the panel exists for.
     #[test]
-    fn lo_nuestro_sube_hasta_trace() {
+    fn our_stuff_rises_up_to_trace() {
         for target in [
             "norte_core::connect",
             "norte_tui::navigate",
@@ -668,30 +674,30 @@ mod tests {
             "ntc",
         ] {
             assert!(
-                bajo_cota(target, Level::TRACE),
-                "«{target}» es nuestro y no pudo subir"
+                under_cap(target, Level::TRACE),
+                "\"{target}\" is ours and could not rise"
             );
         }
-        // Y el binario a secas, con y sin ruta de módulo detrás: `norte` es un
-        // crate de verdad, no solo un prefijo.
+        // And the bare binary, with and without a module path after it:
+        // `norte` is a real crate, not just a prefix.
         for target in ["norte", "norte::daemon", "ntc::app"] {
             assert!(
-                bajo_cota(target, Level::TRACE),
-                "«{target}» es nuestro y no pudo subir"
+                under_cap(target, Level::TRACE),
+                "\"{target}\" is ours and could not rise"
             );
         }
     }
 
-    /// La lista blanca casa por SEGMENTO de crate, no por prefijo crudo.
+    /// The allowlist matches by crate SEGMENT, not by raw prefix.
     ///
-    /// Con `starts_with` sobre la cadena entera, una dependencia futura
-    /// llamada `nortex` o `ntcp` habría entrado en TRACE en un anillo que
-    /// cualquier cliente local sube con una tecla y lee en pantalla. Esta lista
-    /// es la ÚNICA cota que deja fuera el `PASS <contraseña>` de `suppaftp`
-    /// (#43, regla 10), así que las negativas están aquí para que el próximo
-    /// refactor no la ensanche en silencio.
+    /// With `starts_with` over the whole string, a future dependency named
+    /// `nortex` or `ntcp` would have entered TRACE in a ring any local client
+    /// raises with a keypress and reads on screen. This list is the ONLY cap
+    /// keeping `suppaftp`'s `PASS <password>` out (#43, rule 10), so the
+    /// negative cases are here so the next refactor does not widen it
+    /// silently.
     #[test]
-    fn un_crate_que_solo_empieza_igual_no_es_nuestro() {
+    fn a_crate_that_only_starts_the_same_is_not_ours() {
         for target in [
             "nortex",
             "nortex::x",
@@ -700,122 +706,125 @@ mod tests {
             "ntcp::session",
             "norteño",
         ] {
-            for nivel in [Level::DEBUG, Level::TRACE] {
+            for level in [Level::DEBUG, Level::TRACE] {
                 assert!(
-                    !bajo_cota(target, nivel),
-                    "«{target}» no es nuestro y entró en el anillo en {nivel}"
+                    !under_cap(target, level),
+                    "\"{target}\" is not ours and entered the ring at {level}"
                 );
             }
-            // Y sus INFO y peores siguen entrando, como los de cualquier
-            // tercero: son los que explican un fallo.
-            assert!(bajo_cota(target, Level::INFO), "{target}");
+            // And its INFO and worse still get in, like any third party's:
+            // they are what explains a failure.
+            assert!(under_cap(target, Level::INFO), "{target}");
         }
     }
 
-    /// El anillo tira las viejas y lo CUENTA: un panel que descarta en
-    /// silencio miente sobre lo que hubo.
+    /// The ring drops the old ones and COUNTS it: a panel that silently
+    /// discards lies about what there was.
     #[test]
-    fn al_llenarse_tira_las_viejas_y_lo_dice() {
+    fn filling_up_drops_the_old_ones_and_says_so() {
         let r = LogRing::new(3);
         for i in 0..5 {
-            r.push(linea(Level::INFO, "t", &format!("linea {i}")));
+            r.push(line(Level::INFO, "t", &format!("line {i}")));
         }
         let v = r.snapshot();
-        assert_eq!(v.len(), 3, "el anillo creció por encima de su tope");
-        assert_eq!(v[0].message, "linea 2", "no tiró las MÁS VIEJAS");
-        assert_eq!(v[2].message, "linea 4", "perdió la más reciente");
+        assert_eq!(v.len(), 3, "the ring grew past its cap");
+        assert_eq!(v[0].message, "line 2", "did not drop the OLDEST ones");
+        assert_eq!(v[2].message, "line 4", "lost the most recent one");
         assert_eq!(r.dropped(), 2);
     }
 
-    /// El nivel se cambia en caliente y el anillo lo dice: es lo que permite
-    /// pedir DEBUG desde el panel sin reiniciar.
+    /// The level changes live and the ring says so: that is what lets you
+    /// ask for DEBUG from the panel without restarting.
     #[test]
-    fn el_nivel_se_cambia_en_caliente() {
+    fn level_changes_live() {
         let r = LogRing::new(10);
-        assert_eq!(r.level(), LogLevel::Info, "arranca en INFO, no en DEBUG");
+        assert_eq!(r.level(), LogLevel::Info, "starts at INFO, not DEBUG");
         r.set_level(LogLevel::Debug);
         assert_eq!(r.level(), LogLevel::Debug);
-        // Y el clon comparte el mismo estado: la capa y quien pinta son dos
-        // manos sobre el mismo anillo.
-        let otro = r.clone();
-        otro.set_level(LogLevel::Warn);
+        // And the clone shares the same state: the layer and the painter are
+        // two hands on the same ring.
+        let other = r.clone();
+        other.set_level(LogLevel::Warn);
         assert_eq!(r.level(), LogLevel::Warn);
     }
 
-    /// Un `cap` de cero no es un anillo que no guarda nada: es un error de
-    /// configuración que dejaría el panel vacío para siempre sin decir por qué.
+    /// A `cap` of zero is not a ring that keeps nothing: it is a
+    /// configuration error that would leave the panel empty forever with no
+    /// explanation.
     #[test]
-    fn un_tope_de_cero_se_corrige_a_uno() {
+    fn a_cap_of_zero_is_corrected_to_one() {
         let r = LogRing::new(0);
-        r.push(linea(Level::INFO, "t", "algo"));
+        r.push(line(Level::INFO, "t", "something"));
         assert_eq!(r.snapshot().len(), 1);
     }
 
-    /// La capa montada de verdad recoge lo que pasa el filtro y NADA más.
+    /// The layer, really installed, collects what passes the filter and
+    /// NOTHING else.
     ///
-    /// No usa el subscriber global (que es de una sola vez por proceso y lo
-    /// comparten todos los tests): se monta uno local con
-    /// `with_default`, que es lo mismo que hace la suite de `logging`.
+    /// Does not use the global subscriber (which is once-per-process and
+    /// shared by every test): a local one is set up with `with_default`,
+    /// same as the `logging` suite does.
     #[test]
-    fn la_capa_montada_recoge_y_respeta_la_cota() {
+    fn the_installed_layer_collects_and_respects_the_cap() {
         use tracing_subscriber::prelude::*;
 
         let r = LogRing::new(50);
         let sub = tracing_subscriber::registry().with(ring_layer(&r));
 
         tracing::subscriber::with_default(sub, || {
-            tracing::info!(scheme = "s3", "conectando");
-            tracing::debug!("esto no cabe todavía");
-            // La contraseña que la cota existe para no dejar pasar (#43).
+            tracing::info!(scheme = "s3", "connecting");
+            tracing::debug!("this does not fit yet");
+            // The password the cap exists to keep out (#43).
             tracing::trace!(target: "suppaftp", "PASS hunter2");
         });
 
         let v = r.snapshot();
-        assert_eq!(v.len(), 1, "entró algo que no debía: {v:?}");
+        assert_eq!(v.len(), 1, "something that should not have got in: {v:?}");
         assert_eq!(v[0].level, LogLevel::Info);
-        assert_eq!(v[0].message, "conectando scheme=s3");
+        assert_eq!(v[0].message, "connecting scheme=s3");
         assert!(v[0].target.starts_with("norte_config"), "{}", v[0].target);
 
-        // Ahora se pide DEBUG desde la interfaz: entran los DEBUG y la
-        // contraseña SIGUE fuera, que es el punto entero de la cota.
+        // Now DEBUG is requested from the interface: the DEBUGs get in and
+        // the password STAYS out, which is the whole point of the cap.
         r.set_level(LogLevel::Debug);
         let sub = tracing_subscriber::registry().with(ring_layer(&r));
         tracing::subscriber::with_default(sub, || {
-            tracing::debug!("ahora sí");
+            tracing::debug!("now this one");
             tracing::trace!(target: "suppaftp::command", "PASS hunter2");
             tracing::debug!(target: "suppaftp", "PASS hunter2");
         });
         let v = r.snapshot();
         assert!(
-            v.iter().any(|l| l.message == "ahora sí"),
-            "subir el nivel no trajo los DEBUG: {v:?}"
+            v.iter().any(|l| l.message == "now this one"),
+            "raising the level did not bring the DEBUGs: {v:?}"
         );
         assert!(
             !v.iter().any(|l| l.message.contains("hunter2")),
-            "UNA CONTRASEÑA ENTRÓ EN EL ANILLO: {v:?}"
+            "A PASSWORD ENTERED THE RING: {v:?}"
         );
     }
 
-    /// La cota aguanta por el camino REAL, que no es el que probaban los otros
-    /// tests.
+    /// The cap holds up over the REAL path, which is not the one the other
+    /// tests exercised.
     ///
-    /// `suppaftp` no emite eventos de `tracing`: emite `log::trace!`. El puente
-    /// `tracing-log` despacha ese registro con el `target` estático `"log"` y
-    /// deja el verdadero como campo, así que un `tracing::trace!(target:
-    /// "suppaftp", …)` —lo que probaban los otros— NO recorre el mismo camino.
-    /// La cota sobrevive porque el puente consulta `enabled` antes, con los
-    /// metadatos verdaderos; eso es un detalle de implementación de terceros
-    /// del que depende la regla 10, y por eso se fija aquí.
+    /// `suppaftp` does not emit `tracing` events: it emits `log::trace!`. The
+    /// `tracing-log` bridge dispatches that record with the static target
+    /// `"log"` and leaves the real one as a field, so a
+    /// `tracing::trace!(target: "suppaftp", …)` — what the other tests
+    /// exercised — does NOT walk the same path. The cap survives because the
+    /// bridge consults `enabled` first, with the real metadata; that is a
+    /// third-party implementation detail rule 10 depends on, and that is why
+    /// it is pinned here.
     ///
-    /// Corolario para quien venga después: una comprobación defensiva sobre
-    /// `meta.target()` DENTRO de `on_event` no cazaría nada, porque para
-    /// entonces el target ya es `"log"`. Sería teatro.
+    /// Corollary for whoever comes next: a defensive check on `meta.target()`
+    /// INSIDE `on_event` would catch nothing, because by then the target is
+    /// already `"log"`. It would be theater.
     #[test]
-    fn la_contrasena_no_entra_ni_por_el_puente_de_log() {
+    fn the_password_does_not_get_in_through_the_log_bridge_either() {
         use tracing_subscriber::prelude::*;
 
-        // El puente es un global de proceso; instalarlo dos veces es error y no
-        // pasa nada por ello (otro test del binario pudo hacerlo antes).
+        // The bridge is a process global; installing it twice is an error and
+        // is harmless (another test in the binary may have done it already).
         let _ = tracing_log::LogTracer::init();
         log::set_max_level(log::LevelFilter::Trace);
 
@@ -825,119 +834,123 @@ mod tests {
         tracing::subscriber::with_default(sub, || {
             log::trace!(target: "suppaftp", "PASS hunter2");
             log::trace!(target: "suppaftp::command", "PASS hunter2");
-            // Y un tercero cualquiera al mismo nivel: tampoco entra.
+            // And any third party at the same level: it does not get in
+            // either.
             log::trace!(target: "russh::session", "session_write_encrypted, buf = [1, 2, 3]");
-            // Lo que sí pasa: un aviso de un tercero, que explica fallos.
-            log::warn!(target: "russh::session", "reconectando");
+            // What does pass: a third party's warning, which explains
+            // failures.
+            log::warn!(target: "russh::session", "reconnecting");
         });
 
         let v = r.snapshot();
         assert!(
             !v.iter().any(|l| l.message.contains("hunter2")),
-            "UNA CONTRASEÑA ENTRÓ EN EL ANILLO POR EL PUENTE: {v:?}"
+            "A PASSWORD ENTERED THE RING THROUGH THE BRIDGE: {v:?}"
         );
         assert!(
             !v.iter().any(|l| l.message.contains("session_write")),
-            "el TRACE de un tercero entró en el anillo: {v:?}"
+            "a third party's TRACE entered the ring: {v:?}"
         );
         assert!(
-            v.iter().any(|l| l.message.contains("reconectando")),
-            "el aviso de un tercero SÍ tiene que entrar: {v:?}"
+            v.iter().any(|l| l.message.contains("reconnecting")),
+            "a third party's warning DOES have to get in: {v:?}"
         );
     }
 
-    /// El caso normal: pides desde donde te quedaste y te dan lo nuevo.
+    /// The normal case: you ask from where you left off and get what is new.
     #[test]
-    fn desde_un_cursor_llegan_solo_las_nuevas() {
-        let anillo = LogRing::new(10);
+    fn from_a_cursor_only_the_new_ones_arrive() {
+        let ring = LogRing::new(10);
         for i in 0..4 {
-            anillo.push(linea(Level::INFO, "norte_core", &format!("l{i}")));
+            ring.push(line(Level::INFO, "norte_core", &format!("l{i}")));
         }
-        let t = anillo.since(2, 100);
+        let t = ring.since(2, 100);
         assert_eq!(t.lines.len(), 2);
         assert_eq!(t.lines[0].message, "l2");
         assert_eq!(t.next, 4);
         assert_eq!(t.lost, 0);
     }
 
-    /// Un cursor de antes del desbordamiento DICE cuántas se perdió. Un hueco
-    /// silencioso miente sobre lo que hubo, que es el motivo de que `dropped`
-    /// exista.
+    /// A cursor from before the overflow SAYS how many it lost. A silent gap
+    /// lies about what there was, which is why `dropped` exists.
     #[test]
-    fn un_cursor_rancio_dice_cuantas_se_perdio() {
-        let anillo = LogRing::new(3);
+    fn a_stale_cursor_says_how_many_it_lost() {
+        let ring = LogRing::new(3);
         for i in 0..7 {
-            anillo.push(linea(Level::INFO, "norte_core", &format!("l{i}")));
+            ring.push(line(Level::INFO, "norte_core", &format!("l{i}")));
         }
-        // El anillo guarda l4,l5,l6: base = 7 - 3 = 4.
-        let t = anillo.since(1, 100);
-        assert_eq!(t.lost, 3, "se perdió l1, l2 y l3");
+        // The ring holds l4,l5,l6: base = 7 - 3 = 4.
+        let t = ring.since(1, 100);
+        assert_eq!(t.lost, 3, "l1, l2 and l3 were lost");
         assert_eq!(t.lines.len(), 3);
         assert_eq!(t.lines[0].message, "l4");
         assert_eq!(t.next, 7);
     }
 
-    /// `max` acota la respuesta y el cursor avanza SOLO lo entregado: pedir de
-    /// nuevo continúa donde se cortó, sin saltarse nada.
+    /// `max` caps the response and the cursor advances by ONLY what was
+    /// delivered: asking again continues where it was cut off, missing
+    /// nothing.
     #[test]
-    fn max_acota_y_el_cursor_no_se_adelanta() {
-        let anillo = LogRing::new(10);
+    fn max_caps_and_the_cursor_does_not_get_ahead() {
+        let ring = LogRing::new(10);
         for i in 0..5 {
-            anillo.push(linea(Level::INFO, "norte_core", &format!("l{i}")));
+            ring.push(line(Level::INFO, "norte_core", &format!("l{i}")));
         }
-        let t = anillo.since(0, 2);
+        let t = ring.since(0, 2);
         assert_eq!(t.lines.len(), 2);
         assert_eq!(t.next, 2);
-        let t2 = anillo.since(t.next, 2);
+        let t2 = ring.since(t.next, 2);
         assert_eq!(t2.lines[0].message, "l2");
     }
 
-    /// La capacidad es la que se pidió y NO se mueve con lo que entra: es lo
-    /// que un lector remoto necesita para saber dónde está el fondo de la
-    /// historia (ADR 0092).
+    /// Capacity is what was asked for and does NOT move with what comes in:
+    /// it is what a remote reader needs to know where the bottom of the
+    /// history is (ADR 0092).
     #[test]
-    fn la_capacidad_dice_el_fondo_y_no_la_ocupacion() {
-        let anillo = LogRing::new(3);
-        assert_eq!(anillo.capacity(), 3, "vacío ya sabe cuánto le cabe");
+    fn capacity_says_the_bottom_not_the_occupancy() {
+        let ring = LogRing::new(3);
+        assert_eq!(ring.capacity(), 3, "empty already knows how much it holds");
         for i in 0..7 {
-            anillo.push(linea(Level::INFO, "norte_core", &format!("l{i}")));
+            ring.push(line(Level::INFO, "norte_core", &format!("l{i}")));
         }
-        assert_eq!(anillo.capacity(), 3, "lleno y desbordado, la misma");
-        // Un anillo de cero líneas no existe: `new` lo sube a una, y la
-        // capacidad tiene que decir lo que hay, no lo que se pidió.
+        assert_eq!(ring.capacity(), 3, "full and overflowed, the same");
+        // A ring of zero lines does not exist: `new` bumps it to one, and
+        // capacity has to say what there is, not what was asked for.
         assert_eq!(LogRing::new(0).capacity(), 1);
     }
 
-    /// Un cursor del futuro —un daemon reiniciado bajo un cliente que guardó el
-    /// suyo— no es un pánico ni un hueco: no hay nada nuevo y no se perdió nada.
+    /// A cursor from the future — a restarted daemon under a client that kept
+    /// its own — is neither a panic nor a gap: nothing is new and nothing was
+    /// lost.
     #[test]
-    fn un_cursor_del_futuro_no_inventa_nada() {
-        let anillo = LogRing::new(10);
-        anillo.push(linea(Level::INFO, "norte_core", "l0"));
-        let t = anillo.since(99, 100);
+    fn a_cursor_from_the_future_invents_nothing() {
+        let ring = LogRing::new(10);
+        ring.push(line(Level::INFO, "norte_core", "l0"));
+        let t = ring.since(99, 100);
         assert!(t.lines.is_empty());
         assert_eq!(t.next, 1);
         assert_eq!(t.lost, 0);
     }
 
-    /// El mensaje va delante y los campos detrás, como en el fichero: las dos
-    /// superficies tienen que decir lo mismo para que una sirva de referencia
-    /// de la otra.
+    /// The message goes first and the fields after, as in the file: the two
+    /// surfaces have to say the same thing for one to serve as a reference
+    /// for the other.
     #[test]
-    fn el_aplanador_pone_el_mensaje_delante() {
-        let con = |mensaje: &str, campos: &str| {
-            Aplanador {
-                mensaje: mensaje.to_string(),
-                campos: campos.to_string(),
+    fn the_flattener_puts_the_message_first() {
+        let with = |message: &str, fields: &str| {
+            Flattener {
+                message: message.to_string(),
+                fields: fields.to_string(),
             }
-            .texto()
+            .text()
         };
         assert_eq!(
-            con("conectando", "scheme=s3 host=un-bucket"),
-            "conectando scheme=s3 host=un-bucket"
+            with("connecting", "scheme=s3 host=a-bucket"),
+            "connecting scheme=s3 host=a-bucket"
         );
-        // Sin campos, solo la frase; sin frase, solo los campos.
-        assert_eq!(con("hola", ""), "hola");
-        assert_eq!(con("", "a=1"), "a=1");
+        // Without fields, just the sentence; without a sentence, just the
+        // fields.
+        assert_eq!(with("hello", ""), "hello");
+        assert_eq!(with("", "a=1"), "a=1");
     }
 }

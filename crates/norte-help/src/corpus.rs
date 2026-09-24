@@ -310,30 +310,32 @@ mod tests {
     }
 
     #[test]
-    fn un_contexto_declarado_resuelve_a_su_tema() {
-        // `panes` declara `context = ["browse"]`: F1 en el pane abre esa
-        // página, y el mapa vive en el CORPUS, no en código de frontend.
-        let t = topic_for_context(Lang::En, "browse").expect("browse tiene página");
+    fn a_declared_context_resolves_to_its_topic() {
+        // `panes` declares `context = ["browse"]`: F1 in the pane opens that
+        // page, and the map lives in the CORPUS, not in frontend code.
+        let t = topic_for_context(Lang::En, "browse").expect("browse has a page");
         assert_eq!(t.id.as_str(), "panes");
-        // Y en el otro locale resuelve al MISMO id: la paridad es estructural.
-        let es = topic_for_context(Lang::Es, "browse").expect("browse en es");
+        // And in the other locale it resolves to the SAME id: parity is
+        // structural.
+        let es = topic_for_context(Lang::Es, "browse").expect("browse in es");
         assert_eq!(es.id, t.id);
     }
 
     #[test]
-    fn un_contexto_sin_tema_es_none_no_un_panico() {
-        assert!(topic_for_context(Lang::En, "no-existe-este-contexto").is_none());
+    fn a_context_without_a_topic_is_none_not_a_panic() {
+        assert!(topic_for_context(Lang::En, "this-context-does-not-exist").is_none());
     }
 
     #[test]
-    fn un_comando_resuelve_a_la_pagina_que_lo_documenta() {
-        // La vuelta de lo que camina la puerta de documentación: ella
-        // garantiza que TODO comando fuera de su allowlist lo nombra algún
-        // tema, y esto es la consulta que cobra esa garantía en runtime (F1
-        // sobre una fila de la palette).
-        let t = topic_for_command(Lang::En, "pane.copy").expect("pane.copy está documentado");
+    fn a_command_resolves_to_the_page_that_documents_it() {
+        // The other side of what the documentation gate walks: it
+        // guarantees that EVERY command outside its allowlist is named by
+        // some topic, and this is the query that cashes in that guarantee
+        // at runtime (F1 over a palette row).
+        let t = topic_for_command(Lang::En, "pane.copy").expect("pane.copy is documented");
         assert_eq!(t.id.as_str(), "copying");
-        // Y el id no depende del idioma del lector: la paridad es estructural.
+        // And the id does not depend on the reader's language: parity is
+        // structural.
         assert_eq!(
             topic_for_command(Lang::Es, "pane.copy").map(|es| es.id.clone()),
             Some(t.id.clone())
@@ -342,22 +344,22 @@ mod tests {
     }
 
     #[test]
-    fn la_pagina_de_un_comando_es_la_que_lo_explica_no_la_que_lo_menciona() {
-        // `mouse` nombra `pane.copy`/`pane.move` (un arrastre hace lo que hace
-        // esa tecla) y va ANTES que `copying` en el corpus, así que "el primer
-        // reclamante" abriría «Using the mouse» sobre la fila `pane.copy` de la
-        // palette. El desempate es la deferencia: `mouse` enlaza a `copying`
-        // por `see_also`, luego está señalando, no explicando.
+    fn the_page_for_a_command_is_the_one_that_explains_it_not_the_one_that_mentions_it() {
+        // `mouse` names `pane.copy`/`pane.move` (a drag does what that key
+        // does) and comes BEFORE `copying` in the corpus, so "the first
+        // claimant" would open "Using the mouse" for the `pane.copy` row of
+        // the palette. The tiebreaker is deference: `mouse` links to
+        // `copying` via `see_also`, so it is pointing, not explaining.
         for cmd in ["pane.copy", "pane.move"] {
             assert_eq!(
                 topic_for_command(Lang::En, cmd).map(|t| t.id.as_str()),
                 Some("copying"),
-                "{cmd} se explica en la página de copiar"
+                "{cmd} is explained on the copying page"
             );
         }
-        // Y al revés: cuando la primera página en orden de corpus NO defiere,
-        // gana ella. `panes` nombra `nav.enter` igual que `mouse` y
-        // `archives`, y no enlaza a ninguna de las dos.
+        // And the other way around: when the first page in corpus order
+        // does NOT defer, it wins. `panes` names `nav.enter` just like
+        // `mouse` and `archives`, and links to neither.
         assert_eq!(
             topic_for_command(Lang::En, "nav.enter").map(|t| t.id.as_str()),
             Some("panes")
@@ -369,10 +371,10 @@ mod tests {
     }
 
     #[test]
-    fn una_clave_de_fila_de_plugin_no_documenta_nada() {
-        // La `key` de una fila de plugin de la palette
-        // (`plugin:{id}:{command}`) no es un comando del host y ningún tema
-        // del corpus la nombra: `None`, jamás un pánico ni una página ajena.
+    fn a_plugin_row_key_documents_nothing() {
+        // A palette plugin row's `key` (`plugin:{id}:{command}`) is not a
+        // host command and no corpus topic names it: `None`, never a panic
+        // or a foreign page.
         assert!(topic_for_command(Lang::En, "plugin:dev.norte.demo:greet").is_none());
     }
 }

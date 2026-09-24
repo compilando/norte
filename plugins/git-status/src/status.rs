@@ -201,8 +201,15 @@ mod style_tests {
         assert_eq!(State::Clean.cell_with(simbolos), None, "limpio no pinta");
         let sin_ignorados = Style::parse(Some("letters"), Some("false"));
         assert_eq!(State::Ignored.cell_with(sin_ignorados), None);
-        assert_eq!(State::Untracked.cell_with(sin_ignorados), Some("?".to_string()));
-        assert_eq!(Style::parse(None, None), Style::default(), "sin config, lo de siempre");
+        assert_eq!(
+            State::Untracked.cell_with(sin_ignorados),
+            Some("?".to_string())
+        );
+        assert_eq!(
+            Style::parse(None, None),
+            Style::default(),
+            "sin config, lo de siempre"
+        );
     }
 }
 

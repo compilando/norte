@@ -1,17 +1,17 @@
-// Pintores de `Screen` para ai (ola W10): funciones con `this: Screen`,
-// enganchadas como propiedades en `render.ts`. El estado sigue en la clase.
+// `Screen` painters for ai (wave W10): functions with `this: Screen`, hooked
+// in as properties in `render.ts`. State stays in the class.
 
 import type { Screen } from "../render";
 import type { AiRenameView } from "../types";
 import { badge } from "./dom";
 
 /**
- * El plan de renombrado en revisión.
+ * The rename plan under review.
  *
- * Los dos nombres de cada pareja van en ELEMENTOS distintos, jamás
- * concatenados con una flecha: un nombre puede contener la flecha, y la
- * fila se leería como otra pareja. El separador lo pone el CSS, que un
- * nombre no puede escribir.
+ * The two names in each pair go in separate ELEMENTS, never concatenated
+ * with an arrow: a name can contain the arrow, and the row would read as a
+ * different pair than it is. The separator is set by the CSS, which a name
+ * cannot write.
  */
 export function paintAiRename(this: Screen, plan: AiRenameView | null): void {
   if (plan === null) {
@@ -20,135 +20,136 @@ export function paintAiRename(this: Screen, plan: AiRenameView | null): void {
     return;
   }
   this.aiRenameRoot.dataset["open"] = "true";
-  const caja = document.createElement("section");
-  caja.className = "ai-rename";
-  caja.setAttribute("role", "dialog");
-  caja.setAttribute("aria-modal", "true");
+  const box = document.createElement("section");
+  box.className = "ai-rename";
+  box.setAttribute("role", "dialog");
+  box.setAttribute("aria-modal", "true");
   const h = document.createElement("h2");
   h.id = "ai-rename-title";
   h.textContent = this.t("modal-ai-rename-plan");
-  caja.setAttribute("aria-labelledby", h.id);
-  caja.append(h);
+  box.setAttribute("aria-labelledby", h.id);
+  box.append(h);
 
-  const donde = document.createElement("p");
-  donde.className = "ai-rename-dir";
-  donde.textContent = plan.dir.text;
-  donde.dataset["hostile"] = String(plan.dir.hostile);
+  const where = document.createElement("p");
+  where.className = "ai-rename-dir";
+  where.textContent = plan.dir.text;
+  where.dataset["hostile"] = String(plan.dir.hostile);
   if (plan.dir.hostile) {
-    donde.classList.add("hostile");
-    donde.append(badge(this.t("hostile-name")));
+    where.classList.add("hostile");
+    where.append(badge(this.t("hostile-name")));
   }
-  caja.append(donde);
+  box.append(where);
 
-  // El VEREDICTO va arriba, junto al directorio: de todo el cuerpo es la
-  // línea que no se puede perder si la pantalla se queda corta.
-  const estado = document.createElement("p");
-  estado.className = "ai-rename-status";
-  estado.dataset["confirmable"] = String(plan.confirmable);
-  estado.setAttribute("role", "status");
-  estado.textContent = plan.status;
-  caja.append(estado);
+  // The VERDICT goes at the top, next to the directory: of the whole body it
+  // is the one line that cannot be lost if the screen runs short.
+  const status = document.createElement("p");
+  status.className = "ai-rename-status";
+  status.dataset["confirmable"] = String(plan.confirmable);
+  status.setAttribute("role", "status");
+  status.textContent = plan.status;
+  box.append(status);
 
-  const lista = document.createElement("ol");
-  lista.className = "ai-rename-pairs";
-  lista.setAttribute("start", String(plan.first_visible + 1));
-  for (const par of plan.pairs) {
-    const fila = document.createElement("li");
-    fila.className = "ai-rename-pair";
-    // Los dos nombres en LÍNEAS distintas, y la segunda con su propio
-    // color. Ponerlos en la misma línea separados por una flecha los
-    // separaba con un glifo que un nombre puede contener: `cap 2 → final`
-    // se leía como una pareja distinta de la que es. La numeración la pinta
-    // el `<ol>`, que un nombre tampoco puede falsificar.
-    for (const [clase, linea] of [
-      ["ai-rename-from", par.from],
-      ["ai-rename-to", par.to],
+  const list = document.createElement("ol");
+  list.className = "ai-rename-pairs";
+  list.setAttribute("start", String(plan.first_visible + 1));
+  for (const pair of plan.pairs) {
+    const row = document.createElement("li");
+    row.className = "ai-rename-pair";
+    // The two names on separate LINES, and the second with its own color.
+    // Putting them on the same line separated by an arrow split them with a
+    // glyph a name can contain: `cap 2 → final` read as a different pair
+    // than it was. The numbering is painted by the `<ol>`, which a name
+    // cannot forge either.
+    for (const [cls, line] of [
+      ["ai-rename-from", pair.from],
+      ["ai-rename-to", pair.to],
     ] as const) {
       const el = document.createElement("div");
-      el.className = clase;
-      el.textContent = linea.text;
-      el.dataset["hostile"] = String(linea.hostile);
-      if (linea.hostile) {
+      el.className = cls;
+      el.textContent = line.text;
+      el.dataset["hostile"] = String(line.hostile);
+      if (line.hostile) {
         el.classList.add("hostile");
         el.append(badge(this.t("hostile-name")));
       }
-      fila.append(el);
+      row.append(el);
     }
-    lista.append(fila);
+    list.append(row);
   }
-  caja.append(lista);
+  box.append(list);
 
   if (plan.more_note !== "") {
-    // Ya traducido y ya sustituido POR EL HOST. Sustituirlo aquí no
-    // funcionaba: el catálogo lleva las cadenas ya formateadas y sin
-    // argumentos, y Fluent escribe una variable ausente como `{$shown}` —
-    // sin espacios—, así que el `.replace` no casaba nunca y la línea que
-    // dice cuánto del plan se está viendo pintaba dos identificadores.
-    const mas = document.createElement("p");
-    mas.className = "ai-rename-more";
-    mas.textContent = plan.more_note;
-    caja.append(mas);
+    // Already translated and already substituted BY THE HOST. Substituting
+    // it here did not work: the catalogue carries the strings already
+    // formatted and without arguments, and Fluent writes a missing variable
+    // as `{$shown}` — with no spaces — so the `.replace` never matched and
+    // the line saying how much of the plan is being shown painted two
+    // identifiers.
+    const more = document.createElement("p");
+    more.className = "ai-rename-more";
+    more.textContent = plan.more_note;
+    box.append(more);
   }
   if (plan.hidden_hostile) {
-    // Lo que se enmascara se dice TAMBIÉN cuando no cabe en la ventana: la
-    // marca de una línea solo existe para esa línea, y la pareja alterada
-    // puede estar en la posición doce.
-    const aviso = document.createElement("p");
-    aviso.className = "ai-rename-hidden-hostile hostile";
-    aviso.setAttribute("role", "alert");
-    aviso.textContent = this.t("modal-ai-rename-hidden-hostile");
-    caja.append(aviso);
+    // What gets masked is said ALSO when it does not fit in the window: a
+    // line's mark only exists for that line, and the altered pair can be in
+    // position twelve.
+    const notice = document.createElement("p");
+    notice.className = "ai-rename-hidden-hostile hostile";
+    notice.setAttribute("role", "alert");
+    notice.textContent = this.t("modal-ai-rename-hidden-hostile");
+    box.append(notice);
   }
 
-  for (const linea of plan.detail) {
+  for (const line of plan.detail) {
     const p = document.createElement("p");
     p.className = "ai-rename-detail";
-    p.textContent = linea.text;
-    p.dataset["hostile"] = String(linea.hostile);
-    if (linea.hostile) {
+    p.textContent = line.text;
+    p.dataset["hostile"] = String(line.hostile);
+    if (line.hostile) {
       p.classList.add("hostile");
       p.append(badge(this.t("hostile-name")));
     }
-    caja.append(p);
+    box.append(p);
   }
 
   if (plan.real_steps_note !== "") {
-    // Cuántos renombra DE VERDAD: el planificador tira las parejas nulas, y
-    // enseñar solo las pedidas promete de más.
-    const reales = document.createElement("p");
-    reales.className = "ai-rename-real";
-    reales.textContent = plan.real_steps_note;
-    caja.append(reales);
+    // How many it REALLY renames: the planner drops the null pairs, and
+    // showing only the requested ones promises too much.
+    const real = document.createElement("p");
+    real.className = "ai-rename-real";
+    real.textContent = plan.real_steps_note;
+    box.append(real);
   }
 
-  // Botones, y no solo teclas. Un clic es un gesto DIRIGIDO a esta
-  // pantalla, así que no necesita el reconocimiento que sí necesita una
-  // tecla; y sin ellos un lector con el ratón no podía ni quitarse de
-  // encima una pantalla que se abrió sola.
-  const botones = document.createElement("div");
-  botones.className = "choices";
-  // Las dos claves, LITERALES: una `t(variable)` es una clave que el
-  // barrido del catálogo no puede seguir, y una clave que no se sigue se
-  // pinta como su propio identificador el día que falte.
-  const aplicar = document.createElement("button");
-  aplicar.type = "button";
-  aplicar.textContent = this.t("modal-ai-rename-apply");
-  aplicar.disabled = !plan.confirmable;
-  aplicar.addEventListener("click", () => {
+  // Buttons, and not just keys. A click is a gesture AIMED at this screen,
+  // so it does not need the acknowledgment a key does; and without them a
+  // mouse-only reader could not even dismiss a screen that opened on its
+  // own.
+  const buttons = document.createElement("div");
+  buttons.className = "choices";
+  // The two keys, LITERAL: a `t(variable)` is a key the catalogue's sweep
+  // cannot follow, and a key that is not followed gets painted as its own
+  // identifier the day it is missing.
+  const apply = document.createElement("button");
+  apply.type = "button";
+  apply.textContent = this.t("modal-ai-rename-apply");
+  apply.disabled = !plan.confirmable;
+  apply.addEventListener("click", () => {
     this.send({ action: "ai_rename_decide", approve: true });
   });
-  const descartar = document.createElement("button");
-  descartar.type = "button";
-  descartar.textContent = this.t("modal-ai-rename-discard");
-  descartar.addEventListener("click", () => {
+  const discard = document.createElement("button");
+  discard.type = "button";
+  discard.textContent = this.t("modal-ai-rename-discard");
+  discard.addEventListener("click", () => {
     this.send({ action: "ai_rename_decide", approve: false });
   });
-  botones.append(aplicar, descartar);
-  caja.append(botones);
+  buttons.append(apply, discard);
+  box.append(buttons);
 
-  const pie = document.createElement("p");
-  pie.className = "ai-rename-hint";
-  pie.textContent = this.t("gui-modal-ai-rename-plan-hint");
-  caja.append(pie);
-  this.aiRenameRoot.replaceChildren(caja);
+  const footer = document.createElement("p");
+  footer.className = "ai-rename-hint";
+  footer.textContent = this.t("gui-modal-ai-rename-plan-hint");
+  box.append(footer);
+  this.aiRenameRoot.replaceChildren(box);
 }

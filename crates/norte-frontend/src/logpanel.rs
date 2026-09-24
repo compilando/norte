@@ -1,131 +1,136 @@
-//! El panel de registro: qué se enseña del anillo y cómo se recorre.
+//! The log panel: what is shown from the ring and how it is browsed.
 //!
-//! El anillo (`norte_config::logring`) guarda; esto decide qué se ve. Vive en
-//! la crate compartida porque la ventana necesita las mismas respuestas, y una
-//! decisión de presentación duplicada entre frontends diverge en silencio
+//! The ring (`norte_config::logring`) stores; this decides what is seen.
+//! Lives in the shared crate because the window needs the same answers, and
+//! a presentation decision duplicated between frontends silently drifts
 //! (ADR 0077).
 //!
-//! # Dos niveles, y confundirlos es la trampa
+//! # Two levels, and confusing them is the trap
 //!
-//! Hay el nivel que el anillo **captura** y el nivel que el panel **enseña**, y
-//! no son el mismo. Filtrar a DEBUG lo que se guardó a INFO no enseña nada:
-//! los DEBUG no existen. Quien cambia el que se enseña tiene que subir el del
-//! anillo, y ese invariante vive en `LogRing::raise_to` —en el tipo que POSEE
-//! el nivel— y no en un valor de retorno que un segundo frontend pueda ignorar.
+//! There is the level the ring **captures** and the level the panel
+//! **shows**, and they are not the same. Filtering to DEBUG what was stored
+//! at INFO shows nothing: the DEBUG lines do not exist. Whoever changes the
+//! shown level has to raise the ring's, and that invariant lives in
+//! `LogRing::raise_to` — in the type that OWNS the level — and not in a
+//! return value a second frontend could ignore.
 //!
-//! Y bajarlo NO baja el del anillo, a propósito: ir a DEBUG, volver a WARN y
-//! pedir DEBUG otra vez tiene que enseñar lo de en medio. Si al bajar dejáramos
-//! de capturar, ese viaje de ida y vuelta borraría justo el rato que se estaba
-//! investigando. Se paga capturando de más mientras dure la sesión, que es lo
-//! barato de las dos equivocaciones posibles.
+//! And lowering it does NOT lower the ring's, on purpose: going to DEBUG,
+//! back to WARN and asking for DEBUG again has to show what happened in
+//! between. If lowering it stopped capturing, that round trip would erase
+//! exactly the stretch being investigated. The cost is over-capturing for as
+//! long as the session lasts, which is the cheap one of the two possible
+//! mistakes.
 
 use norte_config::logline::{LogLevel, LogLine};
 
-/// De dónde salen las líneas que el panel enseña.
+/// Where the lines the panel shows come from.
 ///
-/// Esto es la PREFERENCIA guardada, no lo que se pinta. Un frontend con el
-/// core embebido —un solo proceso, un solo anillo— no tiene una segunda
-/// fuente que mostrar, y quien decide reducir `Both` a `Window` y esconder el
-/// selector en ese caso es ESE frontend: aquí no hay manera de saber si hay un
-/// daemon al otro lado, y esta crate no debe fingir que la hay.
+/// This is the SAVED PREFERENCE, not what is painted. A frontend with the
+/// core embedded — a single process, a single ring — has no second source to
+/// show, and whoever decides to collapse `Both` into `Window` and hide the
+/// selector in that case is THAT frontend: there is no way to know here
+/// whether there is a daemon on the other end, and this crate must not
+/// pretend there is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum LogSource {
-    /// Solo este proceso.
+    /// Only this process.
     Window,
-    /// Solo el daemon.
+    /// Only the daemon.
     Daemon,
-    /// Los dos, mezclados por marca de tiempo.
+    /// Both, merged by timestamp.
     #[default]
     Both,
 }
 
-/// Estado del panel.
+/// The panel's state.
 #[derive(Debug, Clone)]
 pub struct LogPanel {
-    /// Hasta qué verbosidad se ENSEÑA.
+    /// Up to which verbosity is SHOWN.
     level: LogLevel,
-    /// Qué fuente se enseña: preferencia, no lo pintado (ver [`LogSource`]).
+    /// Which source is shown: a preference, not what is painted (see
+    /// [`LogSource`]).
     source: LogSource,
-    /// Filtro de texto sobre módulo y mensaje. Vacío = todo.
+    /// Text filter over module and message. Empty = everything.
     filter: String,
-    /// El mismo, ya en minúsculas.
+    /// The same, already lowercased.
     ///
-    /// Precalculado porque [`Self::matches`] corre una vez POR LÍNEA y por
-    /// frame: con la aguja dentro, cada llamada reservaba una `String` nueva
-    /// para lo mismo, dos mil veces, diez veces por segundo.
+    /// Precomputed because [`Self::matches`] runs once PER LINE and per
+    /// frame: with the needle inline, every call allocated a new `String`
+    /// for the same thing, two thousand times, ten times a second.
     filter_lc: String,
-    /// Cuántas líneas hay por encima de la primera visible. `None` = pegado al
-    /// final (sigue lo que llega).
+    /// How many lines are above the first visible one. `None` = stuck to
+    /// the end (follows what arrives).
     scroll: Option<usize>,
-    /// Cuántas filas caben, del frame anterior.
+    /// How many rows fit, from the previous frame.
     ///
-    /// Lo pone quien pinta, y esto se corrigió tras una revisión: el manejo de
-    /// teclas ADIVINABA diez —el alto con el que se abre el hueco— mientras el
-    /// pintado usaba el interior real, que son ocho. Cada página se saltaba dos
-    /// líneas y la primera, cuatro: lo que ninguna de las dos ventanas enseñaba
-    /// no se podía leer de ninguna manera. Adivinar el viewport rompe el scroll
-    /// en silencio, y este árbol ya tenía el remedio para las otras listas
-    /// largas (`ui::geometry::before_frame`).
+    /// Set by whoever paints, and this was fixed after a review: key
+    /// handling GUESSED ten — the height the pane opens with — while
+    /// painting used the real interior, which is eight. Every page skipped
+    /// two lines, and the first one, four: what neither window showed could
+    /// not be read at all. Guessing the viewport silently breaks scrolling,
+    /// and this tree already had the fix for the other long lists
+    /// (`ui::geometry::before_frame`).
     rows: usize,
 }
 
 impl Default for LogPanel {
     fn default() -> Self {
         Self {
-            // INFO: lo mismo que captura el anillo al arrancar, así que abrir
-            // el panel enseña algo desde el primer momento.
+            // INFO: the same as what the ring captures on startup, so
+            // opening the panel shows something from the very first moment.
             level: LogLevel::Info,
             source: LogSource::Both,
             filter: String::new(),
             filter_lc: String::new(),
             scroll: None,
-            // Uno hasta que el primer frame diga la verdad: nunca cero, para
-            // que una página antes de pintar mueva algo en vez de nada.
+            // One until the first frame tells the truth: never zero, so a
+            // page before painting moves something instead of nothing.
             rows: 1,
         }
     }
 }
 
 impl LogPanel {
-    /// El nivel que se está enseñando.
+    /// The level currently being shown.
     #[must_use]
     pub const fn level(&self) -> LogLevel {
         self.level
     }
 
-    /// Cambia el nivel que se ENSEÑA.
+    /// Changes the level SHOWN.
     ///
-    /// Subir el del anillo es cosa de `LogRing::raise_to`, y esto se corrigió
-    /// tras una revisión: antes esta función devolvía «el nivel que el anillo
-    /// debe capturar» y confiaba en que el llamante lo comparase y subiera.
-    /// `#[must_use]` obliga a atar el valor, no a usarlo — y el segundo
-    /// frontend habría copiado un `let _ =` y acabado filtrando a DEBUG unas
-    /// líneas que nadie capturó. El invariante vive ahora en el tipo que posee
-    /// el nivel.
+    /// Raising the ring's is `LogRing::raise_to`'s job, and this was fixed
+    /// after a review: this function used to return "the level the ring must
+    /// capture" and trusted the caller to compare it and raise it.
+    /// `#[must_use]` forces binding the value, not using it — and the second
+    /// frontend would have copied a `let _ =` and ended up filtering to
+    /// DEBUG some lines nobody captured. The invariant now lives in the type
+    /// that owns the level.
     pub fn show_level(&mut self, l: LogLevel) {
         self.level = l;
-        // Volver al final: tras cambiar el filtro, lo que el lector quiere ver
-        // es lo último que encaja, no el trozo donde estaba mirando de otra
-        // lista.
+        // Back to the end: after changing the filter, what the reader wants
+        // to see is the latest match, not the spot they were looking at in a
+        // different list.
         self.scroll = None;
     }
 
-    /// La fuente que se está enseñando (preferencia, ver [`LogSource`]).
+    /// The source currently being shown (a preference, see [`LogSource`]).
     #[must_use]
     pub const fn source(&self) -> LogSource {
         self.source
     }
 
-    /// Cambia la fuente.
+    /// Changes the source.
     pub fn set_source(&mut self, s: LogSource) {
         self.source = s;
-        // Igual que al cambiar de filtro o de nivel: la lista compuesta
-        // cambia de forma, y quedarse en el desplazamiento de la ANTERIOR
-        // deja al lector en un trozo que no pidió.
+        // Same as when changing the filter or the level: the composed list
+        // changes shape, and staying at the PREVIOUS one's scroll leaves the
+        // reader at a spot they did not ask for.
         self.scroll = None;
     }
 
-    /// Recorre las tres fuentes y vuelve a la primera: es UN mando, no tres.
+    /// Cycles through the three sources and returns to the first: it is ONE
+    /// control, not three.
     pub fn cycle_source(&mut self) {
         self.set_source(match self.source {
             LogSource::Window => LogSource::Daemon,
@@ -134,65 +139,66 @@ impl LogPanel {
         });
     }
 
-    /// El filtro de texto actual.
+    /// The current text filter.
     #[must_use]
     pub fn filter(&self) -> &str {
         &self.filter
     }
 
-    /// Cambia el filtro de texto.
+    /// Changes the text filter.
     pub fn set_filter(&mut self, f: impl Into<String>) {
         self.filter = f.into();
         self.filter_lc = self.filter.to_lowercase();
         self.scroll = None;
     }
 
-    /// ¿Está pegado al final?
+    /// Is it stuck to the end?
     #[must_use]
     pub const fn following(&self) -> bool {
         self.scroll.is_none()
     }
 
-    /// Vuelve a pegarse al final.
+    /// Sticks back to the end.
     pub const fn follow(&mut self) {
         self.scroll = None;
     }
 
-    /// Cuántas filas caben. Lo llama quien pinta, una vez por frame.
+    /// How many rows fit. Called by whoever paints, once per frame.
     pub const fn set_viewport_rows(&mut self, rows: usize) {
-        // Nunca cero: con cero, `tope` sería el total y una página no movería
-        // nada.
+        // Never zero: with zero, the `cap` would be the total and a page
+        // would not move anything.
         self.rows = if rows == 0 { 1 } else { rows };
     }
 
-    /// Cuántas filas caben (las del último frame).
+    /// How many rows fit (the previous frame's).
     #[must_use]
     pub const fn viewport_rows(&self) -> usize {
         self.rows
     }
 
-    /// Sube `n` líneas, despegándose del final.
+    /// Scrolls up `n` lines, unsticking from the end.
     ///
-    /// Despegarse es la mitad del panel: uno que salta siempre al final no se
-    /// puede leer mientras algo escribe, que es justo cuando hace falta.
-    pub fn scroll_up(&mut self, n: usize, visibles: usize) {
-        let tope = visibles.saturating_sub(self.rows);
-        let actual = self.scroll.unwrap_or(tope);
-        self.scroll = Some(actual.saturating_sub(n));
+    /// Unsticking is half the panel: one that always jumps to the end
+    /// cannot be read while something is writing, which is exactly when it
+    /// is needed.
+    pub fn scroll_up(&mut self, n: usize, visible: usize) {
+        let cap = visible.saturating_sub(self.rows);
+        let current = self.scroll.unwrap_or(cap);
+        self.scroll = Some(current.saturating_sub(n));
     }
 
-    /// Baja `n` líneas; al llegar al final se vuelve a pegar.
-    pub fn scroll_down(&mut self, n: usize, visibles: usize) {
-        let tope = visibles.saturating_sub(self.rows);
-        let actual = self.scroll.unwrap_or(tope);
-        let nuevo = actual.saturating_add(n);
-        self.scroll = if nuevo >= tope { None } else { Some(nuevo) };
+    /// Scrolls down `n` lines; on reaching the end it sticks back.
+    pub fn scroll_down(&mut self, n: usize, visible: usize) {
+        let cap = visible.saturating_sub(self.rows);
+        let current = self.scroll.unwrap_or(cap);
+        let new = current.saturating_add(n);
+        self.scroll = if new >= cap { None } else { Some(new) };
     }
 
-    /// ¿Pasa esta línea los dos filtros?
+    /// Does this line pass both filters?
     ///
-    /// El texto se compara en minúsculas y contra el módulo TAMBIÉN, no solo
-    /// contra el mensaje: media búsqueda real es «enséñame lo de connect».
+    /// The text is compared lowercased and against the module TOO, not just
+    /// the message: half of a real search is "show me connect's".
     #[must_use]
     pub fn matches(&self, line: &LogLine) -> bool {
         if line.level > self.level {
@@ -201,70 +207,73 @@ impl LogPanel {
         if self.filter_lc.is_empty() {
             return true;
         }
-        contiene_sin_mayusculas(&line.message, &self.filter_lc)
-            || contiene_sin_mayusculas(&line.target, &self.filter_lc)
+        contains_case_insensitive(&line.message, &self.filter_lc)
+            || contains_case_insensitive(&line.target, &self.filter_lc)
     }
 
-    /// Las líneas que se ven, en orden, y desde qué índice empieza la ventana
-    /// de `alto` filas.
+    /// The visible lines, in order, and the index the window of `height`
+    /// rows starts at.
     ///
-    /// Devuelve índices sobre el filtrado y no sobre el anillo: el llamante
-    /// pinta un trozo, y lo que se recorta es lo que se ve, no lo que hay.
+    /// Returns indices over the filtered set and not over the ring: the
+    /// caller paints one chunk, and what gets cut is what is seen, not what
+    /// there is.
     #[must_use]
-    pub fn view<'a>(&self, lines: &'a [LogLine], alto: usize) -> (Vec<&'a LogLine>, usize) {
-        let visibles: Vec<&LogLine> = lines.iter().filter(|l| self.matches(l)).collect();
-        let desde = self.window_start(visibles.len(), alto);
-        (visibles, desde)
+    pub fn view<'a>(&self, lines: &'a [LogLine], height: usize) -> (Vec<&'a LogLine>, usize) {
+        let visible: Vec<&LogLine> = lines.iter().filter(|l| self.matches(l)).collect();
+        let start = self.window_start(visible.len(), height);
+        (visible, start)
     }
 
-    /// Desde qué índice empieza la ventana de `alto` filas sobre una lista ya
-    /// filtrada de `total` elementos.
+    /// The index the window of `height` rows starts at, over an already
+    /// filtered list of `total` elements.
     ///
-    /// La otra mitad de [`Self::view`], expuesta aparte porque quien mezcla dos
-    /// fuentes ([`merge`]) ya no tiene un `&[LogLine]` que darle: tiene parejas
-    /// `(línea, origen)`. Sin esto, ese llamante tenía que materializar la
-    /// mezcla en un `Vec<LogLine>` propio —clonando lo que `merge` presta a
-    /// propósito— solo para volver a preguntar por el desplazamiento.
+    /// [`Self::view`]'s other half, exposed separately because whoever
+    /// merges two sources ([`merge`]) no longer has a `&[LogLine]` to hand
+    /// it: it has `(line, source)` pairs. Without this, that caller had to
+    /// materialize the merge into its own `Vec<LogLine>` — cloning what
+    /// `merge` borrows on purpose — just to ask about the scroll offset
+    /// again.
     ///
     /// ```
     /// use norte_frontend::logpanel::LogPanel;
     /// let mut p = LogPanel::default();
     /// p.set_viewport_rows(10);
-    /// // Pegado al final: la ventana empieza donde caben las diez últimas.
+    /// // Stuck to the end: the window starts where the last ten fit.
     /// assert_eq!(p.window_start(25, 10), 15);
-    /// // Y nunca por encima del tope, aunque la lista encoja debajo.
+    /// // And never above the cap, even if the list shrinks under it.
     /// assert_eq!(p.window_start(4, 10), 0);
     /// ```
     #[must_use]
-    pub fn window_start(&self, total: usize, alto: usize) -> usize {
-        let tope = total.saturating_sub(alto);
-        self.scroll.map_or(tope, |s| s.min(tope))
+    pub fn window_start(&self, total: usize, height: usize) -> usize {
+        let cap = total.saturating_sub(height);
+        self.scroll.map_or(cap, |s| s.min(cap))
     }
 
-    /// Cuántas líneas del anillo pasan los filtros.
+    /// How many of the ring's lines pass the filters.
     ///
-    /// Sin construir el vector: es lo único que el desplazamiento necesita, y
-    /// hacerlo con [`Self::view`] clonaba referencias de las 2000 en cada
-    /// tecla, incluidas las que no desplazan nada.
+    /// Without building the vector: it is the only thing scrolling needs,
+    /// and doing it with [`Self::view`] cloned references from the 2000 on
+    /// every keystroke, including the ones that scroll nothing.
     #[must_use]
     pub fn visible_count(&self, lines: &[LogLine]) -> usize {
         lines.iter().filter(|l| self.matches(l)).count()
     }
 }
 
-/// Mezcla dos listas ya ordenadas por `epoch_ms`, marcando el origen de cada
-/// línea. Estable: a igual marca, primero la local — dos procesos en una
-/// misma máquina comparten reloj, así que las marcas iguales son el caso
-/// normal, no el raro, y una lista que se reordena entre frames no se puede
-/// leer.
+/// Merges two lists already sorted by `epoch_ms`, marking each line's
+/// origin. Stable: on a tie, the local one first — two processes on the
+/// same machine share a clock, so equal timestamps are the normal case, not
+/// the rare one, and a list that reorders itself between frames cannot be
+/// read.
 ///
-/// Devuelve líneas PRESTADAS a propósito: el anillo ya clonó una vez en su
-/// `snapshot`, y el panel pinta como mucho una pantalla; clonar dos mil
-/// líneas otra vez por frame es justo el gasto que la proyección de la
-/// ventana se escribió para evitar.
+/// Returns BORROWED lines on purpose: the ring already cloned once in its
+/// `snapshot`, and the panel paints at most one screen; cloning two thousand
+/// lines again per frame is exactly the cost the window's projection was
+/// written to avoid.
 ///
-/// El filtro de nivel y el de texto NO se aplican aquí: van después, sobre el
-/// resultado, para que una línea del daemon no se cuele por venir de fuera.
+/// The level filter and the text one are NOT applied here: they go after,
+/// on the result, so that a daemon line does not sneak in just for coming
+/// from outside.
 #[must_use]
 pub fn merge<'a>(
     local: &'a [LogLine],
@@ -283,7 +292,7 @@ pub fn merge<'a>(
                     out.push((&remote[j], LogSource::Daemon));
                     j += 1;
                 } else {
-                    // Igual marca: la local primero, a propósito.
+                    // Same timestamp: local first, on purpose.
                     out.push((&local[i], LogSource::Window));
                     i += 1;
                 }
@@ -295,31 +304,32 @@ pub fn merge<'a>(
     }
 }
 
-/// ¿Contiene `heno` la `aguja` (que YA viene en minúsculas), sin distinguir
-/// mayúsculas y sin reservar memoria?
+/// Does `haystack` contain `needle` (which ALREADY arrives lowercased),
+/// case-insensitively and without allocating?
 ///
-/// `heno.to_lowercase().contains(..)` copiaba el mensaje entero por línea y por
-/// frame. Esto compara ventana a ventana sobre el original.
-fn contiene_sin_mayusculas(heno: &str, aguja: &str) -> bool {
-    if aguja.is_empty() {
+/// `haystack.to_lowercase().contains(..)` copied the whole message per line
+/// and per frame. This compares window by window over the original.
+fn contains_case_insensitive(haystack: &str, needle: &str) -> bool {
+    if needle.is_empty() {
         return true;
     }
-    // Por CARACTERES en minúscula y no por bytes: `char::to_lowercase` puede
-    // dar más de uno (la `İ` turca), y comparar bytes crudos fallaría en cuanto
-    // el mensaje llevara acentos. Y sin `collect`: recolectar en dos `Vec` para
-    // comparar ventanas reservaría DOS veces por línea, que es peor que el
-    // `to_lowercase` que esto vino a quitar.
-    for (i, _) in heno.char_indices() {
-        let mut h = heno[i..].chars().flat_map(char::to_lowercase);
-        let mut a = aguja.chars();
+    // By lowercased CHARACTERS and not by bytes: `char::to_lowercase` can
+    // yield more than one (the Turkish `İ`), and comparing raw bytes would
+    // fail as soon as the message carried accents. And with no `collect`:
+    // collecting into two `Vec`s to compare windows would allocate TWICE
+    // per line, which is worse than the `to_lowercase` this was written to
+    // remove.
+    for (i, _) in haystack.char_indices() {
+        let mut h = haystack[i..].chars().flat_map(char::to_lowercase);
+        let mut n = needle.chars();
         loop {
-            match (a.next(), h.next()) {
-                // Se acabó la aguja sin discrepar: está.
+            match (n.next(), h.next()) {
+                // The needle ran out with no mismatch: it is there.
                 (None, _) => return true,
-                // Se acabó el heno antes que la aguja: no cabe, y desde una
-                // posición más adelante tampoco cabría.
+                // The haystack ran out before the needle: it does not fit,
+                // and it would not fit from a later position either.
                 (Some(_), None) => return false,
-                (Some(ac), Some(hc)) if ac == hc => {}
+                (Some(nc), Some(hc)) if nc == hc => {}
                 _ => break,
             }
         }
@@ -342,17 +352,18 @@ mod tests {
 
     fn corpus() -> Vec<LogLine> {
         vec![
-            l(LogLevel::Info, "norte_core::connect", "conectando"),
-            l(LogLevel::Warn, "norte_core::connect", "fallo de conexión"),
-            l(LogLevel::Debug, "norte_tui::fill", "página 2"),
-            l(LogLevel::Error, "norte_core::journal", "no se pudo anclar"),
+            l(LogLevel::Info, "norte_core::connect", "connecting"),
+            l(LogLevel::Warn, "norte_core::connect", "connection failure"),
+            l(LogLevel::Debug, "norte_tui::fill", "page 2"),
+            l(LogLevel::Error, "norte_core::journal", "could not anchor"),
         ]
     }
 
-    /// El filtro de nivel deja pasar lo MENOS verboso, no solo lo igual: pedir
-    /// WARN y perder los ERROR sería enseñar menos cuanto peor va la cosa.
+    /// The level filter lets through what is LESS verbose, not only the
+    /// same: asking for WARN and losing the ERROR ones would show less the
+    /// worse things get.
     #[test]
-    fn el_nivel_deja_pasar_lo_mas_grave() {
+    fn the_level_lets_through_the_more_severe() {
         let mut p = LogPanel::default();
         p.show_level(LogLevel::Warn);
         let v: Vec<_> = corpus().into_iter().filter(|x| p.matches(x)).collect();
@@ -360,87 +371,88 @@ mod tests {
         assert!(v.iter().all(|x| x.level <= LogLevel::Warn));
     }
 
-    /// El texto busca también en el MÓDULO: «enséñame lo de connect» es media
-    /// búsqueda real, y sin esto habría que saberse los mensajes de memoria.
+    /// The text also searches the MODULE: "show me connect's" is half of a
+    /// real search, and without this you would have to know the messages by
+    /// heart.
     #[test]
-    fn el_texto_busca_en_el_modulo_y_en_el_mensaje() {
+    fn the_text_searches_the_module_and_the_message() {
         let mut p = LogPanel::default();
         p.show_level(LogLevel::Trace);
         p.set_filter("connect");
         assert_eq!(corpus().iter().filter(|x| p.matches(x)).count(), 2);
-        p.set_filter("ANCLAR"); // sin distinguir mayúsculas
+        p.set_filter("ANCHOR"); // case-insensitive
         assert_eq!(corpus().iter().filter(|x| p.matches(x)).count(), 1);
         p.set_filter("");
         assert_eq!(corpus().iter().filter(|x| p.matches(x)).count(), 4);
     }
 
-    /// Pedir más detalle devuelve el nivel que el anillo tiene que capturar:
-    /// filtrar a DEBUG lo que se guardó a INFO no enseña nada.
+    /// Asking for more detail returns the level the ring has to capture:
+    /// filtering to DEBUG what was stored at INFO shows nothing.
     #[test]
-    fn pedir_debug_dice_lo_que_hay_que_capturar() {
+    fn asking_for_debug_says_what_must_be_captured() {
         let mut p = LogPanel::default();
         p.show_level(LogLevel::Debug);
         assert_eq!(p.level(), LogLevel::Debug);
     }
 
-    /// Arranca pegado al final; subir lo despega; bajar hasta el final lo
-    /// vuelve a pegar. Un panel que salta siempre al final no se puede leer
-    /// mientras algo escribe, que es cuando hace falta.
+    /// Starts stuck to the end; scrolling up unsticks it; scrolling down to
+    /// the end sticks it back. A panel that always jumps to the end cannot
+    /// be read while something is writing, which is when it is needed.
     #[test]
-    fn seguir_el_final_se_suelta_al_subir_y_se_recupera_al_bajar() {
+    fn following_the_end_lets_go_on_scroll_up_and_comes_back_on_scroll_down() {
         let mut p = LogPanel::default();
         assert!(p.following());
         p.set_viewport_rows(4);
         p.scroll_up(1, 10);
-        assert!(!p.following(), "subir no soltó el seguimiento");
+        assert!(!p.following(), "scrolling up did not let go of following");
         p.scroll_down(99, 10);
-        assert!(p.following(), "llegar al final no volvió a pegarlo");
+        assert!(p.following(), "reaching the end did not stick it back");
     }
 
-    /// La ventana se recorta sobre lo FILTRADO: con cuatro líneas, un filtro
-    /// que deja dos y un alto de una, se ve la última de las dos.
+    /// The window is cut over what is FILTERED: with four lines, a filter
+    /// that leaves two and a height of one, the last of the two is seen.
     #[test]
-    fn la_ventana_se_recorta_sobre_lo_filtrado() {
+    fn the_window_is_cut_over_the_filtered_set() {
         let mut p = LogPanel::default();
         p.show_level(LogLevel::Warn);
-        let lineas = corpus();
-        let (visibles, desde) = p.view(&lineas, 1);
-        assert_eq!(visibles.len(), 2);
-        assert_eq!(desde, 1, "pegado al final, empieza en la última");
-        assert_eq!(visibles[desde].message, "no se pudo anclar");
+        let lines = corpus();
+        let (visible, start) = p.view(&lines, 1);
+        assert_eq!(visible.len(), 2);
+        assert_eq!(start, 1, "stuck to the end, it starts at the last one");
+        assert_eq!(visible[start].message, "could not anchor");
     }
 
-    /// El alto lo pone quien pinta, y las páginas cuadran con ÉL.
+    /// The height is set by whoever paints, and pages match IT.
     ///
-    /// Esto es el arreglo de un fallo de verdad: el manejo de teclas adivinaba
-    /// diez filas y el pintado usaba ocho, así que cada página se saltaba dos
-    /// líneas y la primera, cuatro. Con 100 líneas y 8 filas, pegado al final
-    /// se ven de la 92 a la 99; una página arriba tiene que enseñar de la 84 a
-    /// la 91 — sin huecos entre las dos ventanas.
+    /// This is the fix for a real bug: key handling guessed ten rows and
+    /// painting used eight, so every page skipped two lines, and the first
+    /// one, four. With 100 lines and 8 rows, stuck to the end, 92 through 99
+    /// are seen; a page up has to show 84 through 91 — with no gaps between
+    /// the two windows.
     #[test]
-    fn una_pagina_no_se_salta_ninguna_linea() {
+    fn a_page_does_not_skip_any_line() {
         let mut p = LogPanel::default();
         p.set_viewport_rows(8);
-        let lineas: Vec<LogLine> = (0..100)
-            .map(|i| l(LogLevel::Info, "t", &format!("linea {i}")))
+        let lines: Vec<LogLine> = (0..100)
+            .map(|i| l(LogLevel::Info, "t", &format!("line {i}")))
             .collect();
 
-        let (_, desde) = p.view(&lineas, 8);
-        assert_eq!(desde, 92, "pegado al final empieza en 92");
+        let (_, start) = p.view(&lines, 8);
+        assert_eq!(start, 92, "stuck to the end it starts at 92");
 
         p.scroll_up(8, 100);
-        let (_, desde) = p.view(&lineas, 8);
+        let (_, start) = p.view(&lines, 8);
         assert_eq!(
-            desde, 84,
-            "la página anterior tiene que empezar justo donde acaba la de abajo"
+            start, 84,
+            "the previous page has to start right where the one below ends"
         );
     }
 
-    /// Con la aguja precalculada, buscar sigue sin distinguir mayúsculas y
-    /// sigue funcionando con acentos — que es lo que se rompería al comparar
-    /// bytes crudos en vez de caracteres.
+    /// With the needle precomputed, searching is still case-insensitive and
+    /// still works with accents — which is what would break if raw bytes
+    /// were compared instead of characters.
     #[test]
-    fn el_filtro_sin_reservar_sigue_encontrando_acentos() {
+    fn the_non_allocating_filter_still_finds_accents() {
         let mut p = LogPanel::default();
         p.set_filter("CONEXIÓN");
         assert!(p.matches(&l(LogLevel::Warn, "t", "fallo de conexión remota")));
@@ -448,15 +460,15 @@ mod tests {
         assert!(p.matches(&l(LogLevel::Warn, "t", "CONEXIÓN")));
         p.set_filter("zzz");
         assert!(!p.matches(&l(LogLevel::Warn, "t", "conexión")));
-        // Una aguja más larga que el heno no puede «encontrarse».
+        // A needle longer than the haystack cannot "be found".
         p.set_filter("larguísima aguja");
         assert!(!p.matches(&l(LogLevel::Warn, "t", "corto")));
     }
 
-    /// Cambiar de filtro vuelve al final: quedarse en el desplazamiento de la
-    /// lista ANTERIOR deja al lector en un trozo que no pidió.
+    /// Changing the filter goes back to the end: staying at the PREVIOUS
+    /// list's scroll leaves the reader at a spot they did not ask for.
     #[test]
-    fn cambiar_de_filtro_vuelve_al_final() {
+    fn changing_the_filter_goes_back_to_the_end() {
         let mut p = LogPanel::default();
         p.set_viewport_rows(3);
         p.scroll_up(2, 10);
@@ -469,9 +481,9 @@ mod tests {
         assert!(p.following());
     }
 
-    /// Línea con marca de tiempo, para las pruebas de mezcla. Distinto de
-    /// [`l`] (que fija `epoch_ms` a 0 y pide nivel y módulo) porque `merge`
-    /// solo le importa la marca y el mensaje.
+    /// A line with a timestamp, for the merge tests. Different from [`l`]
+    /// (which pins `epoch_ms` to 0 and asks for level and module) because
+    /// `merge` only cares about the timestamp and the message.
     fn le(ms: i64, msg: &str) -> LogLine {
         LogLine {
             epoch_ms: ms,
@@ -481,32 +493,35 @@ mod tests {
         }
     }
 
-    /// La mezcla respeta el reloj, y a igual marca no baila: primero la local.
+    /// The merge respects the clock, and on a tie it does not waver: local
+    /// first.
     #[test]
-    fn la_mezcla_ordena_por_marca_y_es_estable() {
+    fn the_merge_sorts_by_timestamp_and_is_stable() {
         let local = vec![le(10, "ventana-a"), le(30, "ventana-b")];
-        let remoto = vec![le(10, "daemon-a"), le(20, "daemon-b")];
-        let m = merge(&local, &remoto, LogSource::Both);
+        let remote = vec![le(10, "daemon-a"), le(20, "daemon-b")];
+        let m = merge(&local, &remote, LogSource::Both);
         let ms: Vec<_> = m.iter().map(|(l, _)| l.message.as_str()).collect();
         assert_eq!(ms, ["ventana-a", "daemon-a", "daemon-b", "ventana-b"]);
         assert_eq!(m[1].1, LogSource::Daemon);
     }
 
-    /// Elegir una fuente NO mezcla: enseña esa y nada más.
+    /// Choosing a single source does NOT merge: it shows that one and
+    /// nothing else.
     #[test]
-    fn una_fuente_sola_no_trae_la_otra() {
+    fn a_single_source_does_not_bring_the_other() {
         let local = vec![le(10, "ventana")];
-        let remoto = vec![le(20, "daemon")];
-        assert_eq!(merge(&local, &remoto, LogSource::Window).len(), 1);
+        let remote = vec![le(20, "daemon")];
+        assert_eq!(merge(&local, &remote, LogSource::Window).len(), 1);
         assert_eq!(
-            merge(&local, &remoto, LogSource::Daemon)[0].0.message,
+            merge(&local, &remote, LogSource::Daemon)[0].0.message,
             "daemon"
         );
     }
 
-    /// El ciclo recorre las tres y vuelve: es UN mando, no tres.
+    /// The cycle goes through all three and comes back: it is ONE control,
+    /// not three.
     #[test]
-    fn el_ciclo_de_fuente_da_la_vuelta() {
+    fn the_source_cycle_comes_full_circle() {
         let mut p = LogPanel::default();
         assert_eq!(p.source(), LogSource::Both);
         p.cycle_source();
@@ -515,20 +530,20 @@ mod tests {
         assert_eq!(p.source(), LogSource::Both);
     }
 
-    /// El filtro de nivel y el de texto siguen aplicándose DESPUÉS de mezclar:
-    /// una línea del daemon que no pasa el filtro no se cuela por venir de
-    /// fuera.
+    /// The level filter and the text one keep applying AFTER merging: a
+    /// daemon line that does not pass the filter does not sneak in just for
+    /// coming from outside.
     #[test]
-    fn el_filtro_manda_tambien_sobre_lo_remoto() {
+    fn the_filter_also_governs_the_remote_side() {
         let mut p = LogPanel::default();
         p.show_level(LogLevel::Error);
-        let remoto = vec![LogLine {
+        let remote = vec![LogLine {
             epoch_ms: 1,
             level: LogLevel::Debug,
             target: "norte_core".into(),
-            message: "ruido".into(),
+            message: "noise".into(),
         }];
-        let m = merge(&[], &remoto, LogSource::Both);
+        let m = merge(&[], &remote, LogSource::Both);
         assert!(!p.matches(m[0].0));
     }
 }

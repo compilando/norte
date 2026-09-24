@@ -365,80 +365,85 @@ mod has_active_tests {
     }
 
     #[test]
-    fn mezcla_una_en_vuelo_entre_terminales_es_activa() {
+    fn mixing_one_in_flight_among_terminals_is_active() {
         let mut board = TaskBoard::default();
         board.push(&task_ref(1, TaskState::Completed), None);
         board.push(&task_ref(2, TaskState::Running), None);
         assert!(board.has_active());
     }
 
-    /// ADR 0147: pausar elige la MISMA tarea que cancelar —la viva más
-    /// reciente— y dice si ya está pausada, leído en vivo.
+    /// ADR 0147: pausing picks the SAME task cancelling would — the most
+    /// recent live one — and says whether it is already paused, read live.
     #[test]
-    fn pausar_elige_la_viva_mas_reciente_y_sabe_si_esta_pausada() {
+    fn pausing_picks_the_most_recent_live_one_and_knows_if_it_is_paused() {
         let mut board = TaskBoard::default();
         board.push(&task_ref(1, TaskState::Running), None);
         board.push(&task_ref(2, TaskState::Paused), None);
         board.push(&task_ref(3, TaskState::Completed), None);
-        let (task, pausada) = board.last_running().expect("hay una viva");
+        let (task, paused) = board.last_running().expect("there is a live one");
         assert_eq!(task.id(), norte_proto::TaskId::new(2));
-        assert!(pausada);
-        let mut vacio = TaskBoard::default();
-        vacio.push(&task_ref(9, TaskState::Completed), None);
-        assert!(vacio.last_running().is_none());
+        assert!(paused);
+        let mut empty = TaskBoard::default();
+        empty.push(&task_ref(9, TaskState::Completed), None);
+        assert!(empty.last_running().is_none());
     }
 
-    /// #173: el tablero se queda un OBSERVADOR, así que quien lanzó la task
-    /// conserva el `TaskRef` —y con él el `Esc` del panel de sincronización,
-    /// que es el único sitio desde el que se para un plan aprobado—. Antes
-    /// esto no se podía escribir: `push` se llevaba la task.
+    /// #173: the board stays an OBSERVER, so whoever launched the task keeps
+    /// the `TaskRef` — and with it the sync panel's `Esc`, which is the only
+    /// place from which an approved plan is stopped. This used to be
+    /// unwritable: `push` took the task away.
     #[test]
-    fn el_tablero_observa_sin_quedarse_la_task() {
+    fn the_board_observes_without_taking_the_task() {
         let task = task_ref(4, TaskState::Running);
         let mut board = TaskBoard::default();
         board.push_observed(task.observer(), None);
         assert_eq!(board.rows().len(), 1);
         assert!(board.has_active());
-        // La task sigue siendo de quien la lanzó: el tablero no se la llevó.
+        // The task is still whoever launched it's: the board did not take it.
         assert_eq!(task.id(), norte_proto::TaskId::new(4));
-        // Y el tablero puede pararla.
+        // And the board can stop it.
         assert!(board.cancel_last_running());
-        // Un segundo empujón con el mismo id no duplica la fila (la propia
-        // puede llegar además por broadcast).
+        // A second push with the same id does not duplicate the row (the
+        // task itself can also arrive via broadcast).
         board.push_observed(task.observer(), None);
         assert_eq!(board.rows().len(), 1);
     }
 
-    /// Una terminada se va sola a los diez segundos, y una viva NO se va por
-    /// mucho que pase el tiempo: cortar trabajo en curso sería mentir, que es
-    /// la misma razón por la que `MAX_ROWS` tampoco las tira.
+    /// A finished one leaves on its own after ten seconds, and a live one does
+    /// NOT leave no matter how much time passes: cutting off work in progress
+    /// would be lying, which is the same reason `MAX_ROWS` does not drop them
+    /// either.
     #[test]
-    fn una_terminada_caduca_y_una_viva_no() {
+    fn a_finished_one_expires_and_a_live_one_does_not() {
         let mut board = TaskBoard::default();
         board.push(&task_ref(1, TaskState::Completed), None);
         board.push(&task_ref(2, TaskState::Running), None);
-        // Sin `tick` no hay `reported`, así que el sello no se pone: una
-        // terminal que todavía debe su `Finished` no se puede tirar.
+        // Without `tick` there is no `reported`, so the stamp is not set: a
+        // terminal one that still owes its `Finished` cannot be dropped.
         board.prune_terminal(0);
         assert_eq!(board.rows().len(), 2);
 
-        assert_eq!(board.tick(0).len(), 1, "la terminal emite su Finished");
+        assert_eq!(
+            board.tick(0).len(),
+            1,
+            "the terminal one emits its Finished"
+        );
         board.prune_terminal(0);
-        assert_eq!(board.rows().len(), 2, "recién terminada, todavía se ve");
+        assert_eq!(board.rows().len(), 2, "just finished, still visible");
 
         board.prune_terminal(9_999);
-        assert_eq!(board.rows().len(), 2, "justo por debajo del TTL");
+        assert_eq!(board.rows().len(), 2, "just under the TTL");
 
         board.prune_terminal(10_000);
-        assert_eq!(board.rows().len(), 1, "la terminada se fue");
-        assert!(board.has_active(), "la que quedó es la viva");
+        assert_eq!(board.rows().len(), 1, "the finished one is gone");
+        assert!(board.has_active(), "the one left is the live one");
     }
 
-    /// El sello es el del PRIMER pase que la ve terminal, no el del último:
-    /// si se refrescara en cada pintada, una fila terminada no caducaría
-    /// nunca mientras la pantalla siguiera pintándose.
+    /// The stamp is the FIRST pass that sees it as terminal, not the last
+    /// one: if it were refreshed on every paint, a finished row would never
+    /// expire while the screen kept repainting.
     #[test]
-    fn el_sello_no_se_refresca_en_cada_pase() {
+    fn the_stamp_is_not_refreshed_on_every_pass() {
         let mut board = TaskBoard::default();
         board.push(&task_ref(1, TaskState::Completed), None);
         board.tick(0);
@@ -447,14 +452,17 @@ mod has_active_tests {
         }
         assert_eq!(board.rows().len(), 1);
         board.prune_terminal(10_000);
-        assert!(board.rows().is_empty(), "caducó desde que se vio terminal");
+        assert!(
+            board.rows().is_empty(),
+            "expired since it was seen as terminal"
+        );
     }
 
-    /// El operando es PEGAJOSO: `current` viene vacío en el snapshot terminal
-    /// de casi todas las tasks, y una fila que dice «copy ✓» sin decir sobre
-    /// qué no informa de nada.
+    /// The operand is STICKY: `current` comes back empty in the terminal
+    /// snapshot for almost every task, and a row that says «copy ✓» without
+    /// saying what it acted on tells you nothing.
     #[test]
-    fn el_operando_sobrevive_al_snapshot_terminal() {
+    fn the_operand_survives_the_terminal_snapshot() {
         let progress = |state: TaskState, current: Option<VPath>| TaskProgress {
             task_id: TaskId::new(7),
             kind: TaskKind::Copy,
@@ -484,7 +492,7 @@ mod has_active_tests {
         assert_eq!(
             board.rows()[0].operand.as_ref().map(VPath::to_wire),
             Some("mem:///a".to_owned()),
-            "el terminal llegó sin `current` y la fila sigue sabiendo sobre qué actuó"
+            "the terminal one arrived without `current` and the row still knows what it acted on"
         );
     }
 }

@@ -1,90 +1,93 @@
-// `norte:hook` (H1, ADR 0100): un plugin OBSERVA las mutaciones que el
-// journal ya registró. Nada de lo que devuelve cambia un fichero: el único
-// efecto es `notify`, una frase para el humano que el host enmascara, acota y
-// atribuye al plugin. Un hook que atrapa, tarda o se pasa de presupuesto no
-// hace fallar ninguna operación: ya ocurrió cuando el hook la ve.
+// `norte:hook` (H1, ADR 0100): a plugin OBSERVES the mutations the journal
+// already recorded. Nothing it returns changes a file: the only effect is
+// `notify`, a sentence for the human that the host masks, caps and
+// attributes to the plugin. A hook that traps, is slow or exceeds its
+// budget does not fail any operation: it already happened by the time the
+// hook sees it.
 //
-// Por qué solo `after-*`: un hook que pudiera vetar sería una segunda puerta
-// de policy, con motivos fuera del vocabulario que el humano aprueba y con un
-// fallo (trap, timeout) que habría que resolver como «sí» o como «no» — las
-// dos respuestas mal para algún plugin. Lo que decide si una mutación ocurre
-// es el policy engine, y sus veredictos son lo que la cadena de auditoría
-// atestigua. Ver ADR 0100.
+// Why only `after-*`: a hook that could veto would be a second policy
+// gate, with reasons outside the vocabulary the human approves and with a
+// failure (trap, timeout) that would have to be resolved as "yes" or as
+// "no" — both answers wrong for some plugin. What decides whether a
+// mutation happens is the policy engine, and its verdicts are what the
+// audit chain attests. See ADR 0100.
 //
-// Paquete propio, como `norte:renamer` (ADR 0041 decisión 4, ADR 0094): la
-// versión viaja en el nombre de cada interfaz y subir esto no puede invalidar
-// a los previewers de terceros. Empieza en 0.1.0 y sube por su cuenta.
+// Its own package, like `norte:renamer` (ADR 0041 decision 4, ADR 0094):
+// the version travels in the name of each interface and bumping this
+// must not invalidate third-party previewers. It starts at 0.1.0 and
+// bumps on its own.
 //
-// 0.1.0 → 0.2.0 (ADR 0101): `effect` gana `write-sidecar`. Un guest
-// compilado contra 0.1.0 se lista como desfasado hasta recompilar (ADR
-// 0094). 0.1.0 no llegó a ningún tercero.
+// 0.1.0 → 0.2.0 (ADR 0101): `effect` gains `write-sidecar`. A guest
+// compiled against 0.1.0 is listed as mismatched until recompiled (ADR
+// 0094). 0.1.0 never reached any third party.
 package norte:hook@0.2.0;
 
-/// Un observador de mutaciones. Recibe, en cada llamada, las entradas del
-/// journal que llegaron desde la anterior y que casan con los eventos de su
-/// manifiesto (`on = "after-renamed"`…), y devuelve los efectos que quiere.
+/// An observer of mutations. Receives, on each call, the journal entries
+/// that arrived since the previous one and that match the events in its
+/// manifest (`on = "after-renamed"`…), and returns the effects it wants.
 interface hook {
-    /// La operación registrada: el mismo vocabulario que la columna `op` del
-    /// journal. Cerrado; un plugin que no conozca uno lo ignora.
+    /// The recorded operation: the same vocabulary as the journal's `op`
+    /// column. Closed; a plugin that does not know one ignores it.
     enum op { created, removed, trashed, renamed, mode-changed }
 
-    /// Quién la causó. Un agente NO viene con su id de sesión: un hook sabe
-    /// que fue un agente, no cuál.
+    /// Who caused it. An agent does NOT come with its session id: a hook
+    /// knows it was an agent, not which one.
     enum actor-kind { user, agent, plugin }
 
-    /// La ubicación que el host abrió para el DIRECTORIO PADRE de `path`,
-    /// para un guest al que se le aprobó la capacidad `location`: el token
-    /// opaco con el que se lee (`norte:location`) y el `prefix` relativo a la
-    /// raíz abierta. `none` = no se le aprobó, o no se pudo abrir (una ruta
-    /// remota, una raíz protegida). Un guest que reciba `none` sigue
-    /// contestando con lo que el evento ya dice.
+    /// The location the host opened for `path`'s PARENT DIRECTORY, for a
+    /// guest approved for the `location` capability: the opaque token
+    /// used to read it (`norte:location`) and the `prefix` relative to
+    /// the opened root. `none` = it was not approved, or it could not be
+    /// opened (a remote path, a protected root). A guest that receives
+    /// `none` keeps answering with what the event already says.
     record location-ref {
         token: string,
         prefix: list<u8>,
     }
 
-    /// Una entrada del journal, ya durable.
+    /// A journal entry, already durable.
     record event {
-        /// El `seq` de la entrada: monótono, sirve para deduplicar.
+        /// The entry's `seq`: monotonic, useful for deduplication.
         seq: u64,
-        /// Milisegundos UTC del registro.
+        /// UTC milliseconds of the record.
         ts-ms: s64,
         op: op,
         actor: actor-kind,
-        /// El nodo afectado, en la FORMA DE CABLE del `VPath` (`file:///a/b`,
-        /// con percent-encoding): es texto por construcción, y lo que un
-        /// `renamed` deja aquí es el nombre NUEVO.
+        /// The affected node, in the `VPath`'s WIRE FORM (`file:///a/b`,
+        /// with percent-encoding): it is text by construction, and what a
+        /// `renamed` leaves here is the NEW name.
         path: string,
-        /// El otro extremo de un `renamed` (el nombre que HABÍA), en la misma
-        /// forma. Para `mode-changed` lleva el modo nuevo en decimal.
+        /// The other end of a `renamed` (the name it HAD), in the same
+        /// form. For `mode-changed` it carries the new mode in decimal.
         path-to: option<string>,
-        /// El último segmento de `path`, en BYTES crudos (regla 1): lo que se
-        /// le pasa a `stat` bajo `location` para mirar el resultado.
+        /// `path`'s last segment, in raw BYTES (rule 1): what gets passed
+        /// to `stat` under `location` to look at the result.
         name: list<u8>,
-        /// El lote al que pertenece la entrada (`fs.rename_batch`, un
-        /// `set_mode` recursivo), si formó parte de uno. Los eventos de un
-        /// mismo lote llegan juntos cuando caben en una llamada.
+        /// The batch the entry belongs to (`fs.rename_batch`, a recursive
+        /// `set_mode`), if it was part of one. Events from the same batch
+        /// arrive together when they fit in one call.
         batch: option<u64>,
         location: option<location-ref>,
     }
 
-    /// Qué hacer si el sidecar ya existe. `replace` no sobrescribe en sitio:
-    /// el host lleva el fichero que había a la papelera lógica y crea el
-    /// nuevo, así que el contenido anterior tiene vuelta atrás.
+    /// What to do if the sidecar already exists. `replace` does not
+    /// overwrite in place: the host sends the previous file to the
+    /// logical trash and creates the new one, so the earlier content has
+    /// an undo path.
     enum on-exists { refuse, replace }
 
-    /// Un fichero JUNTO a lo que cambió (ADR 0101): `name` es uno de los
-    /// nombres que el manifiesto declara en `fs-write = { sidecar = [...] }`
-    /// —el host rechaza cualquier otro— y se escribe en el directorio PADRE
-    /// del evento `seq` de esta misma llamada. El host lo escribe como actor
-    /// `plugin`, por el policy engine y por el journal; el guest nunca ve la
-    /// ruta. `content` como mucho 64 KiB, y como mucho cuatro sidecars por
-    /// llamada: pasarse de cualquiera de los dos rechaza la llamada ENTERA y
-    /// cuenta como un fallo para el fusible. Un nombre que no esté en el
-    /// manifiesto, o un `seq` que no sea de esta llamada, cuentan igual; un
-    /// directorio que el host no escribe —remoto, protegido, la casa, la
-    /// raíz— se descarta en silencio y no cuenta. Las filas que escribe un
-    /// plugin NO vuelven como eventos a ningún hook: un sidecar no dispara
+    /// A file ALONGSIDE what changed (ADR 0101): `name` is one of the
+    /// names the manifest declares in `fs-write = { sidecar = [...] }`
+    /// — the host rejects any other — and it is written in the PARENT
+    /// directory of this same call's `seq` event. The host writes it as
+    /// the `plugin` actor, through the policy engine and the journal; the
+    /// guest never sees the path. `content` at most 64 KiB, and at most
+    /// four sidecars per call: exceeding either rejects the WHOLE call
+    /// and counts as a failure for the fuse. A name not in the manifest,
+    /// or a `seq` not from this call, count the same; a directory the
+    /// host does not write to — remote, protected, home, the root — is
+    /// silently dropped and does not count. The rows a plugin writes
+    /// NEVER come back as events to any hook: a sidecar does not trigger
     /// hooks.
     record sidecar {
         seq: u64,
@@ -93,32 +96,34 @@ interface hook {
         if-exists: on-exists,
     }
 
-    /// Lo que un hook puede pedir: una frase para el humano, que el host
-    /// enmascara (controles, bidi) y acota antes de enseñarla, atribuida al
-    /// plugin; o un sidecar. Un efecto que la policy del humano deniega no
-    /// es un fallo del hook: se le dice al humano una vez y se sigue.
+    /// What a hook can ask for: a sentence for the human, which the host
+    /// masks (control characters, bidi) and caps before showing it,
+    /// attributed to the plugin; or a sidecar. An effect the human's
+    /// policy denies is not a hook failure: the human is told once and
+    /// things move on.
     variant effect {
         notify(string),
         write-sidecar(sidecar),
     }
 
-    /// Los eventos desde la última llamada, en orden de `seq`. `dropped` es
-    /// cuántos eventos se descartaron por cola llena desde la llamada
-    /// anterior: si no es cero, lo que hay en `events` NO es todo lo que
-    /// pasó, y una frase que cuente debe decirlo. Un `err` es una frase para
-    /// el registro del daemon; tres seguidos —o tres traps, o tres llamadas
-    /// fuera de presupuesto— apagan los hooks de este plugin hasta que se
-    /// desactive y se reactive.
+    /// The events since the last call, in `seq` order. `dropped` is how
+    /// many events were dropped for a full queue since the previous
+    /// call: if it is not zero, what is in `events` is NOT everything
+    /// that happened, and a sentence that counts must say so. An `err` is
+    /// a sentence for the daemon's log; three in a row — or three traps,
+    /// or three over-budget calls — turn off this plugin's hooks until it
+    /// is disabled and re-enabled.
     on-events: func(events: list<event>, dropped: u64) -> result<list<effect>, string>;
 }
 
-/// El world de un plugin `hook`: importa lo mismo que `norte-renamer` y
-/// exporta `hook`.
+/// The world of a `hook` plugin: imports the same as `norte-renamer` and
+/// exports `hook`.
 world norte-hook {
     import norte:host/host-log@0.1.0;
     import norte:host/host-config@0.1.0;
-    // Importado SIEMPRE, como en `norte-columns`: el linker lo ofrece a todo
-    // guest y lo que decide si SIRVE algo es la capacidad aprobada.
+    // ALWAYS imported, as in `norte-columns`: the linker offers it to
+    // every guest and what decides whether it SERVES anything is the
+    // approved capability.
     import norte:location/location@0.2.0;
     export hook;
 }

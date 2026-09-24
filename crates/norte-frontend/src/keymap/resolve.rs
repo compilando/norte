@@ -88,46 +88,46 @@ impl Count {
     }
 }
 
-/// Resultado de empujar una tecla al [`Resolver`].
+/// Result of pushing a key into the [`Resolver`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Resolution {
-    /// Secuencia completa: ejecutar este comando, `count` veces.
+    /// Complete sequence: run this command, `count` times.
     Run {
-        /// El comando a ejecutar.
+        /// The command to run.
         command: String,
-        /// Qué significa para él el contador tecleado, si lo hubo.
+        /// What the typed count means for it, if there was one.
         count: Count,
     },
-    /// Prefijo válido de alguna secuencia: esperando (profundidad actual).
+    /// Valid prefix of some sequence: waiting (current depth).
     Pending(usize),
-    /// Se está tecleando un contador (valor actual). La status bar lo pinta:
-    /// un contador que no se ve es un contador que no se puede cancelar.
+    /// A count is being typed (current value). The status bar paints it: a
+    /// count that cannot be seen is a count that cannot be cancelled.
     Counting(u32),
-    /// La tecla SÍ está ligada, y lo que tiene ligado no puede ejecutarse
-    /// aquí. El frontend lo dice; jamás se queda sin hacer nada.
+    /// The key IS bound, and what it is bound to cannot run here. The
+    /// frontend says so; it never just does nothing.
     Unavailable {
-        /// El comando al que la tecla está ligada.
+        /// The command the key is bound to.
         command: String,
-        /// Por qué no puede ejecutarse.
+        /// Why it cannot run.
         why: Availability,
     },
-    /// Sin binding (o cancelación): estado limpio, tecla descartada.
+    /// No binding (or cancellation): clean state, key discarded.
     Reset,
 }
 
-/// Estado de resolución de UNA secuencia en curso. POSEE su keymap
-/// efectivo: el hot-reload (ADR 0007) construye uno nuevo y reemplaza el
-/// resolver entero.
+/// Resolution state for ONE sequence in progress. OWNS its effective
+/// keymap: hot-reload (ADR 0007) builds a new one and replaces the whole
+/// resolver.
 #[derive(Debug, Clone)]
 pub struct Resolver {
     eff: Effective,
     pending: Vec<Chord>,
-    /// El contador tecleado hasta ahora, si el preset habilita contadores.
+    /// The count typed so far, if the preset enables counts.
     count: Option<u32>,
 }
 
 impl Resolver {
-    /// Resolver limpio sobre un keymap efectivo.
+    /// Clean resolver over an effective keymap.
     #[must_use]
     pub fn new(eff: Effective) -> Self {
         Self {
@@ -137,14 +137,14 @@ impl Resolver {
         }
     }
 
-    /// La secuencia pendiente (para pintarla en la status bar).
+    /// The pending sequence (to paint it in the status bar).
     #[must_use]
     pub fn pending(&self) -> &[Chord] {
         &self.pending
     }
 
-    /// El contador tecleado hasta ahora (para la status bar). `None` cuando no
-    /// hay ningún dígito en vuelo.
+    /// The count typed so far (for the status bar). `None` when no digit is
+    /// in flight.
     ///
     /// ```
     /// use norte_frontend::keymap::{Effective, Resolver, Screen, parse_chord, parse_keymap};
@@ -159,7 +159,8 @@ impl Resolver {
     /// r.push(parse_chord("1").unwrap());
     /// r.push(parse_chord("2").unwrap());
     /// assert_eq!(r.count(), Some(12));
-    /// // Y se consume con el comando: no sobrevive a la pulsación.
+    /// // And it is consumed with the command: it does not survive the
+    /// // keystroke.
     /// r.push(parse_chord("j").unwrap());
     /// assert_eq!(r.count(), None);
     /// ```
@@ -168,48 +169,47 @@ impl Resolver {
         self.count
     }
 
-    /// El keymap efectivo que este resolver posee (G3c): la GUI lo necesita
-    /// para construir las filas de la paleta de comandos
-    /// (`palette::first_chord`) sin duplicar el `Effective` en un campo
-    /// aparte de `NorteGui` — el resolver ya es la única fuente de verdad
-    /// del keymap vigente (hot-reload lo reemplaza entero, ver el doc del
-    /// tipo).
+    /// The effective keymap this resolver owns (G3c): the GUI needs it to
+    /// build the command palette's rows (`palette::first_chord`) without
+    /// duplicating the `Effective` in a separate `NorteGui` field — the
+    /// resolver is already the sole source of truth for the current keymap
+    /// (hot-reload replaces it whole, see the type's doc).
     #[must_use]
     pub fn effective(&self) -> &Effective {
         &self.eff
     }
 
-    /// Rompe cualquier secuencia pendiente Y el contador en curso (una tecla
-    /// no modelada por el frontend equivale a un miss: cancela el multi-tecla
-    /// en curso, y un miss también limpia el contador — un número pegado a la
-    /// siguiente pulsación es el peor fallo que este mecanismo puede tener).
+    /// Breaks any pending sequence AND the count in progress (a key the
+    /// frontend does not model is equivalent to a miss: it cancels the
+    /// multi-key in progress, and a miss also clears the count — a number
+    /// stuck to the next keystroke is the worst failure this mechanism can
+    /// have).
     pub fn reset(&mut self) {
         self.pending.clear();
         self.count = None;
     }
 
-    /// Empuja una tecla. Con secuencia o contador pendiente, `Esc` SIEMPRE
-    /// cancela (jamás ejecuta un binding); sin nada pendiente, `Esc` es una
-    /// tecla más. Un dígito suelto se acumula en el contador cuando el preset
-    /// los habilita y no hay secuencia en vuelo — a mitad de secuencia, un
-    /// dígito es una tecla más.
+    /// Pushes a key. With a sequence or count pending, `Esc` ALWAYS
+    /// cancels (never runs a binding); with nothing pending, `Esc` is just
+    /// another key. A bare digit accumulates into the count when the
+    /// preset enables them and no sequence is in flight — mid-sequence, a
+    /// digit is just another key.
     pub fn push(&mut self, chord: Chord) -> Resolution {
         if chord.is_bare_esc() && (!self.pending.is_empty() || self.count.is_some()) {
             self.reset();
             return Resolution::Reset;
         }
-        // El último conjunto: el cero jamás ABRE un contador — `0` sigue
-        // siendo ligable, que es de lo que vive la tecla «primera columna» de
-        // vim. Acumula sin problema una vez el contador está abierto, así que
-        // `10` es diez.
+        // The last piece: zero never OPENS a count — `0` is still bindable,
+        // which is what vim's "first column" key lives on. It accumulates
+        // fine once the count is open, so `10` is ten.
         if self.eff.counts()
             && self.pending.is_empty()
             && let Some(d) = digit_of(chord)
             && (self.count.is_some() || d != 0)
         {
             let acc = self.count.unwrap_or(0);
-            // Topa en vez de desbordar: un quinto dígito se DESCARTA, nunca
-            // envuelve el acumulador a un número que nadie tecleó.
+            // Caps instead of overflowing: a fifth digit is DISCARDED,
+            // never wraps the accumulator into a number nobody typed.
             let next = if acc > MAX_COUNT / 10 {
                 acc
             } else {
@@ -225,10 +225,10 @@ impl Resolver {
                 self.pending.clear();
                 let count = match self.count.take() {
                     None => Count::None,
-                    // El CATÁLOGO es la autoridad sobre quién acepta un
-                    // contador. Un comando `lua:` no está en él, así que un
-                    // contador sobre uno es `Ignored` — honesto: no podemos
-                    // saber qué significaría.
+                    // The CATALOGUE is the authority on who accepts a
+                    // count. A `lua:` command is not in it, so a count on
+                    // one is `Ignored` — honest: there is no way to know
+                    // what it would mean.
                     Some(n) if super::catalogue::lookup(run).is_some_and(|d| d.counts) => {
                         Count::Repeat(n)
                     }
@@ -239,9 +239,9 @@ impl Resolver {
                     count,
                 }
             }
-            // K1 T4: la tecla está ligada pero esta build no puede correr lo
-            // que tiene ligado. Un `Reset` aquí sería indistinguible de una
-            // tecla sin ligar: exactamente el silencio que K1 elimina.
+            // K1 T4: the key is bound but this build cannot run what it is
+            // bound to. A `Reset` here would be indistinguishable from an
+            // unbound key: exactly the silence K1 eliminates.
             Lookup::Exact(run, why) => {
                 self.pending.clear();
                 self.count = None;

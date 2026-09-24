@@ -44,7 +44,7 @@ use std::ffi::OsStr;
 ///
 /// ```
 /// use std::ffi::OsStr;
-/// assert_eq!(norte_vfs::wtf8::os_to_bytes(OsStr::new("hola")), b"hola");
+/// assert_eq!(norte_vfs::wtf8::os_to_bytes(OsStr::new("hi")), b"hi");
 /// ```
 #[must_use]
 pub fn os_to_bytes(os: &OsStr) -> Vec<u8> {
@@ -256,45 +256,48 @@ mod tests {
     /// have, being portable).
     #[test]
     fn ascii_bytes_pass_through() {
-        assert_eq!(os_to_bytes(OsStr::new("USB de Nico")), b"USB de Nico");
+        assert_eq!(
+            os_to_bytes(OsStr::new("Nico's USB drive")),
+            b"Nico's USB drive"
+        );
     }
 
     #[test]
-    fn utf8_valido_es_wtf8() {
+    fn valid_utf8_is_wtf8() {
         for s in ["", "abc", "cañón", "テスト", "👨‍👩‍👧‍👦", "\u{10FFFF}"] {
             assert!(is_valid(s.as_bytes()), "{s:?}");
         }
     }
 
     #[test]
-    fn surrogates_sueltos_validos() {
-        assert!(is_valid(&[0xED, 0xA0, 0x80])); // lead D800 suelto
-        assert!(is_valid(&[0xED, 0xB0, 0x80])); // trail DC00 suelto
+    fn lone_surrogates_are_valid() {
+        assert!(is_valid(&[0xED, 0xA0, 0x80])); // lone lead D800
+        assert!(is_valid(&[0xED, 0xB0, 0x80])); // lone trail DC00
         assert!(is_valid(&[0xED, 0xB0, 0x80, 0xED, 0xA0, 0x80])); // trail+lead OK
         assert!(is_valid(&[0xED, 0xA0, 0x80, 0xED, 0xA0, 0x80])); // lead+lead OK
         assert!(is_valid(b"a\xED\xA0\x80b"));
     }
 
     #[test]
-    fn fronteras_ed_y_e0() {
-        assert!(is_valid(&[0xED, 0x9F, 0xBF])); // U+D7FF: UTF-8 legal
-        assert!(is_valid(&[0xEE, 0x80, 0x80])); // U+E000: tras surrogates
-        assert!(!is_valid(&[0xE0, 0x9F, 0x80])); // overlong de 3 bytes
+    fn ed_and_e0_boundaries() {
+        assert!(is_valid(&[0xED, 0x9F, 0xBF])); // U+D7FF: legal UTF-8
+        assert!(is_valid(&[0xEE, 0x80, 0x80])); // U+E000: past the surrogates
+        assert!(!is_valid(&[0xE0, 0x9F, 0x80])); // 3-byte overlong
     }
 
     #[test]
-    fn decode_produce_utf16_correcto() {
+    fn decode_produces_correct_utf16() {
         assert_eq!(decode_to_wide(b"ab").unwrap(), vec![0x61, 0x62]);
         // é U+00E9
         assert_eq!(decode_to_wide("é".as_bytes()).unwrap(), vec![0x00E9]);
-        // 👨 U+1F468 → par de surrogates
+        // 👨 U+1F468 → surrogate pair
         assert_eq!(
             decode_to_wide("👨".as_bytes()).unwrap(),
             vec![0xD83D, 0xDC68]
         );
-        // lead surrogate suelto queda como su unidad
+        // a lone lead surrogate stays as its own unit
         assert_eq!(decode_to_wide(&[0xED, 0xA0, 0x80]).unwrap(), vec![0xD800]);
-        // U+10FFFF → último par válido
+        // U+10FFFF → last valid pair
         assert_eq!(
             decode_to_wide("\u{10FFFF}".as_bytes()).unwrap(),
             vec![0xDBFF, 0xDFFF]
@@ -302,21 +305,21 @@ mod tests {
     }
 
     #[test]
-    fn par_cesu8_invalido() {
-        // lead + trail consecutivos: en WTF-8 canónico sería 4 bytes.
+    fn cesu8_pair_is_invalid() {
+        // consecutive lead + trail: in canonical WTF-8 this would be 4 bytes.
         assert!(!is_valid(&[0xED, 0xA0, 0x80, 0xED, 0xB0, 0x80]));
     }
 
     #[test]
-    fn basura_invalida() {
+    fn invalid_garbage() {
         for bad in [
             &[0xC0, 0xAF][..],       // overlong
-            &[0xE0, 0x80, 0x80][..], // overlong 3 bytes
+            &[0xE0, 0x80, 0x80][..], // 3-byte overlong
             &[0xF5, 0x80, 0x80, 0x80][..],
-            &[0x80][..],                   // continuación suelta
-            &[0xC2][..],                   // truncado
-            &[0xE9][..],                   // latin1 crudo
-            &[0xFF, 0xFE][..],             // BOM UTF-16
+            &[0x80][..],                   // lone continuation
+            &[0xC2][..],                   // truncated
+            &[0xE9][..],                   // raw latin1
+            &[0xFF, 0xFE][..],             // UTF-16 BOM
             &[0xF4, 0x90, 0x80, 0x80][..], // > U+10FFFF
         ] {
             assert!(!is_valid(bad), "{bad:02X?}");
@@ -331,7 +334,7 @@ mod tests {
     /// collapse into a pair — `basura_invalida`/`par_cesu8_invalido` above
     /// pin the decode side of that same distinction).
     #[test]
-    fn encode_es_el_inverso_exacto_de_decode() {
+    fn encode_is_the_exact_inverse_of_decode() {
         assert_eq!(encode_from_wide(&[0x61, 0x62]), b"ab");
         assert_eq!(encode_from_wide(&[0x00E9]), "é".as_bytes());
         assert_eq!(encode_from_wide(&[0xD83D, 0xDC68]), "👨".as_bytes());
@@ -352,7 +355,7 @@ mod tests {
     /// Latin-1 byte, or an overlong encoding) are skipped: there is nothing
     /// for `decode_to_wide` to hand `encode_from_wide` to round-trip.
     #[test]
-    fn encode_redondea_el_corpus_hostil_completo() {
+    fn encode_round_trips_the_entire_hostile_corpus() {
         for fixture in norte_testkit::corpus::hostile_names() {
             let Some(wide) = decode_to_wide(&fixture.bytes) else {
                 continue;

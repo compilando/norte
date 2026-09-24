@@ -1,14 +1,14 @@
-//! Guest WASM de ejemplo (M4-P2, P2 Task 3): un command mínimo.
+//! Example WASM guest (M4-P2, P2 Task 3): a minimal command.
 //!
-//! Exporta AMBAS interfaces del world `norte-plugin` (el world las exige las
-//! dos): `command::run` despacha por `id` (`echo`/`shout`/`read`/`config`) y
-//! registra una línea vía `host-log::log`; el comando `read` llama a
-//! `host-log::read-scoped` para demostrar que el enforcement de `fs-read` vive
-//! en el HOST (ADR 0022 D4); el comando `config` llama a `host-config::get`
-//! para demostrar la entrega de `[config]` (P2) — `arg` es la CLAVE, la
-//! salida es el valor resuelto (default u override) tal cual lo ve el guest.
-//! `previewer::render` responde "no soportado" porque este guest es solo de
-//! categoría command.
+//! Exports BOTH interfaces of the `norte-plugin` world (the world requires
+//! both): `command::run` dispatches by `id` (`echo`/`shout`/`read`/`config`)
+//! and logs a line via `host-log::log`; the `read` command calls
+//! `host-log::read-scoped` to demonstrate that `fs-read` enforcement lives
+//! on the HOST (ADR 0022 D4); the `config` command calls `host-config::get`
+//! to demonstrate `[config]`'s delivery (P2) — `arg` is the KEY, the
+//! output is the resolved value (default or override) exactly as the guest
+//! sees it. `previewer::render` responds "not supported" because this guest
+//! is command-category only.
 #![no_std]
 
 extern crate alloc;
@@ -19,9 +19,9 @@ use alloc::string::{String, ToString};
 wit_bindgen::generate!({
     world: "norte-plugin",
     path: "wit",
-    // `host-log`/`host-config` viven en OTRO paquete desde la partición
-    // (ADR 0041 decisión 4); wit-bindgen exige decidir explícitamente qué
-    // hacer con los imports de fuera del paquete del world.
+    // `host-log`/`host-config` live in ANOTHER package since the split
+    // (ADR 0041 decision 4); wit-bindgen requires explicitly deciding what
+    // to do with imports from outside the world's package.
     generate_all,
 });
 
@@ -38,41 +38,43 @@ impl CommandGuest for Demo {
             "echo" => Ok(arg),
             "shout" => Ok(arg.to_uppercase()),
             "read" => {
-                // El guest SIEMPRE intenta leer; el HOST cierra la puerta si
-                // `fs-read` no se declaró (enforcement host-side).
+                // The guest ALWAYS tries to read; the HOST closes the gate
+                // if `fs-read` was not declared (host-side enforcement).
                 let bytes = host_log::read_scoped("demo")?;
                 Ok(String::from_utf8_lossy(&bytes).into_owned())
             }
             "config" => {
-                // P2 Task 3: `arg` es la CLAVE de `[config]`; el host YA
-                // resolvió defaults+overrides antes de instanciar (Task 2),
-                // el guest solo hace eco — demuestra la entrega end-to-end.
-                host_config::get(&arg).ok_or_else(|| format!("clave de config desconocida: {arg}"))
+                // P2 Task 3: `arg` is the `[config]` KEY; the host has
+                // ALREADY resolved defaults+overrides before instantiating
+                // (Task 2), the guest just echoes it — demonstrates the
+                // end-to-end delivery.
+                host_config::get(&arg).ok_or_else(|| format!("unknown config key: {arg}"))
             }
-            // Bucle infinito a propósito: el HOST lo corta por deadline de
-            // época (regla dura 3). Sin el enforcement, colgaría el hilo host.
+            // Infinite loop on purpose: the HOST cuts it off by epoch
+            // deadline (hard rule 3). Without enforcement, it would hang
+            // the host thread.
             "spin" =>
             {
                 #[allow(clippy::empty_loop)]
                 loop {}
             }
-            other => Err(format!("comando desconocido: {other}")),
+            other => Err(format!("unknown command: {other}")),
         }
     }
 }
 
 impl PreviewerGuest for Demo {
     fn render(_input: PreviewInput) -> Result<String, String> {
-        Err("command-demo no aporta previews".to_string())
+        Err("command-demo does not provide previews".to_string())
     }
 
-    // ADR 0037 (WIT 0.6.0): `render-styled` es un export REQUERIDO de
-    // `previewer` — este guest es solo-`command`, así que responde el mismo
-    // "no soportado" que `render`.
+    // ADR 0037 (WIT 0.6.0): `render-styled` is a REQUIRED export of
+    // `previewer` — this guest is `command`-only, so it responds with the
+    // same "not supported" as `render`.
     fn render_styled(
         _input: PreviewInput,
     ) -> Result<alloc::vec::Vec<alloc::vec::Vec<Span>>, String> {
-        Err("command-demo no aporta previews".to_string())
+        Err("command-demo does not provide previews".to_string())
     }
 }
 

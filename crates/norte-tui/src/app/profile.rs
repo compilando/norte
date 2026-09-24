@@ -81,7 +81,7 @@ mod tests {
     /// same shape D10 fixed for shortcuts, and that the settings didn't
     /// have.
     #[test]
-    fn con_perfil_activo_los_ajustes_se_escriben_en_el_perfil() {
+    fn with_an_active_profile_settings_are_written_to_the_profile() {
         let mut app = super::super::App::new(
             crate::app::Pane::new(
                 norte_proto::VPath::parse("file:///x").expect("wire"),
@@ -103,7 +103,7 @@ mod tests {
 
     /// And with no profile, wherever it always goes.
     #[test]
-    fn sin_perfil_los_ajustes_van_a_la_capa_del_usuario() {
+    fn with_no_profile_settings_go_to_the_user_layer() {
         let app = super::super::App::new(
             crate::app::Pane::new(
                 norte_proto::VPath::parse("file:///x").expect("wire"),
@@ -120,7 +120,7 @@ mod tests {
     /// Changing the language gets ANNOUNCED; changing the theme doesn't,
     /// because the theme DOES apply hot.
     #[test]
-    fn solo_el_idioma_se_anuncia() {
+    fn only_the_language_gets_announced() {
         let base = norte_config::load(&norte_config::Layers { dirs: Vec::new() }).expect("empty");
         let mut other = base.clone();
         other.ui_theme = Some("nord".to_owned());
@@ -143,7 +143,7 @@ mod tests {
     /// adding it, and it's the only way for the line the profile switch
     /// tells the reader to stay true a year from now.
     #[test]
-    fn todo_campo_de_common_config_esta_clasificado() {
+    fn every_common_config_field_is_classified() {
         let c = norte_config::load(&norte_config::Layers { dirs: Vec::new() }).expect("empty");
         let norte_config::CommonConfig {
             // — Apply hot: `reload_config` (step 2 of the change).

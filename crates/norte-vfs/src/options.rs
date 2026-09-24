@@ -1,13 +1,13 @@
-//! Opciones de listado/stat ([`ListOptions`]) y la petición saneada de
-//! atributos ([`AttrRequest`]) que viaja con ellas (#108 bloque 2, ADR 0039).
+//! Listing/stat options ([`ListOptions`]) and the sanitized attribute
+//! request ([`AttrRequest`]) that travels with them (#108 block 2, ADR 0039).
 
 use norte_proto::ATTRS_MAX_REQUEST;
 
-/// Ids de atributos solicitados, saneados: todos válidos según
-/// [`norte_proto::is_valid_attr_id`], sin duplicados (el primero gana) y a lo
-/// sumo [`ATTRS_MAX_REQUEST`]. Este tipo FILTRA — rechazar una petición
-/// malformada con `-32602` es trabajo del daemon (y de la CLI antes de
-/// llamar al backend embebido), *antes* de construir uno.
+/// Requested attribute ids, sanitized: all valid per
+/// [`norte_proto::is_valid_attr_id`], no duplicates (the first wins) and
+/// at most [`ATTRS_MAX_REQUEST`]. This type FILTERS — rejecting a
+/// malformed request with `-32602` is the daemon's job (and the CLI's,
+/// before calling the embedded backend), *before* building one.
 ///
 /// ```
 /// use norte_vfs::AttrRequest;
@@ -22,8 +22,8 @@ use norte_proto::ATTRS_MAX_REQUEST;
 pub struct AttrRequest(Vec<String>);
 
 impl AttrRequest {
-    /// Construye filtrando: id inválido fuera, duplicado fuera (el primero
-    /// gana), truncado a [`ATTRS_MAX_REQUEST`].
+    /// Builds by filtering: invalid id out, duplicate out (the first
+    /// wins), truncated to [`ATTRS_MAX_REQUEST`].
     #[must_use]
     pub fn sanitized<I: IntoIterator<Item = String>>(ids: I) -> Self {
         let mut out: Vec<String> = Vec::new();
@@ -38,29 +38,30 @@ impl AttrRequest {
         Self(out)
     }
 
-    /// Sin atributos pedidos: el provider debe tomar su camino rápido pelado.
+    /// No attributes requested: the provider must take its bare fast path.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
 
-    /// ¿Está pedido `id`? Los providers condicionan cada materialización aquí.
+    /// Is `id` requested? Providers gate every materialization on this.
     #[must_use]
     pub fn wants(&self, id: &str) -> bool {
         self.0.iter().any(|have| have == id)
     }
 
-    /// Ids pedidos, en orden de petición.
+    /// Requested ids, in request order.
     pub fn iter(&self) -> impl Iterator<Item = &str> {
         self.0.iter().map(String::as_str)
     }
 
-    /// Cinturón de emisión (ADR 0039 §5), compartido por el daemon y el
-    /// backend embebido: retiene en `entry.attrs` solo ids PEDIDOS con valor
-    /// conforme — `Text`/`Bytes` dentro de tope (bytes) y jamás
-    /// [`AttrValue::Unknown`](norte_proto::AttrValue::Unknown) (un daemon
-    /// conforme no lo emite, ADR 0039 §3). Un provider con bug pierde la
-    /// celda, jamás rompe la página; nada se trunca en silencio.
+    /// Emission belt (ADR 0039 §5), shared by the daemon and the embedded
+    /// backend: keeps in `entry.attrs` only REQUESTED ids with a
+    /// conforming value — `Text`/`Bytes` within the byte ceiling and never
+    /// [`AttrValue::Unknown`](norte_proto::AttrValue::Unknown) (a
+    /// conforming daemon never emits it, ADR 0039 §3). A buggy provider
+    /// loses the cell, never breaks the page; nothing is silently
+    /// truncated.
     ///
     /// ```
     /// use norte_proto::{AttrValue, Entry, EntryKind, VPath};
@@ -69,8 +70,8 @@ impl AttrRequest {
     /// let mut e = Entry {
     ///     attrs: [
     ///         ("a.ok".to_owned(), AttrValue::Uint(1)),
-    ///         ("a.nope".to_owned(), AttrValue::Uint(2)), // no pedido
-    ///         ("a.unk".to_owned(), AttrValue::Unknown),  // jamás se emite
+    ///         ("a.nope".to_owned(), AttrValue::Uint(2)), // not requested
+    ///         ("a.unk".to_owned(), AttrValue::Unknown),  // never emitted
     ///     ]
     ///     .into(),
     ///     path: VPath::parse("mem:///f").unwrap(),
@@ -95,9 +96,9 @@ impl AttrRequest {
     }
 }
 
-/// Opciones de [`Provider::list_with`](crate::Provider::list_with) y
-/// [`Provider::stat_with`](crate::Provider::stat_with). Struct para que
-/// futuras opciones de listado no vuelvan a agitar todas las firmas.
+/// Options for [`Provider::list_with`](crate::Provider::list_with) and
+/// [`Provider::stat_with`](crate::Provider::stat_with). A struct so future
+/// listing options don't shake up every signature again.
 ///
 /// ```
 /// use norte_vfs::ListOptions;
@@ -105,7 +106,7 @@ impl AttrRequest {
 /// ```
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ListOptions {
-    /// Atributos a materializar por entrada. Vacío = entradas peladas.
+    /// Attributes to materialize per entry. Empty = bare entries.
     pub attrs: AttrRequest,
 }
 
@@ -114,20 +115,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn sanitized_filtra_invalidos_dedup_primero_gana_y_trunca() {
+    fn sanitized_filters_invalid_dedups_first_wins_and_truncates() {
         let ids = vec![
             "posix.mode".to_owned(),
-            "MAYUS.no".to_owned(),   // inválido: mayúsculas
-            "sindot".to_owned(),     // inválido: sin punto
-            "posix.mode".to_owned(), // duplicado
+            "UPPER.no".to_owned(),   // invalid: uppercase
+            "nodot".to_owned(),      // invalid: no dot
+            "posix.mode".to_owned(), // duplicate
             "s3.etag".to_owned(),
         ];
         let req = AttrRequest::sanitized(ids);
         assert_eq!(req.iter().collect::<Vec<_>>(), ["posix.mode", "s3.etag"]);
         assert!(req.wants("posix.mode"));
-        assert!(!req.wants("mayus.no"));
+        assert!(!req.wants("upper.no"));
 
-        // Truncado al tope del wire: 20 ids válidos → 16.
+        // Truncated to the wire ceiling: 20 valid ids → 16.
         let many = (0..20).map(|i| format!("a.b{i}"));
         assert_eq!(
             AttrRequest::sanitized(many).iter().count(),
@@ -136,7 +137,7 @@ mod tests {
     }
 
     #[test]
-    fn default_es_vacio_y_list_options_lo_envuelve() {
+    fn default_is_empty_and_list_options_wraps_it() {
         assert!(AttrRequest::default().is_empty());
         assert!(ListOptions::default().attrs.is_empty());
     }

@@ -1547,7 +1547,7 @@ impl HostBackend for Falso {
         &self,
         _dir: VPath,
     ) -> BoxFuture<'static, Result<norte_proto::AttrCatalog, Error>> {
-        let c = self.catalogo.lock().expect("catálogo").clone();
+        let c = self.catalogo.lock().expect("catalog").clone();
         Box::pin(async move { Ok(c) })
     }
 
@@ -1779,10 +1779,10 @@ impl HostBackend for Falso {
     ) -> BoxFuture<'static, Result<Vec<norte_proto::methods::SemanticHit>, Error>> {
         self.semanticas_pedidas
             .lock()
-            .expect("semánticas")
+            .expect("semantics")
             .push((query, k));
         self.latido();
-        let hits = self.semanticos.lock().expect("semánticos").clone();
+        let hits = self.semanticos.lock().expect("semantics").clone();
         Box::pin(async move { hits.ok_or(Error::NotFound) })
     }
 
@@ -2141,7 +2141,7 @@ impl HostBackend for Falso {
     fn session_get(
         &self,
     ) -> BoxFuture<'static, Result<(norte_proto::methods::Session, bool), Error>> {
-        let (sesion, duena) = self.sesion.lock().expect("sesión").clone();
+        let (sesion, duena) = self.sesion.lock().expect("session").clone();
         // With no session set — revision 0, what `Default` gives — this
         // window owns it, like on a fresh install: the daemon answers
         // `owner: true` to the first connection even with nothing saved. A

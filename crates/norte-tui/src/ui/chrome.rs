@@ -556,12 +556,12 @@ pub fn panel_zones(app: &App, area: Rect) -> Vec<PanelZone> {
 /// Paints the panel groups' tab strips (ADR 0134): the one in front with
 /// the title style and underlined, the others dimmed.
 pub(crate) fn draw_tiras_de_paneles(frame: &mut Frame<'_>, app: &App) {
-    for (row, tabs) in crate::ui::geometry::tiras_de_paneles(app, frame.area()) {
+    for (row, tabs) in crate::ui::geometry::panel_tab_strips(app, frame.area()) {
         clear_themed(frame, row, &app.theme);
         let spans: Vec<ratatui::text::Span<'static>> = tabs
             .into_iter()
             .map(|p| {
-                let style = if p.activa {
+                let style = if p.active {
                     app.theme
                         .role(Role::Title)
                         .add_modifier(ratatui::style::Modifier::UNDERLINED)
@@ -570,7 +570,7 @@ pub(crate) fn draw_tiras_de_paneles(frame: &mut Frame<'_>, app: &App) {
                         .role(Role::Regular)
                         .add_modifier(ratatui::style::Modifier::DIM)
                 };
-                ratatui::text::Span::styled(p.texto, style)
+                ratatui::text::Span::styled(p.text, style)
             })
             .collect();
         frame.render_widget(Paragraph::new(ratatui::text::Line::from(spans)), row);
@@ -586,8 +586,8 @@ fn hidden_tab_zones(app: &App, area: Rect) -> Vec<PanelZone> {
     }
     let buttons = panel_buttons(app, area);
     let mut out = Vec::new();
-    for (row, tabs) in crate::ui::geometry::tiras_de_paneles(app, area) {
-        for p in tabs.into_iter().filter(|p| !p.activa) {
+    for (row, tabs) in crate::ui::geometry::panel_tab_strips(app, area) {
+        for p in tabs.into_iter().filter(|p| !p.active) {
             let Some(kind) = app.layout.kind_of(p.slot) else {
                 continue;
             };

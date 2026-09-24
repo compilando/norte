@@ -912,7 +912,7 @@ async fn the_session_places_the_slots() {
     let mut fake = Falso::default();
     fake.pon("mem:///casa", vec![(b"a".to_vec(), false)]);
     fake.pon("mem:///casa/docs", vec![(b"a.md".to_vec(), false)]);
-    *fake.sesion.lock().expect("sesión") = (sesion_guardada(1, 7, 1, "mem:///casa/docs"), true);
+    *fake.sesion.lock().expect("session") = (sesion_guardada(1, 7, 1, "mem:///casa/docs"), true);
     let (_h, snap) = host_arbol(Arc::new(fake)).await;
     assert!(
         listado(&snap).path_display.ends_with("/casa/docs"),
@@ -944,7 +944,7 @@ async fn the_session_returns_the_cursor() {
         serde_json::from_value(session.body.clone()).expect("body");
     body.slots.get_mut(&1).expect("slot").cursor = 2;
     session.body = serde_json::to_value(&body).expect("json");
-    *fake.sesion.lock().expect("sesión") = (session, true);
+    *fake.sesion.lock().expect("session") = (session, true);
     let (h, _snap) = host_arbol(Arc::new(fake)).await;
     let mut sub = h.subscribe();
     h.dispatch(UiAction::Resync).await.expect("host alive");
@@ -990,7 +990,7 @@ async fn with_a_typed_dir_the_saved_cursor_does_not_apply() {
         serde_json::from_value(session.body.clone()).expect("body");
     body.slots.get_mut(&1).expect("slot").cursor = 2;
     session.body = serde_json::to_value(&body).expect("json");
-    *fake.sesion.lock().expect("sesión") = (session, true);
+    *fake.sesion.lock().expect("session") = (session, true);
     let (h, _snap) = Box::pin(UiHost::start(UiHostOptions {
         backend: Arc::new(fake),
         initial_dir: VPath::parse("mem:///casa").expect("vpath"),
@@ -1083,7 +1083,7 @@ async fn profile_start_seeds_a_slot_with_no_session() {
     fake.pon("mem:///casa", vec![(b"a".to_vec(), false)]);
     fake.pon("mem:///casa/fotos", vec![(b"gato.png".to_vec(), false)]);
     // A readable and EMPTY session: nobody has saved slot 1 yet.
-    *fake.sesion.lock().expect("sesión") = (
+    *fake.sesion.lock().expect("session") = (
         norte_proto::methods::Session {
             version: 1,
             revision: 7,
@@ -1112,7 +1112,7 @@ async fn the_session_beats_profile_start() {
     fake.pon("mem:///casa", vec![(b"a".to_vec(), false)]);
     fake.pon("mem:///casa/docs", vec![(b"a.md".to_vec(), false)]);
     fake.pon("mem:///casa/fotos", vec![(b"gato.png".to_vec(), false)]);
-    *fake.sesion.lock().expect("sesión") = (sesion_guardada(1, 7, 1, "mem:///casa/docs"), true);
+    *fake.sesion.lock().expect("session") = (sesion_guardada(1, 7, 1, "mem:///casa/docs"), true);
     let (_h, snap) = host_con_start(Arc::new(fake), &[(1, "mem:///casa/fotos")]).await;
     assert!(
         listado(&snap).path_display.ends_with("/casa/docs"),
@@ -1137,7 +1137,7 @@ async fn the_command_lines_dir_beats_the_session() {
     let mut fake = Falso::default();
     fake.pon("mem:///casa", vec![(b"a".to_vec(), false)]);
     fake.pon("mem:///casa/docs", vec![(b"a.md".to_vec(), false)]);
-    *fake.sesion.lock().expect("sesión") = (sesion_guardada(1, 7, 1, "mem:///casa/docs"), true);
+    *fake.sesion.lock().expect("session") = (sesion_guardada(1, 7, 1, "mem:///casa/docs"), true);
     let (_h, snap) = UiHost::start(UiHostOptions {
         backend: Arc::new(fake),
         // What the human typed, which is NOT where the session left it.
@@ -1174,7 +1174,7 @@ async fn with_no_argument_the_session_still_rules() {
     let mut fake = Falso::default();
     fake.pon("mem:///casa", vec![(b"a".to_vec(), false)]);
     fake.pon("mem:///casa/docs", vec![(b"a.md".to_vec(), false)]);
-    *fake.sesion.lock().expect("sesión") = (sesion_guardada(1, 7, 1, "mem:///casa/docs"), true);
+    *fake.sesion.lock().expect("session") = (sesion_guardada(1, 7, 1, "mem:///casa/docs"), true);
     let (_h, snap) = host_arbol(Arc::new(fake)).await;
     assert!(
         listado(&snap).path_display.ends_with("/casa/docs"),
@@ -1190,7 +1190,7 @@ async fn with_no_argument_the_session_still_rules() {
 async fn a_session_from_the_future_is_neither_applied_nor_overwritten() {
     let mut fake = Falso::default();
     fake.pon("mem:///casa", vec![(b"a".to_vec(), false)]);
-    *fake.sesion.lock().expect("sesión") = (
+    *fake.sesion.lock().expect("session") = (
         sesion_guardada(
             norte_frontend::session::SCHEMA_VERSION + 1,
             7,
@@ -1218,7 +1218,7 @@ async fn a_session_from_the_future_is_neither_applied_nor_overwritten() {
 async fn a_detached_window_does_not_write() {
     let mut fake = Falso::default();
     fake.pon("mem:///casa", vec![(b"a".to_vec(), false)]);
-    *fake.sesion.lock().expect("sesión") = (sesion_guardada(1, 7, 1, "mem:///casa"), false);
+    *fake.sesion.lock().expect("session") = (sesion_guardada(1, 7, 1, "mem:///casa"), false);
     let backend = Arc::new(fake);
     let (h, snap) = host_arbol(Arc::clone(&backend)).await;
     // And it SAYS so from the first frame, with the same indicator as the
@@ -1243,7 +1243,7 @@ async fn a_detached_window_does_not_write() {
 async fn the_owner_carries_no_session_indicator() {
     let mut fake = Falso::default();
     fake.pon("mem:///casa", vec![(b"a".to_vec(), false)]);
-    *fake.sesion.lock().expect("sesión") = (sesion_guardada(1, 7, 1, "mem:///casa"), true);
+    *fake.sesion.lock().expect("session") = (sesion_guardada(1, 7, 1, "mem:///casa"), true);
     let (_h, snap) = host_arbol(Arc::new(fake)).await;
     let indicator = norte_i18n::t_in(norte_i18n::Lang::Es, "status-session-detached");
     assert!(
@@ -1263,7 +1263,7 @@ async fn the_owner_dumps_on_close_and_with_no_marks() {
         vec![(b"docs".to_vec(), true), (b"a".to_vec(), false)],
     );
     fake.pon("mem:///casa/docs", vec![(b"a.md".to_vec(), false)]);
-    *fake.sesion.lock().expect("sesión") = (sesion_guardada(1, 7, 1, "mem:///casa"), true);
+    *fake.sesion.lock().expect("session") = (sesion_guardada(1, 7, 1, "mem:///casa"), true);
     let backend = Arc::new(fake);
     let (h, snap) = host_arbol(Arc::clone(&backend)).await;
 
@@ -1368,7 +1368,7 @@ async fn closing_the_window_does_not_touch_the_tuis_layout_or_slots() {
 
     let mut fake = Falso::default();
     fake.pon("mem:///casa", vec![(b"a".to_vec(), false)]);
-    *fake.sesion.lock().expect("sesión") = (
+    *fake.sesion.lock().expect("session") = (
         norte_proto::methods::Session {
             version: norte_frontend::session::SCHEMA_VERSION,
             revision: 7,
@@ -1421,7 +1421,7 @@ async fn closing_the_window_does_not_touch_the_tuis_layout_or_slots() {
 async fn a_conflict_overwrites_nobody_and_says_so() {
     let mut fake = Falso::default();
     fake.pon("mem:///casa", vec![(b"a".to_vec(), false)]);
-    *fake.sesion.lock().expect("sesión") = (sesion_guardada(1, 7, 1, "mem:///otro"), true);
+    *fake.sesion.lock().expect("session") = (sesion_guardada(1, 7, 1, "mem:///otro"), true);
     fake.conflicto = true;
     let backend = Arc::new(fake);
     let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
@@ -1454,7 +1454,7 @@ async fn a_body_that_does_not_fit_gets_degraded_and_retried() {
         s.back = vec![VPath::parse("mem:///casa/atras").expect("vpath")];
     }
     saved.body = serde_json::to_value(&body).expect("json");
-    *fake.sesion.lock().expect("sesión") = (saved, true);
+    *fake.sesion.lock().expect("session") = (saved, true);
     // The first one does not fit; the second does.
     *fake.rechazos_por_tamano.lock().expect("rechazos") = 1;
     let backend = Arc::new(fake);
@@ -1498,7 +1498,7 @@ async fn a_body_that_does_not_fit_even_degraded_says_so() {
         s.back = vec![VPath::parse("mem:///casa/atras").expect("vpath")];
     }
     saved.body = serde_json::to_value(&body).expect("json");
-    *fake.sesion.lock().expect("sesión") = (saved, true);
+    *fake.sesion.lock().expect("session") = (saved, true);
     *fake.rechazos_por_tamano.lock().expect("rechazos") = 5;
     let backend = Arc::new(fake);
 
@@ -1521,7 +1521,7 @@ fn falso_con_sesion(saved: norte_proto::methods::Session, owner: bool) -> Falso 
         "mem:///casa",
         vec![(b"docs".to_vec(), true), (b"a".to_vec(), false)],
     );
-    *fake.sesion.lock().expect("sesión") = (saved, owner);
+    *fake.sesion.lock().expect("session") = (saved, owner);
     fake
 }
 
@@ -2635,7 +2635,7 @@ async fn any_answer_other_than_approve_denies() {
 #[tokio::test]
 async fn the_catalogue_gives_meaning_to_an_attr() {
     let fake = arbol_como_falso();
-    *fake.catalogo.lock().expect("catálogo") =
+    *fake.catalogo.lock().expect("catalog") =
         norte_proto::AttrCatalog::new(vec![norte_proto::attrs::AttrInfo {
             id: "posix.mode".to_owned(),
             label: "modo".to_owned(),

@@ -15,7 +15,7 @@
 /// A leading dot is NOT an extension (`.bashrc` has none), which is the rule
 /// every file manager uses and the one a human expects to see.
 #[must_use]
-pub fn carpeta_de(name: &str) -> String {
+pub fn folder_for(name: &str) -> String {
     match name.rsplit_once('.') {
         // `rsplit_once` on `.bashrc` gives `("", "bashrc")`: an empty stem
         // means the dot was leading, so there is no extension.
@@ -30,11 +30,11 @@ pub fn carpeta_de(name: &str) -> String {
 /// onto itself. Returning a no-op would make the plan look like it does
 /// something it does not.
 #[must_use]
-pub fn destino(name: &str) -> Option<String> {
+pub fn destination(name: &str) -> Option<String> {
     if name.is_empty() || name.contains('/') {
         return None;
     }
-    Some(format!("{}/{name}", carpeta_de(name)))
+    Some(format!("{}/{name}", folder_for(name)))
 }
 
 #[cfg(target_family = "wasm")]
@@ -78,32 +78,38 @@ mod tests {
     use super::*;
 
     #[test]
-    fn la_carpeta_es_la_extension_en_minusculas() {
-        assert_eq!(carpeta_de("foto.JPG"), "jpg");
-        assert_eq!(carpeta_de("a.tar.gz"), "gz");
+    fn the_folder_is_the_lowercased_extension() {
+        assert_eq!(folder_for("photo.JPG"), "jpg");
+        assert_eq!(folder_for("a.tar.gz"), "gz");
     }
 
-    /// Un punto inicial NO es una extensión: `.bashrc` no va a una carpeta
-    /// llamada `bashrc`.
+    /// A leading dot is NOT an extension: `.bashrc` does not go to a folder
+    /// called `bashrc`.
     #[test]
-    fn un_punto_inicial_no_es_extension() {
-        assert_eq!(carpeta_de(".bashrc"), "sin-extension");
-        assert_eq!(carpeta_de("LEEME"), "sin-extension");
-        assert_eq!(carpeta_de("acaba.en.punto."), "sin-extension");
+    fn a_leading_dot_is_not_an_extension() {
+        assert_eq!(folder_for(".bashrc"), "sin-extension");
+        assert_eq!(folder_for("README"), "sin-extension");
+        assert_eq!(folder_for("ends.in.dot."), "sin-extension");
     }
 
     #[test]
-    fn el_destino_cuelga_de_la_carpeta() {
-        assert_eq!(destino("factura.pdf").as_deref(), Some("pdf/factura.pdf"));
-        assert_eq!(destino("LEEME").as_deref(), Some("sin-extension/LEEME"));
+    fn the_destination_hangs_off_the_folder() {
+        assert_eq!(
+            destination("invoice.pdf").as_deref(),
+            Some("pdf/invoice.pdf")
+        );
+        assert_eq!(
+            destination("README").as_deref(),
+            Some("sin-extension/README")
+        );
     }
 
-    /// Un nombre con `/` no es un nombre, y no se propone nada para él: el
-    /// host lo rechazaría, y proponerlo sería ensuciar el plan con algo que
-    /// el lector va a ver desaparecer.
+    /// A name with `/` is not a name, and nothing is proposed for it: the
+    /// host would reject it, and proposing it would dirty the plan with
+    /// something the reader will see disappear.
     #[test]
-    fn un_nombre_con_barra_no_propone_nada() {
-        assert!(destino("a/b").is_none());
-        assert!(destino("").is_none());
+    fn a_name_with_a_slash_proposes_nothing() {
+        assert!(destination("a/b").is_none());
+        assert!(destination("").is_none());
     }
 }

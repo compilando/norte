@@ -1,9 +1,9 @@
-# Guest WASM de ejemplo (ADR 0037, G3 plan Task 2): un decorator mínimo que
-# demuestra la interfaz `decorator` end-to-end (world `norte-decorator`).
-# NO es miembro del workspace (ver `exclude` en el Cargo.toml raíz): compila a
-# wasm32-wasip2 con su propio lockfile y perfil.
-# Manifiesto AUTÓNOMO: empty `[workspace]` para que no herede el workspace del
-# host (compila a wasm32-wasip2 con su propio lockfile y perfil).
+# Example WASM guest (ADR 0037, G3 plan Task 2): a minimal decorator that
+# demonstrates the `decorator` interface end-to-end (world `norte-decorator`).
+# NOT a workspace member (see `exclude` in the root Cargo.toml): compiles to
+# wasm32-wasip2 with its own lockfile and profile.
+# STANDALONE manifest: empty `[workspace]` so it does not inherit the host's
+# workspace (compiles to wasm32-wasip2 with its own lockfile and profile).
 [workspace]
 
 [package]
@@ -16,8 +16,8 @@ publish = false
 crate-type = ["cdylib"]
 
 [dependencies]
-# wit-bindgen GUEST-side: genera los bindings desde el MISMO WIT que el host
-# (symlink `wit` -> ../../wit). Comparte tren de Component Model con wasmtime 46.
+# wit-bindgen GUEST-side: generates bindings from the SAME WIT as the host
+# (symlink `wit` -> ../../wit). Shares Component Model release train with wasmtime 46.
 wit-bindgen = "0.46"
 
 [profile.release]

@@ -208,9 +208,9 @@ mod tests {
     /// scheme and host got folded into the message and thrown away, so
     /// "which connection degraded?" had no answer. H3d needs it per pane.
     #[test]
-    fn la_degradacion_se_guarda_por_scheme() {
+    fn degraded_is_stored_per_scheme() {
         let mut app = app_dos_panes();
-        app.note_degraded(degradacion_de_test("sftp", "example.org"));
+        app.note_degraded(test_degraded("sftp", "example.org"));
         let d = app.degraded_for("sftp").expect("the degradation was kept");
         assert_eq!(
             d.host, "example.org",
@@ -227,7 +227,7 @@ mod tests {
     /// session to keep warning about, so a permanent indicator would never
     /// turn off.
     #[test]
-    fn un_fallo_de_conexion_dice_el_motivo_en_la_barra() {
+    fn connection_failure_states_the_reason_in_the_bar() {
         let mut app = app_dos_panes();
         app.note_connection_failed(&norte_proto::methods::ConnectionFailed {
             conn: Some("rosetta".to_owned()),
@@ -249,7 +249,7 @@ mod tests {
     /// ADR 0100: a hook's phrase reaches the status bar attributed to the
     /// plugin, and lights no persistent indicator.
     #[test]
-    fn el_aviso_de_un_hook_llega_a_la_barra_con_su_plugin_delante() {
+    fn hook_notice_reaches_the_bar_with_its_plugin_first() {
         let mut app = app_dos_panes();
         app.note_plugin_notice(&norte_proto::methods::PluginNotice {
             plugin_id: "org.norte.rename-log".to_owned(),
@@ -266,10 +266,10 @@ mod tests {
     /// used to win and the first vanished from the status bar without
     /// anything having resolved it.
     #[test]
-    fn dos_degradaciones_conviven() {
+    fn two_degradations_coexist() {
         let mut app = app_dos_panes();
-        app.note_degraded(degradacion_de_test("sftp", "a.org"));
-        app.note_degraded(degradacion_de_test("ftp", "b.org"));
+        app.note_degraded(test_degraded("sftp", "a.org"));
+        app.note_degraded(test_degraded("ftp", "b.org"));
         assert!(app.degraded_for("sftp").is_some());
         assert!(app.degraded_for("ftp").is_some());
         // And the status bar stops lying about how many there are. It names
@@ -301,7 +301,7 @@ mod tests {
     /// almost always, and it's the one the reader has already learned not to
     /// look at.
     #[test]
-    fn el_ocupante_sin_daemon_tiene_su_propia_frase() {
+    fn the_occupant_with_no_daemon_has_its_own_phrase() {
         let mut app = App::new(Pane::new(root(), vec![]), Pane::new(root(), vec![]));
         app.note_no_journal(norte_core::embedded::NoJournal::Busy);
         let soft = app.journal_banner().expect("indicator lit");
@@ -321,7 +321,7 @@ mod tests {
     }
 
     #[test]
-    fn la_sesion_sin_journal_tiene_indicador_persistente() {
+    fn session_with_no_journal_has_a_persistent_indicator() {
         let mut app = app_dos_panes();
         assert!(app.journal_banner().is_none(), "recorded by default");
 
@@ -339,10 +339,10 @@ mod tests {
     /// class and simultaneous, so choosing one would hide the other for the
     /// rest of the session.
     #[test]
-    fn los_dos_indicadores_persistentes_caben_juntos() {
+    fn the_two_persistent_indicators_fit_together() {
         let mut app = app_dos_panes();
         app.note_no_journal(norte_core::embedded::NoJournal::Busy);
-        app.note_degraded(degradacion_de_test("sftp", "a.org"));
+        app.note_degraded(test_degraded("sftp", "a.org"));
         let banner = app.persistent_banner().expect("there is a notice");
         assert!(
             banner.contains("a.org"),
@@ -359,7 +359,7 @@ mod tests {
     /// The startup message gets erased by the next key, and from then on
     /// the window doesn't save the screen with nothing on screen to say so.
     #[test]
-    fn la_ventana_suelta_tiene_indicador_persistente() {
+    fn the_detached_window_has_a_persistent_indicator() {
         let mut app = app_dos_panes();
         assert!(app.session_banner().is_none(), "the owner warns of nothing");
 
@@ -379,10 +379,10 @@ mod tests {
     /// same class, and the session's is the one that weighs least, so it
     /// goes last.
     #[test]
-    fn los_tres_indicadores_persistentes_caben_juntos() {
+    fn the_three_persistent_indicators_fit_together() {
         let mut app = app_dos_panes();
         app.note_no_journal(norte_core::embedded::NoJournal::Busy);
-        app.note_degraded(degradacion_de_test("sftp", "a.org"));
+        app.note_degraded(test_degraded("sftp", "a.org"));
         app.session.detached = true;
         let banner = app.persistent_banner().expect("there is a notice");
         assert!(
@@ -404,10 +404,10 @@ mod tests {
     /// seven schemes — so only something anomalous reaches it, and when it
     /// does the oldest gets dropped and the one that just arrived is kept.
     #[test]
-    fn las_degradaciones_tienen_tope() {
+    fn degradations_have_a_cap() {
         let mut app = app_dos_panes();
         for i in 0..(norte_frontend::banners::DEGRADED_MAX + 10) {
-            app.note_degraded(degradacion_de_test(&format!("s{i}"), "host"));
+            app.note_degraded(test_degraded(&format!("s{i}"), "host"));
         }
         assert_eq!(app.degraded.len(), norte_frontend::banners::DEGRADED_MAX);
         assert!(
@@ -426,9 +426,9 @@ mod tests {
     /// or bidi is exactly what gets sent to a security indicator to make it
     /// lie.
     #[test]
-    fn el_aviso_enmascara_un_host_hostil() {
+    fn the_notice_masks_a_hostile_host() {
         let mut app = app_dos_panes();
-        app.note_degraded(degradacion_de_test("sftp", "ma\u{202e}gro.org\n"));
+        app.note_degraded(test_degraded("sftp", "ma\u{202e}gro.org\n"));
         let banner = app.connection_banner().expect("there is a notice");
         assert!(
             !banner.contains('\u{202e}') && !banner.contains('\n'),
@@ -444,10 +444,10 @@ mod tests {
     /// the usual one (#44): scheme and host, formatted from the structured
     /// value.
     #[test]
-    fn el_aviso_de_una_sola_degradacion_nombra_la_conexion() {
+    fn a_single_degradation_notice_names_the_connection() {
         let mut app = app_dos_panes();
         assert!(app.connection_banner().is_none());
-        app.note_degraded(degradacion_de_test("sftp", "remote.example"));
+        app.note_degraded(test_degraded("sftp", "remote.example"));
         let banner = app.connection_banner().expect("there is a notice");
         assert!(banner.contains("sftp"), "{banner}");
         assert!(banner.contains("remote.example"), "{banner}");

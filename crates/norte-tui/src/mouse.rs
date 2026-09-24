@@ -1947,7 +1947,7 @@ pub fn release_for_suspend(cap: &mut Capture, out: &mut impl Write) -> std::io::
 /// Restores capture on return from the external program, if it was on.
 ///
 /// # Errors
-/// La de escribir en `out`.
+/// The one from writing to `out`.
 pub fn restore_after_suspend(
     cap: &mut Capture,
     was: bool,

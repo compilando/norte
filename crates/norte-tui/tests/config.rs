@@ -1,5 +1,5 @@
-//! Tests de la config en capas (ADR 0007): precedencia, diagnóstico con
-//! archivo, y claves desconocidas como error claro.
+//! Tests for the layered config (ADR 0007): precedence, file-backed
+//! diagnostics, and unknown keys as a clear error.
 
 use norte_tui::config::{ConfigError, Layer, Layers, load};
 use norte_tui::keymap::{Effective, Screen, presets};
@@ -17,7 +17,7 @@ fn defaults_sin_ninguna_capa() {
     let cfg = load(&Layers { dirs: vec![] }).expect("defaults");
     assert_eq!(
         cfg.common.preset, "orthodox",
-        "default compilado (decisión 2026-07-10)"
+        "compiled default (decision 2026-07-10)"
     );
     assert!(cfg.keymap_layers.is_empty());
 }
@@ -43,15 +43,15 @@ fn el_ultimo_gana_por_campo_y_las_capas_de_keymap_se_acumulan() {
             (proyecto.path().to_path_buf(), Layer::Project),
         ],
     };
-    let cfg = load(&layers).expect("carga");
+    let cfg = load(&layers).expect("load");
     assert_eq!(
         cfg.common.preset, "vim",
-        "el preset del usuario pisa al del sistema"
+        "the user's preset overrides the system's"
     );
     assert_eq!(
         cfg.keymap_layers.len(),
         2,
-        "las capas de keymap NO se pisan: se pliegan (ADR 0007)"
+        "keymap layers do NOT override each other: they stack (ADR 0007)"
     );
 }
 
@@ -64,10 +64,10 @@ fn toml_roto_nombra_el_archivo() {
         Err(ConfigError::Toml { path, .. }) => {
             assert!(
                 path.ends_with("norte.toml"),
-                "diagnóstico con archivo: {path:?}"
+                "file-backed diagnostic: {path:?}"
             );
         }
-        other => panic!("esperaba Toml, fue {other:?}"),
+        other => panic!("expected Toml, got {other:?}"),
     }
 }
 
@@ -80,7 +80,7 @@ fn clave_desconocida_es_error_claro() {
         Err(ConfigError::Toml { path, .. }) => {
             assert!(path.ends_with("norte.toml"));
         }
-        other => panic!("esperaba Toml (deny_unknown_fields), fue {other:?}"),
+        other => panic!("expected Toml (deny_unknown_fields), got {other:?}"),
     }
 }
 
@@ -93,12 +93,13 @@ fn dir_sin_archivos_no_molesta() {
             ("/no/existe/en/absoluto".into(), Layer::Project),
         ],
     })
-    .expect("capas ausentes = defaults");
+    .expect("absent layers = defaults");
     assert_eq!(cfg.common.preset, "orthodox");
 }
 
-/// Regla 3 para el poll del watcher: detecta cambios y soltar el `Watch`
-/// lo CANCELA limpio (el task suelta su sender → el canal se cierra).
+/// Rule 3 for the watcher's poll: it detects changes, and dropping the
+/// `Watch` CANCELS it cleanly (the task drops its sender → the channel
+/// closes).
 #[tokio::test]
 async fn el_polling_detecta_cambios_y_se_cancela_limpio() {
     let d = dir_with(&[("norte.toml", "[keymap]\npreset = \"vim\"\n")]);
@@ -108,17 +109,17 @@ async fn el_polling_detecta_cambios_y_se_cancela_limpio() {
     let (tx, mut rx) = tokio::sync::mpsc::channel(8);
     let watch = norte_tui::config::watch_polling(&layers, tx, std::time::Duration::from_millis(20));
 
-    // El poll toma su snapshot base en su propio task, así que no hay un
-    // «ya puedes cambiar el archivo» que esperar: dormir un múltiplo del
-    // periodo era apostar a que la base se tomó antes de la escritura, y bajo
-    // carga se perdía (ola W9, tarea 2.2). En su lugar se escribe un cambio
-    // distinto (mtime Y tamaño) en cada vuelta hasta que un tick lo ve: si la
-    // base llegó después de la primera escritura, la segunda la delata.
+    // The poll takes its base snapshot in its own task, so there is no
+    // "you can change the file now" to wait for: sleeping a multiple of the
+    // period was betting the base was taken before the write, and under
+    // load it lost (wave W9, task 2.2). Instead a different change (mtime
+    // AND size) is written every round until a tick sees it: if the base
+    // arrived after the first write, the second one gives it away.
     let mut visto = None;
     for i in 0..15u32 {
         let mut contenido = String::from("[keymap]\npreset = \"orthodox\"\n");
         for _ in 0..i {
-            contenido.push_str("# vuelta\n");
+            contenido.push_str("# round\n");
         }
         std::fs::write(d.path().join("norte.toml"), contenido).unwrap();
         if let Ok(Some(())) =
@@ -128,27 +129,27 @@ async fn el_polling_detecta_cambios_y_se_cancela_limpio() {
             break;
         }
     }
-    assert!(visto.is_some(), "el poll ve el cambio");
+    assert!(visto.is_some(), "the poll sees the change");
 
     drop(watch);
-    // Tras cancelar, el task termina y suelta el sender: recv → None
-    // (drenando los eventos que quedaran en vuelo).
+    // After cancelling, the task ends and drops the sender: recv → None
+    // (draining whatever events were still in flight).
     loop {
         match tokio::time::timeout(std::time::Duration::from_secs(3), rx.recv()).await {
             Ok(Some(())) => {}
             Ok(None) => break,
             Err(timeout) => {
-                panic!("el task de polling no terminó tras soltar el Watch: {timeout}")
+                panic!("the polling task did not end after dropping the Watch: {timeout}")
             }
         }
     }
 }
 
-/// ALTA (security review M4 Lua): `load` marca como PROYECTO el
-/// `keymap.toml` de la capa `Layer::Project` (`./.norte`; deuda #75 cerrada:
-/// el kind viaja POR DIR) y esa marca fluye hasta `Effective::build_for`,
-/// que descarta sus bindings `lua:` (un repo hostil no rebindea teclas a
-/// comandos Lua del usuario). La capa de usuario NO se marca.
+/// HIGH (security review M4 Lua): `load` marks the `Layer::Project` layer's
+/// `keymap.toml` (`./.norte`; debt #75 closed: the kind travels PER DIR) as
+/// PROJECT, and that mark flows through to `Effective::build_for`, which
+/// discards its `lua:` bindings (a hostile repo does not rebind keys to the
+/// user's Lua commands). The user layer is NOT marked.
 #[test]
 fn el_keymap_de_la_ultima_capa_se_marca_como_proyecto() {
     let binding = "[pane]\nprepend_keymap = [{ on = [\"j\"], run = \"lua:pwn\" }]\n";
@@ -160,30 +161,30 @@ fn el_keymap_de_la_ultima_capa_se_marca_como_proyecto() {
             (proyecto.path().to_path_buf(), Layer::Project),
         ],
     };
-    let cfg = load(&layers).expect("carga");
+    let cfg = load(&layers).expect("load");
     assert_eq!(cfg.keymap_layers.len(), 2);
-    assert!(!cfg.keymap_layers[0].is_project(), "capa de usuario");
-    assert!(cfg.keymap_layers[1].is_project(), "última capa = proyecto");
+    assert!(!cfg.keymap_layers[0].is_project(), "user layer");
+    assert!(cfg.keymap_layers[1].is_project(), "last layer = project");
 
-    // Y el efecto de seguridad, de punta a punta: el lua: del PROYECTO se
-    // descarta (contado); el de USUARIO sobrevive y gana la precedencia.
+    // And the security effect, end to end: the PROJECT's lua: is discarded
+    // (counted); the USER's survives and wins precedence.
     let (_, preset) = &presets()[0];
-    // El conjunto real de la TUI, con `LUA_HOST` (ADR 0110): `bindings()` solo
-    // cuenta lo disponible AQUÍ.
+    // The TUI's real set, with `LUA_HOST` (ADR 0110): `bindings()` only
+    // counts what is available HERE.
     let known = norte_tui::shortcuts_editor::known_commands(Screen::Browse);
     let eff = Effective::build_for(preset, &cfg.keymap_layers, &known, Screen::Browse)
-        .expect("descartar no es error");
-    assert_eq!(eff.discarded_lua_bindings(), 1, "solo el del proyecto");
+        .expect("discarding is not an error");
+    assert_eq!(eff.discarded_lua_bindings(), 1, "only the project's");
     assert!(
         eff.bindings().iter().any(|(_, run)| *run == "lua:pwn"),
-        "el binding de la capa de USUARIO sigue vivo"
+        "the USER layer's binding is still alive"
     );
 }
 
-/// #95.2: `[archive]` se fusiona último-gana entre capas de CONFIANZA y la
-/// capa de proyecto se IGNORA — un `./.norte/norte.toml` de un repo ajeno no
-/// puede subir los límites anti-bomba justo donde viven los contenedores
-/// hostiles (mismo criterio fail-closed que la hotlist).
+/// #95.2: `[archive]` merges last-wins across TRUSTED layers and the
+/// project layer is IGNORED — a foreign repo's `./.norte/norte.toml`
+/// cannot raise the anti-bomb limits exactly where hostile archives live
+/// (same fail-closed criterion as the hotlist).
 #[test]
 fn archive_limits_ultimo_gana_y_proyecto_no_los_toca() {
     let sistema = dir_with(&[(
@@ -202,37 +203,39 @@ fn archive_limits_ultimo_gana_y_proyecto_no_los_toca() {
             (proyecto.path().to_path_buf(), Layer::Project),
         ],
     };
-    let cfg = load(&layers).expect("carga");
+    let cfg = load(&layers).expect("load");
     assert_eq!(
         cfg.common.archive.max_entries,
         Some(50),
-        "usuario pisa sistema"
+        "user overrides system"
     );
     assert_eq!(
         cfg.common.archive.max_decompressed_bytes,
         Some(4096),
-        "campo no pisado conserva la capa inferior"
+        "a field that was not overridden keeps the lower layer's value"
     );
 }
 
-/// Roadmap ítem 9, y las DOS mitades son la aserción: lo que este binario
-/// diagnostica llega al FICHERO, y NO a stderr.
+/// Roadmap item 9, and the TWO halves are the assertion: what this binary
+/// diagnoses reaches the FILE, and NOT stderr.
 ///
-/// La primera versión de este test lanzaba `--version`, que sale treinta líneas
-/// ANTES de que se instale el subscriber — así que el proceso bajo prueba no
-/// instalaba ninguno y la aserción se cumplía sola, incluido si alguien cambiara
-/// `init_to_file` por el `init` de la CLI, que es justo la regresión que decía
-/// pinnear. Ahora se le da un `[ai]` roto, que es un aviso real por un camino
-/// que sí carga config, instala el subscriber y sale sin abrir la TTY.
+/// This test's first version launched `--version`, which exits thirty lines
+/// BEFORE the subscriber is installed — so the process under test installed
+/// none and the assertion passed on its own, including if someone swapped
+/// `init_to_file` for the CLI's `init`, which is exactly the regression it
+/// claimed to pin. Now it is given a broken `[ai]`, which is a real warning
+/// through a path that does load config, install the subscriber, and exit
+/// without opening the TTY.
 #[test]
 fn el_frontend_de_terminal_loguea_al_fichero_y_no_a_la_pantalla() {
     let state = tempfile::tempdir().expect("tmp");
     let config = tempfile::tempdir().expect("tmp");
-    // Config VÁLIDA con un proveedor de IA que no resuelve: parsea (el tipo de
-    // proveedor no se valida al leer, a propósito — lo rechaza la puerta de la
-    // IA al usarlo, donde el diagnóstico puede nombrarlo), así que se llega a
-    // instalar el subscriber y el aviso sale por `tracing::warn!`. Uno que no
-    // parseara abortaría por stderr ANTES, que es correcto y no es esto.
+    // VALID config with an AI provider that does not resolve: it parses
+    // (the provider's kind is not validated on read, on purpose — the AI
+    // gate rejects it on use, where the diagnostic can name it), so the
+    // subscriber does get installed and the warning goes out through
+    // `tracing::warn!`. One that failed to parse would abort via stderr
+    // BEFORE that, which is correct and is not this.
     std::fs::write(
         config.path().join("norte.toml"),
         "[ai]\nenabled = true\nrename_provider = \"x\"\n\n\
@@ -247,27 +250,27 @@ fn el_frontend_de_terminal_loguea_al_fichero_y_no_a_la_pantalla() {
         .env("NORTE_CONFIG_DIR", config.path())
         .env("RUST_LOG", "warn")
         .output()
-        .expect("ejecuta");
+        .expect("run");
 
-    // El proceso muere al no encontrar TTY, y ese error SÍ va a stderr a
-    // propósito: es lo que le dice al usuario por qué no arrancó. Lo que no
-    // puede aparecer ahí es el DIAGNÓSTICO, que es lo que rompería la pantalla
-    // si hubiera pantalla.
+    // The process dies from not finding a TTY, and that error DOES go to
+    // stderr on purpose: it is what tells the user why it did not start.
+    // What must not show up there is the DIAGNOSTIC, which is what would
+    // break the screen if there were a screen.
     let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
     assert!(
-        !stderr.contains("proveedor de IA no disponible"),
-        "el aviso no puede salir por la pantalla: {stderr}"
+        !stderr.contains("AI provider not available"),
+        "the warning must not reach the screen: {stderr}"
     );
 
-    // Y la otra mitad: el aviso ESTÁ, en el fichero.
+    // And the other half: the warning IS there, in the file.
     let logs = state.path().join("norte").join("logs");
     let text: String = std::fs::read_dir(&logs)
-        .unwrap_or_else(|e| panic!("no hay directorio de logs en {logs:?}: {e}"))
+        .unwrap_or_else(|e| panic!("no logs directory at {logs:?}: {e}"))
         .flatten()
         .map(|f| std::fs::read_to_string(f.path()).unwrap_or_default())
         .collect();
     assert!(
-        text.contains("proveedor de IA no disponible"),
-        "el aviso tiene que estar en el log: {text}"
+        text.contains("AI provider not available"),
+        "the warning has to be in the log: {text}"
     );
 }

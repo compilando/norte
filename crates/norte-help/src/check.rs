@@ -1346,20 +1346,20 @@ mod tests {
     }
 
     #[test]
-    fn un_contexto_conocido_sin_tema_es_un_hallazgo() {
-        // La mitad que faltaba (deuda registrada en H3a): `check_contexts`
-        // cazaba contextos inventados y duplicados, pero NO que un contexto
-        // que la app sabe abrir se quedara sin página. F1 ahí no abriría
-        // nada y ninguna puerta lo decía.
+    fn a_known_context_without_a_topic_is_a_finding() {
+        // The missing half (debt recorded in H3a): `check_contexts` caught
+        // invented and duplicate contexts, but NOT a context the app knows
+        // how to open being left without a page. F1 there would open
+        // nothing and no gate said so.
         let issues = check_contexts_in(
             Lang::En,
             crate::corpus::topics(Lang::En),
-            &["browse", "un-contexto-huerfano"],
+            &["browse", "an-orphan-context"],
         );
         assert!(
             issues.iter().any(|i| matches!(
                 i,
-                Issue::ContextWithoutTopic { context, .. } if context == "un-contexto-huerfano"
+                Issue::ContextWithoutTopic { context, .. } if context == "an-orphan-context"
             )),
             "{issues:?}"
         );

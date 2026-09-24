@@ -206,7 +206,7 @@ mod tests {
         let e = entry("mem:///home/dir", EntryKind::Dir);
         let rows = sheet(&e, false, None, Lang::En);
         assert_eq!(labels(&rows), ["Name", "Kind"]);
-        assert_eq!(rows[1].value, "directory");
+        assert_eq!(rows[1].value, "folder");
     }
 
     /// The `..` row is described as `..` and says WHERE it leads.
@@ -218,9 +218,9 @@ mod tests {
     fn the_parent_row_is_named_two_dots_and_says_where_it_leads() {
         let e = entry("mem:///home", EntryKind::Dir);
         let rows = sheet(&e, true, None, Lang::En);
-        assert_eq!(labels(&rows), ["Name", "Kind", "Target"]);
+        assert_eq!(labels(&rows), ["Name", "Kind", "Leads to"]);
         assert_eq!(rows[0].value, "..", "not the parent's name");
-        assert_eq!(rows[1].value, "directory");
+        assert_eq!(rows[1].value, "folder");
         assert_eq!(
             rows[2].value, "⟨mem⟩/home",
             "the SAME form as the listing's header, not the wire one"

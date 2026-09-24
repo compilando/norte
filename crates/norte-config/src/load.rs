@@ -23,72 +23,70 @@ const NORTE_TOML: &str = "norte.toml";
 /// `norte.toml`'s would be a bug rather than a saving.
 const KEYMAP_TOML: &str = "keymap.toml";
 
-/// Fija `[ui].theme = name` en el `norte.toml` del usuario, PRESERVANDO
-/// comentarios y formato (`toml_edit`). Crea el fichero/directorio si no
-/// existen. Devuelve la ruta escrita.
+/// Sets `[ui].theme = name` in the user's `norte.toml`, PRESERVING comments
+/// and formatting (`toml_edit`). Creates the file/directory if they do not
+/// exist. Returns the written path.
 ///
 /// # Errors
-/// [`std::io::Error`] si no hay dir de usuario, el TOML existente no parsea, o
-/// falla el I/O.
+/// [`std::io::Error`] if there is no user dir, the existing TOML does not
+/// parse, or the I/O fails.
 pub fn persist_ui_theme(name: &str) -> std::io::Result<PathBuf> {
     let dir = crate::dirs::user_config_dir().ok_or_else(|| {
-        std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            "sin directorio de config de usuario",
-        )
+        std::io::Error::new(std::io::ErrorKind::NotFound, "no user config directory")
     })?;
     persist_ui_theme_to(&dir, name)
 }
 
-/// Como [`persist_ui_theme`] pero en un `dir` explícito (sin depender del
-/// entorno — la base testeable). Envoltorio fino sobre [`persist_set`] (S2):
-/// mantiene su propia firma (`name: &str`, no `toml_edit::Value`) porque es
-/// el punto de entrada histórico, pero la escritura la hace enteramente
-/// `persist_set(dir, "ui", "theme", …)` — prueba de comportamiento en el
-/// mismo `#[test]` de antes (`hotlist_tests`), sin cambios.
+/// Like [`persist_ui_theme`] but into an explicit `dir` (not depending on the
+/// environment — the testable base). A thin wrapper over [`persist_set`]
+/// (S2): it keeps its own signature (`name: &str`, not `toml_edit::Value`)
+/// because it is the historical entry point, but the write is done entirely
+/// by `persist_set(dir, "ui", "theme", …)` — behavior proven by the same
+/// `#[test]` as before (`hotlist_tests`), unchanged.
 ///
 /// # Errors
-/// [`std::io::Error`] si el TOML existente no parsea o falla el I/O.
+/// [`std::io::Error`] if the existing TOML does not parse or the I/O fails.
 pub fn persist_ui_theme_to(dir: &std::path::Path, name: &str) -> std::io::Result<PathBuf> {
     persist_set(dir, "ui", "theme", toml_edit::Value::from(name))
 }
 
-/// Fija `[section] key = value` en el `norte.toml` de `dir`, PRESERVANDO
-/// comentarios y formato (`toml_edit`) — la forma GENÉRICA detrás de
-/// [`persist_ui_theme_to`] (S2, mismo patrón EXACTO: lee-o-crea un
-/// `DocumentMut`, la tabla de sección nace EXPLÍCITA — jamás implícita, para
-/// que un fichero nuevo lea limpio — fija `key`, escribe). Crea el
-/// dir/fichero si no existen. `value` ya viene tipado por el caller
-/// (`toml_edit::Value`): un string se escapa solo (mismo mecanismo que
-/// `toml_edit::value(name)` usaba antes aquí), un bool/int se escriben nativos.
+/// Sets `[section] key = value` in the `norte.toml` of `dir`, PRESERVING
+/// comments and formatting (`toml_edit`) — the GENERIC form behind
+/// [`persist_ui_theme_to`] (S2, the EXACT same pattern: reads-or-creates a
+/// `DocumentMut`, the section table is born EXPLICIT — never implicit, so a
+/// new file reads clean — sets `key`, writes). Creates the dir/file if they
+/// do not exist. `value` already comes typed by the caller
+/// (`toml_edit::Value`): a string escapes itself (the same mechanism
+/// `toml_edit::value(name)` used to use here), a bool/int are written
+/// natively.
 ///
-/// CONTRATO de forma (revisión S, I1): cada `[section]` de `norte.toml` debe
-/// ser una tabla plana (`[section]` real o `section = { .. }` inline) —
-/// NUNCA un escalar (`ui = 3`) ni un array-of-tables (`[[ui]]`). `load` solo
-/// AVISA si una sección tiene una forma inesperada (degrada esa sección,
-/// sigue arrancando); este escritor, en cambio, debe RECHAZAR explícitamente
-/// una sección con forma escalar — indexar un `toml_edit::Item` escalar por
-/// clave (`item[key] = ..`) no crea nada: `panic!("index not found")` (la
-/// implementación de `IndexMut` de `toml_edit` para un `Item::Value` no
-/// tabla devuelve `None` internamente y el operador de índice lo
-/// `.expect()`). Alcanzable con una config editada a mano entre sesiones (el
-/// TUI solo lo AVISA en el reload, no lo bloquea) — un `panic` aquí tumbaría
-/// el hilo de fondo (GUI: se lleva el proceso; TUI: `JoinError` silencioso
-/// tras un `spawn_blocking`). Se comprueba con `Item::is_table_like` (el
-/// mismo criterio que usa el `IndexMut` interno de `toml_edit` para decidir
-/// si puede indexar) — así el guard nunca rechaza una forma que la propia
-/// librería aceptaría.
+/// Shape CONTRACT (review S, I1): every `[section]` of `norte.toml` must be a
+/// flat table (a real `[section]` or an inline `section = { .. }`) — NEVER a
+/// scalar (`ui = 3`) nor an array-of-tables (`[[ui]]`). `load` only WARNS if
+/// a section has an unexpected shape (degrades that section, keeps
+/// starting); this writer, on the other hand, must explicitly REFUSE a
+/// section with scalar shape — indexing a scalar `toml_edit::Item` by key
+/// (`item[key] = ..`) creates nothing: `panic!("index not found")` (`toml_edit`'s
+/// `IndexMut` implementation for a non-table `Item::Value` returns `None`
+/// internally and the index operator `.expect()`s it). Reachable with a
+/// config hand-edited between sessions (the TUI only WARNS about it on
+/// reload, it does not block it) — a `panic` here would bring down the
+/// background thread (GUI: takes the process with it; TUI: a silent
+/// `JoinError` after a `spawn_blocking`). Checked with `Item::is_table_like`
+/// (the same rule `toml_edit`'s internal `IndexMut` uses to decide whether it
+/// can index) — so the guard never refuses a shape the library itself would
+/// accept.
 ///
-/// Desde #116 la escritura es SEGURA entre procesos: toma el lock advisory
-/// `norte.toml.lock` ANTES de leer (puede bloquear mientras otro proceso
-/// persiste — ver `lock_config_file`) y reemplaza el fichero vía tmp +
-/// `rename` atómico (`write_config_file`): un lector concurrente jamás ve
-/// un fichero a medias. Aplica a TODA la familia `persist_*`.
+/// Since #116 the write is SAFE across processes: it takes the
+/// `norte.toml.lock` advisory lock BEFORE reading (it may block while another
+/// process is persisting — see `lock_config_file`) and replaces the file via
+/// tmp + atomic `rename` (`write_config_file`): a concurrent reader never
+/// sees a half-written file. Applies to the WHOLE `persist_*` family.
 ///
 /// # Errors
-/// [`std::io::Error`] si no hay dir de usuario, el TOML existente no parsea,
-/// la sección existente no es una tabla (forma inesperada, ver el CONTRATO
-/// arriba), o falla el I/O.
+/// [`std::io::Error`] if there is no user dir, the existing TOML does not
+/// parse, the existing section is not a table (unexpected shape, see the
+/// CONTRACT above), or the I/O fails.
 pub fn persist_set(
     dir: &std::path::Path,
     section: &str,
@@ -97,7 +95,7 @@ pub fn persist_set(
 ) -> std::io::Result<PathBuf> {
     use std::io::{Error, ErrorKind};
     std::fs::create_dir_all(dir)?;
-    // #116: lock ANTES de leer — el RMW entero es la sección crítica.
+    // #116: lock BEFORE reading — the whole RMW is the critical section.
     let lock = lock_config_file(dir, NORTE_TOML)?;
     let path = lock.target().to_path_buf();
     let mut doc = match std::fs::read_to_string(&path) {
@@ -110,7 +108,7 @@ pub fn persist_set(
             Error::new(
                 ErrorKind::InvalidData,
                 format!(
-                    "{} no parsea: TOML inválido; corrígelo o bórralo",
+                    "{} does not parse: invalid TOML; fix it or delete it",
                     path.display()
                 ),
             )
@@ -118,25 +116,25 @@ pub fn persist_set(
         Err(e) if e.kind() == ErrorKind::NotFound => toml_edit::DocumentMut::new(),
         Err(e) => return Err(e),
     };
-    // Guard de forma (revisión S, I1) — ANTES de tocar nada: una sección
-    // existente que no sea tabla (escalar, array-of-tables…) indexaría en
-    // pánico más abajo (ver el CONTRATO del rustdoc). `get` no crea nada
-    // (a diferencia de `entry`), así que este chequeo es de solo lectura.
+    // Shape guard (review S, I1) — BEFORE touching anything: an existing
+    // section that is not a table (scalar, array-of-tables…) would index
+    // into a panic further below (see the rustdoc's CONTRACT). `get` creates
+    // nothing (unlike `entry`), so this check is read-only.
     if let Some(existing) = doc.as_table().get(section)
         && !existing.is_table_like()
     {
         return Err(Error::new(
             ErrorKind::InvalidData,
             format!(
-                "{}: [{section}] no es una tabla (forma inesperada); corrígelo o bórralo",
+                "{}: [{section}] is not a table (unexpected shape); fix it or delete it",
                 path.display()
             ),
         ));
     }
-    // Una tabla `[section]` recién creada sería IMPLÍCITA (se emitiría como
-    // `section.key = …` en vez de bajo `[section]`): se crea EXPLÍCITA para
-    // que el fichero nuevo tenga una sección legible; la ya existente se
-    // respeta.
+    // A freshly created `[section]` table would be IMPLICIT (it would be
+    // emitted as `section.key = …` instead of under `[section]`): it is
+    // created EXPLICIT so a new file reads with a legible section; an
+    // already-existing one is respected.
     let table = doc.as_table_mut().entry(section).or_insert_with(|| {
         let mut t = toml_edit::Table::new();
         t.set_implicit(false);
@@ -147,50 +145,49 @@ pub fn persist_set(
     Ok(path)
 }
 
-/// Lo que una escritura de configuración hizo: dónde, y si cambió algo.
+/// What a configuration write did: where, and whether it changed anything.
 #[derive(Debug, Clone)]
 pub struct ConfigWrite {
-    /// El `norte.toml` sobre el que se trabajó.
+    /// The `norte.toml` that was worked on.
     pub path: PathBuf,
-    /// `false` = no había nada que hacer y no se tocó el fichero.
+    /// `false` = there was nothing to do and the file was not touched.
     pub changed: bool,
 }
 
-/// Quita `key` de `[section]` en el `norte.toml` de `dir` — el reverso de
-/// [`persist_set`], y lo que hay detrás de «restablecer» en la pantalla de
-/// ajustes.
+/// Removes `key` from `[section]` in the `norte.toml` of `dir` — the reverse
+/// of [`persist_set`], and what is behind "reset" on the settings screen.
 ///
-/// Quita la clave de la capa que se le pase, que es la de ESCRITURA. Ojo con
-/// lo que eso significa de cara al usuario: si el sistema, el perfil o el
-/// proyecto fijan la misma clave, el valor cambia y **sigue sin ser el de
-/// fábrica**. Esta función no lo sabe ni lo puede saber; quien la llama
-/// compara después y lo dice.
+/// Removes the key from whichever layer it is given, which is the WRITE one.
+/// Careful about what that means to the user: if system, profile or project
+/// set the same key, the value changes and **is still not the factory one**.
+/// This function does not know that and cannot; whoever calls it compares
+/// afterwards and says so.
 ///
-/// Un fichero que no está, una sección que no está o una clave que no está
-/// son un **no-op documentado**, no un error: no hay nada que quitar. Y no
-/// crea nada — sin `create_dir_all`, igual que
-/// [`persist_keymap_unbind`]: una eliminación que crea un directorio es una
-/// eliminación que deja rastro.
+/// A file that is not there, a section that is not there or a key that is
+/// not there are a **documented no-op**, not an error: there is nothing to
+/// remove. And it creates nothing — no `create_dir_all`, same as
+/// [`persist_keymap_unbind`]: a removal that creates a directory is a removal
+/// that leaves a trace.
 ///
-/// Una `[section]` que se queda vacía **se conserva**. Borrarla cambia el
-/// fichero más de lo que se pidió, y una tabla vacía no significa nada
-/// distinto de una ausente.
+/// A `[section]` that ends up empty **is kept**. Deleting it changes the file
+/// more than was asked, and an empty table means nothing different from an
+/// absent one.
 ///
-/// BLOQUEANTE: I/O de FS síncrono — el caller DEBE envolverla en
-/// `spawn_blocking` (regla 2), mismo patrón que [`persist_set`].
+/// BLOCKING: synchronous FS I/O — the caller MUST wrap it in `spawn_blocking`
+/// (rule 2), same pattern as [`persist_set`].
 ///
 /// # Errors
-/// [`std::io::Error`] si el TOML existente no parsea, si `[section]` existe
-/// con una forma que no es tabla, o si falla el I/O.
+/// [`std::io::Error`] if the existing TOML does not parse, if `[section]`
+/// exists with a non-table shape, or if the I/O fails.
 pub fn persist_unset(dir: &Path, section: &str, key: &str) -> std::io::Result<ConfigWrite> {
     use std::io::{Error, ErrorKind};
-    let declarado = dir.join(NORTE_TOML);
-    // Sin fichero no hay nada que quitar, y el lock no debe crearlo.
+    let declared = dir.join(NORTE_TOML);
+    // With no file there is nothing to remove, and the lock must not create it.
     let lock = match lock_config_file(dir, NORTE_TOML) {
         Ok(l) => l,
         Err(e) if e.kind() == ErrorKind::NotFound => {
             return Ok(ConfigWrite {
-                path: declarado,
+                path: declared,
                 changed: false,
             });
         }
@@ -199,13 +196,13 @@ pub fn persist_unset(dir: &Path, section: &str, key: &str) -> std::io::Result<Co
     let path = lock.target().to_path_buf();
     let mut doc = match std::fs::read_to_string(&path) {
         Ok(s) => s.parse::<toml_edit::DocumentMut>().map_err(|_| {
-            // Nombra el fichero, nunca el contenido: el `Display` del error
-            // de `toml_edit` cita la línea ofensiva, y ahí puede haber un
-            // nombre hostil persistido antes (#73).
+            // Names the file, never the content: `toml_edit`'s error
+            // `Display` quotes the offending line, and a hostile name
+            // persisted earlier could be there (#73).
             Error::new(
                 ErrorKind::InvalidData,
                 format!(
-                    "{} no parsea: TOML inválido; corrígelo o bórralo",
+                    "{} does not parse: invalid TOML; fix it or delete it",
                     path.display()
                 ),
             )
@@ -218,8 +215,8 @@ pub fn persist_unset(dir: &Path, section: &str, key: &str) -> std::io::Result<Co
         }
         Err(e) => return Err(e),
     };
-    // El mismo guard de forma que `persist_set`, y por lo mismo: una
-    // `[section]` que no es tabla indexaría en pánico.
+    // The same shape guard as `persist_set`, and for the same reason: a
+    // `[section]` that is not a table would index into a panic.
     let Some(existing) = doc.as_table().get(section) else {
         return Ok(ConfigWrite {
             path,
@@ -230,71 +227,71 @@ pub fn persist_unset(dir: &Path, section: &str, key: &str) -> std::io::Result<Co
         return Err(Error::new(
             ErrorKind::InvalidData,
             format!(
-                "{}: [{section}] no es una tabla (forma inesperada); corrígelo o bórralo",
+                "{}: [{section}] is not a table (unexpected shape); fix it or delete it",
                 path.display()
             ),
         ));
     }
-    let quitada = doc
+    let removed = doc
         .as_table_mut()
         .get_mut(section)
         .and_then(toml_edit::Item::as_table_like_mut)
         .is_some_and(|t| t.remove(key).is_some());
-    if quitada {
+    if removed {
         write_config_file(&lock, &doc)?;
     }
     Ok(ConfigWrite {
         path,
-        changed: quitada,
+        changed: removed,
     })
 }
 
-/// El `sort` a persistir (#108 7a) — espejo consciente de [`SortChoice`]:
-/// este writer serializa EXACTAMENTE el vocabulario que `load` parsea en
+/// The `sort` to persist (#108 7a) — a deliberate mirror of [`SortChoice`]:
+/// this writer serializes EXACTLY the vocabulary `load` parses in
 /// `parse_sort_section` (`column` = `name`|`size`|`mtime`, `dir` =
-/// `asc`|`desc`, `dirs_first` bool), pineado por el round-trip test de al
-/// lado. Toma strings/bools crudos (no [`SortChoice`]) porque el caller es
-/// un frontend que ya habla el vocabulario Display de las columnas.
+/// `asc`|`desc`, `dirs_first` bool), pinned by the round-trip test next to
+/// it. Takes raw strings/bools (not [`SortChoice`]) because the caller is a
+/// frontend that already speaks the columns' Display vocabulary.
 #[derive(Debug, Clone, Copy)]
 pub struct PersistSort<'a> {
-    /// `"name"` | `"size"` | `"mtime"` (vocabulario cerrado del load).
+    /// `"name"` | `"size"` | `"mtime"` (load's closed vocabulary).
     pub column: &'a str,
-    /// `true` = descendente (se serializa como `dir = "desc"`).
+    /// `true` = descending (serialized as `dir = "desc"`).
     pub descending: bool,
-    /// Directorios primero.
+    /// Directories first.
     pub dirs_first: bool,
 }
 
-/// Escribe la selección del picker de columnas (#108 7a) en el `norte.toml`
-/// de `dir`, PRESERVANDO comentarios y formato (`toml_edit`, mismo patrón
-/// que [`persist_set`]): `scheme = None` fija `[ui.columns]` `default` +
-/// `sort`; `Some(s)` fija `[ui.columns.scheme.<s>]` `columns` + `sort`.
-/// Primera escritura ANIDADA del persistidor — `persist_set` solo sabe de
-/// `[section] key = escalar` — y primer valor ARRAY: las tablas intermedias
-/// nacen implícitas (no emiten cabeceras vacías), la hoja nace EXPLÍCITA
-/// (un `[ui.columns]` legible, mismo criterio que `persist_set`).
+/// Writes the column picker's selection (#108 7a) into the `norte.toml` of
+/// `dir`, PRESERVING comments and formatting (`toml_edit`, same pattern as
+/// [`persist_set`]): `scheme = None` sets `[ui.columns]`'s `default` +
+/// `sort`; `Some(s)` sets `[ui.columns.scheme.<s>]`'s `columns` + `sort`.
+/// The persister's first NESTED write — `persist_set` only knows about
+/// `[section] key = scalar` — and first ARRAY value: the intermediate tables
+/// are born implicit (they do not emit empty headers), the leaf is born
+/// EXPLICIT (a readable `[ui.columns]`, same rule as `persist_set`).
 ///
-/// CONTRATO de forma: el guard `is_table_like` de [`persist_set`] se aplica
-/// nivel a nivel ANTES de mutar nada — un nivel escalar (`ui = 3`) indexado
-/// panicaría (ver el CONTRATO de `persist_set`) y tumbaría el hilo de fondo
-/// del caller. BLOQUEANTE: I/O de FS síncrono — el caller DEBE envolverla
-/// en `spawn_blocking` (regla 2), mismo patrón que `persist_hotlist_add`.
+/// Shape CONTRACT: [`persist_set`]'s `is_table_like` guard is applied level
+/// by level BEFORE mutating anything — an indexed scalar level (`ui = 3`)
+/// would panic (see `persist_set`'s CONTRACT) and bring down the caller's
+/// background thread. BLOCKING: synchronous FS I/O — the caller MUST wrap it
+/// in `spawn_blocking` (rule 2), same pattern as `persist_hotlist_add`.
 ///
-/// CONTRATO: `scheme` debe ser un scheme de `VPath` VALIDADO
-/// (`[a-z][a-z0-9+.-]*`), como entregan los callers actuales
-/// (`VPath::scheme()`). `toml_edit` escapa la clave igualmente — no hay
-/// inyección — pero un string arbitrario viajaría en el `Display` del
-/// error del guard de forma, convirtiéndolo en carrier de contenido
-/// hostil (#73).
+/// CONTRACT: `scheme` must be a VALIDATED `VPath` scheme
+/// (`[a-z][a-z0-9+.-]*`), as the current callers deliver it
+/// (`VPath::scheme()`). `toml_edit` escapes the key regardless — there is no
+/// injection — but an arbitrary string would travel in the shape guard's
+/// error `Display`, turning it into a carrier of hostile content (#73).
 ///
 /// # Errors
-/// [`std::io::Error`] si el TOML existente no parsea, un nivel existente de
-/// la cadena no es una tabla (forma inesperada), o falla el I/O.
+/// [`std::io::Error`] if the existing TOML does not parse, an existing level
+/// of the chain is not a table (unexpected shape), or the I/O fails.
 ///
-/// `sort = None` NO toca la clave `sort` que haya: es lo que se pasa cuando el
-/// orden elegido no tiene forma en este fichero —un orden por ATRIBUTO (ADR
-/// 0144) vale para la sesión, y `[ui] sort` solo nombra built-ins—. Escribir
-/// `name` en su lugar pisaría en silencio lo que el lector tenía guardado.
+/// `sort = None` does NOT touch whatever `sort` key is there: it is what is
+/// passed when the chosen order has no shape in this file — an order by
+/// ATTRIBUTE (ADR 0144) is valid for the session, and `[ui] sort` only names
+/// built-ins. Writing `name` in its place would silently overwrite what the
+/// reader had saved.
 pub fn persist_columns(
     dir: &std::path::Path,
     scheme: Option<&str>,
@@ -302,7 +299,7 @@ pub fn persist_columns(
     sort: Option<PersistSort<'_>>,
 ) -> std::io::Result<PathBuf> {
     std::fs::create_dir_all(dir)?;
-    // #116: lock ANTES de leer — el RMW entero es la sección crítica.
+    // #116: lock BEFORE reading — the whole RMW is the critical section.
     let lock = lock_config_file(dir, NORTE_TOML)?;
     let path = lock.target().to_path_buf();
     let mut doc = open_config_toml(&path)?;
@@ -313,12 +310,12 @@ pub fn persist_columns(
     let t = nested_table_mut(&mut doc, &path, &segs)?;
     let mut arr = toml_edit::Array::new();
     for id in ids {
-        // Ids TAL CUAL (set abierto — `attr:`/`plugin:`/no-parseables):
-        // `toml_edit` escapa, jamás inyecta TOML (pin en `persist_set`).
+        // Ids AS IS (an open set — `attr:`/`plugin:`/unparseable): `toml_edit`
+        // escapes, it never injects TOML (pinned in `persist_set`).
         arr.push(id.as_str());
     }
-    // La clave de la lista difiere por diseño del schema (#108 block 4):
-    // `default` bajo `[ui.columns]`, `columns` en un override de scheme.
+    // The list's key differs by schema design (#108 block 4): `default`
+    // under `[ui.columns]`, `columns` in a scheme override.
     let list_key = if scheme.is_none() {
         "default"
     } else {
@@ -342,56 +339,56 @@ pub fn persist_columns(
     Ok(path)
 }
 
-/// Lock advisory cross-process de UN fichero de config (#116): `flock`/
-/// `LockFileEx` sobre el hermano DEDICADO `<fichero>.lock` — jamás sobre el
-/// fichero mismo: la escritura atómica lo reemplaza por `rename` (inode
-/// nuevo) y un lock sobre el inode viejo no excluiría al siguiente
-/// escritor. Los escritores lo toman ANTES de leer: la sección crítica es
-/// el ciclo lee-modifica-escribe ENTERO (lost update cerrado, también
-/// entre procesos — GUI + TUI sobre el mismo fichero). Se libera al soltar
-/// el guard (cerrar el descriptor); el SO lo suelta igualmente si el
-/// proceso muere — no hay locks rancios tras un crash.
+/// Cross-process advisory lock for ONE config file (#116): `flock`/
+/// `LockFileEx` on the DEDICATED sibling `<file>.lock` — never on the file
+/// itself: the atomic write replaces it via `rename` (a new inode) and a
+/// lock on the old inode would not exclude the next writer. Writers take it
+/// BEFORE reading: the critical section is the WHOLE read-modify-write cycle
+/// (closes the lost update, across processes too — GUI + TUI over the same
+/// file). Released on dropping the guard (closing the descriptor); the OS
+/// releases it just the same if the process dies — no stale locks after a
+/// crash.
 ///
-/// K3c: hay DOS ficheros escribibles (`norte.toml` y `keymap.toml`) y cada
-/// uno tiene su PROPIO lock — compartir uno serializaría dos ficheros que no
-/// se tocan y, mucho peor, dejaría a un escritor futuro reemplazar un fichero
-/// mientras sostiene el lock del OTRO, creyéndose protegido. Que eso sea
-/// imposible es estructural, no una convención: el guard lleva su
-/// [`ConfigFileLock::target`] y [`write_config_file`] toma de ahí la ruta que
-/// escribe, así que el único fichero que un escritor puede nombrar es el que
-/// bloqueó.
+/// K3c: there are TWO writable files (`norte.toml` and `keymap.toml`) and
+/// each has its OWN lock — sharing one would serialize two files that do not
+/// touch each other and, much worse, would let a future writer replace a
+/// file while holding the OTHER's lock, believing itself protected. That
+/// being impossible is structural, not a convention: the guard carries its
+/// [`ConfigFileLock::target`] and [`write_config_file`] takes the path it
+/// writes from there, so the only file a writer can name is the one it
+/// locked.
 struct ConfigFileLock {
-    /// Mantiene vivo el descriptor bloqueado; drop = cerrar = unlock.
+    /// Keeps the locked descriptor alive; drop = close = unlock.
     _file: std::fs::File,
-    /// El fichero de config que este lock protege (`dir/<fichero>`), NO el
-    /// `.lock` hermano.
+    /// The config file this lock protects (`dir/<file>`), NOT the sibling
+    /// `.lock`.
     target: PathBuf,
 }
 
 impl ConfigFileLock {
-    /// El fichero de config protegido — el ÚNICO que su portador puede
-    /// escribir (ver la doc del tipo).
+    /// The protected config file — the ONLY one its holder may write (see
+    /// the type's doc).
     fn target(&self) -> &Path {
         &self.target
     }
 }
 
-/// Toma (bloqueando) el lock de escritores de `file` dentro de `dir`.
-/// BLOQUEANTE como el resto del persistidor (regla 2: el caller ya envuelve
-/// en `spawn_blocking`); los escritores son cortos — retener el lock
-/// milisegundos — y no hay locks anidados, así que la espera no acota:
-/// un peer VIVO pero colgado reteniéndolo es el único caso patológico
-/// (decisión: bloquear simple; el SO libera al morir el proceso).
+/// Takes (blocking) the writers' lock for `file` inside `dir`. BLOCKING like
+/// the rest of the persister (rule 2: the caller already wraps it in
+/// `spawn_blocking`); writers are short — holding the lock for milliseconds
+/// — and there are no nested locks, so the wait has no bound: a peer that is
+/// ALIVE but hung while holding it is the only pathological case (decision:
+/// block plainly; the OS releases it when the process dies).
 ///
-/// La apertura es SIN truncar (review #116 MAJOR-1): `File::create`
-/// (`CREATE_ALWAYS`) sobre un lockfile que otro proceso tiene bajo
-/// `LockFileEx` puede FALLAR en Windows (sharing/lock violation) en vez de
-/// llegar al `lock()` que espera — exactamente la contención GUI+TUI que
-/// este lock cierra. En POSIX truncar un fichero vacío era inocuo, pero la
-/// forma canónica de abrir un lockfile es no tocarlo jamás.
+/// The open is WITHOUT truncating (review #116 MAJOR-1): `File::create`
+/// (`CREATE_ALWAYS`) on a lockfile another process holds under `LockFileEx`
+/// can FAIL on Windows (sharing/lock violation) instead of reaching the
+/// `lock()` call that waits — exactly the GUI+TUI contention this lock
+/// closes. On POSIX truncating an empty file was harmless, but the canonical
+/// way to open a lockfile is to never touch it.
 ///
-/// `file` es SIEMPRE una constante de este módulo ([`NORTE_TOML`],
-/// [`KEYMAP_TOML`]) — nunca un nombre que venga del usuario.
+/// `file` is ALWAYS a constant of this module ([`NORTE_TOML`],
+/// [`KEYMAP_TOML`]) — never a name coming from the user.
 fn lock_config_file(dir: &Path, file: &str) -> std::io::Result<ConfigFileLock> {
     let handle = std::fs::OpenOptions::new()
         .write(true)
@@ -405,28 +402,28 @@ fn lock_config_file(dir: &Path, file: &str) -> std::io::Result<ConfigFileLock> {
     })
 }
 
-/// Escritura ATÓMICA del fichero que `lock` protege (#116): tmp hermano +
-/// `rename` (atómico en POSIX; `std::fs::rename` reemplaza también en
-/// Windows). Un lector concurrente ve el fichero viejo o el nuevo COMPLETO —
-/// jamás un truncado a medias que parsee "bien" y del que un escritor
-/// posterior reconstruya el documento perdiendo secciones ajenas. `sync_all`
-/// antes del rename evita la ventana fichero-vacío-tras-crash; el rename
-/// mismo puede perderse en un corte de luz (sin fsync del dir, a propósito):
-/// reaparece la config VIEJA — consistente, solo rancia. Un tmp huérfano
-/// de un crash es inocuo: la siguiente escritura (mismo nombre, bajo el
-/// lock) lo pisa. Los permisos del fichero existente se COPIAN al tmp
-/// (review #116 MINOR-2: sin esto un `chmod 600` del usuario se ensanchaba
-/// al umask en el reemplazo). Limitación Windows conocida: un proceso
-/// externo (editor, AV) con el fichero abierto sin `FILE_SHARE_DELETE`
-/// hace fallar el rename con sharing violation — la persistencia falla
-/// visible, sin retry (los lectores de Rust std comparten en modo full).
+/// ATOMIC write of the file `lock` protects (#116): sibling tmp + `rename`
+/// (atomic on POSIX; `std::fs::rename` also replaces on Windows). A
+/// concurrent reader sees the old file or the COMPLETE new one — never a
+/// half-truncated one that parses "fine" and from which a later writer
+/// reconstructs the document losing sections it did not own. `sync_all`
+/// before the rename avoids the empty-file-after-crash window; the rename
+/// itself can be lost in a power cut (deliberately no dir fsync): the OLD
+/// config reappears — consistent, just stale. An orphaned tmp from a crash
+/// is harmless: the next write (same name, under the lock) overwrites it.
+/// The existing file's permissions are COPIED to the tmp (review #116
+/// MINOR-2: without this, a user's `chmod 600` widened to the umask on
+/// replacement). Known Windows limitation: an external process (editor, AV)
+/// with the file open without `FILE_SHARE_DELETE` makes the rename fail with
+/// a sharing violation — the persist fails visibly, with no retry (Rust
+/// std's readers share in full mode).
 ///
-/// K3c: la ruta viene del `lock` (no del caller) y el tmp se DERIVA del
-/// nombre de esa ruta. Hardcodear `norte.toml.tmp` era inocuo con un solo
-/// fichero escribible; con dos, dos escritores de ficheros distintos
-/// competirían por un mismo tmp y el rename aterrizaría con el contenido del
-/// otro. El nombre se compone en `OsString` (regla 1: los nombres son bytes,
-/// jamás se asume UTF-8).
+/// K3c: the path comes from `lock` (not from the caller) and the tmp is
+/// DERIVED from that path's name. Hardcoding `norte.toml.tmp` was harmless
+/// with a single writable file; with two, two writers of different files
+/// would compete for the same tmp and the rename would land with the
+/// other's content. The name is composed in `OsString` (rule 1: names are
+/// bytes, UTF-8 is never assumed).
 fn write_config_file(lock: &ConfigFileLock, doc: &toml_edit::DocumentMut) -> std::io::Result<()> {
     use std::io::Write;
     let path = lock.target();
@@ -435,7 +432,7 @@ fn write_config_file(lock: &ConfigFileLock, doc: &toml_edit::DocumentMut) -> std
         .ok_or_else(|| {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
-                "ruta de config sin nombre de fichero",
+                "config path with no file name",
             )
         })?
         .to_os_string();
@@ -454,13 +451,13 @@ fn write_config_file(lock: &ConfigFileLock, doc: &toml_edit::DocumentMut) -> std
     std::fs::rename(&tmp, path)
 }
 
-/// Lee (o crea, si no existe) el fichero de config de `path` como documento
-/// `toml_edit`, con el error de parseo SANEADO — el `Display` de
-/// `toml_edit` cita la línea ofensora, y un `name`/`path` hostil
-/// persistido antes llegaría a quien muestre este `io::Error` (la status
-/// bar, #73): se nombra el fichero, jamás el contenido. Compartido por los
-/// escritores de columnas (`persist_columns`/`persist_column_format`) y por
-/// los de keymap (`persist_keymap_append`/`persist_keymap_remove`).
+/// Reads (or creates, if absent) the config file at `path` as a `toml_edit`
+/// document, with the parse error SANITIZED — `toml_edit`'s `Display` quotes
+/// the offending line, and a hostile `name`/`path` persisted earlier would
+/// reach whoever shows this `io::Error` (the status bar, #73): the file is
+/// named, never the content. Shared by the column writers
+/// (`persist_columns`/`persist_column_format`) and the keymap ones
+/// (`persist_keymap_append`/`persist_keymap_remove`).
 fn open_config_toml(path: &std::path::Path) -> std::io::Result<toml_edit::DocumentMut> {
     use std::io::{Error, ErrorKind};
     match std::fs::read_to_string(path) {
@@ -468,7 +465,7 @@ fn open_config_toml(path: &std::path::Path) -> std::io::Result<toml_edit::Docume
             Error::new(
                 ErrorKind::InvalidData,
                 format!(
-                    "{} no parsea: TOML inválido; corrígelo o bórralo",
+                    "{} does not parse: invalid TOML; fix it or delete it",
                     path.display()
                 ),
             )
@@ -478,113 +475,113 @@ fn open_config_toml(path: &std::path::Path) -> std::io::Result<toml_edit::Docume
     }
 }
 
-/// Camina/crea la cadena `segs` de tablas bajo `doc` (#108 7a/7b — DOS
-/// callers: [`persist_columns`] y [`persist_column_format`]) y devuelve la
-/// hoja mutable.
+/// Walks/creates the `segs` chain of tables under `doc` (#108 7a/7b — TWO
+/// callers: [`persist_columns`] and [`persist_column_format`]) and returns
+/// the mutable leaf.
 ///
-/// Guard de forma nivel a nivel, de SOLO LECTURA y ANTES de tocar nada
-/// (mismo criterio `is_table_like` que `persist_set`): un nivel que se
-/// corta (no existe) hace segura la creación de todo lo de debajo. La
-/// mutación camina con `entry` sobre `TableLike` — NO con el operador de
-/// índice, cuyo `IndexMut` en este `toml_edit` materializa los niveles que
-/// falten como tablas INLINE con dotted-keys (`ui = { columns.default = … }`),
-/// ilegible para un fichero editable a mano. Cada nivel nuevo nace
-/// `Item::Table`: intermedios IMPLÍCITOS (sin cabecera propia), la hoja
-/// EXPLÍCITA (`[ui.columns]` legible, mismo criterio que `persist_set`);
-/// una hoja `Item::Table` ya existente se fuerza a explícita; una inline
-/// (`ui = { columns = {…} }`) se respeta tal cual.
+/// Level-by-level shape guard, READ-ONLY and BEFORE touching anything (same
+/// `is_table_like` rule as `persist_set`): a level that cuts off (does not
+/// exist) makes creating everything below it safe. The mutation walks with
+/// `entry` over `TableLike` — NOT with the index operator, whose `IndexMut`
+/// in this `toml_edit` materializes missing levels as INLINE tables with
+/// dotted-keys (`ui = { columns.default = … }`), unreadable for a
+/// hand-editable file. Each new level is born `Item::Table`: intermediates
+/// IMPLICIT (with no header of their own), the leaf EXPLICIT (a readable
+/// `[ui.columns]`, same rule as `persist_set`); an already-existing
+/// `Item::Table` leaf is forced explicit; an inline one
+/// (`ui = { columns = {…} }`) is respected as is.
 fn nested_table_mut<'d>(
     doc: &'d mut toml_edit::DocumentMut,
     path: &std::path::Path,
     segs: &[&str],
 ) -> std::io::Result<&'d mut dyn toml_edit::TableLike> {
     use std::io::{Error, ErrorKind};
-    let forma = |hasta: usize| {
+    let shape = |up_to: usize| {
         Error::new(
             ErrorKind::InvalidData,
             format!(
-                "{}: [{}] no es una tabla (forma inesperada); corrígelo o bórralo",
+                "{}: [{}] is not a table (unexpected shape); fix it or delete it",
                 path.display(),
-                segs[..=hasta].join(".")
+                segs[..=up_to].join(".")
             ),
         )
     };
     {
-        let mut nivel: &dyn toml_edit::TableLike = doc.as_table();
+        let mut level: &dyn toml_edit::TableLike = doc.as_table();
         for (i, seg) in segs.iter().enumerate() {
-            let Some(item) = nivel.get(seg) else { break };
+            let Some(item) = level.get(seg) else { break };
             if !item.is_table_like() {
-                return Err(forma(i));
+                return Err(shape(i));
             }
             let Some(t) = item.as_table_like() else {
-                // Inalcanzable: `is_table_like` acaba de pasar (es
-                // literalmente `as_table_like().is_some()`).
+                // Unreachable: `is_table_like` just passed (it is literally
+                // `as_table_like().is_some()`).
                 break;
             };
-            nivel = t;
+            level = t;
         }
     }
-    // Seguro tras el guard: ya no hay nivel existente no-tabla.
+    // Safe after the guard: there is no longer any existing non-table level.
     let mut t: &mut dyn toml_edit::TableLike = doc.as_table_mut();
     for (i, seg) in segs.iter().enumerate() {
-        let es_hoja = i + 1 == segs.len();
+        let is_leaf = i + 1 == segs.len();
         let item = t.entry(seg).or_insert_with(|| {
             let mut nt = toml_edit::Table::new();
-            nt.set_implicit(!es_hoja);
+            nt.set_implicit(!is_leaf);
             toml_edit::Item::Table(nt)
         });
-        if es_hoja && let Some(tab) = item.as_table_mut() {
+        if is_leaf && let Some(tab) = item.as_table_mut() {
             tab.set_implicit(false);
         }
-        // Inalcanzable el `Err`: el guard ya rechazó todo nivel existente
-        // no-tabla y los nuevos nacen `Item::Table` — pero un `Err` limpio
-        // antes que un `unwrap` (regla 6).
-        t = item.as_table_like_mut().ok_or_else(|| forma(i))?;
+        // Unreachable `Err`: the guard already refused every existing
+        // non-table level and new ones are born `Item::Table` — but a clean
+        // `Err` beats an `unwrap` (rule 6).
+        t = item.as_table_like_mut().ok_or_else(|| shape(i))?;
     }
     Ok(t)
 }
 
-/// Fija (o crea) el `format` del `[[ui.columns.spec]]` de id `id` (#108
-/// 7b): reemplazo POR ID que PRESERVA el resto de campos de la entrada
-/// (`header`/`width`/`align`) y los comentarios del fichero — el
-/// precedente `ArrayOfTables` de [`persist_hotlist_add`], incluido su
-/// guard de forma (`spec` existente que no sea array de tablas = error
-/// limpio, jamás pánico).
+/// Sets (or creates) the `format` of the `[[ui.columns.spec]]` for id `id`
+/// (#108 7b): a BY-ID replacement that PRESERVES the entry's other fields
+/// (`header`/`width`/`align`) and the file's comments — [`persist_hotlist_add`]'s
+/// `ArrayOfTables` precedent, including its shape guard (an existing `spec`
+/// that is not an array of tables = a clean error, never a panic).
 ///
-/// CONTRATO: `id` viene del vocabulario del picker (ids Display de
-/// builtins) y `format` del vocabulario CERRADO de formatos ya validado
-/// contra su columna; `toml_edit` escapa igualmente. BLOQUEANTE: I/O de FS
-/// síncrono — el caller DEBE envolverla en `spawn_blocking` (regla 2).
+/// CONTRACT: `id` comes from the picker's vocabulary (builtins' Display ids)
+/// and `format` from the CLOSED vocabulary of formats already validated
+/// against its column; `toml_edit` escapes it regardless. BLOCKING:
+/// synchronous FS I/O — the caller MUST wrap it in `spawn_blocking` (rule 2).
 ///
 /// # Errors
-/// [`std::io::Error`] si el TOML existente no parsea, un nivel de
-/// `[ui.columns]` no es tabla, `spec` existe con otra forma, o falla el
-/// I/O.
+/// [`std::io::Error`] if the existing TOML does not parse, a level of
+/// `[ui.columns]` is not a table, `spec` exists with a different shape, or
+/// the I/O fails.
 pub fn persist_column_format(dir: &Path, id: &str, format: &str) -> std::io::Result<PathBuf> {
     persist_column_spec_field(dir, id, "format", toml_edit::value(format))
 }
 
-/// Persiste el ANCHO de una columna como `width = <celdas>` en su
-/// `[[ui.columns.spec]]` (spec 2026-09-11, V2: arrastrar el borde de una
-/// cabecera en la ventana). Misma mecánica y mismos guards que
-/// [`persist_column_format`]: reemplazo por id, los otros campos y los
-/// comentarios sobreviven, todas las entradas duplicadas se actualizan.
+/// Persists a column's WIDTH as `width = <cells>` in its
+/// `[[ui.columns.spec]]` (spec 2026-09-11, V2: dragging a header's border in
+/// the window). Same mechanics and same guards as [`persist_column_format`]:
+/// replacement by id, the other fields and comments survive, every
+/// duplicate entry is updated.
 ///
-/// CONTRATO: `cells` ya está en `[1, 64]` —lo que el loader acepta— o el
-/// siguiente `load` lo rechazará entero; el caller (el host) acota antes.
-/// BLOQUEANTE: I/O de FS síncrono — envolver en `spawn_blocking` (regla 2).
+/// CONTRACT: `cells` is already in `[1, 64]` — what the loader accepts — or
+/// the next `load` will reject it entirely; the caller (the host) bounds it
+/// beforehand. BLOCKING: synchronous FS I/O — wrap in `spawn_blocking` (rule
+/// 2).
 ///
 /// # Errors
-/// Los de [`persist_column_format`].
+/// The same as [`persist_column_format`].
 pub fn persist_column_width(dir: &Path, id: &str, cells: u16) -> std::io::Result<PathBuf> {
-    // La forma que el loader lee para un ancho fijo: `width = { fixed = N }`
-    // (`WidthSection::Fixed`); un entero a secas no es ninguna variante.
-    let mut fijo = toml_edit::InlineTable::new();
-    fijo.insert("fixed", toml_edit::Value::from(i64::from(cells)));
-    persist_column_spec_field(dir, id, "width", toml_edit::value(fijo))
+    // The shape the loader reads for a fixed width: `width = { fixed = N }`
+    // (`WidthSection::Fixed`); a bare integer is not any variant.
+    let mut fixed = toml_edit::InlineTable::new();
+    fixed.insert("fixed", toml_edit::Value::from(i64::from(cells)));
+    persist_column_spec_field(dir, id, "width", toml_edit::value(fixed))
 }
 
-/// El escritor común de UN campo de un `[[ui.columns.spec]]` por id.
+/// The common writer for ONE field of a `[[ui.columns.spec]]` by id.
 fn persist_column_spec_field(
     dir: &Path,
     id: &str,
@@ -593,7 +590,7 @@ fn persist_column_spec_field(
 ) -> std::io::Result<PathBuf> {
     use std::io::{Error, ErrorKind};
     std::fs::create_dir_all(dir)?;
-    // #116: lock ANTES de leer — el RMW entero es la sección crítica.
+    // #116: lock BEFORE reading — the whole RMW is the critical section.
     let lock = lock_config_file(dir, NORTE_TOML)?;
     let path = lock.target().to_path_buf();
     let mut doc = open_config_toml(&path)?;
@@ -606,25 +603,25 @@ fn persist_column_spec_field(
             Error::new(
                 ErrorKind::InvalidData,
                 format!(
-                    "{}: `spec` no es un array de tablas (forma inesperada); corrígelo o bórralo",
+                    "{}: `spec` is not an array of tables (unexpected shape); fix it or delete it",
                     path.display()
                 ),
             )
         })?;
-    // TODAS las entradas del id, no solo la primera (MAJOR revisión 7b): el
-    // loader fusiona duplicados intra-capa LAST-wins por campo — escribir
-    // solo la primera dejaría la sesión y el fichero divergentes tras un
-    // reload (el duplicado tardío pisa lo recién guardado con el toast ya
-    // enseñado). Actualizarlas todas auto-sana la divergencia.
-    let mut alguna = false;
+    // EVERY entry for the id, not just the first (MAJOR review 7b): the
+    // loader merges intra-layer duplicates LAST-wins per field — writing
+    // only the first would leave the session and the file diverging after a
+    // reload (the later duplicate overrides what was just saved, with the
+    // toast already shown). Updating all of them self-heals the divergence.
+    let mut any = false;
     for tb in arr
         .iter_mut()
         .filter(|tb| tb.get("id").and_then(|v| v.as_str()) == Some(id))
     {
         tb[key] = value.clone();
-        alguna = true;
+        any = true;
     }
-    if !alguna {
+    if !any {
         let mut tb = toml_edit::Table::new();
         tb["id"] = toml_edit::value(id);
         tb[key] = value;
@@ -634,24 +631,24 @@ fn persist_column_spec_field(
     Ok(path)
 }
 
-/// Añade (o reemplaza si `name` ya existe) una entrada `[[hotlist]]` en el
-/// `norte.toml` de `dir`, PRESERVANDO comentarios y formato (mismo patrón
-/// `toml_edit` que [`persist_ui_theme_to`]). `wire_path` se guarda TAL
-/// CUAL — la validación a [`VPath`] ocurre al releer (`load`), no aquí:
-/// persistir no debe rechazar un path que el propio `norte` todavía no
-/// sabe interpretar (p.ej. un scheme nuevo de un provider futuro).
+/// Adds (or replaces if `name` already exists) a `[[hotlist]]` entry in the
+/// `norte.toml` of `dir`, PRESERVING comments and formatting (same
+/// `toml_edit` pattern as [`persist_ui_theme_to`]). `wire_path` is saved AS
+/// IS — validation to [`VPath`] happens on reread (`load`), not here:
+/// persisting must not refuse a path `norte` itself does not yet know how to
+/// interpret (e.g. a future provider's new scheme).
 ///
-/// BLOQUEANTE: hace I/O de FS síncrono. El caller (T5) DEBE envolverla en
-/// `tokio::task::spawn_blocking` — el runtime jamás se bloquea (regla 2),
-/// mismo patrón que `persist_ui_theme` en `main.rs`.
+/// BLOCKING: does synchronous FS I/O. The caller (T5) MUST wrap it in
+/// `tokio::task::spawn_blocking` — the runtime is never blocked (rule 2),
+/// same pattern as `persist_ui_theme` in `main.rs`.
 ///
 /// # Errors
-/// [`std::io::Error`] si el TOML existente no parsea, `hotlist` existe
-/// pero no es un array de tablas, o falla el I/O.
+/// [`std::io::Error`] if the existing TOML does not parse, `hotlist` exists
+/// but is not an array of tables, or the I/O fails.
 pub fn persist_hotlist_add(dir: &Path, name: &str, wire_path: &str) -> std::io::Result<PathBuf> {
     use std::io::{Error, ErrorKind};
     std::fs::create_dir_all(dir)?;
-    // #116: lock ANTES de leer — el RMW entero es la sección crítica.
+    // #116: lock BEFORE reading — the whole RMW is the critical section.
     let lock = lock_config_file(dir, NORTE_TOML)?;
     let path = lock.target().to_path_buf();
     let mut doc = match std::fs::read_to_string(&path) {
@@ -664,7 +661,7 @@ pub fn persist_hotlist_add(dir: &Path, name: &str, wire_path: &str) -> std::io::
             Error::new(
                 ErrorKind::InvalidData,
                 format!(
-                    "{} no parsea: TOML inválido; corrígelo o bórralo",
+                    "{} does not parse: invalid TOML; fix it or delete it",
                     path.display()
                 ),
             )
@@ -677,10 +674,15 @@ pub fn persist_hotlist_add(dir: &Path, name: &str, wire_path: &str) -> std::io::
         .entry("hotlist")
         .or_insert_with(|| toml_edit::Item::ArrayOfTables(toml_edit::ArrayOfTables::new()))
         .as_array_of_tables_mut()
-        .ok_or_else(|| Error::new(ErrorKind::InvalidData, "`hotlist` no es un array de tablas"))?;
-    // add REEMPLAZA si el name ya existe (spec: "add reemplaza si name
-    // existe") — mismo comportamiento que renombrar/actualizar el favorito
-    // sin dejar una entrada vieja huérfana.
+        .ok_or_else(|| {
+            Error::new(
+                ErrorKind::InvalidData,
+                "`hotlist` is not an array of tables",
+            )
+        })?;
+    // add REPLACES if the name already exists (spec: "add replaces if name
+    // exists") — same behavior as renaming/updating the favorite without
+    // leaving an orphaned old entry.
     if let Some(existing) = arr
         .iter_mut()
         .find(|t| t.get("name").and_then(|v| v.as_str()) == Some(name))
@@ -696,28 +698,27 @@ pub fn persist_hotlist_add(dir: &Path, name: &str, wire_path: &str) -> std::io::
     Ok(path)
 }
 
-/// Retira la entrada `[[hotlist]]` de nombre `name` del `norte.toml` de
-/// `dir`, PRESERVANDO comentarios y formato. `name` inexistente (o
-/// `norte.toml`/`hotlist` inexistentes) es NO-OP documentado: no hay nada
-/// que borrar, no es un error — y crucialmente NO reescribe el fichero
-/// (review MINOR-1: escribir sin cambios toca el mtime → el watcher de
-/// `config::watch` lo confunde con una edición real y dispara un
-/// hot-reload fantasma).
+/// Removes the `[[hotlist]]` entry named `name` from the `norte.toml` of
+/// `dir`, PRESERVING comments and formatting. A nonexistent `name` (or a
+/// missing `norte.toml`/`hotlist`) is a documented NO-OP: there is nothing to
+/// delete, it is not an error — and crucially it does NOT rewrite the file
+/// (review MINOR-1: writing with no changes touches the mtime → `config::watch`'s
+/// watcher confuses it with a real edit and triggers a phantom hot-reload).
 ///
-/// BLOQUEANTE: hace I/O de FS síncrono. El caller (T5) DEBE envolverla en
-/// `tokio::task::spawn_blocking` — el runtime jamás se bloquea (regla 2),
-/// mismo patrón que `persist_ui_theme` en `main.rs`.
+/// BLOCKING: does synchronous FS I/O. The caller (T5) MUST wrap it in
+/// `tokio::task::spawn_blocking` — the runtime is never blocked (rule 2),
+/// same pattern as `persist_ui_theme` in `main.rs`.
 ///
 /// # Errors
-/// [`std::io::Error`] si el TOML existente no parsea o falla el I/O.
+/// [`std::io::Error`] if the existing TOML does not parse or the I/O fails.
 pub fn persist_hotlist_remove(dir: &Path, name: &str) -> std::io::Result<PathBuf> {
     use std::io::{Error, ErrorKind};
-    // #116: lock ANTES de leer. Este writer no crea el dir (solo borra):
-    // dir inexistente = nada que borrar = el mismo no-op documentado que
-    // el `norte.toml` ausente de abajo — y ese no-op necesita la ruta ANTES
-    // de que exista el guard, único motivo de que aquí se componga a mano
-    // (el resto de la familia la toma de `lock.target()`, que no puede
-    // divergir del fichero bloqueado).
+    // #116: lock BEFORE reading. This writer creates no dir (it only
+    // deletes): a nonexistent dir = nothing to delete = the same documented
+    // no-op as the absent `norte.toml` below — and that no-op needs the path
+    // BEFORE the guard exists, the only reason it is composed by hand here
+    // (the rest of the family takes it from `lock.target()`, which cannot
+    // diverge from the locked file).
     let lock = match lock_config_file(dir, NORTE_TOML) {
         Ok(l) => l,
         Err(e) if e.kind() == ErrorKind::NotFound => return Ok(dir.join(NORTE_TOML)),
@@ -734,17 +735,17 @@ pub fn persist_hotlist_remove(dir: &Path, name: &str) -> std::io::Result<PathBuf
             Error::new(
                 ErrorKind::InvalidData,
                 format!(
-                    "{} no parsea: TOML inválido; corrígelo o bórralo",
+                    "{} does not parse: invalid TOML; fix it or delete it",
                     path.display()
                 ),
             )
         })?,
-        // No-op documentado: nada que borrar.
+        // Documented no-op: nothing to delete.
         Err(e) if e.kind() == ErrorKind::NotFound => return Ok(path),
         Err(e) => return Err(e),
     };
-    // Solo se escribe si `retain` REALMENTE quitó algo — comparar
-    // longitudes antes/después en vez de escribir incondicionalmente.
+    // Only writes if `retain` REALLY removed something — compare lengths
+    // before/after instead of writing unconditionally.
     if let Some(arr) = doc
         .as_table_mut()
         .get_mut("hotlist")
@@ -1239,37 +1240,37 @@ pub fn persist_keymap_unbind(
     Ok(KeymapWrite { path, changed })
 }
 
-/// Una entrada de hotlist YA fusionada y validada por [`load`]. `target` es
-/// `Err` si el `path` de `norte.toml` no parsea como [`VPath`] — la entrada
-/// se CONSERVA (se muestra con badge de error en el popup, T5) en vez de
-/// tumbar la carga entera: la hotlist es data del usuario, no config
-/// estructural (spec 2026-07-18, decisión 3). La clave de error es
-/// ESTABLE (`"err-invalid-path"`, no el mensaje crudo del parser de
-/// `VPath`): el popup la traduce vía Fluent y un path hostil (bidi,
-/// kilométrico) jamás llega intacto a la barra (misma cautela que #73).
+/// A hotlist entry ALREADY merged and validated by [`load`]. `target` is
+/// `Err` if `norte.toml`'s `path` does not parse as [`VPath`] — the entry is
+/// KEPT (shown with an error badge in the popup, T5) instead of bringing
+/// down the whole load: the hotlist is the user's data, not structural
+/// config (spec 2026-07-18, decision 3). The error key is STABLE
+/// (`"err-invalid-path"`, not the parser's raw `VPath` message): the popup
+/// translates it via Fluent, and a hostile path (bidi, mile-long) never
+/// reaches the bar intact (same caution as #73).
 #[derive(Debug, Clone)]
 pub struct HotlistItem {
-    /// Nombre mostrado.
+    /// Displayed name.
     pub name: String,
-    /// Destino ya parseado, o la clave de error estable.
+    /// Already-parsed destination, or the stable error key.
     pub target: Result<VPath, String>,
 }
 
-/// Clave de error ESTABLE para un `path` de hotlist que no parsea como
-/// [`VPath`] (ver doc de [`HotlistItem`]).
+/// STABLE error key for a hotlist `path` that does not parse as [`VPath`]
+/// (see [`HotlistItem`]'s doc).
 const ERR_INVALID_PATH: &str = "err-invalid-path";
 
-/// Valida `entry.path` a [`VPath`] y lo fusiona en `items`: si ya hay una
-/// entrada con el mismo `name`, la reemplaza — sea de una capa ANTERIOR
-/// (la capa posterior gana, igual que el resto de la config), sea de un
-/// `[[hotlist]]` PREVIO dentro de la MISMA capa (TOML no impide repetir
-/// `name` en un array de tablas; `load` llama a esta función una vez por
-/// entrada, en orden de aparición, así que la ÚLTIMA gana también
-/// intra-capa). Conserva la posición original para que el orden del popup
-/// no salte al editar solo el `path` de un favorito ya existente. Si no
-/// existía, se añade al final. Las claves (`name`) comparan byte-exactas
-/// SIN normalizar (la identidad jamás se normaliza); twins NFC/NFD conviven
-/// como filas distintas — decisión consciente.
+/// Validates `entry.path` to [`VPath`] and merges it into `items`: if there is
+/// already an entry with the same `name`, it replaces it — whether from an
+/// EARLIER layer (the later layer wins, same as the rest of the config), or
+/// from a PREVIOUS `[[hotlist]]` within the SAME layer (TOML does not stop
+/// `name` repeating in an array of tables; `load` calls this function once
+/// per entry, in order of appearance, so the LAST one wins intra-layer too).
+/// Keeps the original position so the popup's order does not jump when only
+/// an existing favorite's `path` is edited. If it did not exist, it is
+/// appended at the end. Keys (`name`) compare byte-exact with NO
+/// normalization (identity is never normalized); NFC/NFD twins coexist as
+/// distinct rows — a deliberate decision.
 fn merge_hotlist_entry(items: &mut Vec<HotlistItem>, entry: schema::HotlistEntry) {
     let target = VPath::parse(&entry.path).map_err(|_| ERR_INVALID_PATH.to_owned());
     if let Some(existing) = items.iter_mut().find(|it| it.name == entry.name) {
@@ -1441,8 +1442,8 @@ impl StatusItems {
     /// # Errors
     /// The message to show, naming the valid ids (never the raw value).
     pub fn parse<S: AsRef<str>>(ids: &[S]) -> Result<Self, &'static str> {
-        const MSG: &str = "[ui] status_items inválido: cada id una vez, de «position», \
-                           «marks», «sort», «encoding», «tasks» y «notices»";
+        const MSG: &str = "invalid [ui] status_items: each id once, from \"position\", \
+                           \"marks\", \"sort\", \"encoding\", \"tasks\" and \"notices\"";
         let mut out = Self {
             ids: StatusItem::ALL,
             len: 0,
@@ -1452,7 +1453,7 @@ impl StatusItems {
             if out.iter().any(|i| i == item) {
                 return Err(MSG);
             }
-            // Cabe: `ALL` tiene uno de cada, y los repetidos ya se rechazaron.
+            // It fits: `ALL` has one of each, and repeats were already rejected.
             out.ids[usize::from(out.len)] = item;
             out.len += 1;
         }
@@ -1615,17 +1616,17 @@ impl ProcessesPanel {
     }
 }
 
-/// `[ui] images`, validado.
+/// `[ui] images`, validated.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Images {
-    /// El protocolo del terminal si lo hay; si no, el previewer.
+    /// The terminal's protocol if it has one; otherwise the previewer.
     #[default]
     Auto,
-    /// El protocolo del terminal, aunque la sonda dijera que no.
+    /// The terminal's protocol, even if the probe said no.
     Kitty,
-    /// Medios bloques por el previewer, aunque el terminal supiera más.
+    /// Half blocks from the previewer, even if the terminal knew better.
     Blocks,
-    /// Ni uno ni otro: el visor se queda en hexview.
+    /// Neither one: the viewer stays on hexview.
     Off,
 }
 
@@ -1852,16 +1853,16 @@ pub struct AiSettings {
     pub providers: std::collections::BTreeMap<String, crate::schema::AiProviderEntry>,
 }
 
-/// `[ui.columns] sort` resuelto y VALIDADO (#108): vocabulario cerrado —
-/// un valor inválido es error de carga con la ruta culpable (patrón
-/// `quick_search`). El default reproduce el orden histórico.
+/// `[ui.columns] sort`, resolved and VALIDATED (#108): closed vocabulary —
+/// an invalid value is a load error with the culprit path (`quick_search`
+/// pattern). The default reproduces the historical order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SortChoice {
-    /// Columna de orden.
+    /// Sort column.
     pub column: SortColumnKey,
-    /// Dirección.
+    /// Direction.
     pub descending: bool,
-    /// Directorios primero.
+    /// Directories first.
     pub dirs_first: bool,
 }
 
@@ -1875,84 +1876,87 @@ impl Default for SortChoice {
     }
 }
 
-/// Columna de orden del vocabulario CERRADO de config (#108). El frontend
-/// la mapea a su `SortSpec`; separada para no invertir la dirección de
-/// dependencias (config no conoce al frontend).
+/// Sort column from config's CLOSED vocabulary (#108). The frontend maps it
+/// onto its own `SortSpec`; kept separate so the dependency direction is not
+/// reversed (config does not know the frontend).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SortColumnKey {
-    /// Nombre.
+    /// Name.
     Name,
-    /// Tamaño.
+    /// Size.
     Size,
-    /// Fecha de modificación.
+    /// Modification date.
     Mtime,
-    /// Extensión del nombre (#138).
+    /// Name extension (#138).
     Extension,
 }
 
-/// `[ui.columns]` resuelto (#108): ids CRUDOS (set abierto — los parsea el
-/// frontend, los reporta doctor) + sort validado + overrides por scheme.
+/// `[ui.columns]`, resolved (#108): RAW ids (an open set — the frontend
+/// parses them, doctor reports them) + validated sort + per-scheme
+/// overrides.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ColumnsConfig {
-    /// Ids de columna en orden de pintado; `None` = default built-in.
+    /// Column ids in paint order; `None` = built-in default.
     pub default_columns: Option<Vec<String>>,
-    /// Orden global; `None` = histórico (name/asc/dirs-first).
+    /// Global sort; `None` = historical (name/asc/dirs-first).
     pub sort: Option<SortChoice>,
-    /// Overrides por scheme (la lista REEMPLAZA, jamás mezcla).
+    /// Per-scheme overrides (the list REPLACES, never merges).
     pub schemes: std::collections::BTreeMap<String, SchemeColumns>,
-    /// Specs globales por id de columna (#108 7b), ya validados.
+    /// Global specs by column id (#108 7b), already validated.
     pub specs: std::collections::BTreeMap<String, ColumnSpec>,
 }
 
-/// Override de un scheme dentro de [`ColumnsConfig`].
+/// A scheme's override inside [`ColumnsConfig`].
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SchemeColumns {
-    /// Lista de columnas del scheme; `None` = hereda la default.
+    /// The scheme's column list; `None` = inherits the default.
     pub columns: Option<Vec<String>>,
-    /// Orden del scheme; `None` = hereda el global.
+    /// The scheme's sort; `None` = inherits the global one.
     pub sort: Option<SortChoice>,
-    /// Specs del scheme por id (#108 7b); al resolver GANAN sobre los
-    /// globales.
+    /// The scheme's specs by id (#108 7b); WIN over the global ones when
+    /// resolving.
     pub specs: std::collections::BTreeMap<String, ColumnSpec>,
 }
 
-/// Width elegido en un spec (#108 7b), ya validado a `[1, 64]`.
+/// Width chosen in a spec (#108 7b), already validated to `[1, 64]`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WidthChoice {
-    /// Ancho de la celda más ancha de la página (techo del frontend).
+    /// Width of the widest cell on the page (the frontend's ceiling).
     Auto,
-    /// Fijo en celdas.
+    /// Fixed, in cells.
     Fixed(u16),
-    /// Reparto por peso con suelo.
+    /// Share by weight, with a floor.
     Flex {
-        /// Suelo en celdas.
+        /// Floor in cells.
         min: u16,
-        /// Peso del reparto.
+        /// Share weight.
         weight: u16,
     },
 }
 
-/// Align elegido en un spec (#108 7b).
+/// Alignment chosen in a spec (#108 7b).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AlignChoice {
-    /// Izquierda.
+    /// Left.
     Left,
-    /// Derecha.
+    /// Right.
     Right,
 }
 
-/// Un `[[ui.columns.spec]]` resuelto (#108 7b): vocabularios YA validados
-/// (typo = error de carga, patrón sort); `format` queda como string —
-/// si CASA con la columna lo decide el frontend (doctor reporta).
+/// A `[[ui.columns.spec]]`, resolved (#108 7b): vocabularies ALREADY
+/// validated (a typo is a load error, the sort pattern); `format` stays a
+/// string — whether it FITS the column is the frontend's call (doctor
+/// reports it).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ColumnSpec {
-    /// Ancho, si el spec lo fija.
+    /// Width, if the spec sets it.
     pub width: Option<WidthChoice>,
-    /// Alineación, si el spec la fija.
+    /// Alignment, if the spec sets it.
     pub align: Option<AlignChoice>,
-    /// Formato (vocabulario global cerrado; encaje por-columna = frontend).
+    /// Format (closed global vocabulary; per-column fit is the frontend's
+    /// call).
     pub format: Option<String>,
-    /// Cabecera propia (texto libre; el frontend la sanea y capa).
+    /// Custom header (free text; the frontend sanitizes and caps it).
     pub header: Option<String>,
 }
 
@@ -1998,70 +2002,72 @@ pub struct CommonConfig {
     /// Project — presentation-only, same class as the other `[ui]` scalars
     /// above.
     pub ui_confirm_quit: ConfirmQuit,
-    /// `[ui.columns]` (#108, last-wins POR CAMPO; schemes se fusionan por
-    /// clave con el último ganando). Presentación-solo: todas las capas.
+    /// `[ui.columns]` (#108, last-wins PER FIELD; schemes merge by key with
+    /// the last one winning). Presentation-only: every layer.
     pub ui_columns: ColumnsConfig,
     /// `[ui] show_hidden` (#107, last-wins; None = show everything). Honored
     /// from ALL layers including Project — presentation-only, same class as
     /// the other `[ui]` scalars above: hiding dotfiles cannot launch, write,
     /// or redirect anything.
     pub ui_show_hidden: Option<bool>,
-    /// `[ui] layout` (last-wins; None = el preset `orthodox`). Nombre de un
-    /// fichero en `layouts/`. Presentación-solo, como el resto de escalares
-    /// `[ui]`: repartir la pantalla no lanza, escribe ni redirige nada.
+    /// `[ui] layout` (last-wins; None = the `orthodox` preset). Name of a
+    /// file in `layouts/`. Presentation-only, like the rest of the `[ui]`
+    /// scalars: laying out the screen cannot launch, write, or redirect
+    /// anything.
     pub ui_layout: Option<String>,
     /// `[ui] mouse` (last-wins; None = captured). Honored from ALL layers
     /// including Project — presentation-only, same class as the other
     /// `[ui]` scalars above: capturing (or not capturing) the pointer
     /// cannot launch, write, or redirect anything.
     pub ui_mouse: Option<bool>,
-    /// `[ui] alt_menu` (last-wins; None = off). Presentación-solo, todas las
-    /// capas: pedirle al terminal un protocolo de teclado no lanza, escribe
-    /// ni redirige nada.
+    /// `[ui] alt_menu` (last-wins; None = off). Presentation-only, every
+    /// layer: asking the terminal for a keyboard protocol cannot launch,
+    /// write, or redirect anything.
     pub ui_alt_menu: Option<bool>,
-    /// `[ui] menu_bar` (last-wins; None = FIJADA). Presentación-solo, todas
-    /// las capas: una barra de menú no lanza, escribe ni redirige nada.
+    /// `[ui] menu_bar` (last-wins; None = PINNED). Presentation-only, every
+    /// layer: a menu bar cannot launch, write, or redirect anything.
     ///
-    /// Encendida por defecto porque el menú era la única puerta a varios
-    /// comandos y no había nada en pantalla diciendo que existía: quien no se
-    /// sabe `Alt+M` no puede encontrar lo que no ve.
+    /// On by default because the menu was the only door to several commands
+    /// and there was nothing on screen saying it existed: whoever does not
+    /// already know `Alt+M` cannot find what they cannot see.
     pub ui_menu_bar: Option<bool>,
-    /// `[ui] panel_bar` (last-wins; None = FIJADA). Presentación-solo, todas
-    /// las capas, mismo criterio que la de menús.
+    /// `[ui] panel_bar` (last-wins; None = PINNED). Presentation-only, every
+    /// layer, same rule as the menu bar's.
     ///
-    /// Encendida por defecto por lo mismo: los paneles laterales se abrían por
-    /// atajo, por menú o por paleta, y los tres exigen SABER que el panel
-    /// existe. Un panel aportado por un plugin, además, no lo descubría nadie.
+    /// On by default for the same reason: the side panels opened by
+    /// shortcut, by menu or by palette, and all three require KNOWING the
+    /// panel exists. A panel contributed by a plugin, on top of that, nobody
+    /// would discover.
     pub ui_panel_bar: Option<bool>,
-    /// `[ui] parent_entry` (last-wins; None = ENCENDIDA). Presentación-solo,
-    /// todas las capas: una fila que sube un directorio no lanza, escribe ni
-    /// redirige nada.
+    /// `[ui] parent_entry` (last-wins; None = ON). Presentation-only, every
+    /// layer: a row that goes up a directory cannot launch, write, or
+    /// redirect anything.
     ///
-    /// Encendida por defecto porque es lo que espera quien viene de cualquier
-    /// gestor de la familia. Nunca es un OPERANDO: con el cursor encima no hay
-    /// nada señalado, así que una copia o un borrado no tienen sobre qué
-    /// actuar en vez de actuar sobre el directorio padre.
+    /// On by default because that is what anyone coming from any manager in
+    /// the family expects. Never an OPERAND: with the cursor over it nothing
+    /// is marked, so a copy or a delete has nothing to act on instead of
+    /// acting on the parent directory.
     pub ui_parent_entry: Option<bool>,
-    /// `[ui] editor` (last-wins; None = `$VISUAL`/`$EDITOR`/fallback POSIX).
+    /// `[ui] editor` (last-wins; None = `$VISUAL`/`$EDITOR`/POSIX fallback).
     ///
-    /// Plantilla de argv con los códigos de campo de `openers.toml` (`%f` el
-    /// fichero, `%d` el directorio del pane). **Jamás desde la capa de
-    /// proyecto**: nombra un programa que se ejecuta, así que un repo ajeno no
-    /// elige qué corre al pulsar F4 — misma regla fail-closed que `[daemon]` y
-    /// que `openers.toml`.
+    /// Argv template with `openers.toml`'s field codes (`%f` the file, `%d`
+    /// the pane's directory). **Never from the project layer**: it names a
+    /// program that gets run, so a foreign repo does not choose what runs
+    /// when F4 is pressed — same fail-closed rule as `[daemon]` and
+    /// `openers.toml`.
     pub ui_editor: Option<Vec<String>>,
-    /// `[ui] editor_detached` (last-wins; None = `false`): ese editor abre
-    /// VENTANA propia, así que no se suspende el frontend esperándolo. Misma
-    /// capa fail-closed que [`Self::ui_editor`].
+    /// `[ui] editor_detached` (last-wins; None = `false`): that editor opens
+    /// its OWN WINDOW, so the frontend does not suspend waiting for it. Same
+    /// fail-closed layer as [`Self::ui_editor`].
     pub ui_editor_detached: Option<bool>,
-    /// `[ui] diff` (last-wins; None = `diff -u`, esperando una tecla).
+    /// `[ui] diff` (last-wins; None = `diff -u`, waiting for a key).
     ///
-    /// Plantilla de argv con los códigos de campo de `openers.toml` — `%F` son
-    /// LOS DOS ficheros, `%d` el directorio del pane. Misma capa fail-closed
-    /// que [`Self::ui_editor`]: nombra un programa que se ejecuta.
+    /// Argv template with `openers.toml`'s field codes — `%F` is BOTH files,
+    /// `%d` the pane's directory. Same fail-closed layer as
+    /// [`Self::ui_editor`]: it names a program that gets run.
     pub ui_diff: Option<Vec<String>>,
-    /// `[ui] diff_detached` (last-wins; None = `false`): ese comparador abre
-    /// VENTANA propia. Misma capa fail-closed que [`Self::ui_diff`].
+    /// `[ui] diff_detached` (last-wins; None = `false`): that comparator opens
+    /// its OWN WINDOW. Same fail-closed layer as [`Self::ui_diff`].
     pub ui_diff_detached: Option<bool>,
     /// The `[ui]` chrome keys (key bar, panel bar style, pane footer, date
     /// format, notice expiry, dialog buttons), last-wins per key from ALL
@@ -2087,41 +2093,44 @@ pub struct CommonConfig {
     pub ai: AiSettings,
     /// Files that participated (watcher + diagnostics).
     pub sources: Vec<std::path::PathBuf>,
-    /// Capas de PROYECTO que no cargaron, con su motivo ya dicho.
+    /// PROJECT layers that failed to load, with their reason already stated.
     ///
-    /// Un `.norte.toml` roto en un repositorio no puede dejar sin gestor de
-    /// ficheros a quien hace `cd` ahí (#260): la capa se salta y el arranque
-    /// sigue con las demás, que es lo que el usuario tenía. Vacío = todo
-    /// cargó. Quien pinta lo enseña; callarlo dejaría una configuración de
-    /// proyecto que el lector cree activa y no lo está.
+    /// A broken `.norte.toml` in a repository cannot leave whoever `cd`s
+    /// there with no file manager at all (#260): the layer is skipped and
+    /// startup continues with the rest, which is what the user already had.
+    /// Empty = everything loaded. Whoever paints it shows it; staying silent
+    /// would leave a project configuration the reader believes is active when
+    /// it is not.
     pub project_warnings: Vec<String>,
-    /// Claves que una capa de PERFIL declaró y no puede fijar (spec
-    /// 2026-08-26, D2), con su motivo ya dicho.
+    /// Keys a PROFILE layer declared that it may not set (spec 2026-08-26,
+    /// D2), with their reason already stated.
     ///
-    /// Va aparte de [`Self::project_warnings`] a propósito: son dos
-    /// procedencias distintas, y un lector no puede reaccionar igual a «tu
-    /// perfil pide algo que un perfil no decide» que a «este repositorio trae
-    /// una config que no se aplica». Vacío = el perfil solo pedía lo suyo.
+    /// Kept apart from [`Self::project_warnings`] on purpose: these are two
+    /// different sources, and a reader cannot react the same way to "your
+    /// profile asks for something a profile does not decide" as to "this
+    /// repository brings a config that does not apply". Empty = the profile
+    /// only asked for its own.
     ///
-    /// Callarlas sería lo grave: un perfil se elige de una LISTA con el
-    /// programa en marcha, no como se edita una capa de configuración, y un
-    /// selector que concede en silencio es un escalador de permisos.
+    /// Staying silent about these would be the serious part: a profile is
+    /// chosen from a LIST while the program is running, not the way a config
+    /// layer is edited, and a picker that silently grants is a privilege
+    /// escalator.
     pub profile_warnings: Vec<String>,
-    /// `[profile] title` de la capa de perfil activa, para enseñar. La
-    /// IDENTIDAD del perfil es su directorio, no esto.
+    /// `[profile] title` of the active profile layer, to display. The
+    /// profile's IDENTITY is its directory, not this.
     pub profile_title: Option<String>,
-    /// `[profile.start]` ya parseado: dónde abre cada hueco cuando el perfil
-    /// todavía no tiene estado guardado.
+    /// `[profile.start]`, already parsed: where each slot opens when the
+    /// profile has no saved state yet.
     ///
-    /// Las claves son ids de hueco de la disposición DEL PERFIL; los valores,
-    /// [`VPath`]s en forma de CABLE, que es lo que escribe
-    /// [`crate::save_profile`]. Lo que no parsea —ni la clave como id, ni el
-    /// valor como ruta— se tira y se dice en [`Self::profile_warnings`].
+    /// The keys are slot ids of the PROFILE's own layout; the values,
+    /// [`VPath`]s in WIRE form, which is what [`crate::save_profile`] writes.
+    /// Whatever does not parse — neither the key as an id nor the value as a
+    /// path — is dropped and reported in [`Self::profile_warnings`].
     ///
-    /// Un [`VPath`] y no una `PathBuf`: un hueco de un perfil puede estar en
-    /// sftp o dentro de un contenedor, y esto se escribió durante meses en
-    /// forma de cable mientras se leía como ruta del sistema, sin que nadie lo
-    /// notara porque no lo leía nadie.
+    /// A [`VPath`] and not a `PathBuf`: a profile's slot can sit on sftp or
+    /// inside a container, and this was written for months in wire form while
+    /// being read as a system path, with nobody noticing because nobody read
+    /// it.
     pub profile_start: std::collections::BTreeMap<u32, norte_proto::VPath>,
 }
 
@@ -2183,7 +2192,7 @@ fn merge_ai_layer(
 /// [`ConfigError::Toml`] if `font_size` is outside `[8.0, 32.0]`.
 #[expect(
     clippy::too_many_arguments,
-    reason = "fusión campo a campo de las fuentes de la UI"
+    reason = "field-by-field merge of the UI's fonts"
 )]
 fn merge_ui_fonts(
     ui_font: &mut Option<String>,
@@ -2207,7 +2216,7 @@ fn merge_ui_fonts(
             return Err(ConfigError::Toml {
                 path: norte.to_path_buf(),
                 // #73: never quote the raw value in the diagnostic.
-                message: "[ui] font_size fuera de rango [8, 32]".to_owned(),
+                message: "[ui] font_size out of range [8, 32]".to_owned(),
             });
         }
         *ui_font_size = Some(fs);
@@ -2228,7 +2237,7 @@ fn merge_ui_fonts(
 /// key has to bring its own merge rather than another line in the loop.
 #[expect(
     clippy::too_many_arguments,
-    reason = "un acumulador por clave de `[ui]`: plegarlos en un struct movería el problema a `load`"
+    reason = "one accumulator per `[ui]` key: folding them into a struct would move the problem to `load`"
 )]
 fn merge_ui_flags(
     ui_show_hidden: &mut Option<bool>,
@@ -2262,8 +2271,8 @@ pub const STATUS_PLUGINS_MAX: usize = 4;
 /// A neutral message (never the raw value, #73) on a malformed, repeated
 /// or excess id.
 fn parse_status_plugins(ids: &[String]) -> Result<Vec<(String, String)>, &'static str> {
-    const MSG: &str = "[ui] status_plugins inválido: cada id una vez, con la forma \
-                       «plugin:<plugin>/<columna>», y como mucho cuatro";
+    const MSG: &str = "invalid [ui] status_plugins: each id once, shaped like \
+                       \"plugin:<plugin>/<column>\", and at most four";
     if ids.len() > STATUS_PLUGINS_MAX {
         return Err(MSG);
     }
@@ -2294,7 +2303,7 @@ fn merge_panel_bar(acc: &mut UiChrome, ui: &crate::schema::UiSection) -> Result<
             "nerd" => PanelBarStyle::Nerd,
             _ => {
                 return Err(
-                    "[ui] panel_bar_style inválido: solo se admite «names», «letters», «icons» o «nerd»",
+                    "invalid [ui] panel_bar_style: only \"names\", \"letters\", \"icons\" or \"nerd\" are accepted",
                 );
             }
         });
@@ -2306,7 +2315,7 @@ fn merge_panel_bar(acc: &mut UiChrome, ui: &crate::schema::UiSection) -> Result<
             "left" => PanelBarPosition::Left,
             _ => {
                 return Err(
-                    "[ui] panel_bar_position inválido: solo se admite «auto», «top» o «left»",
+                    "invalid [ui] panel_bar_position: only \"auto\", \"top\" or \"left\" are accepted",
                 );
             }
         });
@@ -2315,7 +2324,7 @@ fn merge_panel_bar(acc: &mut UiChrome, ui: &crate::schema::UiSection) -> Result<
         acc.titlebar = Some(match raw.as_str() {
             "native" => Titlebar::Native,
             "custom" => Titlebar::Custom,
-            _ => return Err("[ui] titlebar inválido: solo se admite «native» o «custom»"),
+            _ => return Err("invalid [ui] titlebar: only \"native\" or \"custom\" are accepted"),
         });
     }
     Ok(())
@@ -2355,26 +2364,26 @@ fn merge_ui_chrome(
             "iso" => DateFormat::Iso,
             _ => {
                 return Err(bad(
-                    "[ui] date_format inválido: solo se admite «smart», «relative» o «iso»",
+                    "invalid [ui] date_format: only \"smart\", \"relative\" or \"iso\" are accepted",
                 ));
             }
         });
     }
     if let Some(n) = ui.notice_seconds {
         if n > UiChrome::MAX_NOTICE_SECONDS {
-            return Err(bad("[ui] notice_seconds inválido: el máximo es 600"));
+            return Err(bad("invalid [ui] notice_seconds: the maximum is 600"));
         }
         acc.notice_seconds = Some(n);
     }
     if let Some(n) = ui.history_size {
         if !(UiChrome::MIN_HISTORY_SIZE..=UiChrome::MAX_HISTORY_SIZE).contains(&n) {
-            return Err(bad("[ui] history_size inválido: entre 5 y 64"));
+            return Err(bad("invalid [ui] history_size: between 5 and 64"));
         }
         acc.history_size = Some(n);
     }
     if let Some(n) = ui.splash_ms {
         if !(UiChrome::MIN_SPLASH_MS..=UiChrome::MAX_SPLASH_MS).contains(&n) {
-            return Err(bad("[ui] splash_ms inválido: entre 200 y 60000"));
+            return Err(bad("invalid [ui] splash_ms: between 200 and 60000"));
         }
         acc.splash_ms = Some(n);
     }
@@ -2385,7 +2394,7 @@ fn merge_ui_chrome(
             "home" => SplashMode::Home,
             _ => {
                 return Err(bad(
-                    "[ui] splash inválido: solo se admite «brief», «off» o «home»",
+                    "invalid [ui] splash: only \"brief\", \"off\" or \"home\" are accepted",
                 ));
             }
         });
@@ -2396,7 +2405,7 @@ fn merge_ui_chrome(
             "manual" => ProcessesPanel::Manual,
             _ => {
                 return Err(bad(
-                    "[ui] processes_panel inválido: solo se admite «auto» o «manual»",
+                    "invalid [ui] processes_panel: only \"auto\" or \"manual\" are accepted",
                 ));
             }
         });
@@ -2409,7 +2418,7 @@ fn merge_ui_chrome(
             "off" => Images::Off,
             _ => {
                 return Err(bad(
-                    "[ui] images inválido: sólo se admite «auto», «kitty», «blocks» u «off»",
+                    "invalid [ui] images: only \"auto\", \"kitty\", \"blocks\" or \"off\" are accepted",
                 ));
             }
         });
@@ -2421,7 +2430,7 @@ fn merge_ui_chrome(
             "none" => DirIndicator::None,
             _ => {
                 return Err(bad(
-                    "[ui] dir_indicator inválido: solo se admite «auto», «slash» o «none»",
+                    "invalid [ui] dir_indicator: only \"auto\", \"slash\" or \"none\" are accepted",
                 ));
             }
         });
@@ -2429,8 +2438,8 @@ fn merge_ui_chrome(
     Ok(())
 }
 
-/// Fusiona una capa de `[ui.columns]` sobre el acumulado (#108): last-wins
-/// por campo; los schemes se fusionan por clave (el último gana por campo).
+/// Merges a `[ui.columns]` layer onto the accumulator (#108): last-wins per
+/// field; schemes merge by key (the last one wins per field).
 fn merge_ui_columns(
     acc: &mut ColumnsConfig,
     cols: &crate::schema::UiColumnsSection,
@@ -2466,13 +2475,12 @@ fn merge_ui_columns(
     Ok(())
 }
 
-/// Valida las entradas `[[ui.columns.spec]]` de UNA capa (#108 7b): el `id`
-/// es un set abierto (lo parsea el frontend, lo reporta doctor), pero cada
-/// vocabulario es CERRADO — un typo es error de carga con la ruta culpable
-/// (patrón sort), jamás un skip silencioso. Un `id` repetido dentro de la
-/// capa fusiona last-wins POR CAMPO, igual que entre capas (mismo criterio
-/// que la hotlist intra-capa). El diagnóstico jamás cita el valor crudo
-/// (#73).
+/// Validates the `[[ui.columns.spec]]` entries of ONE layer (#108 7b): the
+/// `id` is an open set (the frontend parses it, doctor reports it), but each
+/// vocabulary is CLOSED — a typo is a load error with the culprit path (sort
+/// pattern), never a silent skip. An `id` repeated within the layer merges
+/// last-wins PER FIELD, same as across layers (same rule as the intra-layer
+/// hotlist). The diagnostic never quotes the raw value (#73).
 fn parse_spec_entries(
     raw: &[schema::ColumnSpecSection],
     norte: &Path,
@@ -2483,7 +2491,7 @@ fn parse_spec_entries(
         if entry.id.is_empty() {
             return Err(ConfigError::Toml {
                 path: norte.to_path_buf(),
-                message: format!("{label} spec.id: no puede estar vacío"),
+                message: format!("{label} spec.id: cannot be empty"),
             });
         }
         let width = entry
@@ -2530,9 +2538,9 @@ fn parse_spec_entries(
     Ok(out)
 }
 
-/// Valida el `width` de un spec (#108 7b): keyword solo `"auto"`;
-/// `fixed`/`min` acotados a `[1, 64]` (0 celdas no pinta nada y >64 se
-/// come el pane). `weight` queda libre (0 = no crece, documentado).
+/// Validates a spec's `width` (#108 7b): keyword only `"auto"`; `fixed`/`min`
+/// bounded to `[1, 64]` (0 cells paints nothing and >64 eats the pane).
+/// `weight` is left free (0 = never grows, documented).
 fn parse_spec_width(
     raw: &schema::WidthSection,
     norte: &Path,
@@ -2540,7 +2548,7 @@ fn parse_spec_width(
 ) -> Result<WidthChoice, ConfigError> {
     let range_err = || ConfigError::Toml {
         path: norte.to_path_buf(),
-        message: format!("{label} spec.width: fixed/min fuera de rango [1, 64]"),
+        message: format!("{label} spec.width: fixed/min out of range [1, 64]"),
     };
     match raw {
         schema::WidthSection::Keyword(s) if s == "auto" => Ok(WidthChoice::Auto),
@@ -2564,9 +2572,9 @@ fn parse_spec_width(
     }
 }
 
-/// Fusiona `spec` sobre `map[id]` last-wins POR CAMPO (`Some` pisa, `None`
-/// conserva la capa anterior) — el mismo criterio en la fusión intra-capa
-/// y entre capas.
+/// Merges `spec` onto `map[id]` last-wins PER FIELD (`Some` overrides, `None`
+/// keeps the previous layer) — the same rule in the intra-layer merge and
+/// across layers.
 fn fold_spec_into(
     map: &mut std::collections::BTreeMap<String, ColumnSpec>,
     id: String,
@@ -2587,9 +2595,9 @@ fn fold_spec_into(
     }
 }
 
-/// Valida un [`crate::schema::SortSection`] (#108): vocabulario CERRADO,
-/// inválido = error con la ruta (patrón `quick_search`). Los campos
-/// ausentes caen al default histórico.
+/// Validates a [`crate::schema::SortSection`] (#108): CLOSED vocabulary,
+/// invalid = error with the path (`quick_search` pattern). Absent fields
+/// fall back to the historical default.
 fn parse_sort_section(
     raw: &crate::schema::SortSection,
     norte: &Path,
@@ -2638,7 +2646,8 @@ fn parse_quick_search(raw: &str, norte: &Path) -> Result<QuickSearch, ConfigErro
         "jump" => Ok(QuickSearch::Jump),
         _ => Err(ConfigError::Toml {
             path: norte.to_path_buf(),
-            message: "[ui] quick_search inválido: solo se admite «filter» o «jump»".to_owned(),
+            message: "invalid [ui] quick_search: only \"filter\" or \"jump\" are accepted"
+                .to_owned(),
         }),
     }
 }
@@ -2658,35 +2667,37 @@ fn parse_confirm_quit(raw: &str, norte: &Path) -> Result<ConfirmQuit, ConfigErro
         "never" => Ok(ConfirmQuit::Never),
         _ => Err(ConfigError::Toml {
             path: norte.to_path_buf(),
-            message: "[ui] confirm_quit inválido: solo se admite «auto», «always» o «never»"
-                .to_owned(),
+            message:
+                "invalid [ui] confirm_quit: only \"auto\", \"always\" or \"never\" are accepted"
+                    .to_owned(),
         }),
     }
 }
 
-/// `[ui] quick_search` de esta capa, o el valor de antes si la capa es de
-/// PROYECTO y el valor no vale — con su aviso.
+/// This layer's `[ui] quick_search`, or the previous value if the layer is a
+/// PROJECT one and the value is not valid — with its warning.
 ///
-/// Mismo criterio que [`parse_layer`]: un repositorio ajeno no deja sin
-/// gestor de ficheros a quien hace `cd` ahí (#260).
+/// Same rule as [`parse_layer`]: a foreign repository does not leave whoever
+/// `cd`s there with no file manager (#260).
 fn merge_quick_search(
-    actual: QuickSearch,
-    valor: &str,
+    current: QuickSearch,
+    value: &str,
     path: &std::path::Path,
     kind: Layer,
-    avisos: &mut Vec<String>,
+    warnings: &mut Vec<String>,
 ) -> Result<QuickSearch, ConfigError> {
-    match parse_quick_search(valor, path) {
+    match parse_quick_search(value, path) {
         Ok(v) => Ok(v),
         Err(e) if kind == Layer::Project => {
-            avisos.push(e.to_string());
-            Ok(actual)
+            warnings.push(e.to_string());
+            Ok(current)
         }
         Err(e) => Err(e),
     }
 }
 
-/// El error que un `norte.toml` que no parsea produce, con su diagnóstico.
+/// The error a `norte.toml` that fails to parse produces, with its
+/// diagnostic.
 fn layer_error(raw: &str, path: &std::path::Path) -> ConfigError {
     match toml::from_str::<NorteToml>(raw) {
         Ok(_) => ConfigError::Toml {
@@ -2700,15 +2711,14 @@ fn layer_error(raw: &str, path: &std::path::Path) -> ConfigError {
     }
 }
 
-/// Parsea una capa. `Ok(None)` = era de PROYECTO y no parsea, así que se
-/// salta.
+/// Parses a layer. `Ok(None)` = it was a PROJECT one and it does not parse,
+/// so it is skipped.
 ///
-/// Cualquier clave desconocida es fatal bajo `deny_unknown_fields`, así que
-/// un `.norte.toml` con una errata rompía el gestor de ficheros entero al
-/// hacer `cd` a ese repositorio — y quien lo escribió puede no ser quien lo
-/// sufre (#260). Las capas de usuario y de sistema siguen siendo fatales:
-/// ésas SÍ son suyas, y arrancar ignorándolas en silencio sería peor que no
-/// arrancar.
+/// Any unknown key is fatal under `deny_unknown_fields`, so a `.norte.toml`
+/// with a typo broke the whole file manager on `cd`-ing into that repository
+/// — and whoever wrote it may not be the one who suffers it (#260). User and
+/// system layers stay fatal: those ARE the reader's own, and starting while
+/// silently ignoring them would be worse than not starting.
 fn parse_layer(
     raw: &str,
     path: &std::path::Path,
@@ -2724,55 +2734,56 @@ fn parse_layer(
     }
 }
 
-/// Qué capas pueden fijar lo que NO es presentación.
+/// Which layers may set what is NOT presentation.
 ///
-/// Escrito en POSITIVO a propósito. La versión anterior era
-/// `*kind != Layer::Project`, y con ella añadir una variante a [`Layer`]
-/// concedía en SILENCIO el transporte, la IA, los logs y los límites
-/// anti-bomba a la capa nueva. Un `match` exhaustivo obliga a decidirlo cuando
-/// la variante se añade, que es cuando alguien lo está pensando.
-const fn manda_fuera_de_presentacion(kind: Layer) -> bool {
+/// Written in the POSITIVE on purpose. The previous version was
+/// `*kind != Layer::Project`, and with it adding a variant to [`Layer`]
+/// SILENTLY granted the transport, AI, logs and anti-bomb limits to the new
+/// layer. An exhaustive `match` forces the decision to be made when the
+/// variant is added, which is when someone is actually thinking about it.
+const fn governs_outside_presentation(kind: Layer) -> bool {
     match kind {
         Layer::System | Layer::User => true,
         Layer::Profile | Layer::Project => false,
     }
 }
 
-/// Si la capa es un fichero DEL USUARIO, en el sentido que importa aquí: lo
-/// escribió quien lo va a sufrir.
+/// Whether the layer is a USER file, in the sense that matters here: written
+/// by whoever is going to live with it.
 ///
-/// Sistema, usuario y perfil lo son; un `./.norte` de un repositorio ajeno no.
-/// Es la línea de `keymap.preset` (#260 — elegir qué tecla borra no es
-/// presentación) y la de `[[hotlist]]` (un repo ajeno no inyecta favoritos en
-/// la sesión de nadie), y las dos la trazan en el mismo sitio.
-const fn es_capa_del_usuario(kind: Layer) -> bool {
+/// System, user and profile are; a `./.norte` from a foreign repository is
+/// not. It is the line `keymap.preset` draws (#260 — choosing which key
+/// deletes is not presentation) and the one `[[hotlist]]` draws (a foreign
+/// repo does not inject favorites into anyone's session), and both draw it in
+/// the same place.
+const fn is_user_owned_layer(kind: Layer) -> bool {
     match kind {
         Layer::System | Layer::User | Layer::Profile => true,
         Layer::Project => false,
     }
 }
 
-/// Los avisos de una capa de PERFIL o de PROYECTO que pidió lo que esa capa no
-/// decide (D2).
+/// The warnings for a PROFILE or PROJECT layer that asked for something that
+/// layer does not decide (D2).
 ///
-/// Una sección AUSENTE no avisa de nada: lo que se dice es lo que el fichero
-/// declaró y no se va a aplicar. Hasta ahora solo avisaba un perfil, y ni
-/// siquiera de todo: el editor y el comparador (programas que se ejecutan) se
-/// descartaban callados, y un `.norte.toml` de repositorio callaba entero.
-/// Fallaba cerrado —no se aplicaba nada—, pero el dueño del fichero no tenía
-/// forma de saber por qué su cambio no hacía nada.
+/// An ABSENT section warns of nothing: what gets said is what the file
+/// declared and is not going to be applied. Until now only a profile warned,
+/// and not even about everything: the editor and the comparator (programs
+/// that get run) were silently dropped, and a repository's `.norte.toml`
+/// stayed silent entirely. It failed closed — nothing was applied — but the
+/// file's owner had no way to know why their change did nothing.
 ///
-/// La capa de SISTEMA y la de USUARIO deciden todo, así que no avisan.
+/// The SYSTEM and USER layers decide everything, so they do not warn.
 fn carve_out_warnings(parsed: &NorteToml, path: &std::path::Path, kind: Layer) -> Vec<String> {
-    let quien = match kind {
-        Layer::Profile => "un perfil",
-        Layer::Project => "un proyecto",
+    let who = match kind {
+        Layer::Profile => "a profile",
+        Layer::Project => "a project",
         Layer::System | Layer::User => return Vec::new(),
     };
     let mut out = Vec::new();
-    let mut di = |seccion: &str, motivo: &str| {
+    let mut say = |section: &str, reason: &str| {
         out.push(format!(
-            "{}: [{seccion}] no lo decide {quien} ({motivo})",
+            "{}: [{section}] is not decided by {who} ({reason})",
             path.display()
         ));
     };
@@ -2782,86 +2793,88 @@ fn carve_out_warnings(parsed: &NorteToml, path: &std::path::Path, kind: Layer) -
         || ui.diff.is_some()
         || ui.diff_detached.is_some()
     {
-        di(
+        say(
             "ui",
-            "`editor` y `diff` eligen un programa que se ejecuta, y eso no es \
-             presentación",
+            "`editor` and `diff` choose a program that gets run, and that is not \
+             presentation",
         );
     }
-    // Lo que un perfil SÍ decide y un repositorio ajeno no: el preset de
-    // teclas (#260, elegir qué tecla borra no es presentación) y los favoritos
-    // (un repo no inyecta sitios en la sesión de nadie).
+    // What a profile DOES decide and a foreign repository does not: the key
+    // preset (#260, choosing which key deletes is not presentation) and the
+    // favorites (a repo does not inject places into anyone's session).
     if kind == Layer::Project {
         if parsed.keymap.preset.is_some() {
-            di("keymap", "elegir qué tecla borra no es presentación");
+            say("keymap", "choosing which key deletes is not presentation");
         }
         if !parsed.hotlist.is_empty() {
-            di(
+            say(
                 "hotlist",
-                "un repositorio no añade favoritos a la sesión de nadie",
+                "a repository does not add favorites to anyone's session",
             );
         }
     }
-    // `declara` desestructura cada sección sin `..`: una clave nueva que no
-    // mire no compila. La lista campo a campo que había aquí se dejó
-    // `[log] format`, y el test de las cuatro secciones no lo vio porque
-    // su perfil traía `dir`.
+    // `declara` destructures each section with no `..`: a new key that
+    // neither one looks at does not compile. The field-by-field list that
+    // used to be here left out `[log] format`, and the four-section test did
+    // not catch it because its profile carried `dir`.
     if crate::DaemonSettings::declara(&parsed.daemon) {
-        di("daemon", "no redirige el transporte del core");
+        say("daemon", "does not redirect the core's transport");
     }
     if parsed.ai != crate::schema::AiSection::default() {
-        di("ai", "no enciende la IA ni redirige sus proveedores");
+        say("ai", "does not enable AI or redirect its providers");
     }
     if crate::LogSettings::declara(&parsed.log) {
-        di("log", "no decide dónde ni cómo escribe este proceso");
+        say("log", "does not decide where or how this process writes");
     }
     if crate::ArchiveSettings::declara(&parsed.archive) {
-        di("archive", "no sube los límites anti-bomba");
+        say("archive", "does not raise the anti-bomb limits");
     }
     out
 }
 
-/// Funde el `[profile]` de una capa de PERFIL (spec 2026-08-26, D3).
+/// Merges the `[profile]` of a PROFILE layer (spec 2026-08-26, D3).
 ///
-/// Last-wins como todo lo demás. Una clave de `start` que no parsea como id de
-/// hueco —o un valor que no parsea como [`VPath`]— se TIRA con su aviso, en vez
-/// de tumbar el arranque: el fichero es del usuario, pero un dedazo en un id no
-/// vale una negativa a arrancar, y la capa entera se perdería por una línea.
+/// Last-wins like everything else. A `start` key that does not parse as a
+/// slot id — or a value that does not parse as [`VPath`] — is DROPPED with its
+/// warning, instead of bringing startup down: the file is the user's own, but
+/// a typo in an id does not earn a refusal to start, and the whole layer
+/// would be lost over one line.
 fn merge_profile_section(
     title: &mut Option<String>,
     start: &mut std::collections::BTreeMap<u32, norte_proto::VPath>,
     section: &crate::schema::ProfileSection,
     path: &std::path::Path,
-    avisos: &mut Vec<String>,
+    warnings: &mut Vec<String>,
 ) {
     if let Some(t) = &section.title {
         *title = Some(t.clone());
     }
-    for (clave, valor) in &section.start {
-        let Ok(id) = clave.parse::<u32>() else {
-            avisos.push(format!(
-                "{}: [profile.start] «{clave}» no es un id de hueco",
+    for (key, value) in &section.start {
+        let Ok(id) = key.parse::<u32>() else {
+            warnings.push(format!(
+                "{}: [profile.start] \"{key}\" is not a slot id",
                 path.display()
             ));
             continue;
         };
-        // Un VPath en forma de CABLE, que es lo que escribe `save_profile`. No
-        // una ruta del sistema: un hueco de un perfil puede estar en sftp o
-        // dentro de un contenedor, y una `PathBuf` no sabe decirlo. Además
-        // quita de en medio la pregunta de contra qué se resuelve un `~` o un
-        // relativo — un perfil se usa en varias máquinas y en varios días, y
-        // «depende de desde dónde lo lanzaste» no es una respuesta.
-        match norte_proto::VPath::parse(valor) {
+        // A VPath in WIRE form, which is what `save_profile` writes. Not a
+        // system path: a profile's slot can be on sftp or inside a
+        // container, and a `PathBuf` cannot say so. It also removes the
+        // question of what a `~` or a relative path would resolve against —
+        // a profile is used across machines and across days, and "depends on
+        // where you launched it from" is not an answer.
+        match norte_proto::VPath::parse(value) {
             Ok(v) => {
                 start.insert(id, v);
             }
-            // Se dice QUÉ hueco se queda sin sembrar, que es lo accionable, y
-            // no el valor: repetirlo no ayuda a arreglarlo —quien lo escribió
-            // lo tiene delante— y estas cadenas acaban en el panel de registro,
-            // donde una ruta de más es una ruta de más. A la barra de mensajes
-            // solo llega el CONTEO, que es lo que #73 acota.
-            Err(_) => avisos.push(format!(
-                "{}: [profile.start] el hueco {id} no trae una ruta válida",
+            // Says WHICH slot is left unseeded, which is the actionable
+            // part, not the value: repeating it does not help fix it —
+            // whoever wrote it has it in front of them — and these strings
+            // end up in the log panel, where one extra path is one path too
+            // many. Only the COUNT reaches the message bar, which is what
+            // #73 bounds.
+            Err(_) => warnings.push(format!(
+                "{}: [profile.start] slot {id} does not carry a valid path",
                 path.display()
             )),
         }
@@ -2873,15 +2886,16 @@ fn merge_profile_section(
 /// # Errors
 /// [`ConfigError`] naming the offending file; an ABSENT layer is not an
 /// error.
-// `too_many_lines`: es un merge por CAPAS, y el orden de las asignaciones ES
-// la semántica (última capa gana, salvo lo que el carve-out de proyecto
-// excluye). Partirlo en ayudantes que se pasaran quince parámetros de salida
-// escondería justo eso, y cambiaría un lint por otro
-// (`too_many_arguments`). Lo que sí se ha sacado son las decisiones con
-// nombre propio: `parse_layer`, `merge_quick_search` y los `merge_*_layer`.
+// `too_many_lines`: this is a merge by LAYERS, and the order of the
+// assignments IS the semantics (the last layer wins, except for what the
+// project carve-out excludes). Splitting it into helpers that passed around
+// fifteen output parameters would hide exactly that, and would trade one
+// lint for another (`too_many_arguments`). What HAS been pulled out are the
+// decisions with a name of their own: `parse_layer`, `merge_quick_search` and
+// the `merge_*_layer`s.
 #[expect(
     clippy::too_many_lines,
-    reason = "una pasada por capa; lo que tiene nombre propio ya está fuera"
+    reason = "one pass per layer; what has a name of its own is already out"
 )]
 pub fn load(layers: &Layers) -> Result<CommonConfig, ConfigError> {
     let mut preset: Option<String> = None;
@@ -2958,21 +2972,22 @@ pub fn load(layers: &Layers) -> Result<CommonConfig, ConfigError> {
                 &mut ui_layout,
                 &parsed.ui,
             );
-            // `keymap.preset` NO se honra desde proyecto (#260). Está
-            // acotado a los siete presets de fábrica, así que no es
-            // ejecución de código — pero los presets DISCREPAN sobre qué
-            // hace cada tecla: `far` ata `shift+delete` a `pane.delete` y
-            // `orthodox` ata `shift+f8` a `pane.delete-permanent`. Un
-            // repositorio hostil elegiría en silencio qué tecla borra, y
-            // «elegir la disposición del teclado» no es presentación: es
-            // decidir qué pasa cuando el lector pulsa algo. Un PERFIL sí lo
-            // elige: es un fichero del usuario, no de un repositorio ajeno.
-            if es_capa_del_usuario(*kind)
+            // `keymap.preset` is NOT honored from a project (#260). It is
+            // bounded to the seven built-in presets, so it is not code
+            // execution — but the presets DISAGREE about what each key does:
+            // `far` binds `shift+delete` to `pane.delete` and `orthodox`
+            // binds `shift+f8` to `pane.delete-permanent`. A hostile
+            // repository would silently choose which key deletes, and
+            // "choosing the keyboard layout" is not presentation: it is
+            // deciding what happens when the reader presses something. A
+            // PROFILE does choose it: it is the user's own file, not a
+            // foreign repository's.
+            if is_user_owned_layer(*kind)
                 && let Some(p) = parsed.keymap.preset
             {
                 preset = Some(p);
             }
-            // Antes de todo lo que MUEVE campos fuera de `parsed.ui`.
+            // Before everything that MOVES fields out of `parsed.ui`.
             merge_ui_chrome(&mut ui_chrome, &parsed.ui, &norte)?;
             if let Some(ids) = &parsed.ui.status_plugins {
                 ui_status_plugins =
@@ -3014,54 +3029,55 @@ pub fn load(layers: &Layers) -> Result<CommonConfig, ConfigError> {
             if let Some(cols) = &parsed.ui.columns {
                 merge_ui_columns(&mut ui_columns, cols, &norte)?;
             }
-            // TODO lo que sigue queda FUERA del alcance de la capa de
-            // proyecto, y era el mismo `if` escrito cinco veces con su motivo
-            // repetido; una sola vez, con los cinco motivos juntos:
+            // TODO what follows is OUT of the project layer's scope, and used
+            // to be the same `if` written five times with its reason
+            // repeated; once, with the five reasons together:
             //
-            // - **hotlist** (spec 2026-07-18, decisión 3): un repo ajeno no
-            //   inyecta favoritos en la sesión del usuario. Un PERFIL sí los
-            //   trae (spec 2026-08-26, D2), así que va por
-            //   `es_capa_del_usuario` y no por el `if` de abajo.
-            // - **`[archive]`** (#95.2): son los límites anti-bomba, y SUBIRLOS
-            //   desarma la protección justo donde viven los contenedores
-            //   hostiles.
-            // - **`[daemon]`** (review MAJOR-1): no redirige el transporte del
-            //   core a un socket ajeno.
-            // - **`[ai]`** (ADR 0035 decisión 3): no habilita la IA ni
-            //   redirige sus proveedores.
-            // - **`[log]`** (roadmap ítem 9): no decide dónde escribe este
-            //   proceso.
+            // - **hotlist** (spec 2026-07-18, decision 3): a foreign repo
+            //   does not inject favorites into the user's session. A PROFILE
+            //   does bring them (spec 2026-08-26, D2), so it goes through
+            //   `is_user_owned_layer` and not the `if` below.
+            // - **`[archive]`** (#95.2): these are the anti-bomb limits, and
+            //   RAISING them disarms the protection right where hostile
+            //   containers live.
+            // - **`[daemon]`** (review MAJOR-1): does not redirect the
+            //   core's transport to a foreign socket.
+            // - **`[ai]`** (ADR 0035 decision 3): does not enable AI or
+            //   redirect its providers.
+            // - **`[log]`** (roadmap item 9): does not decide where this
+            //   process writes.
             //
-            // Los ESCALARES de UI (quick_search, theme, lang) SÍ se honran
-            // desde proyecto: son presentación, y ninguno de ellos lanza,
-            // escribe ni redirige nada. Ésa es la línea, y `keymap.preset`
-            // cae del otro lado (#260): elegir qué tecla borra no es
-            // presentación. Se filtra donde se lee, más arriba.
+            // The UI SCALARS (quick_search, theme, lang) ARE honored from a
+            // project: they are presentation, and none of them launches,
+            // writes, or redirects anything. That is the line, and
+            // `keymap.preset` falls on the other side of it (#260): choosing
+            // which key deletes is not presentation. It is filtered where it
+            // is read, above.
             //
-            // Y las cuatro secciones de abajo van por
-            // `manda_fuera_de_presentacion`, que está escrito en POSITIVO: el
-            // `!= Layer::Project` que había aquí concedía todo esto a
-            // cualquier variante nueva de `Layer` sin que nadie lo decidiera.
-            // La **hotlist** se separa del resto en la 0079: un perfil SÍ trae
-            // sus favoritos —es un fichero del usuario y llevarlos es media
-            // razón de que exista un espacio de trabajo— mientras que las
-            // cuatro secciones de abajo siguen siendo suyas de nadie más que
-            // sistema y usuario.
-            if es_capa_del_usuario(*kind) {
+            // And the four sections below go through
+            // `governs_outside_presentation`, which is written in the
+            // POSITIVE: the `!= Layer::Project` that used to be here granted
+            // all of this to any new `Layer` variant with nobody deciding to.
+            // The **hotlist** is split off from the rest in 0079: a profile
+            // DOES bring its own favorites — it is the user's own file, and
+            // carrying them is half the reason a workspace exists — while
+            // the four sections below remain nobody's but system and user's.
+            if is_user_owned_layer(*kind) {
                 for entry in parsed.hotlist {
                     merge_hotlist_entry(&mut hotlist, entry);
                 }
             }
-            if manda_fuera_de_presentacion(*kind) {
-                // El EDITOR también, y por el mismo motivo que `[daemon]`:
-                // nombra un programa que se ejecuta, así que un repo ajeno no
-                // elige qué corre al pulsar F4. Es la misma línea que deja
-                // fuera a `keymap.preset` — elegir qué tecla borra no es
-                // presentación, y elegir qué binario se lanza, menos.
+            if governs_outside_presentation(*kind) {
+                // The EDITOR too, and for the same reason as `[daemon]`: it
+                // names a program that gets run, so a foreign repo does not
+                // choose what runs when F4 is pressed. Same line that keeps
+                // `keymap.preset` out — choosing which key deletes is not
+                // presentation, and choosing which binary launches, even
+                // less so.
                 ui_editor = parsed.ui.editor.clone().or(ui_editor);
                 ui_editor_detached = parsed.ui.editor_detached.or(ui_editor_detached);
-                // El COMPARADOR (#312) entra por la misma puerta que el
-                // editor: es otro programa que se ejecuta.
+                // The COMPARATOR (#312) comes in through the same door as
+                // the editor: it is another program that gets run.
                 ui_diff = parsed.ui.diff.clone().or(ui_diff);
                 ui_diff_detached = parsed.ui.diff_detached.or(ui_diff_detached);
                 archive.merge(parsed.archive);
@@ -3111,17 +3127,17 @@ pub fn load(layers: &Layers) -> Result<CommonConfig, ConfigError> {
     })
 }
 
-/// Tests de historial+hotlist (spec 2026-07-18, navTC T2) + `[ai]` (ADR
-/// 0035): mod nuevo junto a `toml_diag_tests` de `schema.rs` (no
-/// reutilizarlo — ese mod es solo del diagnóstico compacto de `#73`).
-/// `persist_unset`: el reverso de `persist_set`, y lo que hay detrás de
-/// «restablecer» en la pantalla de ajustes.
+/// History+hotlist tests (spec 2026-07-18, navTC T2) + `[ai]` (ADR
+/// 0035): a new mod alongside `schema.rs`'s `toml_diag_tests` (do not
+/// reuse it — that mod is only for the compact `#73` diagnostic).
+/// `persist_unset`: the reverse of `persist_set`, and what is behind
+/// "reset" on the settings screen.
 #[cfg(test)]
 mod unset_tests {
     use super::*;
 
     #[test]
-    fn quitar_una_clave_la_borra_y_deja_las_vecinas() {
+    fn removing_a_key_deletes_it_and_leaves_its_neighbors() {
         let dir = tempfile::tempdir().unwrap();
         persist_set(dir.path(), "ui", "theme", toml_edit::Value::from("nord")).unwrap();
         persist_set(dir.path(), "ui", "font_size", toml_edit::Value::from(18)).unwrap();
@@ -3129,44 +3145,44 @@ mod unset_tests {
         assert!(out.changed);
         let s = std::fs::read_to_string(&out.path).unwrap();
         assert!(!s.contains("theme"), "{s}");
-        assert!(s.contains("font_size"), "la vecina se queda: {s}");
+        assert!(s.contains("font_size"), "the neighbor stays: {s}");
     }
 
     #[test]
-    fn quitar_lo_que_no_esta_no_escribe_nada_ni_crea_el_fichero() {
+    fn removing_what_is_not_there_writes_nothing_and_creates_no_file() {
         let dir = tempfile::tempdir().unwrap();
         let out = persist_unset(dir.path(), "ui", "theme").unwrap();
-        assert!(!out.changed, "un fichero que no está es un no-op");
-        assert!(!out.path.exists(), "y no lo crea");
-        // Con fichero, pero sin esa clave: lo mismo.
+        assert!(!out.changed, "a file that is not there is a no-op");
+        assert!(!out.path.exists(), "and it does not create it");
+        // With a file, but without that key: same thing.
         persist_set(dir.path(), "ui", "font_size", toml_edit::Value::from(18)).unwrap();
         let out = persist_unset(dir.path(), "ui", "theme").unwrap();
         assert!(!out.changed);
         let out = persist_unset(dir.path(), "keymap", "preset").unwrap();
-        assert!(!out.changed, "una sección que no está tampoco");
+        assert!(!out.changed, "a section that is not there either");
     }
 
-    /// Poner y quitar deja el fichero como estaba. Si esto falla,
-    /// restablecer ensucia el `norte.toml` un poco en cada vuelta.
+    /// Setting and removing leaves the file as it was. If this fails,
+    /// resetting dirties `norte.toml` a little on every round.
     #[test]
-    fn poner_y_quitar_es_la_identidad() {
+    fn setting_and_removing_is_the_identity() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             dir.path().join("norte.toml"),
-            "# mi config\n[ui]\nfont_size = 18 # el tamaño\n",
+            "# my config\n[ui]\nfont_size = 18 # the size\n",
         )
         .unwrap();
-        let antes = std::fs::read_to_string(dir.path().join("norte.toml")).unwrap();
+        let before = std::fs::read_to_string(dir.path().join("norte.toml")).unwrap();
         persist_set(dir.path(), "ui", "theme", toml_edit::Value::from("nord")).unwrap();
         persist_unset(dir.path(), "ui", "theme").unwrap();
-        let despues = std::fs::read_to_string(dir.path().join("norte.toml")).unwrap();
-        assert_eq!(antes, despues, "comentarios y formato incluidos");
+        let after = std::fs::read_to_string(dir.path().join("norte.toml")).unwrap();
+        assert_eq!(before, after, "comments and formatting included");
     }
 
-    /// Una sección que se queda vacía se CONSERVA: borrarla cambia el
-    /// fichero más de lo que se pidió.
+    /// A section that ends up empty is KEPT: deleting it changes the file
+    /// more than was asked.
     #[test]
-    fn la_seccion_vacia_se_queda() {
+    fn the_empty_section_stays() {
         let dir = tempfile::tempdir().unwrap();
         persist_set(dir.path(), "ui", "theme", toml_edit::Value::from("nord")).unwrap();
         persist_unset(dir.path(), "ui", "theme").unwrap();
@@ -3174,11 +3190,11 @@ mod unset_tests {
         assert!(s.contains("[ui]"), "{s}");
     }
 
-    /// El mismo guard de forma que `persist_set`: una `[ui]` que no es tabla
-    /// se rechaza en vez de indexarse, que sería un pánico en el hilo de
-    /// fondo de quien llama.
+    /// The same shape guard as `persist_set`: a `[ui]` that is not a table is
+    /// refused instead of being indexed, which would panic the caller's
+    /// background thread.
     #[test]
-    fn una_seccion_que_no_es_tabla_se_rechaza() {
+    fn a_section_that_is_not_a_table_is_refused() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("norte.toml"), "ui = 3\n").unwrap();
         let e = persist_unset(dir.path(), "ui", "theme").unwrap_err();
@@ -3191,322 +3207,322 @@ mod hotlist_tests {
     use super::*;
 
     #[test]
-    fn hotlist_round_trip_preservando_comentarios() {
+    fn hotlist_round_trip_preserves_comments() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             dir.path().join("norte.toml"),
-            "# mi config\n[ui]\ntheme = \"nord\" # tema\n",
+            "# my config\n[ui]\ntheme = \"nord\" # theme\n",
         )
         .unwrap();
-        persist_hotlist_add(dir.path(), "trabajo", "file:///home/o/work").unwrap();
+        persist_hotlist_add(dir.path(), "work", "file:///home/o/work").unwrap();
         let s = std::fs::read_to_string(dir.path().join("norte.toml")).unwrap();
-        assert!(s.contains("# mi config"), "comentarios intactos: {s}");
+        assert!(s.contains("# my config"), "comments intact: {s}");
         assert!(s.contains("[[hotlist]]"), "{s}");
-        persist_hotlist_remove(dir.path(), "trabajo").unwrap();
+        persist_hotlist_remove(dir.path(), "work").unwrap();
         let s = std::fs::read_to_string(dir.path().join("norte.toml")).unwrap();
-        assert!(!s.contains("trabajo"), "{s}");
+        assert!(!s.contains("work"), "{s}");
     }
 
     #[test]
-    fn hotlist_add_reemplaza_si_el_nombre_ya_existe() {
+    fn hotlist_add_replaces_if_the_name_already_exists() {
         let dir = tempfile::tempdir().unwrap();
-        persist_hotlist_add(dir.path(), "trabajo", "file:///a").unwrap();
-        persist_hotlist_add(dir.path(), "trabajo", "file:///b").unwrap();
+        persist_hotlist_add(dir.path(), "work", "file:///a").unwrap();
+        persist_hotlist_add(dir.path(), "work", "file:///b").unwrap();
         let s = std::fs::read_to_string(dir.path().join("norte.toml")).unwrap();
         assert_eq!(
-            s.matches("trabajo").count(),
+            s.matches("work").count(),
             1,
-            "una sola entrada, no duplicada: {s}"
+            "a single entry, not duplicated: {s}"
         );
         assert!(s.contains("file:///b"), "{s}");
         assert!(!s.contains("file:///a"), "{s}");
     }
 
     #[test]
-    fn hotlist_remove_de_nombre_inexistente_es_no_op() {
+    fn hotlist_remove_of_a_nonexistent_name_is_a_no_op() {
         let dir = tempfile::tempdir().unwrap();
-        persist_hotlist_add(dir.path(), "trabajo", "file:///a").unwrap();
+        persist_hotlist_add(dir.path(), "work", "file:///a").unwrap();
         let path = dir.path().join("norte.toml");
-        // Comentario a mano: si el no-op reescribiera el fichero, toml_edit
-        // podría reformatearlo igual — la prueba fuerte no es "no falla",
-        // es "el CONTENIDO no cambia ni un byte" (review MINOR-1: mtime es
-        // flaky por granularidad del FS, el contenido no).
+        // Comment by hand: if the no-op rewrote the file, toml_edit could
+        // reformat it identically — the strong test is not "does not fail",
+        // it is "the CONTENT does not change by a single byte" (review
+        // MINOR-1: mtime is flaky due to FS granularity, content is not).
         let mut s = std::fs::read_to_string(&path).unwrap();
-        s.push_str("# nota manual\n");
+        s.push_str("# manual note\n");
         std::fs::write(&path, &s).unwrap();
         let before = std::fs::read_to_string(&path).unwrap();
-        // No debe fallar aunque "fantasma" no exista (documentado: no-op).
-        persist_hotlist_remove(dir.path(), "fantasma").unwrap();
+        // Must not fail even though "ghost" does not exist (documented:
+        // no-op).
+        persist_hotlist_remove(dir.path(), "ghost").unwrap();
         let after = std::fs::read_to_string(&path).unwrap();
-        assert_eq!(before, after, "no-op no reescribe: contenido byte-idéntico");
-        assert!(after.contains("trabajo"), "{after}");
+        assert_eq!(
+            before, after,
+            "no-op does not rewrite: byte-identical content"
+        );
+        assert!(after.contains("work"), "{after}");
     }
 
     #[test]
-    fn hotlist_remove_sin_seccion_hotlist_es_no_op_y_no_reescribe() {
-        // `norte.toml` existe pero SIN `[[hotlist]]` en absoluto: el no-op
-        // tampoco debe tocar el fichero (mismo MINOR-1).
+    fn hotlist_remove_with_no_hotlist_section_is_a_no_op_and_does_not_rewrite() {
+        // `norte.toml` exists but WITHOUT any `[[hotlist]]` at all: the no-op
+        // must not touch the file either (same MINOR-1).
         let dir = tempfile::tempdir().unwrap();
-        let content = "# sin hotlist\n[ui]\ntheme = \"nord\"\n";
+        let content = "# no hotlist\n[ui]\ntheme = \"nord\"\n";
         std::fs::write(dir.path().join("norte.toml"), content).unwrap();
-        persist_hotlist_remove(dir.path(), "lo-que-sea").unwrap();
+        persist_hotlist_remove(dir.path(), "whatever").unwrap();
         let after = std::fs::read_to_string(dir.path().join("norte.toml")).unwrap();
-        assert_eq!(content, after, "sin `hotlist`: contenido intacto");
+        assert_eq!(content, after, "with no `hotlist`: content untouched");
     }
 
     #[test]
-    fn hotlist_se_carga_de_todas_las_capas_menos_proyecto() {
-        // Dos dirs: capa `User` con una entrada, capa `Project` con otra —
-        // la de proyecto NO debe entrar (spec: "un repo ajeno no inyecta
-        // favoritos"), y la de usuario sí.
-        let usuario = tempfile::tempdir().unwrap();
+    fn hotlist_loads_from_every_layer_except_project() {
+        // Two dirs: `User` layer with one entry, `Project` layer with
+        // another — the project one must NOT get in (spec: "a foreign repo
+        // does not inject favorites"), and the user one must.
+        let user = tempfile::tempdir().unwrap();
         std::fs::write(
-            usuario.path().join("norte.toml"),
-            "[[hotlist]]\nname = \"casa\"\npath = \"file:///home/o\"\n",
+            user.path().join("norte.toml"),
+            "[[hotlist]]\nname = \"home\"\npath = \"file:///home/o\"\n",
         )
         .unwrap();
-        let proyecto = tempfile::tempdir().unwrap();
+        let project = tempfile::tempdir().unwrap();
         std::fs::write(
-            proyecto.path().join("norte.toml"),
-            "[[hotlist]]\nname = \"repo-ajeno\"\npath = \"file:///tmp/x\"\n",
+            project.path().join("norte.toml"),
+            "[[hotlist]]\nname = \"foreign-repo\"\npath = \"file:///tmp/x\"\n",
         )
         .unwrap();
         let layers = Layers {
             dirs: vec![
-                (usuario.path().to_path_buf(), Layer::User),
-                (proyecto.path().to_path_buf(), Layer::Project),
+                (user.path().to_path_buf(), Layer::User),
+                (project.path().to_path_buf(), Layer::Project),
             ],
         };
-        let cfg = load(&layers).expect("carga");
-        assert_eq!(
-            cfg.hotlist.len(),
-            1,
-            "solo la de usuario: {:?}",
-            cfg.hotlist
-        );
-        assert_eq!(cfg.hotlist[0].name, "casa");
+        let cfg = load(&layers).expect("loads");
+        assert_eq!(cfg.hotlist.len(), 1, "only the user's: {:?}", cfg.hotlist);
+        assert_eq!(cfg.hotlist[0].name, "home");
         assert_eq!(
             cfg.hotlist[0].target.as_ref().unwrap(),
             &VPath::parse("file:///home/o").unwrap()
         );
         assert!(
             cfg.project_warnings.iter().any(|w| w.contains("[hotlist]")),
-            "y se DICE que no entra: {:?}",
+            "and it IS SAID that it does not get in: {:?}",
             cfg.project_warnings
         );
     }
 
-    /// Lo que un repositorio ajeno pide y no se aplica se DICE, igual que en un
-    /// perfil. Se descartaba en silencio: fallaba cerrado, pero el dueño del
-    /// `.norte.toml` no tenía forma de saber por qué su transporte, su editor
-    /// o su preset de teclas no cambiaban.
+    /// What a foreign repository asks for and is not applied gets SAID, same
+    /// as in a profile. It used to be silently dropped: it failed closed, but
+    /// the `.norte.toml`'s owner had no way to know why their transport,
+    /// their editor or their key preset were not changing.
     #[test]
-    fn un_proyecto_que_pide_lo_que_no_decide_avisa() {
-        let usuario = tempfile::tempdir().unwrap();
-        let proyecto = tempfile::tempdir().unwrap();
+    fn a_project_that_asks_for_what_it_does_not_decide_warns() {
+        let user = tempfile::tempdir().unwrap();
+        let project = tempfile::tempdir().unwrap();
         std::fs::write(
-            proyecto.path().join("norte.toml"),
-            "[daemon]\nsocket = \"/tmp/ajeno.sock\"\n\
+            project.path().join("norte.toml"),
+            "[daemon]\nsocket = \"/tmp/foreign.sock\"\n\
              [keymap]\npreset = \"vim\"\n\
              [ui]\ndiff = [\"meld\"]\ntheme = \"nord\"\n",
         )
         .unwrap();
         let layers = Layers {
             dirs: vec![
-                (usuario.path().to_path_buf(), Layer::User),
-                (proyecto.path().to_path_buf(), Layer::Project),
+                (user.path().to_path_buf(), Layer::User),
+                (project.path().to_path_buf(), Layer::Project),
             ],
         };
-        let cfg = load(&layers).expect("carga");
-        assert_eq!(cfg.daemon.socket, None, "no se aplica");
-        for que in ["[daemon]", "keymap", "diff"] {
+        let cfg = load(&layers).expect("loads");
+        assert_eq!(cfg.daemon.socket, None, "not applied");
+        for what in ["[daemon]", "keymap", "diff"] {
             assert!(
-                cfg.project_warnings.iter().any(|w| w.contains(que)),
-                "falta el aviso de {que}: {:?}",
+                cfg.project_warnings.iter().any(|w| w.contains(what)),
+                "missing the warning for {what}: {:?}",
                 cfg.project_warnings
             );
         }
         assert!(
             !cfg.project_warnings.iter().any(|w| w.contains("theme")),
-            "la presentación SÍ la decide un proyecto, y no se avisa de ella"
+            "presentation IS decided by a project, and no warning is raised about it"
         );
     }
 
     #[test]
-    fn hotlist_entrada_invalida_degrada_por_entrada() {
-        // Un path que no parsea como VPath (falta scheme) no tumba la
-        // carga: la entrada sobrevive con `target = Err(...)`, y las demás
-        // entradas de la misma capa se cargan con normalidad.
-        let usuario = tempfile::tempdir().unwrap();
+    fn hotlist_invalid_entry_degrades_per_entry() {
+        // A path that does not parse as a VPath (missing scheme) does not
+        // bring down the load: the entry survives with `target = Err(...)`,
+        // and the other entries of the same layer load normally.
+        let user = tempfile::tempdir().unwrap();
         std::fs::write(
-            usuario.path().join("norte.toml"),
-            "[[hotlist]]\nname = \"rota\"\npath = \"no-es-un-path-wire\"\n\n\
-             [[hotlist]]\nname = \"sana\"\npath = \"file:///ok\"\n",
+            user.path().join("norte.toml"),
+            "[[hotlist]]\nname = \"broken\"\npath = \"not-a-wire-path\"\n\n\
+             [[hotlist]]\nname = \"healthy\"\npath = \"file:///ok\"\n",
         )
         .unwrap();
-        // La entrada va en una capa `User` (que SÍ aporta hotlist); la capa
-        // `Project` (un repo ajeno) se añade vacía para comprobar que su
-        // ausencia de favoritos no altera el resultado.
-        let proyecto = tempfile::tempdir().unwrap();
+        // The entry goes in a `User` layer (which DOES contribute hotlist);
+        // the `Project` layer (a foreign repo) is added empty to check that
+        // its absence of favorites does not alter the result.
+        let project = tempfile::tempdir().unwrap();
         let layers = Layers {
             dirs: vec![
-                (usuario.path().to_path_buf(), Layer::User),
-                (proyecto.path().to_path_buf(), Layer::Project),
+                (user.path().to_path_buf(), Layer::User),
+                (project.path().to_path_buf(), Layer::Project),
             ],
         };
-        let cfg = load(&layers).expect("la carga NO falla por una entrada rota");
+        let cfg = load(&layers).expect("the load does NOT fail over one broken entry");
         assert_eq!(cfg.hotlist.len(), 2);
-        let rota = cfg.hotlist.iter().find(|h| h.name == "rota").unwrap();
+        let broken = cfg.hotlist.iter().find(|h| h.name == "broken").unwrap();
         assert_eq!(
-            rota.target.as_ref().err().map(String::as_str),
+            broken.target.as_ref().err().map(String::as_str),
             Some(ERR_INVALID_PATH)
         );
-        let sana = cfg.hotlist.iter().find(|h| h.name == "sana").unwrap();
-        assert!(sana.target.is_ok());
+        let healthy = cfg.hotlist.iter().find(|h| h.name == "healthy").unwrap();
+        assert!(healthy.target.is_ok());
     }
 
     #[test]
-    fn hotlist_nombre_duplicado_entre_capas_la_capa_posterior_gana() {
-        let sistema = tempfile::tempdir().unwrap();
+    fn hotlist_duplicate_name_across_layers_the_later_layer_wins() {
+        let system = tempfile::tempdir().unwrap();
         std::fs::write(
-            sistema.path().join("norte.toml"),
-            "[[hotlist]]\nname = \"trabajo\"\npath = \"file:///viejo\"\n",
+            system.path().join("norte.toml"),
+            "[[hotlist]]\nname = \"work\"\npath = \"file:///old\"\n",
         )
         .unwrap();
-        let usuario = tempfile::tempdir().unwrap();
+        let user = tempfile::tempdir().unwrap();
         std::fs::write(
-            usuario.path().join("norte.toml"),
-            "[[hotlist]]\nname = \"trabajo\"\npath = \"file:///nuevo\"\n",
+            user.path().join("norte.toml"),
+            "[[hotlist]]\nname = \"work\"\npath = \"file:///new\"\n",
         )
         .unwrap();
-        let proyecto = tempfile::tempdir().unwrap();
+        let project = tempfile::tempdir().unwrap();
         let layers = Layers {
             dirs: vec![
-                (sistema.path().to_path_buf(), Layer::System),
-                (usuario.path().to_path_buf(), Layer::User),
-                (proyecto.path().to_path_buf(), Layer::Project),
+                (system.path().to_path_buf(), Layer::System),
+                (user.path().to_path_buf(), Layer::User),
+                (project.path().to_path_buf(), Layer::Project),
             ],
         };
-        let cfg = load(&layers).expect("carga");
-        assert_eq!(cfg.hotlist.len(), 1, "mismo nombre, una entrada");
+        let cfg = load(&layers).expect("loads");
+        assert_eq!(cfg.hotlist.len(), 1, "same name, one entry");
         assert_eq!(
             cfg.hotlist[0].target.as_ref().unwrap(),
-            &VPath::parse("file:///nuevo").unwrap(),
-            "la capa posterior (usuario) gana sobre sistema"
+            &VPath::parse("file:///new").unwrap(),
+            "the later layer (user) wins over system"
         );
     }
 
-    /// review MINOR-2: el dedup por `name` también aplica DENTRO de la
-    /// MISMA capa — TOML no impide repetir `[[hotlist]] name = "..."` dos
-    /// veces en el mismo array; la última aparición gana (ver rustdoc de
-    /// `merge_hotlist_entry`).
+    /// review MINOR-2: dedup by `name` also applies WITHIN the SAME layer —
+    /// TOML does not stop `[[hotlist]] name = "..."` repeating twice in the
+    /// same array; the last appearance wins (see `merge_hotlist_entry`'s
+    /// rustdoc).
     #[test]
-    fn hotlist_nombre_duplicado_dentro_de_la_misma_capa_la_ultima_aparicion_gana() {
-        let usuario = tempfile::tempdir().unwrap();
+    fn hotlist_duplicate_name_within_the_same_layer_the_last_appearance_wins() {
+        let user = tempfile::tempdir().unwrap();
         std::fs::write(
-            usuario.path().join("norte.toml"),
-            "[[hotlist]]\nname = \"trabajo\"\npath = \"file:///viejo\"\n\n\
-             [[hotlist]]\nname = \"trabajo\"\npath = \"file:///nuevo\"\n",
+            user.path().join("norte.toml"),
+            "[[hotlist]]\nname = \"work\"\npath = \"file:///old\"\n\n\
+             [[hotlist]]\nname = \"work\"\npath = \"file:///new\"\n",
         )
         .unwrap();
-        let proyecto = tempfile::tempdir().unwrap();
+        let project = tempfile::tempdir().unwrap();
         let layers = Layers {
             dirs: vec![
-                (usuario.path().to_path_buf(), Layer::User),
-                (proyecto.path().to_path_buf(), Layer::Project),
+                (user.path().to_path_buf(), Layer::User),
+                (project.path().to_path_buf(), Layer::Project),
             ],
         };
-        let cfg = load(&layers).expect("carga");
-        assert_eq!(cfg.hotlist.len(), 1, "mismo nombre intra-capa, una entrada");
+        let cfg = load(&layers).expect("loads");
+        assert_eq!(cfg.hotlist.len(), 1, "same name intra-layer, one entry");
         assert_eq!(
             cfg.hotlist[0].target.as_ref().unwrap(),
-            &VPath::parse("file:///nuevo").unwrap(),
-            "la última aparición dentro de la capa gana"
+            &VPath::parse("file:///new").unwrap(),
+            "the last appearance within the layer wins"
         );
     }
 
-    /// El layer Project JAMÁS elige qué ejecutable se lanza: un repositorio
-    /// que trae su propio `.norte.toml` con `[archive] rar_delegate` sería
-    /// ejecución de código arbitrario con solo entrar en el directorio. Misma
-    /// regla fail-closed que el resto de `[archive]`, y aquí más afilada.
+    /// The Project layer NEVER chooses which executable gets launched: a
+    /// repository bringing its own `.norte.toml` with `[archive] rar_delegate`
+    /// would be arbitrary code execution just by entering the directory. Same
+    /// fail-closed rule as the rest of `[archive]`, and sharper here.
     #[test]
-    fn rar_delegate_del_layer_project_se_ignora() {
-        let usuario = tempfile::tempdir().unwrap();
+    fn rar_delegate_from_the_project_layer_is_ignored() {
+        let user = tempfile::tempdir().unwrap();
         std::fs::write(
-            usuario.path().join("norte.toml"),
+            user.path().join("norte.toml"),
             "[archive]\nrar_delegate = \"/usr/bin/7z\"\n",
         )
         .unwrap();
-        let proyecto = tempfile::tempdir().unwrap();
+        let project = tempfile::tempdir().unwrap();
         std::fs::write(
-            proyecto.path().join("norte.toml"),
+            project.path().join("norte.toml"),
             "[archive]\nrar_delegate = \"/tmp/evil\"\n",
         )
         .unwrap();
         let layers = Layers {
             dirs: vec![
-                (usuario.path().to_path_buf(), Layer::User),
-                (proyecto.path().to_path_buf(), Layer::Project),
+                (user.path().to_path_buf(), Layer::User),
+                (project.path().to_path_buf(), Layer::Project),
             ],
         };
-        let cfg = load(&layers).expect("carga");
+        let cfg = load(&layers).expect("loads");
         assert_eq!(
             cfg.archive.rar_delegate.as_deref(),
             Some("/usr/bin/7z"),
-            "el layer Project jamás elige el ejecutable"
+            "the Project layer never chooses the executable"
         );
     }
 
-    /// Pin encoding BAJA-1a: un `name` hostil (comilla, salto de línea, un
-    /// `[[hotlist]]` embebido y un override bidi) sobrevive el round-trip
-    /// add → load BYTE-IDÉNTICO como UNA sola entrada — `toml_edit` escapa,
-    /// jamás inyecta TOML — y esa misma clave la retira con remove.
+    /// Encoding pin LOW-1a: a hostile `name` (a quote, a newline, an embedded
+    /// `[[hotlist]]` and a bidi override) survives the add → load round trip
+    /// BYTE-IDENTICAL as ONE single entry — `toml_edit` escapes, it never
+    /// injects TOML — and that same key removes it with remove.
     #[test]
-    fn hotlist_round_trip_name_hostil_byte_identico() {
-        let usuario = tempfile::tempdir().unwrap();
+    fn hotlist_round_trip_hostile_name_byte_identical() {
+        let user = tempfile::tempdir().unwrap();
         let name = "fa\"vo\n[[hotlist]]\u{202E}rito";
-        persist_hotlist_add(usuario.path(), name, "file:///x").unwrap();
-        let proyecto = tempfile::tempdir().unwrap();
+        persist_hotlist_add(user.path(), name, "file:///x").unwrap();
+        let project = tempfile::tempdir().unwrap();
         let layers = Layers {
             dirs: vec![
-                (usuario.path().to_path_buf(), Layer::User),
-                (proyecto.path().to_path_buf(), Layer::Project),
+                (user.path().to_path_buf(), Layer::User),
+                (project.path().to_path_buf(), Layer::Project),
             ],
         };
-        let cfg = load(&layers).expect("el name hostil no rompe el TOML");
-        assert_eq!(cfg.hotlist.len(), 1, "UNA entrada, sin inyección");
-        assert_eq!(cfg.hotlist[0].name, name, "name byte-idéntico");
-        persist_hotlist_remove(usuario.path(), name).unwrap();
-        let cfg = load(&layers).expect("carga tras remove");
-        assert!(cfg.hotlist.is_empty(), "la clave hostil retira su entrada");
+        let cfg = load(&layers).expect("the hostile name does not break the TOML");
+        assert_eq!(cfg.hotlist.len(), 1, "ONE entry, no injection");
+        assert_eq!(cfg.hotlist[0].name, name, "byte-identical name");
+        persist_hotlist_remove(user.path(), name).unwrap();
+        let cfg = load(&layers).expect("loads after remove");
+        assert!(cfg.hotlist.is_empty(), "the hostile key removes its entry");
     }
 
-    /// Pin encoding BAJA-1b: el wire de un `VPath` con segmento no-UTF8
-    /// (0xFF 0xFE) round-tripea add → load con `target` Ok y bytes exactos.
+    /// Encoding pin LOW-1b: the wire form of a `VPath` with a non-UTF8
+    /// segment (0xFF 0xFE) round-trips add → load with `target` Ok and exact
+    /// bytes.
     #[test]
-    fn hotlist_round_trip_path_no_utf8_bytes_exactos() {
-        let usuario = tempfile::tempdir().unwrap();
+    fn hotlist_round_trip_non_utf8_path_exact_bytes() {
+        let user = tempfile::tempdir().unwrap();
         let vp = VPath::parse("file:///%FF%FE").unwrap();
-        persist_hotlist_add(usuario.path(), "bin", &vp.to_wire()).unwrap();
-        let proyecto = tempfile::tempdir().unwrap();
+        persist_hotlist_add(user.path(), "bin", &vp.to_wire()).unwrap();
+        let project = tempfile::tempdir().unwrap();
         let layers = Layers {
             dirs: vec![
-                (usuario.path().to_path_buf(), Layer::User),
-                (proyecto.path().to_path_buf(), Layer::Project),
+                (user.path().to_path_buf(), Layer::User),
+                (project.path().to_path_buf(), Layer::Project),
             ],
         };
-        let cfg = load(&layers).expect("carga");
+        let cfg = load(&layers).expect("loads");
         let target = cfg.hotlist[0].target.as_ref().expect("target Ok");
         assert_eq!(target, &vp);
         assert_eq!(
             target.file_name().unwrap().as_bytes(),
             &[0xFF, 0xFE],
-            "los bytes crudos sobreviven el round-trip por TOML"
+            "the raw bytes survive the round trip through TOML"
         );
     }
 
     #[test]
-    fn quick_search_valores_validos() {
+    fn quick_search_valid_values() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             dir.path().join("norte.toml"),
@@ -3516,18 +3532,18 @@ mod hotlist_tests {
         let layers = Layers {
             dirs: vec![(dir.path().to_path_buf(), Layer::User)],
         };
-        let cfg = load(&layers).expect("carga");
+        let cfg = load(&layers).expect("loads");
         assert_eq!(cfg.quick_search, QuickSearch::Jump);
     }
 
     #[test]
-    fn quick_search_default_es_filter() {
-        let cfg = load(&Layers { dirs: vec![] }).expect("carga");
+    fn quick_search_default_is_filter() {
+        let cfg = load(&Layers { dirs: vec![] }).expect("loads");
         assert_eq!(cfg.quick_search, QuickSearch::Filter);
     }
 
     #[test]
-    fn ui_fonts_se_cargan_y_validan() {
+    fn ui_fonts_load_and_validate() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             dir.path().join("norte.toml"),
@@ -3537,17 +3553,17 @@ mod hotlist_tests {
         let layers = Layers {
             dirs: vec![(dir.path().to_path_buf(), Layer::User)],
         };
-        let cfg = load(&layers).expect("carga");
+        let cfg = load(&layers).expect("loads");
         assert_eq!(cfg.ui_font.as_deref(), Some("Inter"));
         assert_eq!(cfg.ui_mono_font.as_deref(), Some("JetBrains Mono"));
         assert!((cfg.ui_font_size.unwrap() - 15.5).abs() < f32::EPSILON);
     }
 
-    /// `[ui.columns]` (#108): sort validado (vocabulario cerrado, inválido
-    /// = error con ruta), ids crudos last-wins, schemes fusionados por
-    /// clave con el último ganando por campo.
+    /// `[ui.columns]` (#108): validated sort (closed vocabulary, invalid =
+    /// error with the path), raw ids last-wins, schemes merged by key with
+    /// the last one winning per field.
     #[test]
-    fn ui_columns_carga_valida_y_fusiona() {
+    fn ui_columns_loads_validates_and_merges() {
         let system = tempfile::tempdir().unwrap();
         std::fs::write(
             system.path().join("norte.toml"),
@@ -3566,7 +3582,7 @@ mod hotlist_tests {
                 (user.path().to_path_buf(), Layer::User),
             ],
         };
-        let cfg = load(&layers).expect("carga");
+        let cfg = load(&layers).expect("loads");
         assert_eq!(
             cfg.ui_columns.default_columns.as_deref(),
             Some(&["name".to_owned(), "size".to_owned()][..])
@@ -3583,7 +3599,7 @@ mod hotlist_tests {
         assert_eq!(
             sftp.columns.as_deref(),
             Some(&["name".to_owned(), "attr:posix.mode".to_owned()][..]),
-            "la capa user no la pisó (solo trajo sort)"
+            "the user layer did not override it (it only brought sort)"
         );
         assert_eq!(
             sftp.sort,
@@ -3594,7 +3610,7 @@ mod hotlist_tests {
             })
         );
 
-        // Vocabulario cerrado: columna de sort inválida = error de carga.
+        // Closed vocabulary: an invalid sort column is a load error.
         let bad = tempfile::tempdir().unwrap();
         std::fs::write(
             bad.path().join("norte.toml"),
@@ -3607,10 +3623,10 @@ mod hotlist_tests {
         assert!(load(&layers).is_err());
     }
 
-    /// Carga una única capa User desde un string TOML (harness compacto para
-    /// los tests de `[[ui.columns.spec]]`; mismo esqueleto que
-    /// `ui_columns_carga_valida_y_fusiona`).
-    fn carga_una_capa_result(toml: &str) -> Result<CommonConfig, ConfigError> {
+    /// Loads a single User layer from a TOML string (compact harness for the
+    /// `[[ui.columns.spec]]` tests; same skeleton as
+    /// `ui_columns_loads_validates_and_merges`).
+    fn load_one_layer_result(toml: &str) -> Result<CommonConfig, ConfigError> {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("norte.toml"), toml).unwrap();
         let layers = Layers {
@@ -3619,20 +3635,20 @@ mod hotlist_tests {
         load(&layers)
     }
 
-    fn carga_una_capa(toml: &str) -> CommonConfig {
-        carga_una_capa_result(toml).expect("carga")
+    fn load_one_layer(toml: &str) -> CommonConfig {
+        load_one_layer_result(toml).expect("loads")
     }
 
-    /// `[[ui.columns.spec]]` (#108 7b): parse de la capa única — spec global
-    /// por id + spec de scheme que convive (la precedencia al RESOLVER es
-    /// del frontend; aquí solo se pina que ambos mapas llegan).
+    /// `[[ui.columns.spec]]` (#108 7b): parsing a single layer — global spec
+    /// by id + scheme spec that coexists (precedence at RESOLVE time is the
+    /// frontend's; here it is only pinned that both maps arrive).
     #[test]
-    fn ui_columns_spec_carga_valida_y_precedencia_scheme() {
+    fn ui_columns_spec_loads_valid_and_scheme_precedence() {
         let toml = r#"
 [[ui.columns.spec]]
 id = "size"
 format = "si"
-header = "Peso"
+header = "Weight"
 width = { fixed = 9 }
 
 [[ui.columns.spec]]
@@ -3643,10 +3659,10 @@ align = "left"
 id = "size"
 format = "exact"
 "#;
-        let cfg = carga_una_capa(toml);
-        let g = cfg.ui_columns.specs.get("size").expect("spec global size");
+        let cfg = load_one_layer(toml);
+        let g = cfg.ui_columns.specs.get("size").expect("global size spec");
         assert_eq!(g.format.as_deref(), Some("si"));
-        assert_eq!(g.header.as_deref(), Some("Peso"));
+        assert_eq!(g.header.as_deref(), Some("Weight"));
         assert_eq!(g.width, Some(WidthChoice::Fixed(9)));
         assert_eq!(
             cfg.ui_columns.specs.get("kind").and_then(|s| s.align),
@@ -3659,43 +3675,46 @@ format = "exact"
         );
     }
 
-    /// Vocabularios CERRADOS del spec (#108 7b): typo/rango = error de carga
-    /// (patrón sort), jamás un skip silencioso.
+    /// The spec's CLOSED vocabularies (#108 7b): a typo/range is a load error
+    /// (sort pattern), never a silent skip.
     #[test]
-    fn ui_columns_spec_vocabularios_cerrados_fallan_al_cargar() {
+    fn ui_columns_spec_closed_vocabularies_fail_to_load() {
         for toml in [
             "[[ui.columns.spec]]\nid = \"size\"\nformat = \"sise\"\n",
             "[[ui.columns.spec]]\nid = \"size\"\nalign = \"middle\"\n",
-            "[[ui.columns.spec]]\nid = \"size\"\nwidth = \"anchisimo\"\n",
+            "[[ui.columns.spec]]\nid = \"size\"\nwidth = \"hugee\"\n",
             "[[ui.columns.spec]]\nid = \"size\"\nwidth = { fixed = 0 }\n",
             "[[ui.columns.spec]]\nid = \"size\"\nwidth = { fixed = 200 }\n",
-            "[[ui.columns.spec]]\nformat = \"iec\"\n", // sin id
+            "[[ui.columns.spec]]\nformat = \"iec\"\n", // no id
         ] {
-            assert!(carga_una_capa_result(toml).is_err(), "debió fallar: {toml}");
+            assert!(
+                load_one_layer_result(toml).is_err(),
+                "should have failed: {toml}"
+            );
         }
     }
 
-    /// Pin de comportamiento serde (#108 7b): `WidthSection` es `untagged`
-    /// y serde IGNORA `deny_unknown_fields` dentro de variantes struct de
-    /// un enum untagged — un campo extra junto a `fixed` se ignora en
-    /// silencio (no es error ni panic). Documentado en el rustdoc de
-    /// `schema::WidthSection`; si serde cambia, este test avisa.
+    /// Serde behavior pin (#108 7b): `WidthSection` is `untagged`, and serde
+    /// IGNORES `deny_unknown_fields` inside an untagged enum's struct
+    /// variants — an extra field next to `fixed` is silently ignored (not an
+    /// error nor a panic). Documented in `schema::WidthSection`'s rustdoc; if
+    /// serde changes, this test warns.
     #[test]
-    fn width_fixed_con_campo_extra_comportamiento_serde() {
-        let cfg = carga_una_capa(
+    fn width_fixed_with_extra_field_is_serdes_behavior() {
+        let cfg = load_one_layer(
             "[[ui.columns.spec]]\nid = \"size\"\nwidth = { fixed = 9, extra = 1 }\n",
         );
         assert_eq!(
             cfg.ui_columns.specs.get("size").and_then(|s| s.width),
             Some(WidthChoice::Fixed(9)),
-            "campo extra ignorado, fixed sobrevive"
+            "extra field ignored, fixed survives"
         );
     }
 
-    /// Merge de specs entre capas (#108 7b): last-wins POR CAMPO por id —
-    /// mismo criterio que el resto de `[ui.columns]`.
+    /// Merging specs across layers (#108 7b): last-wins PER FIELD by id —
+    /// same rule as the rest of `[ui.columns]`.
     #[test]
-    fn ui_columns_spec_merge_por_id_ultimo_gana_por_campo() {
+    fn ui_columns_spec_merge_by_id_last_wins_per_field() {
         let system = tempfile::tempdir().unwrap();
         std::fs::write(
             system.path().join("norte.toml"),
@@ -3714,21 +3733,21 @@ format = "exact"
                 (user.path().to_path_buf(), Layer::User),
             ],
         };
-        let cfg = load(&layers).expect("carga");
-        let s = cfg.ui_columns.specs.get("size").expect("spec size");
-        assert_eq!(s.format.as_deref(), Some("si"), "capa user gana el campo");
+        let cfg = load(&layers).expect("loads");
+        let s = cfg.ui_columns.specs.get("size").expect("size spec");
+        assert_eq!(s.format.as_deref(), Some("si"), "user layer wins the field");
         assert_eq!(
             s.header.as_deref(),
             Some("A"),
-            "campo no re-declarado conserva la capa anterior"
+            "a field not re-declared keeps the previous layer's"
         );
     }
 
-    /// `[ui] show_hidden` (#107): last-wins, todas las capas — misma clase
-    /// presentación-solo que `reduce_motion`. Ausente = None (el frontend
-    /// muestra todo).
+    /// `[ui] show_hidden` (#107): last-wins, every layer — same
+    /// presentation-only class as `reduce_motion`. Absent = None (the
+    /// frontend shows everything).
     #[test]
-    fn ui_show_hidden_carga_last_wins_y_ausente_es_none() {
+    fn ui_show_hidden_loads_last_wins_and_absent_is_none() {
         let system = tempfile::tempdir().unwrap();
         std::fs::write(
             system.path().join("norte.toml"),
@@ -3747,7 +3766,7 @@ format = "exact"
                 (user.path().to_path_buf(), Layer::User),
             ],
         };
-        let cfg = load(&layers).expect("carga");
+        let cfg = load(&layers).expect("loads");
         assert_eq!(cfg.ui_show_hidden, Some(false), "last-wins");
 
         let empty = tempfile::tempdir().unwrap();
@@ -3755,17 +3774,17 @@ format = "exact"
         let layers = Layers {
             dirs: vec![(empty.path().to_path_buf(), Layer::User)],
         };
-        let cfg = load(&layers).expect("carga");
-        assert_eq!(cfg.ui_show_hidden, None, "ausente = None (mostrar todo)");
+        let cfg = load(&layers).expect("loads");
+        assert_eq!(cfg.ui_show_hidden, None, "absent = None (show everything)");
     }
 
-    /// `[ui] mouse`: last-wins, todas las capas — misma clase
-    /// presentación-solo que `show_hidden`. Ausente = None, que el frontend
-    /// lee como CAPTURAR (el default va en el frontend, no aquí: la config
-    /// distingue «no lo dijo» de «dijo true», y solo así un `mouse = true`
-    /// explícito puede ganarle a un `false` de una capa anterior).
+    /// `[ui] mouse`: last-wins, every layer — same presentation-only class as
+    /// `show_hidden`. Absent = None, which the frontend reads as CAPTURED
+    /// (the default lives in the frontend, not here: the config
+    /// distinguishes "did not say" from "said true", and only that way can an
+    /// explicit `mouse = true` beat a `false` from an earlier layer).
     #[test]
-    fn ui_mouse_carga_last_wins_y_ausente_es_none() {
+    fn ui_mouse_loads_last_wins_and_absent_is_none() {
         let system = tempfile::tempdir().unwrap();
         std::fs::write(system.path().join("norte.toml"), "[ui]\nmouse = false\n").unwrap();
         let user = tempfile::tempdir().unwrap();
@@ -3776,7 +3795,7 @@ format = "exact"
                 (user.path().to_path_buf(), Layer::User),
             ],
         };
-        let cfg = load(&layers).expect("carga");
+        let cfg = load(&layers).expect("loads");
         assert_eq!(cfg.ui_mouse, Some(true), "last-wins");
 
         let empty = tempfile::tempdir().unwrap();
@@ -3784,8 +3803,8 @@ format = "exact"
         let layers = Layers {
             dirs: vec![(empty.path().to_path_buf(), Layer::User)],
         };
-        let cfg = load(&layers).expect("carga");
-        assert_eq!(cfg.ui_mouse, None, "ausente = None (el frontend captura)");
+        let cfg = load(&layers).expect("loads");
+        assert_eq!(cfg.ui_mouse, None, "absent = None (the frontend captures)");
     }
 
     /// `[ui] reduce_motion` (G2 a11y override, spec §17): last-wins, honored
@@ -3793,7 +3812,7 @@ format = "exact"
     /// `ui_theme`/`ui_lang`, not the security-sensitive fail-closed carve-out
     /// `[archive]`/`[ai]`/hotlist get.
     #[test]
-    fn ui_reduce_motion_carga_last_wins_todas_las_capas() {
+    fn ui_reduce_motion_loads_last_wins_every_layer() {
         let system = tempfile::tempdir().unwrap();
         std::fs::write(
             system.path().join("norte.toml"),
@@ -3812,23 +3831,23 @@ format = "exact"
                 (project.path().to_path_buf(), Layer::Project),
             ],
         };
-        let cfg = load(&layers).expect("carga");
+        let cfg = load(&layers).expect("loads");
         assert_eq!(
             cfg.ui_reduce_motion,
             Some(false),
-            "la capa Project gana (last-wins) y SÍ se honra (presentación, no seguridad)"
+            "the Project layer wins (last-wins) and IS honored (presentation, not security)"
         );
     }
 
     #[test]
-    fn ui_reduce_motion_ausente_es_none() {
-        let cfg = load(&Layers { dirs: vec![] }).expect("carga");
+    fn ui_reduce_motion_absent_is_none() {
+        let cfg = load(&Layers { dirs: vec![] }).expect("loads");
         assert_eq!(cfg.ui_reduce_motion, None);
     }
 
-    /// S2: `[ui] confirm_quit` acepta los tres valores documentados.
+    /// S2: `[ui] confirm_quit` accepts the three documented values.
     #[test]
-    fn confirm_quit_valores_validos() {
+    fn confirm_quit_valid_values() {
         for (raw, expected) in [
             ("auto", ConfirmQuit::Auto),
             ("always", ConfirmQuit::Always),
@@ -3843,7 +3862,7 @@ format = "exact"
             let layers = Layers {
                 dirs: vec![(dir.path().to_path_buf(), Layer::User)],
             };
-            let cfg = load(&layers).expect("carga");
+            let cfg = load(&layers).expect("loads");
             assert_eq!(cfg.ui_confirm_quit, expected, "raw={raw}");
         }
     }
@@ -3851,27 +3870,27 @@ format = "exact"
     /// `[ui] status_plugins` (ADR 0137): pairs in order, last layer wins,
     /// and a malformed, repeated or fifth id names the file.
     #[test]
-    fn status_plugins_carga_y_valida() {
+    fn status_plugins_loads_and_validates() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             dir.path().join("norte.toml"),
-            "[ui]\nstatus_plugins = [\"plugin:git/branch\", \"plugin:net.x/estado\"]\n",
+            "[ui]\nstatus_plugins = [\"plugin:git/branch\", \"plugin:net.x/status\"]\n",
         )
         .unwrap();
         let layers = Layers {
             dirs: vec![(dir.path().to_path_buf(), Layer::User)],
         };
-        let c = load(&layers).expect("carga");
+        let c = load(&layers).expect("loads");
         assert_eq!(
             c.ui_status_plugins,
             vec![
                 ("git".to_owned(), "branch".to_owned()),
-                ("net.x".to_owned(), "estado".to_owned())
+                ("net.x".to_owned(), "status".to_owned())
             ]
         );
         assert!(
             load(&Layers { dirs: vec![] })
-                .expect("carga")
+                .expect("loads")
                 .ui_status_plugins
                 .is_empty()
         );
@@ -3893,7 +3912,7 @@ format = "exact"
     /// `[ui]` chrome: the six keys land, the two enums validate, the project
     /// layer is honored (presentation-only), and a bad value names the file.
     #[test]
-    fn ui_chrome_carga_valida_y_honra_proyecto() {
+    fn ui_chrome_loads_validates_and_honors_project() {
         let user = tempfile::tempdir().unwrap();
         std::fs::write(
             user.path().join("norte.toml"),
@@ -3916,13 +3935,13 @@ format = "exact"
                 (project.path().to_path_buf(), Layer::Project),
             ],
         };
-        let c = load(&layers).expect("carga").ui_chrome;
+        let c = load(&layers).expect("loads").ui_chrome;
         assert_eq!(c.key_bar, Some(false));
         assert_eq!(c.panel_bar_style(), PanelBarStyle::Letters);
         assert_eq!(c.panel_bar_position(), PanelBarPosition::Left);
         assert_eq!(c.titlebar(), Titlebar::Custom);
         assert_eq!(c.status_items().to_ids(), ["tasks", "position"]);
-        assert_eq!(c.date_format(), DateFormat::Relative, "la última capa gana");
+        assert_eq!(c.date_format(), DateFormat::Relative, "the last layer wins");
         assert_eq!(c.notice_seconds(), 30);
         assert_eq!(c.history_size(), 12);
         assert_eq!(c.splash(), SplashMode::Home);
@@ -3932,7 +3951,7 @@ format = "exact"
         assert!(!c.pane_footer());
         assert!(!c.dialog_buttons());
 
-        let empty = load(&Layers { dirs: vec![] }).expect("carga").ui_chrome;
+        let empty = load(&Layers { dirs: vec![] }).expect("loads").ui_chrome;
         assert_eq!(empty, UiChrome::default());
         assert!(empty.key_bar() && empty.pane_footer() && empty.dialog_buttons());
         assert_eq!(empty.panel_bar_style(), PanelBarStyle::Names);
@@ -3940,7 +3959,7 @@ format = "exact"
         assert_eq!(
             empty.titlebar(),
             Titlebar::Native,
-            "la del escritorio, de serie"
+            "the desktop's own, by default"
         );
         assert_eq!(empty.status_items(), StatusItems::DEFAULT);
         assert_eq!(empty.date_format(), DateFormat::Smart);
@@ -3977,59 +3996,59 @@ format = "exact"
     }
 
     #[test]
-    fn images_se_lee_y_se_valida() {
+    fn images_reads_and_validates() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("norte.toml"), "[ui]\nimages = \"kitty\"\n").unwrap();
         let layers = Layers {
             dirs: vec![(dir.path().to_path_buf(), Layer::User)],
         };
-        let c = load(&layers).expect("carga").ui_chrome;
+        let c = load(&layers).expect("loads").ui_chrome;
         assert_eq!(c.images(), Images::Kitty);
     }
 
     #[test]
-    fn images_ausente_es_auto() {
-        let vacio = load(&Layers { dirs: vec![] }).expect("carga").ui_chrome;
-        assert_eq!(vacio.images(), Images::Auto);
+    fn images_absent_is_auto() {
+        let empty = load(&Layers { dirs: vec![] }).expect("loads").ui_chrome;
+        assert_eq!(empty.images(), Images::Auto);
     }
 
     #[test]
-    fn images_invalido_se_rechaza_con_motivo() {
-        // Un valor que no es de la lista NO se ignora en silencio: quien
-        // escribió "si" quería algo, y arrancar como si no hubiera escrito
-        // nada convierte su error en una preferencia que no eligió.
+    fn images_invalid_is_refused_with_a_reason() {
+        // A value not on the list is NOT silently ignored: whoever wrote
+        // "yes" wanted something, and starting as if nothing had been
+        // written turns their mistake into a preference they never chose.
         let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("norte.toml"), "[ui]\nimages = \"si\"\n").unwrap();
+        std::fs::write(dir.path().join("norte.toml"), "[ui]\nimages = \"yes\"\n").unwrap();
         let layers = Layers {
             dirs: vec![(dir.path().to_path_buf(), Layer::User)],
         };
-        let err = load(&layers).expect_err("debe rechazar un valor desconocido");
+        let err = load(&layers).expect_err("must refuse an unknown value");
         let msg = err.to_string();
-        assert!(msg.contains("images"), "el motivo nombra la clave: {msg}");
+        assert!(msg.contains("images"), "the reason names the key: {msg}");
     }
 
     #[test]
-    fn confirm_quit_default_es_auto() {
-        let cfg = load(&Layers { dirs: vec![] }).expect("carga");
+    fn confirm_quit_default_is_auto() {
+        let cfg = load(&Layers { dirs: vec![] }).expect("loads");
         assert_eq!(cfg.ui_confirm_quit, ConfirmQuit::Auto);
     }
 
     #[test]
-    fn confirm_quit_valor_invalido_es_error_de_carga() {
+    fn confirm_quit_invalid_value_is_a_load_error() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             dir.path().join("norte.toml"),
-            "[ui]\nconfirm_quit = \"a-veces\"\n",
+            "[ui]\nconfirm_quit = \"sometimes\"\n",
         )
         .unwrap();
         let layers = Layers {
             dirs: vec![(dir.path().to_path_buf(), Layer::User)],
         };
-        let err = load(&layers).expect_err("config rota es error (ADR 0007)");
+        let err = load(&layers).expect_err("broken config is an error (ADR 0007)");
         assert!(matches!(err, ConfigError::Toml { .. }));
     }
 
-    /// `as_str` round-tripea las tres cadenas de wire.
+    /// `as_str` round-trips the three wire strings.
     #[test]
     fn confirm_quit_as_str() {
         assert_eq!(ConfirmQuit::Auto.as_str(), "auto");
@@ -4037,11 +4056,11 @@ format = "exact"
         assert_eq!(ConfirmQuit::Never.as_str(), "never");
     }
 
-    /// ADR 0007: config inválida es error de arranque CON fichero culpable —
-    /// un `font_size` fuera de [8, 32] no se clampa en silencio (contrato
-    /// distinto al de [effects], que es data de tema y clampa).
+    /// ADR 0007: invalid config is a startup error WITH the culprit file — a
+    /// `font_size` outside [8, 32] is not silently clamped (a different
+    /// contract from [effects], which is theme data and does clamp).
     #[test]
-    fn ui_font_size_fuera_de_rango_es_error() {
+    fn ui_font_size_out_of_range_is_an_error() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("norte.toml"), "[ui]\nfont_size = 4.0\n").unwrap();
         let layers = Layers {
@@ -4051,17 +4070,17 @@ format = "exact"
     }
 
     #[test]
-    fn quick_search_valor_invalido_es_error_de_carga() {
+    fn quick_search_invalid_value_is_a_load_error() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             dir.path().join("norte.toml"),
-            "[ui]\nquick_search = \"vuela\"\n",
+            "[ui]\nquick_search = \"fly\"\n",
         )
         .unwrap();
         let layers = Layers {
             dirs: vec![(dir.path().to_path_buf(), Layer::User)],
         };
-        let err = load(&layers).expect_err("config rota es error (ADR 0007)");
+        let err = load(&layers).expect_err("broken config is an error (ADR 0007)");
         assert!(matches!(err, ConfigError::Toml { .. }));
     }
 
@@ -4069,33 +4088,33 @@ format = "exact"
     /// prefixes UNION (a system deny survives a user layer) AND deduped (a
     /// prefix repeated across layers is not a distinct entry).
     #[test]
-    fn ai_merge_escalares_ultimo_gana_y_denied_union() {
-        let sistema = tempfile::tempdir().unwrap();
+    fn ai_merge_scalars_last_wins_and_denied_union() {
+        let system = tempfile::tempdir().unwrap();
         std::fs::write(
-            sistema.path().join("norte.toml"),
+            system.path().join("norte.toml"),
             "[ai]\nenabled = true\nlocal_only = true\n\
              denied_prefixes = [\"file:///etc\", \"file:///shared\"]\n",
         )
         .unwrap();
-        let usuario = tempfile::tempdir().unwrap();
+        let user = tempfile::tempdir().unwrap();
         std::fs::write(
-            usuario.path().join("norte.toml"),
+            user.path().join("norte.toml"),
             "[ai]\nlocal_only = false\n\
              denied_prefixes = [\"file:///home/u/secret\", \"file:///shared\"]\n",
         )
         .unwrap();
         let layers = Layers {
             dirs: vec![
-                (sistema.path().to_path_buf(), Layer::System),
-                (usuario.path().to_path_buf(), Layer::User),
+                (system.path().to_path_buf(), Layer::System),
+                (user.path().to_path_buf(), Layer::User),
             ],
         };
-        let cfg = load(&layers).expect("carga");
+        let cfg = load(&layers).expect("loads");
         assert!(cfg.ai.enabled, "absent in user layer: inherits system");
         assert!(!cfg.ai.local_only, "present in user layer: user wins");
         let etc = VPath::parse("file:///etc").unwrap();
-        let secreto = VPath::parse("file:///home/u/secret").unwrap();
-        let compartido = VPath::parse("file:///shared").unwrap();
+        let secret = VPath::parse("file:///home/u/secret").unwrap();
+        let shared = VPath::parse("file:///shared").unwrap();
         assert_eq!(
             cfg.ai.denied_prefixes.len(),
             3,
@@ -4105,9 +4124,9 @@ format = "exact"
             cfg.ai.denied_prefixes.contains(&etc),
             "system deny survives"
         );
-        assert!(cfg.ai.denied_prefixes.contains(&secreto), "user deny added");
+        assert!(cfg.ai.denied_prefixes.contains(&secret), "user deny added");
         assert!(
-            cfg.ai.denied_prefixes.contains(&compartido),
+            cfg.ai.denied_prefixes.contains(&shared),
             "shared deny present exactly once"
         );
     }
@@ -4115,18 +4134,18 @@ format = "exact"
     /// [ai] from the project layer is ignored fail-closed — a hostile repo
     /// must not enable AI, declare a provider, nor add a denied prefix.
     #[test]
-    fn ai_de_proyecto_se_ignora() {
-        let proyecto = tempfile::tempdir().unwrap();
+    fn ai_from_project_is_ignored() {
+        let project = tempfile::tempdir().unwrap();
         std::fs::write(
-            proyecto.path().join("norte.toml"),
+            project.path().join("norte.toml"),
             "[ai]\nenabled = true\ndenied_prefixes = [\"file:///x\"]\n\n\
              [ai.providers.p]\nkind = \"ollama\"\nmodel = \"m\"\n",
         )
         .unwrap();
         let layers = Layers {
-            dirs: vec![(proyecto.path().to_path_buf(), Layer::Project)],
+            dirs: vec![(project.path().to_path_buf(), Layer::Project)],
         };
-        let cfg = load(&layers).expect("carga");
+        let cfg = load(&layers).expect("loads");
         assert!(!cfg.ai.enabled);
         assert!(cfg.ai.providers.is_empty(), "project provider ignored");
         assert!(
@@ -4140,38 +4159,38 @@ format = "exact"
     /// lower layer survives, and `rename_provider` (a plain scalar) is
     /// last-present-wins independent of the providers map.
     #[test]
-    fn ai_providers_merge_por_nombre_capa_posterior_gana() {
-        let sistema = tempfile::tempdir().unwrap();
+    fn ai_providers_merge_by_name_later_layer_wins() {
+        let system = tempfile::tempdir().unwrap();
         std::fs::write(
-            sistema.path().join("norte.toml"),
+            system.path().join("norte.toml"),
             "[ai]\nrename_provider = \"x\"\n\n\
-             [ai.providers.x]\nkind = \"ollama\"\nmodel = \"viejo\"\n\n\
-             [ai.providers.y]\nkind = \"ollama\"\nmodel = \"solo-sistema\"\n",
+             [ai.providers.x]\nkind = \"ollama\"\nmodel = \"old\"\n\n\
+             [ai.providers.y]\nkind = \"ollama\"\nmodel = \"system-only\"\n",
         )
         .unwrap();
-        let usuario = tempfile::tempdir().unwrap();
+        let user = tempfile::tempdir().unwrap();
         std::fs::write(
-            usuario.path().join("norte.toml"),
+            user.path().join("norte.toml"),
             "[ai]\nrename_provider = \"y\"\n\n\
-             [ai.providers.x]\nkind = \"ollama\"\nmodel = \"nuevo\"\n",
+             [ai.providers.x]\nkind = \"ollama\"\nmodel = \"new\"\n",
         )
         .unwrap();
         let layers = Layers {
             dirs: vec![
-                (sistema.path().to_path_buf(), Layer::System),
-                (usuario.path().to_path_buf(), Layer::User),
+                (system.path().to_path_buf(), Layer::System),
+                (user.path().to_path_buf(), Layer::User),
             ],
         };
-        let cfg = load(&layers).expect("carga");
+        let cfg = load(&layers).expect("loads");
         assert_eq!(cfg.ai.providers.len(), 2, "both names survive");
         assert_eq!(
             cfg.ai.providers.get("x").unwrap().model,
-            "nuevo",
+            "new",
             "user layer redeclares x: later layer wins"
         );
         assert_eq!(
             cfg.ai.providers.get("y").unwrap().model,
-            "solo-sistema",
+            "system-only",
             "y untouched by user layer: survives"
         );
         assert_eq!(
@@ -4186,38 +4205,38 @@ format = "exact"
     /// every layer means `None` (no embeddings).
     #[test]
     fn ai_embed_provider_last_layer_wins() {
-        let sistema = tempfile::tempdir().unwrap();
+        let system = tempfile::tempdir().unwrap();
         std::fs::write(
-            sistema.path().join("norte.toml"),
+            system.path().join("norte.toml"),
             "[ai]\nembed_provider = \"ollama-local\"\n",
         )
         .unwrap();
-        let usuario = tempfile::tempdir().unwrap();
+        let user = tempfile::tempdir().unwrap();
         std::fs::write(
-            usuario.path().join("norte.toml"),
-            "[ai]\nembed_provider = \"otro\"\n",
+            user.path().join("norte.toml"),
+            "[ai]\nembed_provider = \"other\"\n",
         )
         .unwrap();
         let layers = Layers {
             dirs: vec![
-                (sistema.path().to_path_buf(), Layer::System),
-                (usuario.path().to_path_buf(), Layer::User),
+                (system.path().to_path_buf(), Layer::System),
+                (user.path().to_path_buf(), Layer::User),
             ],
         };
-        let cfg = load(&layers).expect("carga");
+        let cfg = load(&layers).expect("loads");
         assert_eq!(
             cfg.ai.embed_provider,
-            Some("otro".to_owned()),
+            Some("other".to_owned()),
             "scalar last-present-wins"
         );
 
         // Absent in every layer: stays `None`.
-        let vacio = tempfile::tempdir().unwrap();
-        std::fs::write(vacio.path().join("norte.toml"), "[ai]\nenabled = true\n").unwrap();
+        let empty = tempfile::tempdir().unwrap();
+        std::fs::write(empty.path().join("norte.toml"), "[ai]\nenabled = true\n").unwrap();
         let layers = Layers {
-            dirs: vec![(vacio.path().to_path_buf(), Layer::System)],
+            dirs: vec![(empty.path().to_path_buf(), Layer::System)],
         };
-        let cfg = load(&layers).expect("carga");
+        let cfg = load(&layers).expect("loads");
         assert_eq!(cfg.ai.embed_provider, None, "absent in all layers => None");
     }
 
@@ -4225,57 +4244,57 @@ format = "exact"
     /// honored — a hostile repo must not redirect the core transport (mode
     /// or socket) to an attacker-controlled endpoint.
     #[test]
-    fn daemon_de_proyecto_se_ignora() {
-        let proyecto = tempfile::tempdir().unwrap();
+    fn daemon_from_project_is_ignored() {
+        let project = tempfile::tempdir().unwrap();
         std::fs::write(
-            proyecto.path().join("norte.toml"),
+            project.path().join("norte.toml"),
             "[daemon]\nmode = \"daemon\"\nsocket = \"/tmp/evil.sock\"\n",
         )
         .unwrap();
         let layers = Layers {
-            dirs: vec![(proyecto.path().to_path_buf(), Layer::Project)],
+            dirs: vec![(project.path().to_path_buf(), Layer::Project)],
         };
-        let cfg = load(&layers).expect("carga");
+        let cfg = load(&layers).expect("loads");
         assert_eq!(cfg.daemon.mode, None, "project mode ignored");
         assert_eq!(cfg.daemon.socket, None, "project socket ignored");
     }
 
-    /// `[log]` se lee de las capas de máquina y de usuario, JAMÁS de la de
-    /// proyecto: un `norte.toml` que llega con un repositorio ajeno no puede
-    /// decidir dónde escribe sus logs este proceso. Misma regla fail-closed que
-    /// `[daemon]` (review MAJOR-1) y por el mismo motivo — redirigir una
-    /// escritura no es presentación.
+    /// `[log]` is read from the machine and user layers, NEVER from the
+    /// project one: a `norte.toml` arriving with a foreign repository cannot
+    /// decide where this process writes its logs. Same fail-closed rule as
+    /// `[daemon]` (review MAJOR-1) and for the same reason — redirecting a
+    /// write is not presentation.
     #[test]
-    fn log_de_proyecto_se_ignora() {
-        let usuario = tempfile::tempdir().unwrap();
+    fn log_from_project_is_ignored() {
+        let user = tempfile::tempdir().unwrap();
         std::fs::write(
-            usuario.path().join("norte.toml"),
-            "[log]\ndir = \"/de-usuario\"\nretain = 3\n",
+            user.path().join("norte.toml"),
+            "[log]\ndir = \"/from-user\"\nretain = 3\n",
         )
         .unwrap();
-        let proyecto = tempfile::tempdir().unwrap();
+        let project = tempfile::tempdir().unwrap();
         std::fs::write(
-            proyecto.path().join("norte.toml"),
-            "[log]\ndir = \"/del-repo\"\nretain = 99\nformat = \"json\"\n",
+            project.path().join("norte.toml"),
+            "[log]\ndir = \"/from-the-repo\"\nretain = 99\nformat = \"json\"\n",
         )
         .unwrap();
         let layers = Layers {
             dirs: vec![
-                (usuario.path().to_path_buf(), Layer::User),
-                (proyecto.path().to_path_buf(), Layer::Project),
+                (user.path().to_path_buf(), Layer::User),
+                (project.path().to_path_buf(), Layer::Project),
             ],
         };
-        let cfg = load(&layers).expect("carga");
+        let cfg = load(&layers).expect("loads");
         assert_eq!(
             cfg.log.dir.as_deref(),
-            Some(std::path::Path::new("/de-usuario")),
-            "gana la capa de usuario; la de proyecto ni se mira"
+            Some(std::path::Path::new("/from-user")),
+            "the user layer wins; the project one is not even looked at"
         );
         assert_eq!(cfg.log.retain, Some(3));
         assert_eq!(
             cfg.log.format,
             crate::schema::LogFormat::Text,
-            "un repositorio tampoco decide el formato del log"
+            "a repository does not decide the log's format either"
         );
     }
 
@@ -4288,7 +4307,7 @@ format = "exact"
     /// planted line containing a bidi override + an embedded fake TOML
     /// header, deliberately broken syntax so the parse fails.
     #[test]
-    fn persist_helpers_no_citan_el_error_crudo_de_toml_edit() {
+    fn persist_helpers_do_not_quote_toml_edits_raw_error() {
         let hostile = "not toml \u{202E}[[hotlist]]\u{202C} = [unterminated\n";
         for helper in ["theme", "hotlist_add", "hotlist_remove"] {
             let dir = tempfile::tempdir().unwrap();
@@ -4311,83 +4330,83 @@ format = "exact"
     }
 }
 
-/// Tests de [`persist_set`] (S2): la forma GENÉRICA detrás de
-/// `persist_ui_theme_to` — comprueba lo que ese wrapper no ejercita solo
-/// (una sección arbitraria, un fichero nuevo, un valor hostil), MIENTRAS que
-/// `hotlist_tests::persist_helpers_no_citan_el_error_crudo_de_toml_edit`
-/// arriba es la prueba de comportamiento de que el wrapper sigue siendo
-/// idéntico a como era.
+/// Tests for [`persist_set`] (S2): the GENERIC form behind
+/// `persist_ui_theme_to` — checks what that wrapper alone does not exercise
+/// (an arbitrary section, a new file, a hostile value), WHILE
+/// `hotlist_tests::persist_helpers_do_not_quote_toml_edits_raw_error` above
+/// is the behavior proof that the wrapper is still identical to how it was.
 #[cfg(test)]
 mod persist_set_tests {
     use super::*;
 
-    /// Round trip preservando comentarios ya existentes — mismo criterio que
-    /// `hotlist_round_trip_preservando_comentarios`.
+    /// Round trip preserving already-existing comments — same rule as
+    /// `hotlist_round_trip_preserves_comments`.
     #[test]
-    fn persist_set_preserva_comentarios_existentes() {
+    fn persist_set_preserves_existing_comments() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             dir.path().join("norte.toml"),
-            "# mi config\n[ui]\ntheme = \"nord\" # tema\n",
+            "# my config\n[ui]\ntheme = \"nord\" # theme\n",
         )
         .unwrap();
         persist_set(dir.path(), "ui", "lang", toml_edit::Value::from("es")).unwrap();
         let s = std::fs::read_to_string(dir.path().join("norte.toml")).unwrap();
-        assert!(s.contains("# mi config"), "comentario del fichero: {s}");
-        assert!(s.contains("# tema"), "comentario de la clave: {s}");
+        assert!(s.contains("# my config"), "file comment: {s}");
+        assert!(s.contains("# theme"), "key comment: {s}");
         assert!(s.contains("lang = \"es\""), "{s}");
-        assert!(s.contains("theme = \"nord\""), "valor previo intacto: {s}");
+        assert!(s.contains("theme = \"nord\""), "previous value intact: {s}");
     }
 
-    /// Fichero AUSENTE: `persist_set` lo crea (y el dir, si tampoco existe).
+    /// ABSENT file: `persist_set` creates it (and the dir, if that is
+    /// missing too).
     #[test]
-    fn persist_set_crea_el_fichero_si_no_existe() {
+    fn persist_set_creates_the_file_if_it_does_not_exist() {
         let base = tempfile::tempdir().unwrap();
-        let dir = base.path().join("subdir/aun-no-existe");
+        let dir = base.path().join("subdir/does-not-exist-yet");
         let path = persist_set(&dir, "keymap", "preset", toml_edit::Value::from("vim")).unwrap();
         let s = std::fs::read_to_string(&path).unwrap();
         assert!(s.contains("preset = \"vim\""), "{s}");
     }
 
-    /// La tabla `[section]` nace EXPLÍCITA en un fichero nuevo — no
-    /// `section.key = …` en dotted-key implícito, que sería ilegible/no
-    /// idiomático para un fichero que el usuario puede editar a mano.
+    /// The `[section]` table is born EXPLICIT in a new file — not
+    /// `section.key = …` as an implicit dotted-key, which would be
+    /// unreadable/non-idiomatic for a file the user may edit by hand.
     #[test]
-    fn persist_set_crea_la_seccion_explicita() {
+    fn persist_set_creates_the_section_explicit() {
         let dir = tempfile::tempdir().unwrap();
         let path = persist_set(dir.path(), "ai", "enabled", toml_edit::Value::from(true)).unwrap();
         let s = std::fs::read_to_string(&path).unwrap();
-        assert!(s.contains("[ai]"), "sección EXPLÍCITA: {s}");
+        assert!(s.contains("[ai]"), "EXPLICIT section: {s}");
         assert!(
             !s.contains("ai.enabled"),
-            "no debe degradar a dotted-key implícito: {s}"
+            "must not degrade to an implicit dotted-key: {s}"
         );
     }
 
-    /// Pin encoding: un valor string hostil (comilla, salto de línea, una
-    /// cabecera TOML embebida y un override bidi) round-tripea escapado y
-    /// byte-idéntico — `toml_edit` escapa, jamás inyecta TOML — mismo
-    /// criterio que `hotlist_round_trip_name_hostil_byte_identico`.
+    /// Encoding pin: a hostile string value (a quote, a newline, an embedded
+    /// TOML header and a bidi override) round-trips escaped and
+    /// byte-identical — `toml_edit` escapes, it never injects TOML — same
+    /// rule as `hotlist_round_trip_hostile_name_byte_identical`.
     #[test]
-    fn persist_set_valor_hostil_round_tripea_escapado() {
+    fn persist_set_hostile_value_round_trips_escaped() {
         let dir = tempfile::tempdir().unwrap();
         let hostile = "fa\"vo\n[[evil]]\u{202E}rito";
         persist_set(dir.path(), "ui", "font", toml_edit::Value::from(hostile)).unwrap();
         let layers = Layers {
             dirs: vec![(dir.path().to_path_buf(), Layer::User)],
         };
-        let cfg = load(&layers).expect("el valor hostil no rompe el TOML");
+        let cfg = load(&layers).expect("the hostile value does not break the TOML");
         assert_eq!(
             cfg.ui_font.as_deref(),
             Some(hostile),
-            "valor byte-idéntico tras el round trip"
+            "byte-identical value after the round trip"
         );
     }
 
-    /// `[section]` ya existente se REEMPLAZA (misma clave, valor nuevo) —
-    /// una sola ocurrencia en el fichero final, no una duplicada.
+    /// An already-existing `[section]` key is REPLACED (same key, new
+    /// value) — a single occurrence in the final file, not a duplicate.
     #[test]
-    fn persist_set_reemplaza_clave_existente() {
+    fn persist_set_replaces_an_existing_key() {
         let dir = tempfile::tempdir().unwrap();
         persist_set(dir.path(), "ui", "theme", toml_edit::Value::from("nord")).unwrap();
         persist_set(
@@ -4398,70 +4417,70 @@ mod persist_set_tests {
         )
         .unwrap();
         let s = std::fs::read_to_string(dir.path().join("norte.toml")).unwrap();
-        assert_eq!(s.matches("theme").count(), 1, "una sola clave: {s}");
+        assert_eq!(s.matches("theme").count(), 1, "a single key: {s}");
         assert!(s.contains("gruvbox-dark"), "{s}");
         assert!(!s.contains("\"nord\""), "{s}");
     }
 
-    /// Revisión S, I1: `[section]` existente pero con forma ESCALAR
-    /// (`ui = 3`, p. ej. un `norte.toml` editado a mano entre sesiones) es
-    /// un `Err(InvalidData)` LIMPIO — antes de este fix, `toml_edit`
-    /// indexaba esa entrada y panicaba (`IndexMut` de un `Item::Value` no
-    /// tabla devuelve `None` internamente, `.expect()`d por el operador de
-    /// índice). Un panic aquí hundiría el hilo de fondo que llama a
-    /// `persist_set` (GUI: se lleva el proceso; TUI: `JoinError` silencioso).
-    /// El fichero queda INTACTO (el guard es de solo lectura, antes de
-    /// cualquier escritura).
+    /// Review S, I1: an existing `[section]` but with SCALAR shape (`ui = 3`,
+    /// e.g. a `norte.toml` hand-edited between sessions) is a CLEAN
+    /// `Err(InvalidData)` — before this fix, `toml_edit` indexed that entry
+    /// and panicked (`IndexMut` on a non-table `Item::Value` returns `None`
+    /// internally, `.expect()`d by the index operator). A panic here would
+    /// bring down the background thread calling `persist_set` (GUI: takes the
+    /// process with it; TUI: a silent `JoinError`). The file stays INTACT
+    /// (the guard is read-only, before any write).
     #[test]
-    fn persist_set_seccion_escalar_es_err_no_panic() {
+    fn persist_set_scalar_section_is_err_not_panic() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("norte.toml"), "ui = 3\n").unwrap();
         let err = persist_set(dir.path(), "ui", "theme", toml_edit::Value::from("nord"))
-            .expect_err("[ui] escalar debe rechazarse, no panicar");
+            .expect_err("a scalar [ui] must be refused, not panic");
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
         let s = std::fs::read_to_string(dir.path().join("norte.toml")).unwrap();
-        assert_eq!(s, "ui = 3\n", "el fichero no se toca en el camino de error");
+        assert_eq!(s, "ui = 3\n", "the file is untouched on the error path");
     }
 
-    /// Mismo guard, forma array-of-tables (`[[ui]]`) — igual de "no tabla"
-    /// para nuestro propósito aunque `toml_edit` lo modele como su propio
-    /// tipo (`Item::ArrayOfTables`), no como un `Item::Value` escalar.
+    /// Same guard, array-of-tables shape (`[[ui]]`) — just as "not a table"
+    /// for our purposes even though `toml_edit` models it as its own type
+    /// (`Item::ArrayOfTables`), not as a scalar `Item::Value`.
     #[test]
-    fn persist_set_seccion_array_of_tables_es_err_no_panic() {
+    fn persist_set_array_of_tables_section_is_err_not_panic() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("norte.toml"), "[[ui]]\nx = 1\n").unwrap();
         let err = persist_set(dir.path(), "ui", "theme", toml_edit::Value::from("nord"))
-            .expect_err("[[ui]] array-of-tables debe rechazarse, no panicar");
+            .expect_err("a [[ui]] array-of-tables must be refused, not panic");
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
     }
 
-    /// Par positivo del guard: una sección `[section]` inline
-    /// (`ui = { theme = "x" }`) SÍ es tabla-like para `toml_edit` — el guard
-    /// no debe rechazarla (pin: evita que un guard demasiado estricto rompa
-    /// una forma que la librería indexa sin problema).
+    /// The guard's positive counterpart: an inline `[section]`
+    /// (`ui = { theme = "x" }`) IS table-like for `toml_edit` — the guard
+    /// must not refuse it (pin: keeps an overly strict guard from breaking a
+    /// shape the library indexes without a problem).
     #[test]
-    fn persist_set_seccion_inline_table_no_se_rechaza() {
+    fn persist_set_inline_table_section_is_not_refused() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("norte.toml"), "ui = { theme = \"nord\" }\n").unwrap();
         persist_set(dir.path(), "ui", "lang", toml_edit::Value::from("es"))
-            .expect("tabla inline: el guard no debe rechazarla");
+            .expect("inline table: the guard must not refuse it");
         let s = std::fs::read_to_string(dir.path().join("norte.toml")).unwrap();
         assert!(s.contains("lang"), "{s}");
     }
 }
 
 /// Tests de [`persist_columns`] (#108 7a): el PRIMER valor array que el
-/// persistidor escribe jamás — el round trip por el `load` real es el pin
-/// del contrato (los nombres de clave del sort son EXACTAMENTE los que
-/// parsea `parse_sort_section`: `column`/`dir`/`dirs_first`).
+/// persister writes ever — the round trip through the real `load` is the
+/// contract's pin (the sort's key names are EXACTLY what
+/// `parse_sort_section` parses: `column`/`dir`/`dirs_first`).
 #[cfg(test)]
 mod persist_columns_tests {
     use super::*;
 
-    /// Sin scheme → `[ui.columns] default + sort`, y el `load` real lo relee
-    /// idéntico (ids opacos incluidos — el picker jamás limpia la config).
+    /// No scheme → `[ui.columns] default + sort`, and the real `load`
+    /// rereads it identically (opaque ids included — the picker never cleans
+    /// up the config).
     #[test]
-    fn persist_columns_default_round_tripea_por_load() {
+    fn persist_columns_default_round_trips_through_load() {
         let dir = tempfile::tempdir().unwrap();
         persist_columns(
             dir.path(),
@@ -4477,11 +4496,11 @@ mod persist_columns_tests {
                 dirs_first: true,
             }),
         )
-        .expect("escritura");
-        // La hoja se emite EXPLÍCITA (un `[ui.columns]` legible), no como
-        // dotted-keys implícitos — mismo criterio que `persist_set`.
-        let texto = std::fs::read_to_string(dir.path().join("norte.toml")).unwrap();
-        assert!(texto.contains("[ui.columns]"), "hoja explícita: {texto}");
+        .expect("write");
+        // The leaf is emitted EXPLICIT (a readable `[ui.columns]`), not as
+        // implicit dotted-keys — same rule as `persist_set`.
+        let text = std::fs::read_to_string(dir.path().join("norte.toml")).unwrap();
+        assert!(text.contains("[ui.columns]"), "explicit leaf: {text}");
         let layers = Layers {
             dirs: vec![(dir.path().to_path_buf(), Layer::User)],
         };
@@ -4506,53 +4525,53 @@ mod persist_columns_tests {
         );
     }
 
-    /// Pin M1/L1 (revisión 7a): el PRIMER camino de escritura de ARRAY del
-    /// persistidor con un id hostil (comilla + salto de línea + header de
-    /// sección + RLO embebidos). `toml_edit` lo escapa (multi-line escapes),
-    /// jamás inyecta TOML: el `load` real relee la lista BYTE-IDÉNTICA, el
-    /// hostil sigue siendo UN elemento y la config no gana artefactos
-    /// (schemes intacto). El pin hostil existente
-    /// (`hotlist_round_trip_name_hostil_byte_identico`) solo cubría Values
-    /// escalares.
+    /// Pin M1/L1 (review 7a): the persister's FIRST ARRAY write path with a
+    /// hostile id (an embedded quote + newline + section header + RLO).
+    /// `toml_edit` escapes it (multi-line escapes), never injects TOML: the
+    /// real `load` rereads the list BYTE-IDENTICAL, the hostile one is still
+    /// ONE element, and the config gains no artifacts (schemes intact). The
+    /// existing hostile pin
+    /// (`hotlist_round_trip_hostile_name_byte_identical`) only covered
+    /// scalar Values.
     #[test]
-    fn persist_columns_id_hostil_round_tripea_por_load() {
+    fn persist_columns_hostile_id_round_trips_through_load() {
         let dir = tempfile::tempdir().unwrap();
-        let hostil = "x\"]\n[evil]\u{202E}";
+        let hostile = "x\"]\n[evil]\u{202E}";
         persist_columns(
             dir.path(),
             None,
-            &["name".to_owned(), hostil.to_owned()],
+            &["name".to_owned(), hostile.to_owned()],
             Some(PersistSort {
                 column: "name",
                 descending: false,
                 dirs_first: true,
             }),
         )
-        .expect("escritura");
+        .expect("write");
         let layers = Layers {
             dirs: vec![(dir.path().to_path_buf(), Layer::User)],
         };
-        let cfg = load(&layers).expect("el id hostil no rompe el TOML");
+        let cfg = load(&layers).expect("the hostile id does not break the TOML");
         assert_eq!(
             cfg.ui_columns.default_columns.as_deref(),
-            Some(&["name".to_owned(), hostil.to_owned()][..]),
-            "la lista round-tripea byte-idéntica, sin inyección"
+            Some(&["name".to_owned(), hostile.to_owned()][..]),
+            "the list round-trips byte-identical, no injection"
         );
         assert!(
             cfg.ui_columns.schemes.is_empty(),
-            "sin artefactos inyectados: {:?}",
+            "no injected artifacts: {:?}",
             cfg.ui_columns.schemes
         );
     }
 
-    /// Con scheme → `[ui.columns.scheme.<s>] columns + sort`, preservando
-    /// comentarios y lo previo del fichero (`toml_edit`).
+    /// With scheme → `[ui.columns.scheme.<s>] columns + sort`, preserving
+    /// the file's comments and its previous content (`toml_edit`).
     #[test]
-    fn persist_columns_scheme_escribe_el_override_y_preserva_comentarios() {
+    fn persist_columns_scheme_writes_the_override_and_preserves_comments() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             dir.path().join("norte.toml"),
-            "# mi config\n[ui]\ntheme = \"default\"\n",
+            "# my config\n[ui]\ntheme = \"default\"\n",
         )
         .expect("seed");
         persist_columns(
@@ -4565,21 +4584,18 @@ mod persist_columns_tests {
                 dirs_first: true,
             }),
         )
-        .expect("escritura");
-        let texto = std::fs::read_to_string(dir.path().join("norte.toml")).unwrap();
+        .expect("write");
+        let text = std::fs::read_to_string(dir.path().join("norte.toml")).unwrap();
+        assert!(text.contains("# my config"), "comments preserved: {text}");
         assert!(
-            texto.contains("# mi config"),
-            "comentarios preservados: {texto}"
-        );
-        assert!(
-            texto.contains("theme = \"default\""),
-            "lo previo intacto: {texto}"
+            text.contains("theme = \"default\""),
+            "previous content intact: {text}"
         );
         let layers = Layers {
             dirs: vec![(dir.path().to_path_buf(), Layer::User)],
         };
         let cfg = load(&layers).expect("load");
-        let sc = cfg.ui_columns.schemes.get("sftp").expect("override sftp");
+        let sc = cfg.ui_columns.schemes.get("sftp").expect("sftp override");
         assert_eq!(
             sc.columns.as_deref(),
             Some(&["name".to_owned(), "size".to_owned()][..])
@@ -4594,11 +4610,11 @@ mod persist_columns_tests {
         );
     }
 
-    /// ADR 0144: sin orden que guardar (el lector ordenó por un atributo,
-    /// que el fichero no sabe nombrar) la lista se escribe y la clave `sort`
-    /// que ya había queda EXACTAMENTE como estaba.
+    /// ADR 0144: with no order to save (the reader sorted by an attribute the
+    /// file cannot name), the list is written and the `sort` key that was
+    /// already there stays EXACTLY as it was.
     #[test]
-    fn persist_columns_sin_orden_no_toca_el_sort_previo() {
+    fn persist_columns_with_no_order_does_not_touch_the_previous_sort() {
         let dir = tempfile::tempdir().unwrap();
         persist_columns(
             dir.path(),
@@ -4610,14 +4626,14 @@ mod persist_columns_tests {
                 dirs_first: false,
             }),
         )
-        .expect("primera escritura");
+        .expect("first write");
         persist_columns(
             dir.path(),
             None,
             &["name".to_owned(), "size".to_owned()],
             None,
         )
-        .expect("segunda escritura");
+        .expect("second write");
         let layers = Layers {
             dirs: vec![(dir.path().to_path_buf(), Layer::User)],
         };
@@ -4625,7 +4641,7 @@ mod persist_columns_tests {
         assert_eq!(
             cfg.ui_columns.default_columns.as_deref(),
             Some(&["name".to_owned(), "size".to_owned()][..]),
-            "la lista sí se escribe"
+            "the list IS written"
         );
         assert_eq!(
             cfg.ui_columns.sort,
@@ -4634,16 +4650,17 @@ mod persist_columns_tests {
                 descending: true,
                 dirs_first: false
             }),
-            "el orden previo intacto"
+            "the previous order intact"
         );
     }
 
-    /// Par positivo del guard (pin del walk por `TableLike`): un `[ui]` en
-    /// forma INLINE (`ui = { theme = "nord" }`) pasa `is_table_like` y el
-    /// escritor debe ESCRIBIR A TRAVÉS de él — un walk por `as_table_mut`
-    /// (solo `Item::Table`) lo rechazaría — sin perder el valor previo.
+    /// The guard's positive counterpart (a pin of the `TableLike` walk): a
+    /// `[ui]` in INLINE shape (`ui = { theme = "nord" }`) passes
+    /// `is_table_like` and the writer must WRITE THROUGH it — a walk via
+    /// `as_table_mut` (only `Item::Table`) would refuse it — without losing
+    /// the previous value.
     #[test]
-    fn persist_columns_escribe_a_traves_de_ui_inline() {
+    fn persist_columns_writes_through_an_inline_ui() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("norte.toml"), "ui = { theme = \"nord\" }\n").expect("seed");
         persist_columns(
@@ -4656,7 +4673,7 @@ mod persist_columns_tests {
                 dirs_first: true,
             }),
         )
-        .expect("tabla inline: el guard no debe rechazarla");
+        .expect("inline table: the guard must not refuse it");
         let layers = Layers {
             dirs: vec![(dir.path().to_path_buf(), Layer::User)],
         };
@@ -4668,15 +4685,15 @@ mod persist_columns_tests {
         assert_eq!(
             cfg.ui_theme.as_deref(),
             Some("nord"),
-            "el valor inline previo sobrevive a la escritura"
+            "the previous inline value survives the write"
         );
     }
 
-    /// Guard de forma nivel a nivel (mismo criterio que `persist_set`): un
-    /// nivel escalar (`ui = 3`) es `Err(InvalidData)` LIMPIO, no un panic
-    /// que tumbaría el hilo de fondo — y el fichero queda intacto.
+    /// Level-by-level shape guard (same rule as `persist_set`): a scalar
+    /// level (`ui = 3`) is a CLEAN `Err(InvalidData)`, not a panic that would
+    /// bring down the background thread — and the file stays intact.
     #[test]
-    fn persist_columns_rechaza_ui_no_tabla_sin_panico() {
+    fn persist_columns_refuses_a_non_table_ui_without_panicking() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("norte.toml"), "ui = 3\n").expect("seed");
         let err = persist_columns(
@@ -4689,57 +4706,58 @@ mod persist_columns_tests {
                 dirs_first: true,
             }),
         )
-        .expect_err("forma inesperada");
+        .expect_err("unexpected shape");
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
         let s = std::fs::read_to_string(dir.path().join("norte.toml")).unwrap();
-        assert_eq!(s, "ui = 3\n", "el fichero no se toca en el camino de error");
+        assert_eq!(s, "ui = 3\n", "the file is untouched on the error path");
     }
 
-    /// #108 7b: sin entrada previa, `persist_column_format` crea el
-    /// `[[ui.columns.spec]]` con `id` + `format`.
+    /// #108 7b: with no previous entry, `persist_column_format` creates the
+    /// `[[ui.columns.spec]]` with `id` + `format`.
     #[test]
-    fn persist_column_format_crea_la_entrada() {
+    fn persist_column_format_creates_the_entry() {
         let dir = tempfile::tempdir().unwrap();
-        persist_column_format(dir.path(), "size", "si").expect("escritura");
+        persist_column_format(dir.path(), "size", "si").expect("write");
         let s = std::fs::read_to_string(dir.path().join("norte.toml")).unwrap();
         assert!(
             s.contains("[[ui.columns.spec]]"),
-            "AoT bajo [ui.columns]: {s}"
+            "AoT under [ui.columns]: {s}"
         );
         assert!(s.contains(r#"id = "size""#), "{s}");
         assert!(s.contains(r#"format = "si""#), "{s}");
     }
 
-    /// Reemplazo POR ID: la entrada existente conserva sus OTROS campos
-    /// (header) y los comentarios del fichero; jamás nace una segunda
-    /// entrada para el mismo id.
+    /// Replacement BY ID: the existing entry keeps its OTHER fields (header)
+    /// and the file's comments; a second entry for the same id never comes
+    /// into being.
     #[test]
-    fn persist_column_format_reemplaza_por_id_preservando_campos() {
+    fn persist_column_format_replaces_by_id_preserving_fields() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             dir.path().join("norte.toml"),
-            "# mi config\n[[ui.columns.spec]]\nid = \"size\"\nheader = \"Peso\"\nformat = \"iec\"\n",
+            "# my config\n[[ui.columns.spec]]\nid = \"size\"\nheader = \"Weight\"\nformat = \"iec\"\n",
         )
         .expect("seed");
-        persist_column_format(dir.path(), "size", "exact").expect("escritura");
+        persist_column_format(dir.path(), "size", "exact").expect("write");
         let s = std::fs::read_to_string(dir.path().join("norte.toml")).unwrap();
-        assert!(s.contains("# mi config"), "comentarios preservados: {s}");
+        assert!(s.contains("# my config"), "comments preserved: {s}");
         assert!(
-            s.contains(r#"header = "Peso""#),
-            "los otros campos sobreviven: {s}"
+            s.contains(r#"header = "Weight""#),
+            "the other fields survive: {s}"
         );
         assert!(s.contains(r#"format = "exact""#), "{s}");
-        assert!(!s.contains(r#"format = "iec""#), "sin entrada vieja: {s}");
+        assert!(!s.contains(r#"format = "iec""#), "no old entry: {s}");
         assert_eq!(
             s.matches(r#"id = "size""#).count(),
             1,
-            "UNA entrada por id: {s}"
+            "ONE entry per id: {s}"
         );
     }
 
-    /// El `load` real relee lo escrito: dos ids → dos specs con su formato.
+    /// The real `load` rereads what was written: two ids → two specs with
+    /// their format.
     #[test]
-    fn persist_column_format_round_tripea_por_load() {
+    fn persist_column_format_round_trips_through_load() {
         let dir = tempfile::tempdir().unwrap();
         persist_column_format(dir.path(), "size", "si").expect("size");
         persist_column_format(dir.path(), "mtime", "iso").expect("mtime");
@@ -4763,27 +4781,28 @@ mod persist_columns_tests {
         );
     }
 
-    /// `[ui] theme_light` / `theme_dark` (spec 2026-09-11, V6): cargan como
-    /// `theme` —cadenas sin validar aquí, el frontend las resuelve— y una
-    /// capa superior gana por clave, sin arrastrar la otra.
+    /// `[ui] theme_light` / `theme_dark` (spec 2026-09-11, V6): load like
+    /// `theme` — strings not validated here, the frontend resolves them —
+    /// and a higher layer wins per key, without dragging the other one
+    /// along.
     #[test]
-    fn theme_light_y_theme_dark_cargan_y_la_capa_superior_gana_por_clave() {
-        let sistema = tempfile::tempdir().unwrap();
-        let usuario = tempfile::tempdir().unwrap();
+    fn theme_light_and_theme_dark_load_and_the_higher_layer_wins_per_key() {
+        let system = tempfile::tempdir().unwrap();
+        let user = tempfile::tempdir().unwrap();
         std::fs::write(
-            sistema.path().join("norte.toml"),
+            system.path().join("norte.toml"),
             "[ui]\ntheme = \"nord\"\ntheme_light = \"gruvbox-light\"\ntheme_dark = \"gruvbox-dark\"\n",
         )
         .unwrap();
         std::fs::write(
-            usuario.path().join("norte.toml"),
+            user.path().join("norte.toml"),
             "[ui]\ntheme_dark = \"catppuccin-mocha\"\n",
         )
         .unwrap();
         let layers = Layers {
             dirs: vec![
-                (sistema.path().to_path_buf(), Layer::System),
-                (usuario.path().to_path_buf(), Layer::User),
+                (system.path().to_path_buf(), Layer::System),
+                (user.path().to_path_buf(), Layer::User),
             ],
         };
         let cfg = load(&layers).expect("load");
@@ -4792,23 +4811,23 @@ mod persist_columns_tests {
         assert_eq!(
             cfg.ui_theme_dark.as_deref(),
             Some("catppuccin-mocha"),
-            "la capa del usuario pisa solo la clave que escribe"
+            "the user layer only overrides the key it writes"
         );
     }
 
-    /// El ancho comparte escritor con el formato: entra en la MISMA entrada
-    /// del id (no nace una segunda), conserva el formato que había, y el
-    /// `load` real lo devuelve como `WidthChoice::Fixed`.
+    /// Width shares its writer with format: it goes into the SAME entry for
+    /// the id (a second one is not born), keeps the format that was there,
+    /// and the real `load` returns it as `WidthChoice::Fixed`.
     #[test]
-    fn persist_column_width_round_tripea_por_load_y_conserva_el_formato() {
+    fn persist_column_width_round_trips_through_load_and_keeps_the_format() {
         let dir = tempfile::tempdir().unwrap();
         persist_column_format(dir.path(), "size", "si").expect("format");
         persist_column_width(dir.path(), "size", 12).expect("width");
-        persist_column_width(dir.path(), "size", 14).expect("width otra vez");
+        persist_column_width(dir.path(), "size", 14).expect("width again");
         let s = std::fs::read_to_string(dir.path().join("norte.toml")).unwrap();
-        assert_eq!(s.matches(r#"id = "size""#).count(), 1, "UNA entrada: {s}");
+        assert_eq!(s.matches(r#"id = "size""#).count(), 1, "ONE entry: {s}");
         assert!(s.contains("fixed = 14"), "{s}");
-        assert!(!s.contains("fixed = 12"), "sin valor viejo: {s}");
+        assert!(!s.contains("fixed = 12"), "no old value: {s}");
         let layers = Layers {
             dirs: vec![(dir.path().to_path_buf(), Layer::User)],
         };
@@ -4818,13 +4837,13 @@ mod persist_columns_tests {
         assert_eq!(spec.format.as_deref(), Some("si"));
     }
 
-    /// MAJOR revisión 7b: con DOS entradas del mismo id editadas a mano, el
-    /// loader honra la ÚLTIMA (merge intra-capa last-wins por campo) — el
-    /// writer debe actualizarlas TODAS o el reload revierte lo recién
-    /// guardado. Tras persistir, ambas llevan el formato nuevo y el `load`
-    /// real devuelve el valor persistido.
+    /// MAJOR review 7b: with TWO hand-edited entries of the same id, the
+    /// loader honors the LAST one (intra-layer last-wins-per-field merge) —
+    /// the writer must update ALL of them or the reload reverts what was
+    /// just saved. After persisting, both carry the new format and the real
+    /// `load` returns the persisted value.
     #[test]
-    fn persist_column_format_actualiza_todos_los_duplicados() {
+    fn persist_column_format_updates_every_duplicate() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             dir.path().join("norte.toml"),
@@ -4832,12 +4851,12 @@ mod persist_columns_tests {
              [[ui.columns.spec]]\nid = \"size\"\nformat = \"exact\"\n",
         )
         .expect("seed");
-        persist_column_format(dir.path(), "size", "si").expect("escritura");
+        persist_column_format(dir.path(), "size", "si").expect("write");
         let s = std::fs::read_to_string(dir.path().join("norte.toml")).unwrap();
         assert_eq!(
             s.matches(r#"format = "si""#).count(),
             2,
-            "TODOS los duplicados llevan el formato nuevo: {s}"
+            "EVERY duplicate carries the new format: {s}"
         );
         assert!(!s.contains(r#"format = "iec""#), "{s}");
         assert!(!s.contains(r#"format = "exact""#), "{s}");
@@ -4851,22 +4870,22 @@ mod persist_columns_tests {
                 .get("size")
                 .and_then(|sp| sp.format.as_deref()),
             Some("si"),
-            "el reload devuelve lo persistido, no el duplicado rancio"
+            "the reload returns the persisted value, not the stale duplicate"
         );
     }
 
-    /// Guard de forma del precedente hotlist: `spec` escalar = error
-    /// limpio, sin pánico y sin tocar el fichero.
+    /// The hotlist precedent's shape guard: a scalar `spec` = clean error,
+    /// no panic and no touching the file.
     #[test]
-    fn persist_column_format_rechaza_spec_no_array_sin_panico() {
+    fn persist_column_format_refuses_a_non_array_spec_without_panicking() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("norte.toml"), "[ui.columns]\nspec = 3\n").expect("seed");
-        let err = persist_column_format(dir.path(), "size", "si").expect_err("forma inesperada");
+        let err = persist_column_format(dir.path(), "size", "si").expect_err("unexpected shape");
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
         let s = std::fs::read_to_string(dir.path().join("norte.toml")).unwrap();
         assert_eq!(
             s, "[ui.columns]\nspec = 3\n",
-            "el fichero no se toca en el camino de error"
+            "the file is untouched on the error path"
         );
     }
 }
@@ -4875,16 +4894,15 @@ mod persist_columns_tests {
 mod persist_atomicity_tests {
     use super::*;
 
-    /// #116: los escritores toman el lock advisory cross-process
-    /// (`norte.toml.lock`) ANTES de leer. Con el lock en manos de "otro
-    /// proceso" (otro descriptor — mismo mecanismo `flock`/`LockFileEx`),
-    /// `persist_set` BLOQUEA hasta la liberación; sin lock, dos RMW se
-    /// intercalan y el segundo escribe sobre una lectura rancia (lost
-    /// update).
+    /// #116: writers take the cross-process advisory lock (`norte.toml.lock`)
+    /// BEFORE reading. With the lock in "another process"'s hands (another
+    /// descriptor — the same `flock`/`LockFileEx` mechanism), `persist_set`
+    /// BLOCKS until it is released; without the lock, two RMWs interleave
+    /// and the second one writes over a stale read (lost update).
     #[test]
-    fn persist_set_espera_el_lock_de_otro_escritor() {
+    fn persist_set_waits_on_another_writers_lock() {
         let dir = tempfile::tempdir().unwrap();
-        // Mismo open SIN truncar que `lock_config_file` (review MAJOR-1).
+        // Same open WITHOUT truncating as `lock_config_file` (review MAJOR-1).
         let holder = std::fs::OpenOptions::new()
             .write(true)
             .create(true)
@@ -4902,28 +4920,28 @@ mod persist_atomicity_tests {
         assert!(
             rx.recv_timeout(std::time::Duration::from_millis(300))
                 .is_err(),
-            "persist_set NO debe completar mientras otro escritor tiene el lock"
+            "persist_set must NOT complete while another writer holds the lock"
         );
-        // Cinturón (review MINOR-6): además de no completar, no ha ESCRITO —
-        // el lock se toma antes de leer, así que ni el tmp ni el fichero
-        // final pueden existir aún.
+        // Belt (review MINOR-6): besides not completing, it has not WRITTEN —
+        // the lock is taken before reading, so neither the tmp nor the final
+        // file can exist yet.
         assert!(
             !dir.path().join("norte.toml").exists(),
-            "nada escrito mientras el lock está en manos ajenas"
+            "nothing written while the lock is in someone else's hands"
         );
-        drop(holder); // flock/LockFileEx se libera al cerrar el descriptor
+        drop(holder); // flock/LockFileEx releases on closing the descriptor
         rx.recv_timeout(std::time::Duration::from_secs(5))
-            .expect("liberado el lock, el escritor completa");
-        writer.join().unwrap().expect("escritura");
+            .expect("lock released, the writer completes");
+        writer.join().unwrap().expect("write");
         let s = std::fs::read_to_string(dir.path().join("norte.toml")).unwrap();
-        assert!(s.contains("theme"), "la escritura aterrizó tras el lock");
+        assert!(s.contains("theme"), "the write landed after the lock");
     }
 
-    /// #116: dos escritores RMW concurrentes sobre claves distintas no se
-    /// pisan — ambas claves sobreviven con su último valor en el fichero
-    /// final (sin lock, una lectura rancia descarta la clave del otro).
+    /// #116: two concurrent RMW writers over different keys do not stomp on
+    /// each other — both keys survive with their last value in the final
+    /// file (without the lock, a stale read discards the other's key).
     #[test]
-    fn escritores_concurrentes_no_pierden_claves() {
+    fn concurrent_writers_do_not_lose_keys() {
         let dir = tempfile::tempdir().unwrap();
         let d1 = dir.path().to_path_buf();
         let d2 = dir.path().to_path_buf();
@@ -4940,35 +4958,35 @@ mod persist_atomicity_tests {
         a.join().unwrap();
         b.join().unwrap();
         let s = std::fs::read_to_string(dir.path().join("norte.toml")).unwrap();
-        let doc: toml_edit::DocumentMut = s.parse().expect("el fichero final parsea");
-        let ui = doc["ui"].as_table_like().expect("[ui] presente");
+        let doc: toml_edit::DocumentMut = s.parse().expect("the final file parses");
+        let ui = doc["ui"].as_table_like().expect("[ui] present");
         assert_eq!(
             ui.get("alpha").and_then(toml_edit::Item::as_integer),
             Some(24),
-            "la última escritura de `alpha` sobrevive"
+            "the last write of `alpha` survives"
         );
         assert_eq!(
             ui.get("beta").and_then(toml_edit::Item::as_integer),
             Some(24),
-            "la última escritura de `beta` sobrevive"
+            "the last write of `beta` survives"
         );
     }
 
-    /// #116 (pin): la escritura es tmp hermano + rename — tras persistir no
-    /// queda temporal residual en el dir (un crash a medias deja como mucho
-    /// un tmp huérfano que la siguiente escritura pisa; jamás un
-    /// `norte.toml` truncado).
+    /// #116 (pin): the write is sibling tmp + rename — after persisting, no
+    /// residual temp is left in the dir (a half-finished crash leaves at
+    /// most an orphaned tmp the next write overwrites; never a truncated
+    /// `norte.toml`).
     #[test]
-    fn persistir_no_deja_tmp_residual() {
+    fn persisting_leaves_no_residual_tmp() {
         let dir = tempfile::tempdir().unwrap();
-        persist_set(dir.path(), "ui", "theme", toml_edit::Value::from("nord")).expect("escritura");
+        persist_set(dir.path(), "ui", "theme", toml_edit::Value::from("nord")).expect("write");
         persist_hotlist_add(dir.path(), "docs", "file:///docs").expect("hotlist");
-        let residuales: Vec<String> = std::fs::read_dir(dir.path())
+        let residual: Vec<String> = std::fs::read_dir(dir.path())
             .unwrap()
             .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
             .filter(|n| n.contains("tmp"))
             .collect();
-        assert!(residuales.is_empty(), "tmp residual: {residuales:?}");
+        assert!(residual.is_empty(), "residual tmp: {residual:?}");
     }
 }
 

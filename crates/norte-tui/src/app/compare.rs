@@ -308,10 +308,10 @@ mod tests {
     /// row's probe, and stops being one as soon as `hydrate_compare_size`
     /// resolves it — successfully or not, so it isn't retried every frame.
     #[test]
-    fn compare_size_probe_targets_solo_file_sin_size_y_no_repite() {
+    fn compare_size_probe_targets_lone_file_with_no_size_and_no_repeat() {
         let mut app = App::new(Pane::new(root(), vec![]), Pane::new(root(), vec![]));
         let mut view = CompareView::new(vp("mem:///a"), vp("mem:///b"), 0, None, None);
-        let row = fila_huerfana(1, EntryKind::File, None);
+        let row = orphan_row(1, EntryKind::File, None);
         let path = row.left.as_ref().unwrap().path.clone();
         view.pane.extend(vec![row]);
         app.compare = Some(view);
@@ -338,10 +338,10 @@ mod tests {
     /// comparison" ends up holding a size from the previous one, in the
     /// panel whose whole point is whether what you're looking at is exact.
     #[test]
-    fn una_sonda_de_la_comparacion_anterior_no_aterriza_en_la_nueva() {
+    fn a_probe_from_the_previous_comparison_doesnt_land_in_the_new_one() {
         let mut app = App::new(Pane::new(root(), vec![]), Pane::new(root(), vec![]));
         let mut view = CompareView::new(vp("mem:///a"), vp("mem:///b"), 0, None, None);
-        let row = fila_huerfana(1, EntryKind::File, None);
+        let row = orphan_row(1, EntryKind::File, None);
         let path = row.left.as_ref().expect("left").path.clone();
         view.pane.extend(vec![row.clone()]);
         app.compare = Some(view);
@@ -377,10 +377,10 @@ mod tests {
     /// retried every frame against a broken provider, same criterion as
     /// `last_probed` in the normal pane.
     #[test]
-    fn compare_size_probe_targets_no_reintenta_un_stat_fallido() {
+    fn compare_size_probe_targets_doesnt_retry_a_failed_stat() {
         let mut app = App::new(Pane::new(root(), vec![]), Pane::new(root(), vec![]));
         let mut view = CompareView::new(vp("mem:///a"), vp("mem:///b"), 0, None, None);
-        let row = fila_huerfana(1, EntryKind::File, None);
+        let row = orphan_row(1, EntryKind::File, None);
         let path = row.left.as_ref().unwrap().path.clone();
         view.pane.extend(vec![row]);
         app.compare = Some(view);
@@ -401,8 +401,8 @@ mod tests {
         let mut app = App::new(Pane::new(root(), vec![]), Pane::new(root(), vec![]));
         let mut view = CompareView::new(vp("mem:///a"), vp("mem:///b"), 0, None, None);
         view.pane.extend(vec![
-            fila_huerfana(1, EntryKind::Dir, None),
-            fila_huerfana(2, EntryKind::File, Some(7)),
+            orphan_row(1, EntryKind::Dir, None),
+            orphan_row(2, EntryKind::File, Some(7)),
         ]);
         app.compare = Some(view);
 

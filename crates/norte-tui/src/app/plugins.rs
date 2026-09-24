@@ -277,7 +277,7 @@ mod clamp_plugin_descriptions_tests {
     /// — its neighbor, with the same kind of text — has been avoiding since
     /// H3e. The defensive cap is still the same number.
     #[test]
-    fn clampa_al_tope_del_wire() {
+    fn clamps_to_the_wire_cap() {
         let mut plugins = vec![plugin(Some(&"a".repeat(50_000)))];
         clamp_plugin_descriptions(&mut plugins);
         let trimmed = plugins[0].description.as_deref().unwrap();
@@ -289,14 +289,14 @@ mod clamp_plugin_descriptions_tests {
     }
 
     #[test]
-    fn none_se_queda_none() {
+    fn none_stays_none() {
         let mut plugins = vec![plugin(None)];
         clamp_plugin_descriptions(&mut plugins);
         assert_eq!(plugins[0].description, None);
     }
 
     #[test]
-    fn corta_bajo_el_tope_no_se_toca() {
+    fn under_the_cap_stays_untouched() {
         let mut plugins = vec![plugin(Some("a short description"))];
         clamp_plugin_descriptions(&mut plugins);
         assert_eq!(
@@ -325,7 +325,7 @@ mod siguiente_foco_tests {
     /// With four buttons, `tab` walks them in order and returns to the
     /// list: five presses close the ring, not one stop too many.
     #[test]
-    fn el_anillo_recorre_los_botones_y_vuelve() {
+    fn the_ring_walks_the_buttons_and_comes_back() {
         let mut f = ExtFoco::Lista;
         let walk: Vec<ExtFoco> = (0..5)
             .map(|_| {
@@ -349,7 +349,7 @@ mod siguiente_foco_tests {
     /// nothing: the narrow-box case, where focusing a button would be
     /// focusing something not on screen.
     #[test]
-    fn sin_botones_pintados_el_foco_se_queda_en_la_lista() {
+    fn with_no_buttons_painted_focus_stays_on_the_list() {
         assert_eq!(siguiente_foco(ExtFoco::Lista, 0), ExtFoco::Lista);
         assert_eq!(siguiente_foco(ExtFoco::Boton(2), 0), ExtFoco::Lista);
     }
@@ -358,7 +358,7 @@ mod siguiente_foco_tests {
     /// card shrank, or the chosen plugin has no help and one fewer button —
     /// goes back to the list instead of staying out of range.
     #[test]
-    fn un_foco_rebasado_vuelve_a_la_lista() {
+    fn an_overrun_focus_returns_to_the_list() {
         assert_eq!(siguiente_foco(ExtFoco::Boton(9), 4), ExtFoco::Lista);
     }
 }

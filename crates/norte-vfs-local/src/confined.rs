@@ -1,46 +1,48 @@
-//! Escribir bajo una raíz sin poder salirse de ella (#164, ADR 0054).
+//! Writing under a root without being able to escape it (#164, ADR 0054).
 //!
-//! El agujero que cierra: una sincronización valida sus dos raíces y después
-//! compone `dest_root + rel` paso a paso. Si un componente INTERMEDIO de ese
-//! relativo es un symlink que apunta fuera, la escritura aterriza fuera y
-//! ninguna de las tres comprobaciones de solape lo ve — todas razonan sobre las
-//! raíces, y las raíces están bien.
+//! The hole this closes: a sync validates its two roots and then composes
+//! `dest_root + rel` step by step. If an INTERMEDIATE component of that
+//! relative path is a symlink pointing outside, the write lands outside and
+//! none of the three overlap checks sees it — they all reason about the
+//! roots, and the roots are fine.
 //!
-//! **Componer la ruta y comprobarla antes de abrir es TOCTOU por
-//! construcción**, así que aquí no se compone ninguna: el caller abre la raíz
-//! UNA vez y a partir de ahí direcciona segmentos relativos. Lo que se sostiene
-//! es un descriptor de directorio, y un descriptor no se puede sustituir por un
-//! symlink entre dos syscalls.
+//! **Composing the path and checking it before opening is TOCTOU by
+//! construction**, so none is composed here: the caller opens the root
+//! ONCE and from then on addresses relative segments. What's held is a
+//! directory descriptor, and a descriptor can't be swapped for a symlink
+//! between two syscalls.
 //!
-//! # Qué se prohíbe exactamente
+//! # What exactly is forbidden
 //!
-//! Salirse de la raíz, y esa es la regla completa — **no** «que haya
-//! symlinks». Un symlink RELATIVO que apunta a otro sitio dentro de la raíz se
-//! sigue, porque prohibirlo rompería árboles legítimos (un `dst/data ->
-//! almacen` corriente) sin ganar seguridad ninguna.
+//! Escaping the root, and that's the whole rule — **not** "having
+//! symlinks". A RELATIVE symlink pointing somewhere else inside the root
+//! is followed, because forbidding that would break legitimate trees (an
+//! ordinary `dst/data -> storage`) without gaining any security.
 //!
-//! Uno ABSOLUTO se rechaza aunque su destino caiga dentro. No es una decisión
-//! de este módulo: es lo que hace `RESOLVE_BENEATH` —para el kernel una ruta
-//! absoluta ya empieza fuera de la raíz—, y el paseo de emulación la copia
-//! porque las dos ramas tienen que dar el MISMO veredicto. Un confinamiento
-//! que significara una cosa con `openat2` y otra sin él no sería una garantía,
-//! sería una lotería de versión de kernel.
+//! An ABSOLUTE one is rejected even if its target falls inside. That's not
+//! this module's decision: it's what `RESOLVE_BENEATH` does — to the
+//! kernel an absolute path already starts outside the root —, and the
+//! emulation walk copies it because the two branches have to give the SAME
+//! verdict. Confinement that meant one thing with `openat2` and another
+//! without it would not be a guarantee, it would be a kernel-version
+//! lottery.
 //!
-//! # Cómo, por plataforma
+//! # How, per platform
 //!
-//! | dónde | cómo |
+//! | where | how |
 //! | --- | --- |
-//! | Linux ≥5.6 | `openat2(RESOLVE_BENEATH)` — lo garantiza el kernel, paso a paso |
-//! | Linux <5.6, seccomp (`ENOSYS`/`EPERM`), macOS | paseo componente a componente: `openat(O_NOFOLLOW)` relativo al fd anterior, y el `ELOOP` que eso da ES la respuesta a «¿era un symlink?» — absoluto se rechaza, relativo se sigue y se comprueba por contención SOBRE EL DESCRIPTOR |
+//! | Linux ≥5.6 | `openat2(RESOLVE_BENEATH)` — the kernel guarantees it, step by step |
+//! | Linux <5.6, seccomp (`ENOSYS`/`EPERM`), macOS | component-by-component walk: `openat(O_NOFOLLOW)` relative to the previous fd, and the `ELOOP` that gives IS the answer to "was it a symlink?" — absolute is rejected, relative is followed and checked for containment ON THE DESCRIPTOR |
 //!
-//! Las dos ramas dan el mismo veredicto en todo lo que importa, con una
-//! diferencia conocida y en la dirección segura: `openat2` rechaza un symlink
-//! relativo que SALE y vuelve a entrar (`../../raiz/dentro`) porque mira el
-//! camino, y el paseo lo acepta porque mira dónde acaba. Y la subida de
-//! [`is_beneath`] es best-effort bajo renombrados concurrentes, mientras que
-//! `openat2` no tiene esa ventana: donde el kernel sabe hacerlo, es el kernel
-//! quien lo hace.
-//! | Windows | no hay `openat`: este módulo no existe ahí y `open_root` responde `Unsupported` |
+//! The two branches give the same verdict on everything that matters, with
+//! one known difference in the safe direction: `openat2` rejects a
+//! relative symlink that EXITS and re-enters (`../../root/inside`) because
+//! it looks at the path, and the walk accepts it because it looks at where
+//! it ends up. And [`is_beneath`]'s climb is best-effort under concurrent
+//! renames, while `openat2` has no such window because the kernel resolves
+//! it as one piece. `libpathrs` documents the same limitation for the same
+//! emulation.
+//! | Windows | there's no `openat`: this module doesn't exist there and `open_root` answers `Unsupported` |
 
 use std::ffi::CString;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
@@ -48,30 +50,33 @@ use std::path::Path;
 
 use norte_proto::{ConflictKind, Entry, EntryKind, Error, Segment};
 
-/// Tope de niveles que sube la comprobación de contención antes de rendirse.
-/// Un árbol de más de 256 niveles ya no es un árbol de ficheros de nadie.
+/// Ceiling on the levels the containment check climbs before giving up. A
+/// tree more than 256 levels deep isn't anyone's file tree anymore.
 const MAX_CLIMB: usize = 256;
 
-/// Una raíz abierta, y el único sitio desde el que se direcciona bajo ella.
+/// An opened root, and the only place from which anything under it is
+/// addressed.
 ///
-/// El `fd` es el objeto: mientras viva, apunta al directorio que se abrió,
-/// aunque alguien renombre o sustituya la ruta por la que se abrió.
+/// The `fd` is the object: as long as it lives, it points at the directory
+/// that was opened, even if someone renames or replaces the path it was
+/// opened by.
 #[derive(Debug)]
 pub(crate) struct LocalRoot {
     fd: OwnedFd,
 }
 
 impl LocalRoot {
-    /// Abre `dir` como raíz confinada.
+    /// Opens `dir` as a confined root.
     ///
-    /// BLOQUEANTE: va dentro de `spawn_blocking` (regla dura 2).
+    /// BLOCKING: goes inside `spawn_blocking` (hard rule 2).
     #[allow(unsafe_code)]
     pub(crate) fn open(dir: &Path) -> Result<Self, Error> {
         use std::os::unix::ffi::OsStrExt as _;
         let c = CString::new(dir.as_os_str().as_bytes()).map_err(|_| Error::InvalidPath)?;
-        // SAFETY: `c` es una CString NUL-terminada viva durante toda la
-        // llamada. `O_PATH` no lee ni escribe nada: solo nombra el nodo, que es
-        // todo lo que hace falta para usarlo como dirfd de los `*at`.
+        // SAFETY: `c` is a NUL-terminated CString alive for the whole call.
+        // `O_PATH` neither reads nor writes anything: it only names the
+        // node, which is all that's needed to use it as the dirfd for the
+        // `*at` calls.
         let raw = unsafe {
             libc::open(
                 c.as_ptr(),
@@ -81,19 +86,19 @@ impl LocalRoot {
         if raw < 0 {
             return Err(map_errno(&std::io::Error::last_os_error()));
         }
-        // SAFETY: `raw` es un fd recién abierto y todavía sin dueño; `OwnedFd`
-        // pasa a ser el único que lo cierra.
+        // SAFETY: `raw` is a freshly opened, still ownerless fd; `OwnedFd`
+        // becomes the only one that closes it.
         Ok(Self {
             fd: unsafe { OwnedFd::from_raw_fd(raw) },
         })
     }
 
-    /// El directorio PADRE de `rel`, abierto bajo la raíz y sin haber podido
-    /// salirse de ella. `rel` vacío es la propia raíz.
+    /// The PARENT directory of `rel`, opened under the root and without
+    /// having been able to escape it. An empty `rel` is the root itself.
     ///
-    /// Devuelve el fd del padre y el último segmento, que es el nombre sobre el
-    /// que operar con un `*at` de un solo componente — y un solo componente no
-    /// puede escaparse de ningún sitio.
+    /// Returns the parent's fd and the last segment, which is the name to
+    /// operate on with a single-component `*at` — and a single component
+    /// can't escape anywhere.
     pub(crate) fn parent_of<'a>(
         &self,
         rel: &'a [Segment],
@@ -103,12 +108,12 @@ impl LocalRoot {
         Ok((fd, last))
     }
 
-    /// El fd de la raíz, para identificarla por `(dev, ino)` (#238).
+    /// The root's fd, to identify it by `(dev, ino)` (#238).
     pub(crate) fn raw_fd(&self) -> RawFd {
         self.fd.as_raw_fd()
     }
 
-    /// Abre el directorio `parents` bajo la raíz, confinado.
+    /// Opens the `parents` directory under the root, confined.
     pub(crate) fn resolve_dir(&self, parents: &[Segment]) -> Result<OwnedFd, Error> {
         if parents.is_empty() {
             return dup(self.fd.as_raw_fd());
@@ -116,8 +121,9 @@ impl LocalRoot {
         #[cfg(target_os = "linux")]
         if !force_walk() {
             match openat2_beneath(self.fd.as_raw_fd(), parents) {
-                // `ENOSYS` = kernel <5.6 o un seccomp que no lo deja pasar: el
-                // paseo hace lo mismo, una syscall por componente.
+                // `ENOSYS` = kernel <5.6 or a seccomp filter that doesn't
+                // let it through: the walk does the same thing, one
+                // syscall per component.
                 Err(e) if is_enosys(&e) => {}
                 other => return other.map_err(|e| map_errno(&e)),
             }
@@ -126,35 +132,36 @@ impl LocalRoot {
     }
 }
 
-/// `dup` de un fd, para que «la raíz misma» se devuelva con el mismo tipo que
-/// cualquier otro directorio resuelto.
+/// `dup` of an fd, so that "the root itself" is returned with the same
+/// type as any other resolved directory.
 #[allow(unsafe_code)]
 fn dup(fd: RawFd) -> Result<OwnedFd, Error> {
-    // SAFETY: `fd` está vivo (lo sostiene el `OwnedFd` del llamante) y
-    // `F_DUPFD_CLOEXEC` devuelve un fd nuevo del que nadie más es dueño.
+    // SAFETY: `fd` is alive (the caller's `OwnedFd` holds it) and
+    // `F_DUPFD_CLOEXEC` returns a new fd nobody else owns.
     let raw = unsafe { libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, 0) };
     if raw < 0 {
         return Err(map_errno(&std::io::Error::last_os_error()));
     }
-    // SAFETY: `raw` es un fd recién creado y sin dueño.
+    // SAFETY: `raw` is a freshly created, ownerless fd.
     Ok(unsafe { OwnedFd::from_raw_fd(raw) })
 }
 
-/// `openat2` con `RESOLVE_BENEATH`: el kernel rechaza cualquier resolución que
-/// se salga de `root`, symlink intermedio incluido, sin que nadie tenga que
-/// comprobar nada entre dos llamadas.
+/// `openat2` with `RESOLVE_BENEATH`: the kernel rejects any resolution
+/// that would escape `root`, intermediate symlink included, with nobody
+/// having to check anything between two calls.
 #[cfg(target_os = "linux")]
 #[allow(unsafe_code)]
 fn openat2_beneath(root: RawFd, parents: &[Segment]) -> Result<OwnedFd, std::io::Error> {
-    // El número de `openat2` es 437 en toda arquitectura Linux que este
-    // workspace compila; `libc` no expone la constante para x86_64-gnu.
+    // `openat2`'s syscall number is 437 on every Linux architecture this
+    // workspace compiles for; `libc` doesn't expose the constant for
+    // x86_64-gnu.
     const SYS_OPENAT2: libc::c_long = 437;
 
-    /// `struct open_how` de `<linux/openat2.h>`. `libc` la declara
-    /// `#[non_exhaustive]`, así que no se puede construir desde fuera del
-    /// crate; la ABI es de tres `u64` y está CONGELADA por diseño (el kernel
-    /// la extiende añadiendo campos al final y comprobando el tamaño que se le
-    /// pasa, que es justo lo que hace la llamada de abajo).
+    /// `struct open_how` from `<linux/openat2.h>`. `libc` declares it
+    /// `#[non_exhaustive]`, so it can't be constructed from outside the
+    /// crate; the ABI is three `u64`s and is FROZEN by design (the kernel
+    /// extends it by adding fields at the end and checking the size it's
+    /// given, which is exactly what the call below does).
     #[repr(C)]
     struct OpenHow {
         flags: u64,
@@ -167,15 +174,15 @@ fn openat2_beneath(root: RawFd, parents: &[Segment]) -> Result<OwnedFd, std::io:
     let how = OpenHow {
         flags: (libc::O_PATH | libc::O_DIRECTORY | libc::O_CLOEXEC) as u64,
         mode: 0,
-        // BENEATH prohíbe SALIRSE; los symlinks que no salen se siguen, que es
-        // lo que hace el paseo de emulación con su comprobación de contención.
-        // NO_MAGICLINKS cierra `/proc/*/fd/*`, que sí es un escape con forma de
-        // ruta corriente.
+        // BENEATH forbids ESCAPING; symlinks that don't escape are
+        // followed, which is what the emulation walk's containment check
+        // does. NO_MAGICLINKS closes `/proc/*/fd/*`, which IS an escape
+        // wearing an ordinary path's shape.
         resolve: libc::RESOLVE_BENEATH | libc::RESOLVE_NO_MAGICLINKS,
     };
-    // SAFETY: `c` vive durante toda la llamada; `how` es un `open_how`
-    // completo, propio y alineado, y se pasa su tamaño exacto como exige la
-    // ABI extensible de `openat2`. El retorno se comprueba antes de usarse.
+    // SAFETY: `c` lives for the whole call; `how` is a complete, owned,
+    // aligned `open_how`, and its exact size is passed as `openat2`'s
+    // extensible ABI requires. The return value is checked before use.
     let raw = unsafe {
         libc::syscall(
             SYS_OPENAT2,
@@ -189,27 +196,28 @@ fn openat2_beneath(root: RawFd, parents: &[Segment]) -> Result<OwnedFd, std::io:
         return Err(std::io::Error::last_os_error());
     }
     let raw = RawFd::try_from(raw).map_err(|_| std::io::Error::from_raw_os_error(libc::EBADF))?;
-    // SAFETY: `raw` es un fd recién abierto por el kernel y sin dueño.
+    // SAFETY: `raw` is a freshly opened fd from the kernel, ownerless.
     Ok(unsafe { OwnedFd::from_raw_fd(raw) })
 }
 
-/// El paseo: un `openat` por componente, siempre relativo al fd anterior.
+/// The walk: one `openat` per component, always relative to the previous
+/// fd.
 ///
-/// Nunca hay una ruta que recomponer, así que la garantía es la misma que la
-/// del kernel aunque el mecanismo sea otro. Un componente que es symlink se
-/// SIGUE y después se comprueba que lo seguido cae bajo la raíz — la
-/// alternativa (negarse a seguir ningún symlink) sería más estricta que
-/// `RESOLVE_BENEATH` y rompería árboles legítimos.
+/// There's never a path to recompose, so the guarantee is the same as the
+/// kernel's even though the mechanism differs. A component that's a
+/// symlink is FOLLOWED and then checked to fall under the root — the
+/// alternative (refusing to follow any symlink) would be stricter than
+/// `RESOLVE_BENEATH` and would break legitimate trees.
 ///
-/// **Se abre SIEMPRE con `O_NOFOLLOW` y el symlink se descubre por el `ELOOP`
-/// que eso produce**, jamás preguntando antes si el nombre es un symlink.
-/// Preguntar primero y abrir después son dos syscalls sobre un NOMBRE, y entre
-/// las dos cabe una sustitución: la revisión de esta fase encontró justo eso —
-/// el componente que el `lstat` había visto como directorio se abría sin
-/// `O_NOFOLLOW` y sin comprobar contención, así que un cambiazo ganado en esa
-/// rendija mandaba el resto del paseo fuera de la raíz. Un `openat` que falla
-/// no ha abierto nada, y lo que se comprueba después es siempre el DESCRIPTOR
-/// ya abierto, no un nombre.
+/// **It's ALWAYS opened with `O_NOFOLLOW` and the symlink is discovered by
+/// the `ELOOP` that produces**, never by asking beforehand whether the
+/// name is a symlink. Asking first and opening after are two syscalls on a
+/// NAME, and a substitution fits between the two: this phase's review
+/// found exactly that — the component `lstat` had seen as a directory was
+/// opened without `O_NOFOLLOW` and without a containment check, so a
+/// switcheroo won in that gap would send the rest of the walk outside the
+/// root. An `openat` that fails hasn't opened anything, and what's checked
+/// afterward is always the already-opened DESCRIPTOR, never a name.
 fn walk_beneath(root: RawFd, parents: &[Segment]) -> Result<OwnedFd, Error> {
     let root_id = node_id_of(root)?;
     let mut current = dup(root)?;
@@ -217,21 +225,24 @@ fn walk_beneath(root: RawFd, parents: &[Segment]) -> Result<OwnedFd, Error> {
         let name = CString::new(seg.as_bytes().to_vec()).map_err(|_| Error::InvalidPath)?;
         match openat_dir_nofollow(current.as_raw_fd(), &name) {
             Ok(next) => current = next,
-            // Con `O_NOFOLLOW` un symlink final sale como `ELOOP`… salvo que
-            // también vaya `O_DIRECTORY`, y entonces el kernel prefiere
-            // contestar `ENOTDIR` —que es además la respuesta legítima para un
-            // fichero corriente en medio de la ruta—. Así que los dos errnos
-            // significan «quizá era un symlink», y quien lo desempata es el
-            // `readlinkat` de abajo: si no lo era, el error original vale.
+            // With `O_NOFOLLOW` a final symlink comes out as `ELOOP`…
+            // unless `O_DIRECTORY` is also set, in which case the kernel
+            // prefers to answer `ENOTDIR` — which is also the legitimate
+            // answer for an ordinary file in the middle of the path. So
+            // both errnos mean "maybe it was a symlink", and the
+            // `readlinkat` below is what breaks the tie: if it wasn't, the
+            // original error stands.
             Err(e) if matches!(e.raw_os_error(), Some(libc::ELOOP | libc::ENOTDIR)) => {
-                // Un symlink ABSOLUTO se rechaza aunque apunte dentro. Es lo
-                // que hace `RESOLVE_BENEATH` —para el kernel una ruta absoluta
-                // ya «empieza» fuera de la raíz— y las dos ramas tienen que dar
-                // el mismo veredicto o el confinamiento significaría una cosa
-                // en un kernel y otra en el de al lado.
+                // An ABSOLUTE symlink is rejected even if it points
+                // inside. That's what `RESOLVE_BENEATH` does — to the
+                // kernel an absolute path already "starts" outside the
+                // root — and the two branches have to give the same
+                // verdict, or confinement would mean one thing on one
+                // kernel and another on the next.
                 match link_target_is_absolute(current.as_raw_fd(), &name)? {
-                    // No era un symlink: un fichero corriente donde la ruta
-                    // pedía un directorio. Su error es el que vale.
+                    // It wasn't a symlink: an ordinary file where the path
+                    // asked for a directory. Its error is the one that
+                    // stands.
                     None => return Err(map_errno(&e)),
                     Some(true) => {
                         return Err(Error::Conflict {
@@ -240,10 +251,11 @@ fn walk_beneath(root: RawFd, parents: &[Segment]) -> Result<OwnedFd, Error> {
                     }
                     Some(false) => {}
                 }
-                // Seguirlo: aquí sí se abre sin `O_NOFOLLOW`, y da igual que
-                // entre el `ELOOP` y esto lo sustituyan por otro symlink —lo
-                // que se comprueba a continuación es el descriptor que salga,
-                // no el nombre por el que se pidió—.
+                // Follow it: here it IS opened without `O_NOFOLLOW`, and it
+                // doesn't matter if between the `ELOOP` and this it gets
+                // replaced by another symlink — what's checked next is
+                // whatever descriptor comes out, not the name it was
+                // requested by.
                 let next = openat_dir(current.as_raw_fd(), &name)?;
                 if !is_beneath(next.as_raw_fd(), root_id)? {
                     return Err(Error::Conflict {
@@ -258,21 +270,21 @@ fn walk_beneath(root: RawFd, parents: &[Segment]) -> Result<OwnedFd, Error> {
     Ok(current)
 }
 
-/// ¿El destino CRUDO del symlink `name` empieza por `/`?
+/// Does the RAW target of symlink `name` start with `/`?
 ///
-/// Se leen los bytes tal cual y no se resuelve nada (regla 1): lo único que se
-/// pregunta es si es absoluto.
+/// The bytes are read as they are and nothing is resolved (rule 1): the
+/// only question asked is whether it's absolute.
 ///
-/// `Ok(None)` = `name` NO es un symlink (`EINVAL` de `readlinkat`), que es
-/// también la forma de desempatar el `ENOTDIR` de un `openat(O_NOFOLLOW |
-/// O_DIRECTORY)`: ese errno lo produce tanto un symlink como un fichero
-/// corriente, y solo esto los separa.
+/// `Ok(None)` = `name` is NOT a symlink (`EINVAL` from `readlinkat`), which
+/// is also how the `ENOTDIR` from an `openat(O_NOFOLLOW | O_DIRECTORY)` is
+/// disambiguated: that errno is produced both by a symlink and by an
+/// ordinary file, and only this tells them apart.
 #[allow(unsafe_code)]
 fn link_target_is_absolute(dir: RawFd, name: &CString) -> Result<Option<bool>, Error> {
     let mut buf = [0i8; 2];
-    // SAFETY: `dir` vive, `name` es NUL-terminada y viva, y `buf` tiene sitio
-    // para los bytes que se piden. `readlinkat` NO termina en NUL: por eso solo
-    // se mira lo que dice haber escrito.
+    // SAFETY: `dir` is alive, `name` is NUL-terminated and alive, and `buf`
+    // has room for the bytes requested. `readlinkat` does NOT NUL-terminate:
+    // that's why only what it reports having written is looked at.
     let n = unsafe { libc::readlinkat(dir, name.as_ptr(), buf.as_mut_ptr().cast(), buf.len()) };
     if n < 0 {
         let e = std::io::Error::last_os_error();
@@ -284,15 +296,16 @@ fn link_target_is_absolute(dir: RawFd, name: &CString) -> Result<Option<bool>, E
     Ok(Some(n > 0 && buf[0] == i8::try_from(b'/').unwrap_or(0)))
 }
 
-/// `openat` de un componente como directorio, SIN seguir un symlink final.
+/// `openat` of a component as a directory, WITHOUT following a final
+/// symlink.
 ///
-/// Devuelve el `io::Error` crudo y no la taxonomía: quien llama necesita
-/// distinguir el `ELOOP` de «esto es un symlink» del resto, y `map_errno` los
-/// funde a propósito en un solo veredicto.
+/// Returns the raw `io::Error` and not the taxonomy: the caller needs to
+/// distinguish the `ELOOP` of "this is a symlink" from the rest, and
+/// `map_errno` deliberately melts them into a single verdict.
 #[allow(unsafe_code)]
 fn openat_dir_nofollow(dir: RawFd, name: &CString) -> Result<OwnedFd, std::io::Error> {
-    // SAFETY: `dir` está vivo y `name` es una CString NUL-terminada viva
-    // durante toda la llamada. `O_PATH` no lee ni escribe.
+    // SAFETY: `dir` is alive and `name` is a NUL-terminated CString alive
+    // for the whole call. `O_PATH` neither reads nor writes.
     let raw = unsafe {
         libc::openat(
             dir,
@@ -303,17 +316,18 @@ fn openat_dir_nofollow(dir: RawFd, name: &CString) -> Result<OwnedFd, std::io::E
     if raw < 0 {
         return Err(std::io::Error::last_os_error());
     }
-    // SAFETY: `raw` es un fd recién abierto y sin dueño.
+    // SAFETY: `raw` is a freshly opened, ownerless fd.
     Ok(unsafe { OwnedFd::from_raw_fd(raw) })
 }
 
-/// `openat` de un componente como directorio SIGUIENDO el symlink, que es lo
-/// que se quiere una vez sabido que lo es y que su destino es relativo. Lo que
-/// salga se comprueba con [`is_beneath`] antes de usarse para nada.
+/// `openat` of a component as a directory FOLLOWING the symlink, which is
+/// what's wanted once it's known to be one and that its target is
+/// relative. Whatever comes out is checked with [`is_beneath`] before
+/// being used for anything.
 #[allow(unsafe_code)]
 fn openat_dir(dir: RawFd, name: &std::ffi::CStr) -> Result<OwnedFd, Error> {
-    // SAFETY: `dir` está vivo y `name` es una CString NUL-terminada viva
-    // durante toda la llamada. `O_PATH` no lee ni escribe.
+    // SAFETY: `dir` is alive and `name` is a NUL-terminated CString alive
+    // for the whole call. `O_PATH` neither reads nor writes.
     let raw = unsafe {
         libc::openat(
             dir,
@@ -324,24 +338,25 @@ fn openat_dir(dir: RawFd, name: &std::ffi::CStr) -> Result<OwnedFd, Error> {
     if raw < 0 {
         return Err(map_errno(&std::io::Error::last_os_error()));
     }
-    // SAFETY: `raw` es un fd recién abierto y sin dueño.
+    // SAFETY: `raw` is a freshly opened, ownerless fd.
     Ok(unsafe { OwnedFd::from_raw_fd(raw) })
 }
 
-/// ¿Se llega desde `fd` hasta `root_id` subiendo por `..`?
+/// Can `root_id` be reached from `fd` by climbing `..`?
 ///
-/// La comprobación se hace sobre el DESCRIPTOR ya abierto, no sobre una ruta,
-/// así que lo que se valida es exactamente el objeto que se va a usar después,
-/// y no un nombre que pueda apuntar a otra cosa para cuando se abra.
+/// The check is done on the already-opened DESCRIPTOR, not on a path, so
+/// what's validated is exactly the object that's going to be used
+/// afterward, not a name that could point at something else by the time
+/// it's opened.
 ///
-/// **La subida en sí es best-effort bajo renombrados concurrentes**, y eso hay
-/// que decirlo en vez de dejarlo suponer: si alguien mueve el directorio ya
-/// abierto FUERA de la raíz entre este cálculo y el `mkdirat`/`openat` que
-/// venga después, el veredicto se calculó sobre un árbol que ya no es. Hace
-/// falta permiso de escritura DENTRO de la raíz para intentarlo, y `openat2`
-/// —que es el camino de serie en Linux— no tiene esa ventana porque lo resuelve
-/// el kernel de una pieza. `libpathrs` documenta la misma limitación para la
-/// misma emulación.
+/// **The climb itself is best-effort under concurrent renames**, and that
+/// has to be said instead of left to assume: if someone moves the
+/// already-opened directory OUTSIDE the root between this computation and
+/// the `mkdirat`/`openat` that comes after, the verdict was computed over
+/// a tree that no longer is. It takes write permission INSIDE the root to
+/// attempt it, and `openat2` — which is the stock path on Linux — has no
+/// such window because the kernel resolves it as one piece. `libpathrs`
+/// documents the same limitation for the same emulation.
 fn is_beneath(fd: RawFd, root_id: (u64, u64)) -> Result<bool, Error> {
     if node_id_of(fd)? == root_id {
         return Ok(true);
@@ -354,7 +369,7 @@ fn is_beneath(fd: RawFd, root_id: (u64, u64)) -> Result<bool, Error> {
         if parent_id == root_id {
             return Ok(true);
         }
-        // La raíz del filesystem es su propio padre: se acabó el camino.
+        // The filesystem root is its own parent: the road ends here.
         if parent_id == node_id_of(current.as_raw_fd())? {
             return Ok(false);
         }
@@ -363,28 +378,29 @@ fn is_beneath(fd: RawFd, root_id: (u64, u64)) -> Result<bool, Error> {
     Ok(false)
 }
 
-/// `(dev, ino)` de un fd abierto.
+/// `(dev, ino)` of an open fd.
 #[allow(unsafe_code)]
 pub(crate) fn node_id_of(fd: RawFd) -> Result<(u64, u64), Error> {
     let mut st = std::mem::MaybeUninit::<libc::stat>::uninit();
-    // SAFETY: `fd` está vivo y `st` es un `stat` propio y alineado que la
-    // llamada rellena entero. Solo se lee tras comprobar el retorno.
+    // SAFETY: `fd` is alive and `st` is an owned, aligned `stat` that the
+    // call fills in entirely. It's only read after checking the return
+    // value.
     //
-    // `fstat` sobre un fd `O_PATH` es una de las pocas operaciones que la
-    // documentación de `open(2)` permite explícitamente sobre él.
+    // `fstat` on an `O_PATH` fd is one of the few operations `open(2)`'s
+    // documentation explicitly allows on it.
     let rc = unsafe { libc::fstat(fd, st.as_mut_ptr()) };
     if rc != 0 {
         return Err(map_errno(&std::io::Error::last_os_error()));
     }
-    // SAFETY: `fstat` devolvió 0, así que dejó `st` inicializado.
+    // SAFETY: `fstat` returned 0, so it left `st` initialized.
     let st = unsafe { st.assume_init() };
-    #[allow(clippy::useless_conversion)] // `dev_t`/`ino_t` cambian por plataforma
+    #[allow(clippy::useless_conversion)] // `dev_t`/`ino_t` vary by platform
     Ok((u64::from(st.st_dev), u64::try_from(st.st_ino).unwrap_or(0)))
 }
 
-/// Los segmentos unidos por `/`, que es lo único que `openat2` sabe recibir.
-/// No es «componer una ruta»: la resolución sigue siendo relativa al fd de la
-/// raíz y el kernel es quien impide salirse de ella.
+/// The segments joined by `/`, which is the only thing `openat2` knows how
+/// to receive. This isn't "composing a path": resolution stays relative to
+/// the root's fd and it's the kernel that prevents escaping it.
 #[cfg(target_os = "linux")]
 fn join(parents: &[Segment]) -> Vec<u8> {
     let mut out = Vec::new();
@@ -397,24 +413,26 @@ fn join(parents: &[Segment]) -> Vec<u8> {
     out
 }
 
-/// ¿Dice este error que `openat2` no está disponible?
+/// Does this error say `openat2` isn't available?
 ///
-/// `ENOSYS` es el kernel <5.6. `EPERM` es lo que contesta un filtro seccomp que
-/// no conoce el syscall (el perfil por defecto de Docker, durante años), y por
-/// eso cuenta: es la MISMA situación —no hay `openat2`— dicha de otra forma.
-/// Que un `EPERM` real de otra procedencia caiga aquí no abre nada: el paseo
-/// confina igual y volverá a fallar con el mismo `EPERM` si lo era de verdad.
+/// `ENOSYS` is a kernel <5.6. `EPERM` is what a seccomp filter that
+/// doesn't know the syscall answers (Docker's default profile, for years),
+/// and that's why it counts: it's the SAME situation — no `openat2` —
+/// stated another way. A real `EPERM` from another cause landing here
+/// opens nothing: the walk confines just the same and will fail again with
+/// the same `EPERM` if it really was one.
 #[cfg(target_os = "linux")]
 fn is_enosys(e: &std::io::Error) -> bool {
     e.raw_os_error() == Some(libc::ENOSYS) || e.raw_os_error() == Some(libc::EPERM)
 }
 
-/// Traduce el errno de una resolución confinada.
+/// Translates the errno of a confined resolution.
 ///
-/// `EXDEV` es lo que contesta `openat2(RESOLVE_BENEATH)` cuando la resolución
-/// se habría salido, y `ELOOP` lo que contesta un `O_NOFOLLOW`: los dos son el
-/// mismo veredicto y NO son `NotFound`, porque un caller que ve `NotFound`
-/// responde creando el padre — justo la operación que esto existe para impedir.
+/// `EXDEV` is what `openat2(RESOLVE_BENEATH)` answers when the resolution
+/// would have escaped, and `ELOOP` is what an `O_NOFOLLOW` answers: the two
+/// are the same verdict and are NOT `NotFound`, because a caller that sees
+/// `NotFound` responds by creating the parent — exactly the operation this
+/// exists to prevent.
 pub(crate) fn map_errno(e: &std::io::Error) -> Error {
     match e.raw_os_error() {
         Some(libc::EXDEV | libc::ELOOP) => Error::Conflict {
@@ -424,8 +442,8 @@ pub(crate) fn map_errno(e: &std::io::Error) -> Error {
     }
 }
 
-/// Costura de test: fuerza el paseo aunque el kernel tenga `openat2`, para que
-/// el camino de emulación se ejercite en la misma máquina que el otro.
+/// Test seam: forces the walk even when the kernel has `openat2`, so the
+/// emulation path is exercised on the same machine as the other one.
 #[cfg(target_os = "linux")]
 fn force_walk() -> bool {
     FORCE_WALK.load(std::sync::atomic::Ordering::Relaxed)
@@ -434,7 +452,7 @@ fn force_walk() -> bool {
 #[cfg(target_os = "linux")]
 static FORCE_WALK: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-/// Guard que fuerza el paseo mientras vive (costura de test).
+/// Guard that forces the walk while it lives (test seam).
 #[cfg(target_os = "linux")]
 #[doc(hidden)]
 #[derive(Debug)]
@@ -455,17 +473,17 @@ impl Drop for ForceComponentWalk {
     }
 }
 
-// ---------- operaciones bajo la raíz ----------
+// ---------- operations under the root ----------
 
 impl LocalRoot {
-    /// `mkdir` de `rel` bajo la raíz.
+    /// `mkdir` of `rel` under the root.
     #[allow(unsafe_code)]
     pub(crate) fn mkdir(&self, rel: &[Segment]) -> Result<(), Error> {
         let (dir, name) = self.parent_of(rel)?;
         let c = cstring(name)?;
-        // SAFETY: `dir` vive mientras dura la llamada y `c` es una CString
-        // NUL-terminada viva también. `0o777` lo recorta la umask del proceso,
-        // igual que hace `std::fs::create_dir`.
+        // SAFETY: `dir` lives for the whole call and `c` is a
+        // NUL-terminated CString alive too. `0o777` gets trimmed by the
+        // process umask, just like `std::fs::create_dir` does.
         let rc = unsafe { libc::mkdirat(dir.as_raw_fd(), c.as_ptr(), 0o777) };
         if rc != 0 {
             let e = std::io::Error::last_os_error();
@@ -479,22 +497,22 @@ impl LocalRoot {
         Ok(())
     }
 
-    /// `symlink` de `rel` bajo la raíz, apuntando a `target`.
+    /// `symlink` of `rel` under the root, pointing at `target`.
     ///
-    /// Lo confinado es DÓNDE cae el link: el `symlinkat` va contra el
-    /// descriptor del padre ya resuelto, así que un componente intermedio que
-    /// sea un puente hacia fuera no puede llevárselo. A dónde APUNTA no se
-    /// toca —se copian los bytes del origen tal cual, como hace
-    /// `Provider::symlink`—: recortar el target sería inventarse un enlace
-    /// distinto del que se está copiando.
+    /// What's confined is WHERE the link lands: the `symlinkat` goes
+    /// against the already-resolved parent descriptor, so an intermediate
+    /// component that's a bridge to the outside can't take it along.
+    /// WHERE it points is untouched — the source's bytes are copied as
+    /// they are, like `Provider::symlink` does —: trimming the target
+    /// would be inventing a different link from the one being copied.
     #[allow(unsafe_code)]
     pub(crate) fn symlink(&self, rel: &[Segment], target: &[u8]) -> Result<(), Error> {
         let (dir, name) = self.parent_of(rel)?;
         let name = cstring(name)?;
-        // Un target con un NUL dentro no es una ruta que ningún unix sostenga.
+        // A target with a NUL inside isn't a path any unix can hold.
         let target = CString::new(target.to_vec()).map_err(|_| Error::InvalidPath)?;
-        // SAFETY: `dir` vive durante toda la llamada y las dos CStrings son
-        // NUL-terminadas y vivas también.
+        // SAFETY: `dir` lives for the whole call and both CStrings are
+        // NUL-terminated and alive too.
         let rc = unsafe { libc::symlinkat(target.as_ptr(), dir.as_raw_fd(), name.as_ptr()) };
         if rc != 0 {
             let e = std::io::Error::last_os_error();
@@ -508,15 +526,15 @@ impl LocalRoot {
         Ok(())
     }
 
-    /// `lstat` de `rel` bajo la raíz: describe el LINK, jamás su destino
-    /// (mismo contrato que `Provider::stat`).
+    /// `lstat` of `rel` under the root: describes the LINK, never its
+    /// target (same contract as `Provider::stat`).
     #[allow(unsafe_code)]
     pub(crate) fn stat(&self, rel: &[Segment], path: norte_proto::VPath) -> Result<Entry, Error> {
         let (dir, name) = self.parent_of(rel)?;
         let c = cstring(name)?;
         let mut st = std::mem::MaybeUninit::<libc::stat>::uninit();
-        // SAFETY: `dir` y `c` viven durante la llamada; `st` es un `stat`
-        // propio y alineado que se rellena entero. Solo se lee tras el 0.
+        // SAFETY: `dir` and `c` live for the call; `st` is an owned,
+        // aligned `stat` filled in entirely. Only read after the 0.
         let rc = unsafe {
             libc::fstatat(
                 dir.as_raw_fd(),
@@ -528,31 +546,32 @@ impl LocalRoot {
         if rc != 0 {
             return Err(map_errno(&std::io::Error::last_os_error()));
         }
-        // SAFETY: `fstatat` devolvió 0, así que dejó `st` inicializado.
+        // SAFETY: `fstatat` returned 0, so it left `st` initialized.
         let st = unsafe { st.assume_init() };
         Ok(entry_from_stat(path, &st))
     }
 
-    /// `(dev, ino)` de `rel` bajo la raíz, sin seguir symlinks — la identidad
-    /// del LINK, coherente con [`Self::stat`].
+    /// `(dev, ino)` of `rel` under the root, without following symlinks —
+    /// the LINK's identity, consistent with [`Self::stat`].
     ///
-    /// Es el mismo `fstatat` que `stat`, y no lo reusa a propósito: `stat`
-    /// devuelve un [`Entry`], que necesita el `VPath` para nombrarlo, y aquí no
-    /// hay nada que nombrar. Lo que se quiere es el par de números.
+    /// It's the same `fstatat` as `stat`, and deliberately doesn't reuse
+    /// it: `stat` returns an [`Entry`], which needs the `VPath` to name
+    /// it, and here there's nothing to name. What's wanted is the pair of
+    /// numbers.
     ///
-    /// El inodo entra por [`u128::from`] y no por un `try_from` con relleno:
-    /// esto se PERSISTE como identidad y se compara días después, así que un
-    /// valor de relleno haría que dos nodos distintos compararan iguales y
-    /// autorizaran un borrado. La conversión es infalible para cualquier
-    /// `ino_t` de unix, de modo que no hay caso degradado que inventar — que
-    /// es mejor que tener uno y elegirle un centinela.
+    /// The inode goes in via [`u128::from`] and not via a padded
+    /// `try_from`: this is PERSISTED as identity and compared days later,
+    /// so a padding value would make two distinct nodes compare equal and
+    /// authorize a deletion. The conversion is infallible for any unix
+    /// `ino_t`, so there's no degraded case to invent — which is better
+    /// than having one and picking it a sentinel.
     #[allow(unsafe_code)]
     pub(crate) fn node_id(&self, rel: &[Segment]) -> Result<norte_vfs::NodeId, Error> {
         let (dir, name) = self.parent_of(rel)?;
         let c = cstring(name)?;
         let mut st = std::mem::MaybeUninit::<libc::stat>::uninit();
-        // SAFETY: `dir` y `c` viven durante la llamada; `st` es un `stat`
-        // propio y alineado que se rellena entero. Solo se lee tras el 0.
+        // SAFETY: `dir` and `c` live for the call; `st` is an owned,
+        // aligned `stat` filled in entirely. Only read after the 0.
         let rc = unsafe {
             libc::fstatat(
                 dir.as_raw_fd(),
@@ -564,28 +583,28 @@ impl LocalRoot {
         if rc != 0 {
             return Err(map_errno(&std::io::Error::last_os_error()));
         }
-        // SAFETY: `fstatat` devolvió 0, así que dejó `st` inicializado.
+        // SAFETY: `fstatat` returned 0, so it left `st` initialized.
         let st = unsafe { st.assume_init() };
-        #[allow(clippy::useless_conversion)] // `dev_t`/`ino_t` cambian por plataforma
+        #[allow(clippy::useless_conversion)] // `dev_t`/`ino_t` vary by platform
         Ok(norte_vfs::NodeId {
             volume: u64::from(st.st_dev),
             index: u128::from(st.st_ino),
         })
     }
 
-    /// `unlinkat` de la HOJA que hay en `rel`, bajo la raíz (#218).
+    /// `unlinkat` of the LEAF in `rel`, under the root (#218).
     ///
-    /// SIN `AT_REMOVEDIR`: lo que esto borra es una hoja que va a ser
-    /// reemplazada, y un directorio en su sitio es `TypeMismatch` —una
-    /// respuesta, no una política—. Pedirle a `unlinkat` que borre un dir sin
-    /// la bandera devuelve `EISDIR`, que es exactamente el error correcto y
-    /// llega sin haber tocado nada.
+    /// WITHOUT `AT_REMOVEDIR`: what this deletes is a leaf about to be
+    /// replaced, and a directory in its place is `TypeMismatch` — an
+    /// answer, not a policy. Asking `unlinkat` to delete a dir without the
+    /// flag returns `EISDIR`, which is exactly the right error and arrives
+    /// without having touched anything.
     #[allow(unsafe_code)]
     pub(crate) fn remove(&self, rel: &[Segment]) -> Result<(), Error> {
         let (dir, name) = self.parent_of(rel)?;
         let c = cstring(name)?;
-        // SAFETY: `dir` vive mientras dura la llamada y `c` es una CString
-        // NUL-terminada viva también.
+        // SAFETY: `dir` lives for the whole call and `c` is a
+        // NUL-terminated CString alive too.
         let rc = unsafe { libc::unlinkat(dir.as_raw_fd(), c.as_ptr(), 0) };
         if rc != 0 {
             return Err(map_errno(&std::io::Error::last_os_error()));
@@ -593,12 +612,12 @@ impl LocalRoot {
         Ok(())
     }
 
-    /// El digest de los primeros `len` bytes del parcial de `rel`, abierto POR
-    /// EL DESCRIPTOR del directorio ya resuelto.
+    /// The digest of the first `len` bytes of `rel`'s partial, opened BY
+    /// THE DESCRIPTOR of the already-resolved directory.
     ///
-    /// Las MISMAS comprobaciones que [`Self::open_resumable`] —`O_NOFOLLOW`,
-    /// fichero regular, un solo enlace, nuestro—: verificar el prefijo de un
-    /// fichero que no es el que vamos a continuar no verifica nada.
+    /// The SAME checks as [`Self::open_resumable`] — `O_NOFOLLOW`, regular
+    /// file, single link, ours —: verifying the prefix of a file that
+    /// isn't the one we're about to continue verifies nothing.
     #[allow(unsafe_code)]
     pub(crate) fn partial_digest(
         &self,
@@ -611,9 +630,10 @@ impl LocalRoot {
         let (dir, name) = self.parent_of(rel)?;
         let staging_name = CString::new(crate::provider::stable_partial_name(name.as_bytes()))
             .map_err(|_| Error::InvalidPath)?;
-        // SAFETY: `dir` vive durante la llamada y `staging_name` es una CString
-        // NUL-terminada viva también. Solo lectura, y sin `O_CREAT`: si no está
-        // no hay digest y el caller degrada a `Length`.
+        // SAFETY: `dir` lives for the call and `staging_name` is a
+        // NUL-terminated CString alive too. Read-only, and no `O_CREAT`: if
+        // it's not there, there's no digest and the caller degrades to
+        // `Length`.
         let raw = unsafe {
             libc::openat(
                 dir.as_raw_fd(),
@@ -628,22 +648,22 @@ impl LocalRoot {
             }
             return Err(map_errno(&e));
         }
-        // SAFETY: `raw` es un fd recién abierto y sin dueño; `File` pasa a serlo.
+        // SAFETY: `raw` is a freshly opened, ownerless fd; `File` becomes its owner.
         let file = unsafe { <std::fs::File as std::os::fd::FromRawFd>::from_raw_fd(raw) };
-        let st = fstat_de(&file)?;
-        // SAFETY: `geteuid` no toma punteros y no puede fallar.
+        let st = fstat_of(&file)?;
+        // SAFETY: `geteuid` takes no pointers and can't fail.
         if st.st_mode & libc::S_IFMT != libc::S_IFREG
             || st.st_nlink != 1
             || st.st_uid != unsafe { libc::geteuid() }
         {
-            // No es el parcial que dejamos: sin digest, y el caller degrada.
-            // Que la reanudación lo rechace es trabajo de `open_resumable`.
+            // Not the partial we left behind: no digest, and the caller
+            // degrades. Rejecting it on resume is `open_resumable`'s job.
             return Ok(None);
         }
         let mut reader = file.take(len);
         let mut hasher = Sha256::new();
         let mut buf = vec![0u8; 64 * 1024];
-        let mut vistos: u64 = 0;
+        let mut seen: u64 = 0;
         loop {
             let n = reader
                 .read(&mut buf)
@@ -652,21 +672,21 @@ impl LocalRoot {
                 break;
             }
             hasher.update(&buf[..n]);
-            vistos += n as u64;
+            seen += n as u64;
         }
-        if vistos < len {
+        if seen < len {
             return Ok(None);
         }
         Ok(Some(hasher.finalize().into()))
     }
 
-    /// `unlinkat(AT_REMOVEDIR)` del directorio VACÍO que hay en `rel` (#296).
+    /// `unlinkat(AT_REMOVEDIR)` of the EMPTY directory in `rel` (#296).
     #[allow(unsafe_code)]
     pub(crate) fn rmdir(&self, rel: &[Segment]) -> Result<(), Error> {
         let (dir, name) = self.parent_of(rel)?;
         let c = cstring(name)?;
-        // SAFETY: `dir` vive mientras dura la llamada y `c` es una CString
-        // NUL-terminada viva también.
+        // SAFETY: `dir` lives for the whole call and `c` is a
+        // NUL-terminated CString alive too.
         let rc = unsafe { libc::unlinkat(dir.as_raw_fd(), c.as_ptr(), libc::AT_REMOVEDIR) };
         if rc != 0 {
             return Err(map_errno(&std::io::Error::last_os_error()));
@@ -674,27 +694,30 @@ impl LocalRoot {
         Ok(())
     }
 
-    /// Abre un sink para `rel`: el staging se crea con `openat` en el
-    /// directorio ya resuelto y se publica con `renameat` en ESE MISMO
-    /// descriptor, así que la publicación va confinada igual que la escritura.
-    /// Entre abrir y publicar nadie puede colar un symlink que mande el rename
-    /// a otro sitio, porque no hay ninguna ruta que volver a resolver.
+    /// Opens a sink for `rel`: the staging is created with `openat` in the
+    /// already-resolved directory and published with `renameat` on that
+    /// SAME descriptor, so publishing is confined just like the write is.
+    /// Between opening and publishing nobody can slip in a symlink that
+    /// sends the rename somewhere else, because there's no path left to
+    /// resolve again.
     pub(crate) fn open_write(&self, rel: &[Segment]) -> Result<ConfinedStaging, Error> {
         let (dir, name) = self.parent_of(rel)?;
         let final_name = cstring(name)?;
-        // `Provider::write` promete un archivo NUEVO y lo dice AL ABRIR: sin
-        // esto, un destino ocupado no se sabría hasta el `commit`, o sea
-        // después de haber transferido el fichero entero para nada.
+        // `Provider::write` promises a NEW file and says so AT OPEN TIME:
+        // without this, an occupied destination wouldn't be known until
+        // `commit`, i.e. after having transferred the whole file for
+        // nothing.
         //
-        // No es LA garantía —esa es el `RENAME_NOREPLACE` de la publicación,
-        // que no tiene ventana—, y por eso una carrera perdida aquí no pierde
-        // nada: sale como conflicto un momento más tarde.
+        // It's not THE guarantee — that's the publish's `RENAME_NOREPLACE`,
+        // which has no window —, and that's why losing a race here loses
+        // nothing: it comes out as a conflict a moment later.
         //
-        // Único matiz frente al camino por ruta: allí `collision_kind_for`
-        // relee el directorio y distingue una colisión de CAJA o de
-        // normalización; aquí se contesta `Exists` a secas. Nada del core
-        // decide por esa distinción (solo se pinta), y releer el directorio
-        // sería recorrer lo que este camino existe para no recorrer.
+        // One nuance versus the by-path route: there, `collision_kind_for`
+        // rereads the directory and distinguishes a CASE collision from a
+        // normalization one; here it just answers `Exists`. Nothing in the
+        // core decides based on that distinction (it's only rendered), and
+        // rereading the directory would be walking what this path exists
+        // to avoid walking.
         if !name_is_free(dir.as_raw_fd(), &final_name)? {
             return Err(Error::Conflict {
                 conflict: ConflictKind::Exists,
@@ -711,24 +734,25 @@ impl LocalRoot {
         })
     }
 
-    /// Como [`Self::open_write`], pero con el staging ESTABLE que un resume
-    /// posterior puede reencontrar (#297, ADR 0012).
+    /// Like [`Self::open_write`], but with the STABLE staging a later
+    /// resume can find again (#297, ADR 0012).
     ///
-    /// La diferencia con el efímero es solo el NOMBRE —derivado del hash del
-    /// nombre final, sin pid ni secuencia— y que se abre en `O_APPEND` sin
-    /// `O_EXCL`: si ya había bytes de un intento anterior, se continúa tras
-    /// ellos. Devuelve cuántos había.
+    /// The difference from the ephemeral one is only the NAME — derived
+    /// from the final name's hash, with no pid or sequence — and that it's
+    /// opened with `O_APPEND` without `O_EXCL`: if there were already bytes
+    /// from an earlier attempt, it continues after them. Returns how many
+    /// there were.
     ///
-    /// Hacía falta porque hasta #219 una hoja iba SIN confinar y por tanto sí
-    /// reanudaba; confinarla la dejó sin resume justo en el caso donde más
-    /// importa —un fichero grande y solo por un enlace que se corta— y eso era
-    /// una regresión, no una decisión.
+    /// This was needed because until #219 a leaf went WITHOUT confinement
+    /// and therefore did resume; confining it left it without resume right
+    /// where it matters most — a large file cut off by just one dropped
+    /// link — and that was a regression, not a decision.
     #[allow(unsafe_code)]
     pub(crate) fn open_resumable(&self, rel: &[Segment]) -> Result<(ConfinedStaging, u64), Error> {
         let (dir, name) = self.parent_of(rel)?;
         let final_name = cstring(name)?;
-        // El destino final NO debe existir todavía: mismo contrato que
-        // `open_write`, y la política de colisión es del core.
+        // The final destination must NOT exist yet: same contract as
+        // `open_write`, and the collision policy belongs to the core.
         if !name_is_free(dir.as_raw_fd(), &final_name)? {
             return Err(Error::Conflict {
                 conflict: ConflictKind::Exists,
@@ -736,22 +760,22 @@ impl LocalRoot {
         }
         let staging_name = CString::new(crate::provider::stable_partial_name(name.as_bytes()))
             .map_err(|_| Error::InvalidPath)?;
-        // SAFETY: `dir` vive durante la llamada y `staging_name` es una CString
-        // NUL-terminada viva también.
+        // SAFETY: `dir` lives for the call and `staging_name` is a
+        // NUL-terminated CString alive too.
         //
-        // Sin `O_EXCL` a propósito —se REABRE, que es de lo que va reanudar— y
-        // por eso hacen falta las banderas siguientes y el `fstat` de abajo.
-        // Este nombre es PREDECIBLE: lo calcula cualquiera que sepa el nombre
-        // de destino, así que el fichero que hay al otro lado puede haberlo
-        // puesto otro.
+        // No `O_EXCL` on purpose — it's REOPENED, which is what resuming
+        // is about — and that's why the flags below and the `fstat` below
+        // are needed. This name is PREDICTABLE: anyone who knows the
+        // destination name can compute it, so the file on the other side
+        // may have been put there by someone else.
         //
-        // - `O_NOFOLLOW`: no es un enlace.
-        // - `O_NONBLOCK`: un FIFO plantado con ese nombre colgaría el `openat`
-        //   PARA SIEMPRE dentro del pool de bloqueo, y el token de cancelación
-        //   no puede interrumpir un `openat` en curso. Se quita después de
-        //   comprobar que es un fichero regular.
-        // - `0o600` y no `0o666`: lo que se crea aquí es nuestro y de nadie
-        //   más mientras dure.
+        // - `O_NOFOLLOW`: it's not a link.
+        // - `O_NONBLOCK`: a FIFO planted with that name would hang the
+        //   `openat` FOREVER inside the blocking pool, and the
+        //   cancellation token can't interrupt an in-progress `openat`.
+        //   Removed after checking it's a regular file.
+        // - `0o600` and not `0o666`: what's created here is ours and
+        //   nobody else's for as long as it lasts.
         let raw = unsafe {
             libc::openat(
                 dir.as_raw_fd(),
@@ -768,38 +792,39 @@ impl LocalRoot {
         if raw < 0 {
             return Err(map_errno(&std::io::Error::last_os_error()));
         }
-        // SAFETY: `raw` es un fd recién abierto y sin dueño; `File` pasa a serlo.
+        // SAFETY: `raw` is a freshly opened, ownerless fd; `File` becomes its owner.
         let file = unsafe { <std::fs::File as std::os::fd::FromRawFd>::from_raw_fd(raw) };
-        // **Y ahora se MIRA lo que se ha abierto**, que es lo que faltaba.
-        // `O_NOFOLLOW` descarta un enlace y nada más: un fichero regular del
-        // atacante, un FIFO o un hardlink al fichero de una víctima pasan por
-        // esa puerta. Reanudar sobre cualquiera de los tres publica bajo el
-        // nombre legítimo un inodo que no es nuestro —con su contenido, su
-        // dueño y sus permisos— o anexa nuestros bytes FUERA de la raíz
-        // aprobada, que es justo lo que el confinamiento existe para impedir.
-        let st = fstat_de(&file)?;
+        // **And now what was opened gets CHECKED**, which was the missing
+        // piece. `O_NOFOLLOW` rules out a link and nothing more: a regular
+        // file of an attacker's, a FIFO or a hardlink to a victim's file
+        // all pass through that door. Resuming over any of the three
+        // publishes under the legitimate name an inode that isn't ours —
+        // with its content, its owner and its permissions — or appends our
+        // bytes OUTSIDE the approved root, which is exactly what
+        // confinement exists to prevent.
+        let st = fstat_of(&file)?;
         if st.st_mode & libc::S_IFMT != libc::S_IFREG {
             return Err(Error::Conflict {
                 conflict: ConflictKind::TypeMismatch,
             });
         }
-        // Un hardlink: nuestros bytes irían también al otro nombre, que puede
-        // estar fuera de la raíz.
+        // A hardlink: our bytes would also go to the other name, which may
+        // be outside the root.
         if st.st_nlink != 1 {
             return Err(Error::Conflict {
                 conflict: ConflictKind::EscapesRoot,
             });
         }
-        // SAFETY: `geteuid` no toma punteros y no puede fallar.
+        // SAFETY: `geteuid` takes no pointers and can't fail.
         if st.st_uid != unsafe { libc::geteuid() } {
             return Err(Error::Conflict {
                 conflict: ConflictKind::EscapesRoot,
             });
         }
-        // Comprobado que es un fichero regular nuestro, el `O_NONBLOCK` ya no
-        // pinta nada; se quita para no pasar a otra capa un fd con una bandera
-        // que no espera.
-        quita_nonblock(&file)?;
+        // Having verified it's a regular file of ours, `O_NONBLOCK` no
+        // longer serves any purpose; it's removed so as not to pass a
+        // flag another layer isn't expecting down to it.
+        remove_nonblock(&file)?;
         let already = u64::try_from(st.st_size).unwrap_or(0);
         Ok((
             ConfinedStaging {
@@ -814,28 +839,30 @@ impl LocalRoot {
     }
 }
 
-/// Un staging abierto bajo una raíz confinada, con todo lo que su publicación
-/// necesita: el descriptor del directorio, el nombre temporal y el definitivo.
+/// A staging file opened under a confined root, with everything its
+/// publication needs: the directory's descriptor, the temporary name and
+/// the final one.
 #[derive(Debug)]
 pub(crate) struct ConfinedStaging {
     pub(crate) dir: OwnedFd,
     pub(crate) file: std::fs::File,
     pub(crate) staging: CString,
     pub(crate) final_name: CString,
-    /// El nombre del staging es el ESTABLE, o sea reencontrable por un resume
-    /// posterior. Es lo que decide si `keep` conserva o borra (#297).
+    /// The staging's name is the STABLE one, i.e. rediscoverable by a
+    /// later resume. It's what decides whether `keep` preserves it or
+    /// deletes it (#297).
     pub(crate) estable: bool,
 }
 
-/// Publica el staging sobre su nombre definitivo, no-replace y en el mismo
-/// descriptor de directorio.
+/// Publishes the staging under its final name, no-replace and on the same
+/// directory descriptor.
 #[allow(unsafe_code)]
 pub(crate) fn publish(dir: RawFd, staging: &CString, final_name: &CString) -> Result<(), Error> {
     #[cfg(target_os = "linux")]
     {
-        // SAFETY: `dir` vive y las dos CStrings son NUL-terminadas y vivas.
-        // `RENAME_NOREPLACE` hace que la colisión la detecte el PROPIO rename,
-        // sin ventana entre comprobar y renombrar.
+        // SAFETY: `dir` is alive and both CStrings are NUL-terminated and
+        // alive. `RENAME_NOREPLACE` makes the rename ITSELF detect the
+        // collision, with no window between checking and renaming.
         let rc = unsafe {
             libc::renameat2(
                 dir,
@@ -849,10 +876,10 @@ pub(crate) fn publish(dir: RawFd, staging: &CString, final_name: &CString) -> Re
             return Ok(());
         }
         let e = std::io::Error::last_os_error();
-        // `EINVAL`/`ENOSYS`/`EOPNOTSUPP`: filesystem sin no-replace (algunos
-        // FUSE, NFS viejos). Se degrada al `renameat` llano precedido de un
-        // `faccessat`, que es la ventana que M0 ya documenta — y sigue siendo
-        // confinada, que es lo que este módulo garantiza.
+        // `EINVAL`/`ENOSYS`/`EOPNOTSUPP`: a filesystem without no-replace
+        // (some FUSE, old NFS). Degrades to a plain `renameat` preceded by
+        // a `faccessat`, which is the window M0 already documents — and is
+        // still confined, which is what this module guarantees.
         if !matches!(
             e.raw_os_error(),
             Some(libc::EINVAL | libc::ENOSYS | libc::EOPNOTSUPP)
@@ -863,22 +890,24 @@ pub(crate) fn publish(dir: RawFd, staging: &CString, final_name: &CString) -> Re
     plain_rename(dir, staging, final_name)
 }
 
-/// ¿Está LIBRE ese nombre en este directorio? Mira el NODO, no lo que apunte:
-/// un symlink roto ocupa el nombre igual que un fichero.
+/// Is that name FREE in this directory? Looks at the NODE, not at what it
+/// points to: a broken symlink occupies the name just like a file does.
 ///
-/// `Ok(false)` = ocupado. `Ok(true)` = libre, y solo lo dice el `ENOENT`:
-/// cualquier otro errno es «no lo sé» y sale como `Err`, porque quien pregunta
-/// lo hace justo antes de un rename que PISA. La versión anterior usaba
-/// `faccessat(F_OK, AT_SYMLINK_NOFOLLOW)` y leía cualquier fallo como «libre»,
-/// que es fail-OPEN: ese flag necesita `faccessat2` (kernel 5.8+) y en un
-/// kernel viejo, o en una libc que no lo use, contesta `EINVAL` para siempre —
-/// con lo que el nombre parecía libre siempre y el rename degradado destruía lo
-/// que hubiera. Lo encontró la revisión de seguridad de esta fase.
+/// `Ok(false)` = occupied. `Ok(true)` = free, and only the `ENOENT` says
+/// so: any other errno is "I don't know" and comes out as `Err`, because
+/// whoever asks does so right before a rename that OVERWRITES. The
+/// previous version used `faccessat(F_OK, AT_SYMLINK_NOFOLLOW)` and read
+/// any failure as "free", which is fail-OPEN: that flag needs
+/// `faccessat2` (kernel 5.8+) and on an old kernel, or a libc that doesn't
+/// use it, it answers `EINVAL` forever — so the name always looked free
+/// and the degraded rename destroyed whatever was there. This phase's
+/// security review found it.
 #[allow(unsafe_code)]
 fn name_is_free(dir: RawFd, name: &CString) -> Result<bool, Error> {
     let mut st = std::mem::MaybeUninit::<libc::stat>::uninit();
-    // SAFETY: `dir` vive, `name` es NUL-terminada y viva, y `st` es un `stat`
-    // propio y alineado. Solo se leería tras un 0, y aquí ni se lee.
+    // SAFETY: `dir` is alive, `name` is NUL-terminated and alive, and `st`
+    // is an owned, aligned `stat`. It would only be read after a 0, and
+    // here it's not even read.
     let rc = unsafe {
         libc::fstatat(
             dir,
@@ -897,29 +926,31 @@ fn name_is_free(dir: RawFd, name: &CString) -> Result<bool, Error> {
     Err(map_errno(&e))
 }
 
-/// Publica sin poder pisar, allí donde `renameat2` no está.
+/// Publishes without being able to overwrite, where `renameat2` isn't
+/// available.
 ///
-/// **Primero se intenta `linkat` + `unlinkat`, que SÍ es no-replace atómico y
-/// es portable.** `link` falla con `EEXIST` si el destino existe, y eso lo
-/// decide el kernel sin ventana ninguna — que es la propiedad entera. Solo si
-/// el filesystem no sabe enlazar (`EPERM`/`EOPNOTSUPP`/`EMLINK`, y `EXDEV` no
-/// puede pasar porque los dos nombres cuelgan del MISMO descriptor) se cae al
-/// `renameat` llano precedido de la comprobación, que es la ventana que M0 ya
-/// documenta.
+/// **First `linkat` + `unlinkat` is tried, which IS atomic no-replace and
+/// portable.** `link` fails with `EEXIST` if the destination exists, and
+/// the kernel decides that with no window at all — which is the whole
+/// property. Only if the filesystem can't link (`EPERM`/`EOPNOTSUPP`/
+/// `EMLINK`, and `EXDEV` can't happen because both names hang off the SAME
+/// descriptor) does it fall back to a plain `renameat` preceded by the
+/// check, which is the window M0 already documents.
 ///
-/// Importa más de lo que parece: en macOS no hay `renameat2`, así que este era
-/// el ÚNICO camino de publicación de todo el módulo, y la revisión de seguridad
-/// señaló que la comprobación previa dejaba a cada publicación de macOS con una
-/// rendija en la que se pisa un fichero ajeno sin decir nada.
+/// Matters more than it looks: on macOS there's no `renameat2`, so this
+/// was the ONLY publication path in the whole module, and the security
+/// review flagged that the upfront check left every macOS publication with
+/// a gap where someone else's file gets overwritten without a word.
 #[allow(unsafe_code)]
 fn plain_rename(dir: RawFd, staging: &CString, final_name: &CString) -> Result<(), Error> {
-    // SAFETY: `dir` vive y las dos CStrings son NUL-terminadas y vivas. Sin
-    // `AT_SYMLINK_FOLLOW`: se enlaza el staging, jamás lo que apuntara.
+    // SAFETY: `dir` is alive and both CStrings are NUL-terminated and
+    // alive. Without `AT_SYMLINK_FOLLOW`: the staging is linked, never
+    // whatever it might have pointed to.
     let rc = unsafe { libc::linkat(dir, staging.as_ptr(), dir, final_name.as_ptr(), 0) };
     if rc == 0 {
-        // Publicado. El staging sobra: su borrado es best-effort porque el
-        // fichero YA está en su sitio y fallar aquí sería fallar después de
-        // haber tenido éxito.
+        // Published. The staging is now spare: deleting it is best-effort
+        // because the file is ALREADY in place and failing here would be
+        // failing after having succeeded.
         let _ = discard(dir, staging);
         return Ok(());
     }
@@ -935,15 +966,15 @@ fn plain_rename(dir: RawFd, staging: &CString, final_name: &CString) -> Result<(
     ) {
         return Err(rename_error(&e));
     }
-    // Sin enlaces duros: queda el rename llano, y su comprobación previa.
-    // `name_is_free` falla en duda, así que un errno raro NO se lee como
-    // «libre» y no se pisa nada por no saber.
+    // No hardlinks: the plain rename is what's left, and its upfront
+    // check. `name_is_free` fails when in doubt, so a strange errno is
+    // NOT read as "free" and nothing gets overwritten out of not knowing.
     if !name_is_free(dir, final_name)? {
         return Err(Error::Conflict {
             conflict: ConflictKind::Exists,
         });
     }
-    // SAFETY: `dir` vive y las dos CStrings son NUL-terminadas y vivas.
+    // SAFETY: `dir` is alive and both CStrings are NUL-terminated and alive.
     let rc = unsafe { libc::renameat(dir, staging.as_ptr(), dir, final_name.as_ptr()) };
     if rc == 0 {
         Ok(())
@@ -952,10 +983,10 @@ fn plain_rename(dir: RawFd, staging: &CString, final_name: &CString) -> Result<(
     }
 }
 
-/// Borra el staging. Un staging que ya no está no es un error.
+/// Deletes the staging. A staging that's already gone isn't an error.
 #[allow(unsafe_code)]
 pub(crate) fn discard(dir: RawFd, staging: &CString) -> Result<(), Error> {
-    // SAFETY: `dir` vive y `staging` es NUL-terminada y viva.
+    // SAFETY: `dir` is alive and `staging` is NUL-terminated and alive.
     let rc = unsafe { libc::unlinkat(dir, staging.as_ptr(), 0) };
     if rc == 0 {
         return Ok(());
@@ -967,13 +998,13 @@ pub(crate) fn discard(dir: RawFd, staging: &CString) -> Result<(), Error> {
     Err(map_errno(&e))
 }
 
-/// Crea el staging en exclusiva: `O_EXCL` para que dos escrituras jamás
-/// compartan uno, `O_NOFOLLOW` para que un symlink plantado con ese nombre no
-/// redirija la creación.
+/// Creates the staging exclusively: `O_EXCL` so two writes never share
+/// one, `O_NOFOLLOW` so a symlink planted with that name can't redirect
+/// the creation.
 #[allow(unsafe_code)]
 fn create_exclusive(dir: RawFd, name: &CString) -> Result<std::fs::File, Error> {
-    // SAFETY: `dir` vive y `name` es NUL-terminada y viva. El modo lo recorta
-    // la umask, igual que en `std::fs::File::create`.
+    // SAFETY: `dir` is alive and `name` is NUL-terminated and alive. The
+    // mode gets trimmed by the umask, same as in `std::fs::File::create`.
     let raw = unsafe {
         libc::openat(
             dir,
@@ -985,38 +1016,41 @@ fn create_exclusive(dir: RawFd, name: &CString) -> Result<std::fs::File, Error> 
     if raw < 0 {
         return Err(map_errno(&std::io::Error::last_os_error()));
     }
-    // SAFETY: `raw` es un fd recién abierto y sin dueño; `File` pasa a serlo.
+    // SAFETY: `raw` is a freshly opened, ownerless fd; `File` becomes its owner.
     Ok(unsafe { <std::fs::File as std::os::fd::FromRawFd>::from_raw_fd(raw) })
 }
 
-/// Abre el staging ESTABLE de una RUTA con las mismas comprobaciones que
-/// [`LocalRoot::open_resumable`] (#298), y devuelve cuántos bytes había.
+/// Opens the STABLE staging of a PATH with the same checks as
+/// [`LocalRoot::open_resumable`] (#298), and returns how many bytes there
+/// were.
 ///
-/// El camino por ruta no tiene descriptor de directorio contra el que hacer
-/// `openat` —el confinamiento es otro asunto, y es #219—, pero el conjunto de
-/// comprobaciones sobre lo que se ha abierto es exactamente el mismo, porque
-/// el motivo es el mismo: el nombre del staging deriva del hash del nombre de
-/// destino, así que **lo calcula cualquiera que sepa a dónde vamos a copiar**
-/// y el fichero que hay al otro lado puede haberlo puesto otro.
+/// The by-path route has no directory descriptor to `openat` against —
+/// confinement is a separate matter, and it's #219 —, but the set of
+/// checks on what got opened is exactly the same, because the reason is
+/// the same: the staging's name derives from the destination name's hash,
+/// so **anyone who knows where we're about to copy to can compute it**,
+/// and the file on the other side may have been put there by someone
+/// else.
 ///
-/// Y se miran sobre el FICHERO ABIERTO, no sobre la ruta: un `lstat` previo
-/// contesta sobre lo que había, no sobre lo que se abrió.
+/// And they're checked on the OPEN FILE, not on the path: a prior `lstat`
+/// answers about what was there, not about what got opened.
 #[allow(unsafe_code)]
 pub(crate) fn abre_staging_estable(path: &std::path::Path) -> Result<(std::fs::File, u64), Error> {
     use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _};
 
-    // Sin `O_EXCL` a propósito —se REABRE, que es de lo que va reanudar— y por
-    // eso hacen falta las banderas de aquí y las comprobaciones de abajo:
+    // No `O_EXCL` on purpose — it's REOPENED, which is what resuming is
+    // about — and that's why the flags here and the checks below are
+    // needed:
     //
-    // - `O_NOFOLLOW`: no es un enlace. Un `.norte-partial.<hash> -> /etc/passwd`
-    //   plantado recibiría nuestros bytes y luego el `commit` publicaría ESE
-    //   inodo bajo el nombre legítimo.
-    // - `O_NONBLOCK`: un FIFO plantado con ese nombre cuelga el `open` PARA
-    //   SIEMPRE dentro del pool de bloqueo, y el token de cancelación no puede
-    //   interrumpir un `open` en curso. Se quita en cuanto se sabe que es un
-    //   fichero regular.
-    // - `0o600` y no el `0o666` de antes: lo que se crea aquí es nuestro y de
-    //   nadie más mientras dure.
+    // - `O_NOFOLLOW`: it's not a link. A planted
+    //   `.norte-partial.<hash> -> /etc/passwd` would receive our bytes and
+    //   then `commit` would publish THAT inode under the legitimate name.
+    // - `O_NONBLOCK`: a FIFO planted with that name hangs the `open`
+    //   FOREVER inside the blocking pool, and the cancellation token can't
+    //   interrupt an in-progress `open`. Removed as soon as it's known to
+    //   be a regular file.
+    // - `0o600` and not the earlier `0o666`: what's created here is ours
+    //   and nobody else's for as long as it lasts.
     let file = std::fs::OpenOptions::new()
         .append(true)
         .create(true)
@@ -1030,29 +1064,30 @@ pub(crate) fn abre_staging_estable(path: &std::path::Path) -> Result<(std::fs::F
             conflict: ConflictKind::TypeMismatch,
         });
     }
-    // Un hardlink al fichero de una víctima: nuestros bytes irían también al
-    // otro nombre, que está donde el atacante quiera.
+    // A hardlink to a victim's file: our bytes would also go to the other
+    // name, wherever the attacker wants it.
     if md.nlink() != 1 {
         return Err(Error::Conflict {
             conflict: ConflictKind::EscapesRoot,
         });
     }
-    // SAFETY: `geteuid` no toma punteros y no puede fallar.
+    // SAFETY: `geteuid` takes no pointers and can't fail.
     if md.uid() != unsafe { libc::geteuid() } {
         return Err(Error::Conflict {
             conflict: ConflictKind::EscapesRoot,
         });
     }
-    quita_nonblock(&file)?;
+    remove_nonblock(&file)?;
     Ok((file, md.len()))
 }
 
-/// Abre para LEER el parcial de una ruta con las mismas comprobaciones (#298):
-/// verificar el prefijo de un fichero que no es el que se va a continuar no
-/// verifica nada.
+/// Opens a path's partial for READING with the same checks (#298):
+/// verifying the prefix of a file that isn't the one about to be continued
+/// verifies nothing.
 ///
-/// `Ok(None)` es «no hay parcial nuestro»: el caller degrada a `Length`, y que
-/// la reanudación rechace lo que haya es trabajo de [`abre_staging_estable`].
+/// `Ok(None)` is "there's no partial of ours": the caller degrades to
+/// `Length`, and rejecting whatever's there on resume is
+/// [`abre_staging_estable`]'s job.
 #[allow(unsafe_code)]
 pub(crate) fn abre_parcial_verificado(
     path: &std::path::Path,
@@ -1069,35 +1104,35 @@ pub(crate) fn abre_parcial_verificado(
         Err(e) => return Err(map_errno(&e)),
     };
     let md = file.metadata().map_err(|e| crate::provider::map_io(&e))?;
-    // SAFETY: `geteuid` no toma punteros y no puede fallar.
+    // SAFETY: `geteuid` takes no pointers and can't fail.
     if !md.file_type().is_file() || md.nlink() != 1 || md.uid() != unsafe { libc::geteuid() } {
         return Ok(None);
     }
-    quita_nonblock(&file)?;
+    remove_nonblock(&file)?;
     Ok(Some(file))
 }
 
-/// `fstat` de un descriptor ya abierto.
+/// `fstat` of an already-open descriptor.
 #[allow(unsafe_code)]
-fn fstat_de(file: &std::fs::File) -> Result<libc::stat, Error> {
+fn fstat_of(file: &std::fs::File) -> Result<libc::stat, Error> {
     use std::os::fd::AsRawFd as _;
     let mut st = std::mem::MaybeUninit::<libc::stat>::uninit();
-    // SAFETY: `file` vive durante la llamada y `st` es un `stat` propio y
-    // alineado que se rellena entero. Solo se lee tras el 0.
+    // SAFETY: `file` lives for the call and `st` is an owned, aligned
+    // `stat` filled in entirely. Only read after the 0.
     let rc = unsafe { libc::fstat(file.as_raw_fd(), st.as_mut_ptr()) };
     if rc != 0 {
         return Err(map_errno(&std::io::Error::last_os_error()));
     }
-    // SAFETY: `fstat` devolvió 0, así que dejó `st` inicializado.
+    // SAFETY: `fstat` returned 0, so it left `st` initialized.
     Ok(unsafe { st.assume_init() })
 }
 
-/// Quita `O_NONBLOCK` de un descriptor ya abierto.
+/// Removes `O_NONBLOCK` from an already-open descriptor.
 #[allow(unsafe_code)]
-fn quita_nonblock(file: &std::fs::File) -> Result<(), Error> {
+fn remove_nonblock(file: &std::fs::File) -> Result<(), Error> {
     use std::os::fd::AsRawFd as _;
-    // SAFETY: `file` vive durante las dos llamadas; `F_GETFL`/`F_SETFL` no
-    // toman punteros.
+    // SAFETY: `file` lives for both calls; `F_GETFL`/`F_SETFL` take no
+    // pointers.
     let flags = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_GETFL) };
     if flags < 0 {
         return Err(map_errno(&std::io::Error::last_os_error()));
@@ -1109,17 +1144,17 @@ fn quita_nonblock(file: &std::fs::File) -> Result<(), Error> {
     Ok(())
 }
 
-/// Nombre de staging efímero, con la MISMA forma que el del provider
-/// (`.norte-partial.<16 hex>.<pid>-<seq>`) para que el barredor de parciales
-/// lo siga reconociendo — esto es otra manera de llegar a los mismos ficheros,
-/// no una segunda convención.
+/// Ephemeral staging name, with the SAME shape as the provider's
+/// (`.norte-partial.<16 hex>.<pid>-<seq>`) so the partial sweeper keeps
+/// recognizing it — this is another way of reaching the same files, not a
+/// second convention.
 fn ephemeral_staging_name(final_name: &[u8]) -> CString {
     let name = crate::provider::ephemeral_partial_name(final_name);
-    CString::new(name).expect("el nombre de staging es hex y puntos")
+    CString::new(name).expect("the staging name is hex and dots")
 }
 
-/// Un `Entry` desde un `stat` crudo, sin pasar por `std::fs::Metadata` (que
-/// exigiría una ruta que aquí, deliberadamente, no existe).
+/// An `Entry` from a raw `stat`, without going through `std::fs::Metadata`
+/// (which would require a path that, deliberately, doesn't exist here).
 fn entry_from_stat(path: norte_proto::VPath, st: &libc::stat) -> Entry {
     let (kind, size) = match st.st_mode & libc::S_IFMT {
         libc::S_IFLNK => (EntryKind::Symlink, None),
@@ -1136,10 +1171,10 @@ fn entry_from_stat(path: norte_proto::VPath, st: &libc::stat) -> Entry {
     }
 }
 
-/// mtime en milisegundos UTC desde un `stat`.
+/// mtime in UTC milliseconds from a `stat`.
 fn mtime_ms_of(st: &libc::stat) -> Option<i64> {
-    // Los tipos de `st_mtime`/`st_mtime_nsec` cambian con la plataforma y la
-    // libc, así que la conversión es redundante SOLO en el objetivo de hoy.
+    // The types of `st_mtime`/`st_mtime_nsec` change with the platform and
+    // the libc, so the conversion is redundant ONLY on today's target.
     #[allow(clippy::useless_conversion)]
     let secs = i64::try_from(st.st_mtime).ok()?;
     #[allow(clippy::useless_conversion)]
@@ -1147,14 +1182,14 @@ fn mtime_ms_of(st: &libc::stat) -> Option<i64> {
     secs.checked_mul(1000)?.checked_add(nanos / 1_000_000)
 }
 
-/// Un segmento como `CString`. Un segmento con un NUL dentro no es un nombre que
-/// ningún filesystem unix pueda sostener.
+/// A segment as a `CString`. A segment with a NUL inside isn't a name any
+/// unix filesystem can hold.
 fn cstring(seg: &Segment) -> Result<CString, Error> {
     CString::new(seg.as_bytes().to_vec()).map_err(|_| Error::InvalidPath)
 }
 
-/// El error de un rename de publicación: un destino que ya existe es
-/// `Conflict`, y el resto pasa por la taxonomía de siempre.
+/// The error from a publication rename: a destination that already exists
+/// is `Conflict`, and the rest goes through the usual taxonomy.
 fn rename_error(e: &std::io::Error) -> Error {
     if e.kind() == std::io::ErrorKind::AlreadyExists {
         return Error::Conflict {
@@ -1164,19 +1199,19 @@ fn rename_error(e: &std::io::Error) -> Error {
     map_errno(e)
 }
 
-// ---------- el handle que ve el core ----------
+// ---------- the handle the core sees ----------
 
-/// [`norte_vfs::ConfinedRoot`] sobre una [`LocalRoot`].
+/// [`norte_vfs::ConfinedRoot`] over a [`LocalRoot`].
 ///
-/// El `Arc` no es por compartir: el sink que devuelve `write` sobrevive al
-/// handle si el caller lo suelta antes de hacer commit, y el descriptor del
-/// directorio tiene que seguir vivo para que el `renameat` de la publicación
-/// siga siendo el mismo directorio y no una ruta que se vuelve a resolver.
+/// The `Arc` isn't for sharing: the sink `write` returns outlives the
+/// handle if the caller drops it before committing, and the directory
+/// descriptor has to stay alive so the publication's `renameat` keeps
+/// being the same directory and not a path resolved all over again.
 #[derive(Debug)]
 pub(crate) struct LocalConfinedRoot {
     root: std::sync::Arc<LocalRoot>,
-    /// La raíz como `VPath`, SOLO para poder nombrar lo que `stat` devuelve.
-    /// Jamás se usa para resolver nada.
+    /// The root as a `VPath`, ONLY to be able to name what `stat` returns.
+    /// Never used to resolve anything.
     vpath: norte_proto::VPath,
 }
 
@@ -1188,8 +1223,8 @@ impl LocalConfinedRoot {
         }
     }
 
-    /// El `VPath` de `rel` bajo la raíz. Es para PINTAR el resultado de un
-    /// `stat`, no para abrir nada.
+    /// The `VPath` of `rel` under the root. It's for RENDERING a `stat`'s
+    /// result, not for opening anything.
     fn vpath_of(&self, rel: &[Segment]) -> norte_proto::VPath {
         let mut p = self.vpath.clone();
         for seg in rel {
@@ -1232,7 +1267,7 @@ impl norte_vfs::ConfinedRoot for LocalConfinedRoot {
         target: &[u8],
         _kind: norte_vfs::SymlinkKind,
     ) -> Result<(), Error> {
-        // `kind` es de Windows, y en Windows este módulo no existe.
+        // `kind` is a Windows thing, and on Windows this module doesn't exist.
         let root = std::sync::Arc::clone(&self.root);
         let rel = rel.to_vec();
         let target = target.to_vec();
@@ -1249,8 +1284,12 @@ impl norte_vfs::ConfinedRoot for LocalConfinedRoot {
     ) -> Result<(Box<dyn norte_vfs::ByteSink>, u64), Error> {
         let root = std::sync::Arc::clone(&self.root);
         let rel = rel.to_vec();
-        let (staging, ya) = crate::provider::blocking(move || root.open_resumable(&rel)).await?;
-        Ok((Box::new(ConfinedSink::desde(staging, ya)), ya))
+        let (staging, already) =
+            crate::provider::blocking(move || root.open_resumable(&rel)).await?;
+        Ok((
+            Box::new(ConfinedSink::from_existing(staging, already)),
+            already,
+        ))
     }
 
     async fn stat(&self, rel: &[Segment]) -> Result<Entry, Error> {
@@ -1285,45 +1324,46 @@ impl norte_vfs::ConfinedRoot for LocalConfinedRoot {
     }
 }
 
-/// El sink de una escritura confinada.
+/// The sink of a confined write.
 ///
-/// Sostiene el descriptor del directorio, no su ruta: entre `write` y `commit`
-/// nadie puede sustituir un componente por un symlink y desviar la
-/// publicación, porque no queda ninguna ruta que volver a resolver.
+/// It holds the directory's descriptor, not its path: between `write` and
+/// `commit` nobody can replace a component with a symlink and divert the
+/// publication, because there's no path left to resolve again.
 #[derive(Debug)]
 struct ConfinedSink {
     dir: Option<OwnedFd>,
     file: Option<std::fs::File>,
-    /// Bytes ya entregados, agujeros incluidos: el ancla de
-    /// [`crate::provider::write_maybe_sparse`]. Con `open_write` empieza en
-    /// cero; **reanudando empieza en lo que ya había**, y no en lo que diga el
-    /// descriptor — el staging se abre con `O_APPEND`, que deja el offset en 0
-    /// hasta la primera escritura. Ése es exactamente el error que el sink de
-    /// al lado cometió.
+    /// Bytes already delivered, holes included: the anchor for
+    /// [`crate::provider::write_maybe_sparse`]. With `open_write` it
+    /// starts at zero; **resuming it starts at what was already there**,
+    /// and not at whatever the descriptor says — the staging is opened
+    /// with `O_APPEND`, which leaves the offset at 0 until the first
+    /// write. That's exactly the mistake the sink next door made.
     pos: u64,
     staging: CString,
     final_name: CString,
-    /// El staging lleva el nombre ESTABLE: `keep` lo CONSERVA para que un
-    /// resume posterior lo continúe (#297).
-    estable: bool,
-    /// `true` cuando commit/abort ya se ocuparon del staging (Drop no toca).
+    /// The staging carries the STABLE name: `keep` PRESERVES it so a later
+    /// resume can continue it (#297).
+    stable: bool,
+    /// `true` once commit/abort have already dealt with the staging (Drop
+    /// touches nothing).
     done: bool,
 }
 
 impl ConfinedSink {
     fn new(s: ConfinedStaging) -> Self {
-        Self::desde(s, 0)
+        Self::from_existing(s, 0)
     }
 
-    /// Reanudando: la posición arranca en lo que el staging ya tenía.
-    fn desde(s: ConfinedStaging, ya: u64) -> Self {
+    /// Resuming: the position starts at what the staging already had.
+    fn from_existing(s: ConfinedStaging, already: u64) -> Self {
         Self {
             dir: Some(s.dir),
             file: Some(s.file),
-            pos: ya,
+            pos: already,
             staging: s.staging,
             final_name: s.final_name,
-            estable: s.estable,
+            stable: s.estable,
             done: false,
         }
     }
@@ -1352,20 +1392,21 @@ impl norte_vfs::ByteSink for ConfinedSink {
         let dir = self.dir.take().ok_or(Error::Io { retryable: false })?;
         let staging = self.staging.clone();
         let final_name = self.final_name.clone();
-        let estable = self.estable;
+        let stable = self.stable;
         let res = crate::provider::blocking(move || {
             file.sync_all().map_err(|e| crate::provider::map_io(&e))?;
-            // El descriptor sigue vivo durante el `publish` a propósito
-            // (#299): el modo se repone DESPUÉS de publicar y sobre el fd.
-            // Relajarlo antes dejaría legible por otros un staging con el
-            // nombre más predecible del directorio.
+            // The descriptor stays alive during `publish` on purpose
+            // (#299): the mode is restored AFTER publishing and on the fd.
+            // Relaxing it earlier would leave readable by others a staging
+            // file with the directory's most predictable name.
             let out = publish(dir.as_raw_fd(), &staging, &final_name);
             if out.is_err() {
-                // Un publish que no publica no deja el staging por ahí: es la
-                // misma promesa del sink de siempre.
+                // A publish that doesn't publish doesn't leave the staging
+                // lying around: it's the same promise the usual sink
+                // makes.
                 let _ = discard(dir.as_raw_fd(), &staging);
             } else {
-                crate::provider::reponer_modo_publicado(&file, estable);
+                crate::provider::reponer_modo_publicado(&file, stable);
             }
             drop(file);
             out
@@ -1385,26 +1426,28 @@ impl norte_vfs::ByteSink for ConfinedSink {
         crate::provider::blocking(move || discard(dir.as_raw_fd(), &staging)).await
     }
 
-    /// **Con un staging EFÍMERO, `keep` borra, y no es una contradicción con el
-    /// trait: es la única forma honesta de cumplirlo.**
+    /// **With an EPHEMERAL staging, `keep` deletes, and that's not a
+    /// contradiction with the trait: it's the only honest way to fulfill
+    /// it.**
     ///
-    /// `keep` existe para conservar el staging y que un `open_resumable`
-    /// posterior lo continúe (ADR 0012). Un nombre efímero —pid y secuencia—
-    /// no lo puede reencontrar nadie: conservarlo dejaría un `.norte-partial`
-    /// por intento que ningún resume va a consumir y que el siguiente `Mirror`
-    /// vería como huérfano y borraría. Sin resume que servir, conservar no
-    /// conserva nada; solo ensucia.
+    /// `keep` exists to preserve the staging so a later `open_resumable`
+    /// can continue it (ADR 0012). An ephemeral name — pid and sequence —
+    /// can't be found again by anyone: keeping it would leave a
+    /// `.norte-partial` per attempt that no resume is ever going to
+    /// consume and that the next `Mirror` would see as an orphan and
+    /// delete. With no resume to serve, keeping preserves nothing; it only
+    /// litters.
     ///
-    /// Con el staging ESTABLE (#297) `keep` sí conserva, que es lo que ese
-    /// nombre existe para permitir: `open_resumable` lo reencuentra y continúa
-    /// tras sus bytes.
+    /// With the STABLE staging (#297) `keep` does preserve, which is what
+    /// that name exists to allow: `open_resumable` finds it again and
+    /// continues after its bytes.
     async fn keep(mut self: Box<Self>) -> Result<(), Error> {
-        if !self.estable {
+        if !self.stable {
             return self.abort().await;
         }
-        // Sincroniza lo escrito y suelta: el staging se queda donde está, con
-        // su nombre reencontrable. Sin `fsync` lo conservado podría ser menos
-        // de lo que el resume va a dar por bueno.
+        // Syncs what was written and lets go: the staging stays where it
+        // is, with its rediscoverable name. Without `fsync`, what's kept
+        // could be less than what resume is going to accept as good.
         let file = self.file.take().ok_or(Error::Io { retryable: false })?;
         self.dir.take();
         self.done = true;
@@ -1415,17 +1458,17 @@ impl norte_vfs::ByteSink for ConfinedSink {
 
 impl Drop for ConfinedSink {
     fn drop(&mut self) {
-        // Un sink soltado sin commit ni abort no deja staging detrás. Es
-        // best-effort y síncrono a propósito: aquí ya no hay a quién devolverle
-        // un error.
+        // A sink dropped without commit or abort leaves no staging behind.
+        // Best-effort and synchronous on purpose: there's nobody left here
+        // to hand an error to.
         if self.done {
             return;
         }
         self.file.take();
-        // Un staging ESTABLE sobrevive al drop: es lo que un resume posterior
-        // va a buscar, y borrarlo aquí convertiría un proceso que se cae en un
-        // fichero que hay que volver a copiar entero.
-        if self.estable {
+        // A STABLE staging survives the drop: it's what a later resume is
+        // going to look for, and deleting it here would turn a crashed
+        // process into a file that has to be copied over entirely again.
+        if self.stable {
             self.dir.take();
             return;
         }

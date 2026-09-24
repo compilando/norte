@@ -1,66 +1,65 @@
-//! La paleta de comandos: su modelo, el filtrado y el cursor.
+//! The command palette: its model, the filtering, and the cursor.
 //!
-//! Izado de `norte-tui` (misma operación que `History`/`Trail` en la tarea
-//! 2.3 del plan multi-frontend): filtrar una lista de comandos por lo
-//! tecleado, mover el cursor entre lo que casa y saber qué está
-//! seleccionado son REGLAS DE PRESENTACIÓN, y dos frontends con dos copias
-//! son dos paletas que se comportan distinto sin que nadie lo note (ADR
-//! 0066, decisión D14).
+//! Hoisted from `norte-tui` (same operation as `History`/`Trail` in task 2.3
+//! of the multi-frontend plan): filtering a list of commands by what was
+//! typed, moving the cursor among what matches, and knowing what is selected
+//! are PRESENTATION RULES, and two frontends with two copies are two palettes
+//! that behave differently without anyone noticing (ADR 0066, decision D14).
 //!
-//! Las FILAS las construye cada frontend con su propia lista de comandos
-//! implementados; lo que se comparte es qué hace la paleta con ellas.
+//! The ROWS are built by each frontend with its own list of implemented
+//! commands; what is shared is what the palette does with them.
 
-/// La paleta de comandos (`Ctrl+P`, vim `:`): filtro libre sobre las filas
-/// que le dé el frontend.
+/// The command palette (`Ctrl+P`, vim `:`): free-text filter over the rows
+/// the frontend gives it.
 ///
-/// Sus teclas NO resuelven contra el contexto `dialog`: es un editor de
-/// texto libre, como el buscador incremental. No hay vocabulario `dialog.*`
-/// para «teclear un carácter» o «correr lo seleccionado», así que quien la
-/// tenga abierta trata esas teclas como fijas.
+/// Its keys do NOT resolve against the `dialog` context: it is a free text
+/// editor, like the incremental search. There is no `dialog.*` vocabulary for
+/// "type a character" or "run the selected one", so whoever has it open
+/// treats those keys as fixed.
 ///
-/// Las `rows` llegan YA construidas (el `build_rows` de cada frontend,
-/// precomputadas como `help_lines`/`dialog_hints` —
-/// mismo criterio: reconstruidas en el arranque y en cada hot-reload OK,
-/// ANTES de que los efectivos se muevan al `Resolver`); `Palette::new` solo
-/// pliega el haystack de cada fila. Mismo patrón de cache que
-/// [`crate::nav::QuickSearch`] (#77): el fold por fila se computa UNA vez
-/// aquí, no por keystroke — los keystrokes solo pliegan la query.
+/// The `rows` arrive ALREADY built (each frontend's `build_rows`,
+/// precomputed like `help_lines`/`dialog_hints` — same criterion: rebuilt on
+/// startup and on every hot-reload OK, BEFORE the effectives move to the
+/// `Resolver`); `Palette::new` only folds each row's haystack. Same cache
+/// pattern as [`crate::nav::QuickSearch`] (#77): the per-row fold is computed
+/// ONCE here, not per keystroke — keystrokes only fold the query.
 #[derive(Debug, Clone)]
 pub struct Palette {
-    /// `(comando, descripción, chord-o-guion)` — snapshot congelado al abrir.
+    /// `(command, description, chord-or-dash)` — snapshot frozen on open.
     rows: Vec<crate::palette::Row>,
-    /// Haystack plegado por fila (nombre + descripción, [`crate::nav::fold`]),
-    /// índice-paralelo a `rows`.
+    /// Folded haystack per row (name + description, [`crate::nav::fold`]),
+    /// index-parallel to `rows`.
     folds: Vec<String>,
-    /// Bytes tecleados tal cual (matching SIN sanear; el saneado es solo al
-    /// pintar, [`Self::query_display`] — mismo contrato que
+    /// Bytes typed as-is (matching WITHOUT sanitizing; sanitizing happens
+    /// only when painting, [`Self::query_display`] — same contract as
     /// [`crate::nav::QuickSearch::query_display`]).
     query: Vec<u8>,
-    /// Índices REALES en `rows` que casan (query vacía = todas).
+    /// REAL indices into `rows` that match (empty query = all).
     visible: Vec<usize>,
-    /// Posición de la selección DENTRO de `visible`.
+    /// Position of the selection WITHIN `visible`.
     cursor: usize,
-    /// Claves lanzadas hace poco, la más reciente primero (spec 2026-09-10):
-    /// con la consulta vacía van arriba, en ese orden. Vienen de la sesión
+    /// Recently launched keys, most recent first (spec 2026-09-10): with an
+    /// empty query they go on top, in that order. They come from the session
     /// ([`crate::session::SessionBody::palette_recent`]).
     recent: Vec<String>,
 }
 
-/// ¿Es `needle` subsecuencia de `hay`? (`cpf` casa `copy path` porque `c`,
-/// `p`, `f`... — sí, `f` no: casa `cop` y `pat`; lo que importa es que cada
-/// byte aparezca en orden). Vacío casa todo. Solo bytes plegados.
+/// Is `needle` a subsequence of `hay`? (`cpf` matches `copy path` because
+/// `c`, `p`, `f`... — no wait, `f` does not: it matches `cop` and `pat`; what
+/// matters is that each byte appears in order). Empty matches everything.
+/// Folded bytes only.
 pub(crate) fn is_subsequence(needle: &str, hay: &str) -> bool {
-    // Por CHARS, no por bytes: una consulta no puede casar sobre un byte de
-    // continuación en mitad de un carácter (revisión m12).
+    // By CHARS, not by bytes: a query must not be able to match a
+    // continuation byte in the middle of a character (review m12).
     let mut it = hay.chars();
     needle.chars().all(|c| it.any(|h| h == c))
 }
 
 impl Palette {
-    /// [`Self::new`] con los comandos recientes: con la consulta vacía, las
-    /// filas cuya clave esté en `recent` van primero, en el orden de
-    /// `recent`. Una clave que ya no tiene fila (un plugin desinstalado, un
-    /// comando que este frontend no implementa) no pinta nada.
+    /// [`Self::new`] with the recent commands: with an empty query, rows
+    /// whose key is in `recent` go first, in `recent`'s order. A key that no
+    /// longer has a row (an uninstalled plugin, a command this frontend does
+    /// not implement) paints nothing.
     #[must_use]
     pub fn with_recent(rows: Vec<crate::palette::Row>, recent: &[String]) -> Self {
         let mut p = Self::new(rows);
@@ -68,11 +67,11 @@ impl Palette {
         p.recompute();
         p
     }
-    /// Abre la palette sobre `rows` (la snapshot precomputada de `App`):
-    /// pliega el haystack de cada fila y arranca con la query vacía (todo
-    /// visible). El fold es sobre `text`+`desc` (lo PINTADO, ya enmascarado
-    /// para una fila de plugin) — jamás sobre `key` (P1: podría llevar el
-    /// `command_id` crudo del manifiesto, sin charset validado).
+    /// Opens the palette over `rows` (`App`'s precomputed snapshot): folds
+    /// each row's haystack and starts with an empty query (everything
+    /// visible). The fold is over `text`+`desc` (what is PAINTED, already
+    /// masked for a plugin row) — never over `key` (P1: it could carry the
+    /// manifest's raw `command_id`, with no charset validated).
     #[must_use]
     pub fn new(rows: Vec<crate::palette::Row>) -> Self {
         let folds = rows
@@ -91,8 +90,8 @@ impl Palette {
         p
     }
 
-    /// ¿Es la fila `i`-ésima de [`Self::rows`] una de las recientes? Para
-    /// que quien pinta pueda decirlo (un separador, un tono).
+    /// Is the `i`-th row of [`Self::rows`] one of the recent ones? So
+    /// whoever paints can say so (a separator, a tone).
     #[must_use]
     pub fn is_recent(&self, i: usize) -> bool {
         self.rows
@@ -100,16 +99,16 @@ impl Palette {
             .is_some_and(|r| self.recent.contains(&r.key))
     }
 
-    /// Añade filas a una palette YA abierta, conservando lo tecleado.
+    /// Adds rows to an ALREADY open palette, keeping what was typed.
     ///
-    /// Existe porque las filas de plugin no se pueden tener al abrir: salen
-    /// de un `plugin.list` que hay que ir a pedir, y esperar a que conteste
-    /// para pintar la palette es congelar la ventana por unas filas que
-    /// puede que no haya. La alternativa —reconstruirla con `new`— pierde la
-    /// query, que es justo lo que el lector acaba de teclear.
+    /// Exists because plugin rows cannot be available on open: they come
+    /// from a `plugin.list` that has to be requested, and waiting for it to
+    /// answer before painting the palette would freeze the window for rows
+    /// that might not even exist. The alternative —rebuilding it with
+    /// `new`— loses the query, which is exactly what the reader just typed.
     ///
-    /// El fold se calcula igual que en [`Self::new`]: sobre lo PINTADO
-    /// (`text`+`desc`), jamás sobre `key`.
+    /// The fold is computed the same way as in [`Self::new`]: over what is
+    /// PAINTED (`text`+`desc`), never over `key`.
     pub fn extend_rows(&mut self, rows: Vec<crate::palette::Row>) {
         self.folds.extend(
             rows.iter()
@@ -119,12 +118,11 @@ impl Palette {
         self.recompute();
     }
 
-    /// Recalcula `visible` a partir de la query actual sobre `self.folds`
-    /// (el cache YA vigente) y clampa el cursor.
+    /// Recomputes `visible` from the current query over `self.folds` (the
+    /// ALREADY current cache) and clamps the cursor.
     fn recompute(&mut self) {
         self.visible = if self.query.is_empty() {
-            // Las recientes primero, en su orden; luego el resto en el
-            // orden de las filas.
+            // Recent ones first, in their order; then the rest in row order.
             let mut out: Vec<usize> = self
                 .recent
                 .iter()
@@ -143,9 +141,10 @@ impl Palette {
                 .map(|(i, _)| i)
                 .collect();
             if exact.is_empty() {
-                // Sin substring, subsecuencia: `cpf` llega a «copy path».
-                // Solo como RESPALDO, para que teclear lo que se ve siga
-                // dando lo que se ve, y nada más, mientras case algo.
+                // No substring, subsequence: `cpf` reaches "copy path".
+                // Only as a FALLBACK, so typing what you see keeps giving
+                // what you see, and nothing more, as long as something
+                // matches.
                 self.folds
                     .iter()
                     .enumerate()
@@ -167,7 +166,7 @@ impl Palette {
         }
     }
 
-    /// Añade un carácter tecleado a la query y recalcula (mismo contrato que
+    /// Adds a typed character to the query and recomputes (same contract as
     /// [`crate::nav::QuickSearch::push_char`]).
     pub fn push_char(&mut self, c: char) {
         let mut buf = [0u8; 4];
@@ -176,7 +175,7 @@ impl Palette {
         self.recompute();
     }
 
-    /// Retira el último char UTF-8 completo tecleado y recalcula.
+    /// Removes the last complete UTF-8 char typed and recomputes.
     pub fn backspace(&mut self) {
         if self.query.is_empty() {
             return;
@@ -189,54 +188,54 @@ impl Palette {
         self.recompute();
     }
 
-    /// Sube la selección (tope arriba).
+    /// Moves the selection up (stops at the top).
     pub fn up(&mut self) {
         self.cursor = self.cursor.saturating_sub(1);
     }
 
-    /// Baja la selección (tope al final).
+    /// Moves the selection down (stops at the end).
     pub fn down(&mut self) {
         if self.cursor + 1 < self.visible.len() {
             self.cursor += 1;
         }
     }
 
-    /// Sube `n` posiciones (pgup).
+    /// Moves up `n` positions (pgup).
     pub fn page_up(&mut self, n: usize) {
         self.cursor = self.cursor.saturating_sub(n);
     }
 
-    /// Baja `n` posiciones, tope al final (pgdn).
+    /// Moves down `n` positions, stops at the end (pgdn).
     pub fn page_down(&mut self, n: usize) {
         self.cursor = (self.cursor + n).min(self.visible.len().saturating_sub(1));
     }
 
-    /// Índices REALES en `rows()` visibles con la query actual.
+    /// REAL indices into `rows()` visible with the current query.
     #[must_use]
     pub fn visible(&self) -> &[usize] {
         &self.visible
     }
 
-    /// Todas las filas ([`crate::palette::Row`]) — `rows()[visible()[i]]`
-    /// para pintar la fila `i`-ésima de la lista filtrada. Solo `text`/
-    /// `desc`/`chord` se pintan; `key` es de despacho interno (ver doc de
-    /// [`crate::palette::Row`]).
+    /// All the rows ([`crate::palette::Row`]) — `rows()[visible()[i]]` to
+    /// paint the `i`-th row of the filtered list. Only `text`/`desc`/`chord`
+    /// get painted; `key` is for internal dispatch (see
+    /// [`crate::palette::Row`]'s doc).
     #[must_use]
     pub fn rows(&self) -> &[crate::palette::Row] {
         &self.rows
     }
 
-    /// Posición de la selección DENTRO de `visible()` (para `ListState`).
+    /// Position of the selection WITHIN `visible()` (for `ListState`).
     #[must_use]
     pub fn cursor(&self) -> usize {
         self.cursor
     }
 
-    /// La CLAVE de despacho bajo el cursor, si hay alguna visible (P1: ya no
-    /// es `&'static str` — una fila de plugin trae una `key` construida en
-    /// tiempo de ejecución, `plugin:{id}:{command}`; se clona porque
-    /// `main::dispatch` la usa DESPUÉS de cerrar la palette, `app.palette =
-    /// None`, que dropea `rows`).
+    /// The dispatch KEY under the cursor, if one is visible (P1: it is no
+    /// longer `&'static str` — a plugin row carries a `key` built at
+    /// runtime, `plugin:{id}:{command}`; it is cloned because
+    /// `main::dispatch` uses it AFTER closing the palette, `app.palette =
+    /// None`, which drops `rows`).
     #[must_use]
     pub fn selected(&self) -> Option<String> {
         self.visible
@@ -244,10 +243,10 @@ impl Palette {
             .map(|&i| self.rows[i].key.clone())
     }
 
-    /// Query para pintar (lossy, enmascarada — mismo contrato que
-    /// [`crate::nav::QuickSearch::query_display`]: sin bracketed paste un
-    /// paste hostil llega como stream de `push_char` y pintaría bidi/
-    /// invisibles crudos en el borde).
+    /// Query to paint (lossy, masked — same contract as
+    /// [`crate::nav::QuickSearch::query_display`]: without bracketed paste a
+    /// hostile paste arrives as a stream of `push_char` and would paint raw
+    /// bidi/invisible characters at the edge).
     #[must_use]
     pub fn query_display(&self) -> String {
         String::from_utf8_lossy(&self.query)
@@ -284,27 +283,27 @@ mod palette_tests {
         ]
     }
 
-    /// Recientes arriba con la consulta vacía, en su orden; una clave sin
-    /// fila no pinta nada; y una consulta las devuelve al orden normal.
+    /// Recent ones on top with an empty query, in their order; a key with no
+    /// row paints nothing; and a query returns them to the normal order.
     #[test]
-    fn palette_recientes_van_primero_solo_con_la_consulta_vacia() {
-        let recent = vec!["app.help".to_owned(), "plugin:ya-no:existe".to_owned()];
+    fn recent_rows_go_first_only_with_an_empty_query() {
+        let recent = vec!["app.help".to_owned(), "plugin:no-longer:exists".to_owned()];
         let mut p = Palette::with_recent(rows(), &recent);
-        let visibles: Vec<&str> = p
+        let visible: Vec<&str> = p
             .visible()
             .iter()
             .map(|&i| p.rows()[i].key.as_str())
             .collect();
-        assert_eq!(visibles, ["app.help", "app.quit"]);
+        assert_eq!(visible, ["app.help", "app.quit"]);
         assert!(p.is_recent(p.visible()[0]) && !p.is_recent(p.visible()[1]));
         p.push_char('q');
         assert_eq!(p.selected().as_deref(), Some("app.quit"));
     }
 
-    /// Sin substring, subsecuencia: `qn` casa «quit norte». Y mientras haya
-    /// substring, la subsecuencia no mete ruido.
+    /// No substring, subsequence: `qn` matches "quit norte". And as long as
+    /// there is a substring, the subsequence adds no noise.
     #[test]
-    fn palette_cae_a_subsecuencia_cuando_nada_casa_entero() {
+    fn palette_falls_back_to_subsequence_when_nothing_matches_whole() {
         let mut p = Palette::new(rows());
         for c in "qn".chars() {
             p.push_char(c);
@@ -314,26 +313,26 @@ mod palette_tests {
         for c in "help".chars() {
             p.push_char(c);
         }
-        assert_eq!(p.visible().len(), 1, "substring exacto: solo app.help");
+        assert_eq!(p.visible().len(), 1, "exact substring: only app.help");
         assert!(super::is_subsequence("", "x") && !super::is_subsequence("ba", "ab"));
         assert!(
             !super::is_subsequence("\u{a9}", "é"),
-            "por chars, no por bytes"
+            "by chars, not by bytes"
         );
     }
 
     #[test]
-    fn palette_filtra_y_selecciona() {
+    fn palette_filters_and_selects() {
         let mut p = Palette::new(rows());
         for c in "quit".chars() {
             p.push_char(c);
         }
-        assert_eq!(p.visible().len(), 1, "solo app.quit casa con 'quit'");
+        assert_eq!(p.visible().len(), 1, "only app.quit matches 'quit'");
         assert_eq!(p.selected().as_deref(), Some("app.quit"));
     }
 
     #[test]
-    fn palette_query_hostil_se_enmascara() {
+    fn palette_hostile_query_is_masked() {
         let mut p = Palette::new(rows());
         for c in "a\u{202E}b".chars() {
             p.push_char(c);
@@ -341,26 +340,26 @@ mod palette_tests {
         let display = p.query_display();
         assert!(
             !display.chars().any(norte_encoding::is_terminal_hazard),
-            "query_display dejó un hazard crudo: {display:?}"
+            "query_display left a raw hazard: {display:?}"
         );
     }
 
     #[test]
-    fn palette_filtro_vacio_muestra_todo() {
+    fn palette_empty_filter_shows_everything() {
         let p = Palette::new(rows());
-        assert_eq!(p.visible().len(), 2, "query vacía = todas las filas");
+        assert_eq!(p.visible().len(), 2, "empty query = all rows");
         assert_eq!(
             p.selected().as_deref(),
             Some("app.quit"),
-            "cursor arranca en la primera"
+            "the cursor starts on the first one"
         );
     }
 
-    /// Filtro que NO casa con ninguna fila: `selected()` devuelve `None`
-    /// (jamás un índice fantasma) y `up`/`down`/páginas no panican sobre
-    /// `visible` vacío.
+    /// A filter that does NOT match any row: `selected()` returns `None`
+    /// (never a phantom index) and `up`/`down`/pages do not panic over an
+    /// empty `visible`.
     #[test]
-    fn palette_sin_matches_selected_es_none_y_no_panica() {
+    fn palette_no_matches_selected_is_none_and_does_not_panic() {
         let mut p = Palette::new(rows());
         for c in "zzz".chars() {
             p.push_char(c);
@@ -374,12 +373,12 @@ mod palette_tests {
         assert_eq!(p.selected(), None);
     }
 
-    /// (P1) Filas de plugin ([`crate::palette::plugin_rows`]) mezcladas con
-    /// las built-in: el filtro de texto libre casa contra el TÍTULO YA
-    /// enmascarado (`text`), y Enter (`selected()`) devuelve la `key` de
-    /// despacho `plugin:{id}:{command}` — jamás el texto pintado.
+    /// (P1) Plugin rows ([`crate::palette::plugin_rows`]) mixed with the
+    /// built-ins: the free-text filter matches against the ALREADY masked
+    /// TITLE (`text`), and Enter (`selected()`) returns the dispatch `key`
+    /// `plugin:{id}:{command}` — never the painted text.
     #[test]
-    fn palette_filas_de_plugin_se_filtran_por_titulo_y_despachan_por_key() {
+    fn palette_plugin_rows_are_filtered_by_title_and_dispatch_by_key() {
         let plugin = norte_proto::methods::PluginInfo {
             id: "org.norte.demo".into(),
             name: "Demo".into(),
@@ -409,7 +408,7 @@ mod palette_tests {
         assert_eq!(
             p.visible().len(),
             1,
-            "solo la fila de plugin casa con 'loudly' (el título)"
+            "only the plugin row matches 'loudly' (the title)"
         );
         assert_eq!(p.selected().as_deref(), Some("plugin:org.norte.demo:greet"));
     }

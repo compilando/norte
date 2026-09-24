@@ -3011,7 +3011,7 @@ header = "Size"
 
         assert!(
             reg.resolve_columns("size-human").is_none(),
-            "sin consentir, ninguna columna se resuelve"
+            "without consent, no column resolves"
         );
 
         assert!(reg.set_approval_in_memory("org.norte.cols", true));

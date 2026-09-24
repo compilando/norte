@@ -1,6 +1,6 @@
-//! [`MemProvider`]: FS simulado en memoria, determinista (`BTreeMap` + reloj
-//! lógico), con capabilities configurables e inyección de fallos. Es el banco
-//! de pruebas del copy engine y de la suite contractual (spec §12).
+//! [`MemProvider`]: an in-memory simulated FS, deterministic (`BTreeMap` +
+//! logical clock), with configurable capabilities and fault injection. It is
+//! the test bench for the copy engine and the contractual suite (spec §12).
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -15,13 +15,13 @@ use norte_vfs::{ByteSink, ByteStream, EntryStream, Provider};
 
 use crate::faults::{Faults, SegPath, seg_path};
 
-/// Tamaño de chunk de los streams de lectura (pequeño a propósito: obliga a
-/// los consumidores a manejar multi-chunk incluso con contenidos de test).
+/// Chunk size for read streams (small on purpose: forces consumers to
+/// handle multi-chunk even with test-sized contents).
 const READ_CHUNK: usize = 1024;
 
-/// Los permisos que este provider dice tener antes de que nadie los cambie
-/// (#314): `0o644`, lo que deja un fichero recién creado con `umask` 022.
-const MODE_POR_DEFECTO: u32 = 0o644;
+/// The permissions this provider claims to have before anyone changes them
+/// (#314): `0o644`, what a freshly-created file gets with `umask` 022.
+const DEFAULT_MODE: u32 = 0o644;
 
 #[derive(Debug, Clone)]
 enum Node {

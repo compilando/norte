@@ -75,7 +75,7 @@ impl App {
         }
         self.layout = tree;
         self.panes.refresh_visible(&self.layout);
-        self.podar_por_arbol();
+        self.prune_by_tree();
         self.settle_key_owner();
         // A freshly seeded sidebar is born EMPTY, and its key was what used
         // to fill it. A layout that brings it — `full`, `explorer`,
@@ -172,7 +172,7 @@ impl App {
             &norte_frontend::layout::Node::slot(id, norte_frontend::layout::KindId::browser()),
         );
         self.panes.refresh_visible(&self.layout);
-        self.podar_por_arbol();
+        self.prune_by_tree();
         // Focus to the newborn: splitting is asking for room to work in it.
         if let Some(i) = (0..self.panes.len()).find(|i| self.panes.slot_of(*i) == id) {
             self.set_focus(i);
@@ -270,7 +270,7 @@ impl App {
     /// area into the state — presentation data living where it doesn't
     /// belong — which is a separate decision and probably worse than the
     /// asymmetry.
-    fn se_ve(&self, id: norte_frontend::layout::SlotId) -> bool {
+    fn is_visible(&self, id: norte_frontend::layout::SlotId) -> bool {
         self.layout.visible_slot_ids().contains(&id)
     }
 
@@ -280,7 +280,7 @@ impl App {
     /// It isn't a gesture of its own and that's why it doesn't touch the
     /// keyboard: the toggles call it before focusing, because focusing
     /// something not visible is sending the keys nowhere.
-    fn revelar(&mut self, id: norte_frontend::layout::SlotId) {
+    fn reveal(&mut self, id: norte_frontend::layout::SlotId) {
         let new_layout = self.layout.reveal(id);
         if new_layout != self.layout {
             self.layout = new_layout;
@@ -305,16 +305,16 @@ impl App {
             // doesn't close, it gets shown. Closing what the reader doesn't
             // have in front of them is the only one of the three actions
             // that can't be undone by looking.
-            Some(id) if self.key_owner == KeyOwner::Places && self.se_ve(id) => {
+            Some(id) if self.key_owner == KeyOwner::Places && self.is_visible(id) => {
                 if let Some(new_layout) = self.layout.close_slot(id) {
                     self.layout = new_layout;
                     self.panes.refresh_visible(&self.layout);
-                    self.podar_por_arbol();
+                    self.prune_by_tree();
                 }
                 self.key_owner = KeyOwner::Panes;
             }
             Some(id) => {
-                self.revelar(id);
+                self.reveal(id);
                 self.key_owner = KeyOwner::Places;
             }
             None => {
@@ -502,11 +502,11 @@ impl App {
     pub fn toggle_preview(&mut self) {
         use norte_frontend::layout::{Bindings, Edge, Follow, KindId, Node, RoleId, Size};
         match self.preview_slot() {
-            Some(id) if self.key_owner == KeyOwner::Preview && self.se_ve(id) => {
+            Some(id) if self.key_owner == KeyOwner::Preview && self.is_visible(id) => {
                 if let Some(new_layout) = self.layout.close_slot(id) {
                     self.layout = new_layout;
                     self.panes.refresh_visible(&self.layout);
-                    self.podar_por_arbol();
+                    self.prune_by_tree();
                 }
                 self.key_owner = KeyOwner::Panes;
             }
@@ -517,7 +517,7 @@ impl App {
             // says — with the keyboard inside, the arrows stop moving the
             // cursor the panel follows. It's still three presses from
             // hidden: show, focus, close; the same as from closed.
-            Some(id) if !self.se_ve(id) => self.revelar(id),
+            Some(id) if !self.is_visible(id) => self.reveal(id),
             Some(_) => self.key_owner = KeyOwner::Preview,
             None => {
                 let id = self.mint_slot();
@@ -558,11 +558,11 @@ impl App {
     pub fn toggle_tree(&mut self) {
         use norte_frontend::layout::{Edge, KindId, Node, Size};
         match self.tree_slot() {
-            Some(id) if self.key_owner == KeyOwner::Tree && self.se_ve(id) => {
+            Some(id) if self.key_owner == KeyOwner::Tree && self.is_visible(id) => {
                 if let Some(new_layout) = self.layout.close_slot(id) {
                     self.layout = new_layout;
                     self.panes.refresh_visible(&self.layout);
-                    self.podar_por_arbol();
+                    self.prune_by_tree();
                 }
                 self.key_owner = KeyOwner::Panes;
             }
@@ -573,7 +573,7 @@ impl App {
                 if let Some(t) = self.panes.tree_mut(id) {
                     t.anchor_near(&dir, &norte_frontend::shell::home_vpath());
                 }
-                self.revelar(id);
+                self.reveal(id);
                 self.key_owner = KeyOwner::Tree;
             }
             None => {
@@ -708,11 +708,11 @@ impl App {
     /// from a spot that can't wait for it.
     pub fn toggle_timeline(&mut self) {
         match self.timeline_slot() {
-            Some(id) if self.key_owner == KeyOwner::Timeline && self.se_ve(id) => {
+            Some(id) if self.key_owner == KeyOwner::Timeline && self.is_visible(id) => {
                 self.close_timeline();
             }
             Some(id) => {
-                self.revelar(id);
+                self.reveal(id);
                 self.key_owner = KeyOwner::Timeline;
             }
             None => self.open_timeline(),
@@ -724,7 +724,7 @@ impl App {
     pub fn open_timeline(&mut self) {
         use norte_frontend::layout::{Edge, KindId, Node, Size};
         if let Some(id) = self.timeline_slot() {
-            self.revelar(id);
+            self.reveal(id);
             self.key_owner = KeyOwner::Timeline;
             return;
         }
@@ -753,7 +753,7 @@ impl App {
         if let Some(new_layout) = self.layout.close_slot(id) {
             self.layout = new_layout;
             self.panes.refresh_visible(&self.layout);
-            self.podar_por_arbol();
+            self.prune_by_tree();
         }
         if self.key_owner == KeyOwner::Timeline {
             self.key_owner = KeyOwner::Panes;
@@ -773,11 +773,11 @@ impl App {
     /// from a spot that can't wait for it.
     pub fn toggle_disk_map(&mut self) {
         match self.disk_map_slot() {
-            Some(id) if self.key_owner == KeyOwner::DiskMap && self.se_ve(id) => {
+            Some(id) if self.key_owner == KeyOwner::DiskMap && self.is_visible(id) => {
                 self.close_disk_map();
             }
             Some(id) => {
-                self.revelar(id);
+                self.reveal(id);
                 self.key_owner = KeyOwner::DiskMap;
             }
             None => self.open_disk_map(),
@@ -789,7 +789,7 @@ impl App {
     pub fn open_disk_map(&mut self) {
         use norte_frontend::layout::{Edge, KindId, Node, Size};
         if let Some(id) = self.disk_map_slot() {
-            self.revelar(id);
+            self.reveal(id);
             self.key_owner = KeyOwner::DiskMap;
             return;
         }
@@ -818,7 +818,7 @@ impl App {
         if let Some(new_layout) = self.layout.close_slot(id) {
             self.layout = new_layout;
             self.panes.refresh_visible(&self.layout);
-            self.podar_por_arbol();
+            self.prune_by_tree();
         }
         if self.key_owner == KeyOwner::DiskMap {
             self.key_owner = KeyOwner::Panes;
@@ -843,11 +843,11 @@ impl App {
     /// what `orthodox` brings. This panel is what opens to ACT on a task.
     pub fn toggle_processes(&mut self) {
         match self.processes_slot() {
-            Some(id) if self.key_owner == KeyOwner::Processes && self.se_ve(id) => {
+            Some(id) if self.key_owner == KeyOwner::Processes && self.is_visible(id) => {
                 self.close_processes();
             }
             Some(id) => {
-                self.revelar(id);
+                self.reveal(id);
                 self.key_owner = KeyOwner::Processes;
             }
             None => self.open_processes(true),
@@ -869,7 +869,7 @@ impl App {
     pub fn open_processes(&mut self, with_keyboard: bool) {
         use norte_frontend::layout::{Edge, KindId, Node, Size};
         if let Some(id) = self.processes_slot() {
-            self.revelar(id);
+            self.reveal(id);
             if with_keyboard {
                 self.key_owner = KeyOwner::Processes;
             }
@@ -902,7 +902,7 @@ impl App {
         if let Some(new_layout) = self.layout.close_slot(id) {
             self.layout = new_layout;
             self.panes.refresh_visible(&self.layout);
-            self.podar_por_arbol();
+            self.prune_by_tree();
         }
         if self.key_owner == KeyOwner::Processes {
             self.key_owner = KeyOwner::Panes;
@@ -921,7 +921,7 @@ impl App {
     /// panel on the same `SlotId`. Without this, the second one received
     /// the first one's opaque blob — which means nothing to norte, but does
     /// to a guest that recognizes its own format.
-    pub(crate) fn podar_por_arbol(&mut self) {
+    pub(crate) fn prune_by_tree(&mut self) {
         self.history.retain_tree(&self.layout);
         self.paneles.retain_tree(&self.layout);
         // And the terminal panel's shell goes with its slot (#362).
@@ -1022,11 +1022,11 @@ impl App {
         match self.terminal_slot() {
             // Already had it: the keyboard gets handed back and the shell
             // stays.
-            Some(id) if self.key_owner == KeyOwner::Terminal && self.se_ve(id) => {
+            Some(id) if self.key_owner == KeyOwner::Terminal && self.is_visible(id) => {
                 self.key_owner = KeyOwner::Panes;
             }
             Some(id) => {
-                self.revelar(id);
+                self.reveal(id);
                 if can_take_keys {
                     self.key_owner = KeyOwner::Terminal;
                 }
@@ -1082,11 +1082,11 @@ impl App {
     pub fn toggle_log(&mut self) {
         use norte_frontend::layout::{Edge, KindId, Node, Size};
         match self.log_slot() {
-            Some(id) if self.key_owner == KeyOwner::Log && self.se_ve(id) => {
+            Some(id) if self.key_owner == KeyOwner::Log && self.is_visible(id) => {
                 if let Some(new_layout) = self.layout.close_slot(id) {
                     self.layout = new_layout;
                     self.panes.refresh_visible(&self.layout);
-                    self.podar_por_arbol();
+                    self.prune_by_tree();
                 }
                 self.key_owner = KeyOwner::Panes;
                 // Closing LOWERS the ring's level to whatever was being
@@ -1114,7 +1114,7 @@ impl App {
                 self.log_remote.reiniciar();
             }
             Some(id) => {
-                self.revelar(id);
+                self.reveal(id);
                 self.key_owner = KeyOwner::Log;
             }
             None => {
@@ -1361,12 +1361,12 @@ impl App {
             // attribute sheet doesn't take the keyboard — it's looked at,
             // not walked through — so it has two states, and what's
             // missing when it isn't visible isn't "close" but "bring it".
-            if !self.se_ve(id) {
-                self.revelar(id);
+            if !self.is_visible(id) {
+                self.reveal(id);
             } else if let Some(new_layout) = self.layout.close_slot(id) {
                 self.layout = new_layout;
                 self.panes.refresh_visible(&self.layout);
-                self.podar_por_arbol();
+                self.prune_by_tree();
             }
         } else {
             let id = self.mint_slot();
@@ -1421,7 +1421,7 @@ impl App {
         };
         self.layout = new_layout;
         self.panes.refresh_visible(&self.layout);
-        self.podar_por_arbol();
+        self.prune_by_tree();
         true
     }
 
@@ -1472,7 +1472,7 @@ impl App {
     pub fn layout_flip(&mut self) {
         let target = self.resize_target();
         let new_layout = self.layout.flip(target);
-        self.cambiar_disposicion(new_layout, None);
+        self.change_layout(new_layout, None);
     }
 
     /// Moves slot `id` next to `target` (ADR 0138): what dropping a panel
@@ -1486,7 +1486,7 @@ impl App {
         let new_layout = self.layout.move_slot(id, target, zone);
         // In the center, the destination goes behind a tab on purpose.
         let tolerated = (zone == norte_frontend::layout::DropZone::Center).then_some(target);
-        self.cambiar_disposicion(new_layout, tolerated);
+        self.change_layout(new_layout, tolerated);
     }
 
     /// Keeps `new_layout` if it leaves visible what was visible
@@ -1494,7 +1494,7 @@ impl App {
     /// their histories and the keyboard's owner up to date, with focus on
     /// the SAME slot. If it doesn't fit, nothing is touched and it says so
     /// on the status bar, like splitting.
-    fn cambiar_disposicion(
+    fn change_layout(
         &mut self,
         new_layout: norte_frontend::layout::Node,
         tolerated: Option<norte_frontend::layout::SlotId>,
@@ -1517,7 +1517,7 @@ impl App {
         // moved, and an old index would name the panel next to it.
         let focused = self.focused_slot();
         self.panes.refresh_visible(&self.layout);
-        self.podar_por_arbol();
+        self.prune_by_tree();
         self.settle_key_owner();
         if let Some(i) = (0..self.panes.len()).find(|i| self.panes.slot_of(*i) == focused) {
             self.set_focus(i);
@@ -1614,12 +1614,12 @@ mod tests {
     /// `KeyOwner::Panel` doesn't carry which one it is, which is what
     /// `multi: false` allows.
     #[test]
-    fn un_panel_de_plugin_se_encuentra_toma_el_teclado_y_se_nombra() {
+    fn a_plugin_panel_is_found_takes_the_keyboard_and_is_named() {
         use norte_frontend::layout::{Dir, KindId, KindRegistry, Node, Size, SlotId};
 
         let mut app = app_dos_panes();
         app.kinds
-            .insert_panels(&[plugin_con_panel("git", "status")]);
+            .insert_panels(&[plugin_with_panel("git", "status")]);
         let tree = Node::Split {
             dir: Dir::Horizontal,
             sizes: vec![Size::Weight(1), Size::Fixed(24)],
@@ -1663,17 +1663,17 @@ mod tests {
     /// approving, activating or uninstalling, so the declaration gets
     /// REBUILT whole.
     #[test]
-    fn quitarle_el_consentimiento_a_un_plugin_retira_su_panel() {
+    fn revoking_a_plugins_consent_removes_its_panel() {
         let mut app = app_dos_panes();
         app.kinds
-            .insert_panels(&[plugin_con_panel("git", "status")]);
-        assert!(app.kinds.decls().iter().any(es_panel_de_git));
+            .insert_panels(&[plugin_with_panel("git", "status")]);
+        assert!(app.kinds.decls().iter().any(is_git_panel));
 
-        let mut disabled = plugin_con_panel("git", "status");
+        let mut disabled = plugin_with_panel("git", "status");
         disabled.enabled = false;
         app.kinds.insert_panels(&[disabled]);
         assert!(
-            !app.kinds.decls().iter().any(es_panel_de_git),
+            !app.kinds.decls().iter().any(is_git_panel),
             "a panel with no consent stops existing for the layout"
         );
     }
@@ -1684,12 +1684,12 @@ mod tests {
     /// `KindId`, which validates nothing: that's where the painted name and
     /// the key saved in the session both come from.
     #[test]
-    fn un_kind_con_caracteres_hostiles_no_se_declara() {
+    fn a_kind_with_hostile_characters_is_not_declared() {
         let mut app = app_dos_panes();
         app.kinds.insert_panels(&[
-            plugin_con_panel("git", "sta\ntus"),
-            plugin_con_panel("git", "está"),
-            plugin_con_panel("git", ""),
+            plugin_with_panel("git", "sta\ntus"),
+            plugin_with_panel("git", "está"),
+            plugin_with_panel("git", ""),
         ]);
         assert!(
             !app.kinds
@@ -1707,12 +1707,12 @@ mod tests {
     /// the listing behind it while the focus border said the keyboard was
     /// in the panel — #243's bug.
     #[test]
-    fn un_panel_de_plugin_solo_deja_pasar_el_cromo() {
+    fn a_plugin_panel_only_lets_the_chrome_through() {
         use norte_frontend::layout::{Dir, KindId, Node, Size, SlotId};
 
         let mut app = app_dos_panes();
         app.kinds
-            .insert_panels(&[plugin_con_panel("git", "status")]);
+            .insert_panels(&[plugin_with_panel("git", "status")]);
         app.set_layout(Node::Split {
             dir: Dir::Horizontal,
             sizes: vec![Size::Weight(1), Size::Fixed(24)],
@@ -1734,12 +1734,12 @@ mod tests {
     }
 
     /// Is this git panel's declaration?
-    fn es_panel_de_git(d: &norte_frontend::layout::KindDecl) -> bool {
+    fn is_git_panel(d: &norte_frontend::layout::KindDecl) -> bool {
         d.id.as_str() == "plugin:git:status"
     }
 
     /// An approved and active `PluginInfo` that contributes a panel.
-    fn plugin_con_panel(id: &str, kind: &str) -> norte_proto::methods::PluginInfo {
+    fn plugin_with_panel(id: &str, kind: &str) -> norte_proto::methods::PluginInfo {
         norte_proto::methods::PluginInfo {
             id: id.to_owned(),
             name: id.to_owned(),
@@ -1764,7 +1764,7 @@ mod tests {
     }
 
     /// A tree with the log hidden in the tab that isn't active.
-    fn app_con_registro_escondido() -> App {
+    fn app_with_hidden_log() -> App {
         use norte_frontend::layout::{Dir, KindId, Node, Size, SlotId};
 
         let mut app = app_dos_panes();
@@ -1791,10 +1791,10 @@ mod tests {
     /// EXISTS. To the reader it doesn't exist: they don't see it, and what
     /// the button promises is showing it to them.
     #[test]
-    fn un_panel_escondido_en_una_pestana_se_pinta_cerrado() {
+    fn a_panel_hidden_in_a_tab_paints_closed() {
         use norte_frontend::panelbar::PanelState;
 
-        let app = app_con_registro_escondido();
+        let app = app_with_hidden_log();
         let button = crate::ui::panel_buttons(&app, PANTALLA)
             .into_iter()
             .find(|b| b.kind == crate::logview::KIND)
@@ -1809,7 +1809,7 @@ mod tests {
     /// two screens — and that's exactly what has to be seen, because it
     /// proves the button looks at the layout and not at the tree.
     #[test]
-    fn un_panel_que_no_cabe_se_pinta_cerrado() {
+    fn a_panel_that_doesnt_fit_paints_closed() {
         use norte_frontend::layout::{Dir, KindId, Node, Size, SlotId};
         use norte_frontend::panelbar::PanelState;
 
@@ -1858,10 +1858,10 @@ mod tests {
     /// stopped reaching what was actually visible, the status bar said
     /// "focused", and the next press closed a panel nobody had ever seen.
     #[test]
-    fn pulsar_un_panel_escondido_lo_ensena() {
+    fn pressing_a_hidden_panel_shows_it() {
         use norte_frontend::layout::SlotId;
 
-        let mut app = app_con_registro_escondido();
+        let mut app = app_with_hidden_log();
         app.toggle_log();
         assert!(
             app.layout.visible_slot_ids().contains(&SlotId(82)),
@@ -1881,10 +1881,10 @@ mod tests {
     /// charge stopped being the same. `tab_cycle` and `tab_goto` call it
     /// for that reason.
     #[test]
-    fn un_panel_que_se_esconde_suelta_el_teclado() {
+    fn a_panel_that_hides_releases_the_keyboard() {
         use norte_frontend::layout::SlotId;
 
-        let mut app = app_con_registro_escondido();
+        let mut app = app_with_hidden_log();
         app.toggle_log();
         assert_eq!(app.key_owner(), KeyOwner::Log, "visible and with the keys");
 
@@ -1905,7 +1905,7 @@ mod tests {
     /// inside, the arrows would stop moving the cursor the panel follows —
     /// meaning showing it would turn off the only thing it does.
     #[test]
-    fn revelar_el_visor_no_se_lleva_el_teclado() {
+    fn revealing_the_viewer_doesnt_take_the_keyboard() {
         use norte_frontend::layout::{Dir, KindId, Node, Size, SlotId};
 
         let mut app = app_dos_panes();
@@ -1941,7 +1941,7 @@ mod tests {
     /// The attribute sheet has TWO states, so what it's missing when hidden
     /// isn't "close" but "bring it".
     #[test]
-    fn la_hoja_de_atributos_escondida_se_ensena_en_vez_de_cerrarse() {
+    fn the_hidden_attribute_sheet_shows_instead_of_closing() {
         use norte_frontend::layout::{Dir, KindId, Node, Size, SlotId};
 
         let mut app = app_dos_panes();
@@ -1974,7 +1974,7 @@ mod tests {
     /// A hidden processes panel doesn't swallow its notification mark
     /// either.
     #[test]
-    fn procesos_escondido_conserva_su_marca_de_novedad() {
+    fn hidden_processes_keeps_its_new_mark() {
         use norte_frontend::layout::{Dir, KindId, Node, Size, SlotId};
 
         let mut app = app_dos_panes();
@@ -2011,8 +2011,8 @@ mod tests {
     /// the three-state promise — open and take the keyboard, take the
     /// keyboard, close — would have four.
     #[test]
-    fn la_segunda_pulsacion_cierra_lo_que_la_primera_ensena() {
-        let mut app = app_con_registro_escondido();
+    fn the_second_press_closes_what_the_first_showed() {
+        let mut app = app_with_hidden_log();
         app.toggle_log();
         app.toggle_log();
         assert!(app.log_slot().is_none());
@@ -2025,11 +2025,11 @@ mod tests {
     /// already looking at it. Hidden, you aren't, so keeping it quiet
     /// turned off the warning right when it's needed.
     #[test]
-    fn un_registro_escondido_conserva_su_marca_de_novedad() {
+    fn a_hidden_log_keeps_its_new_mark() {
         use norte_config::logring::LogRing;
         use tracing_subscriber::layer::SubscriberExt as _;
 
-        let mut app = app_con_registro_escondido();
+        let mut app = app_with_hidden_log();
         let ring = LogRing::new(16);
         let s = tracing_subscriber::registry().with(norte_config::logring::ring_layer(&ring));
         tracing::subscriber::with_default(s, || {
@@ -2050,7 +2050,7 @@ mod tests {
     /// The everyday case doesn't change: a docked, visible panel focuses and
     /// closes as always.
     #[test]
-    fn un_panel_a_la_vista_sigue_haciendo_los_tres_pasos() {
+    fn a_visible_panel_still_does_the_three_steps() {
         let mut app = app_dos_panes();
         app.toggle_log();
         assert_eq!(
@@ -2069,7 +2069,7 @@ mod tests {
     /// system's root: a tree that always hung off `/` would show ten
     /// thousand branches to reach where you already are.
     #[test]
-    fn el_arbol_se_ancla_donde_esta_el_listado() {
+    fn the_tree_anchors_where_the_listing_is() {
         let mut app = app_dos_panes();
         let dir = app.focused().dir().clone();
         app.toggle_tree();
@@ -2082,7 +2082,7 @@ mod tests {
     /// Anchored and still, the panel said where you were when you opened it
     /// and nothing more.
     #[test]
-    fn el_arbol_sigue_al_listado_que_navega() {
+    fn the_tree_follows_the_navigating_listing() {
         let mut app = app_en("mem:///r", "mem:///other");
         app.toggle_tree();
         let t = app.tree_mut().expect("tree");
@@ -2116,7 +2116,7 @@ mod tests {
     /// where it ends up climbing to; with two sibling directories — the
     /// normal case — it climbs one level and stops.
     #[test]
-    fn el_arbol_sigue_al_cambio_de_panel() {
+    fn the_tree_follows_the_panel_change() {
         let mut app = app_en("mem:///r", "mem:///other");
         app.toggle_tree();
         app.return_keys_to_panes();
@@ -2160,7 +2160,7 @@ mod tests {
     /// the panel is already there. `set_layout` seeds EVERY kind's state
     /// for this reason, and the tree had to enter that list.
     #[test]
-    fn un_layout_con_arbol_trae_su_estado() {
+    fn a_layout_with_a_tree_brings_its_state() {
         use norte_frontend::layout::{Dir, KindId, Node, Size, SlotId};
 
         let mut app = app_dos_panes();
@@ -2187,7 +2187,7 @@ mod tests {
     /// layout reserves room for it and nobody paints it, which is a blank
     /// column.
     #[test]
-    fn el_hueco_del_arbol_se_coloca() {
+    fn the_trees_slot_is_placed() {
         use norte_frontend::layout::{KindRegistry, Rect, resolve};
 
         let mut app = app_dos_panes();
@@ -2210,7 +2210,7 @@ mod tests {
     /// closes. The middle one is what makes releasing the keyboard not
     /// close the panel.
     #[test]
-    fn el_arbol_abre_enfoca_y_cierra() {
+    fn the_tree_opens_focuses_and_closes() {
         let mut app = app_dos_panes();
         app.toggle_tree();
         assert!(app.tree_slot().is_some());

@@ -1,10 +1,10 @@
-//! La superficie ENTERA que la webview puede llamar. Cuatro comandos.
+//! The ENTIRE surface the webview can call. Four commands.
 //!
-//! No hay un `rpc(method, params)`, ni un `read_file`, ni un `spawn`: lo que
-//! la webview puede pedir es lo que [`norte_ui_host::UiAction`] expresa, y eso
-//! lo valida serde antes de que llegue al host (ADR 0066, decisión D11). Un
-//! comando nuevo aquí es una decisión, no un atajo — por eso hay un test que
-//! clava la lista.
+//! There is no `rpc(method, params)`, no `read_file`, no `spawn`: what the
+//! webview can ask for is what [`norte_ui_host::UiAction`] expresses, and
+//! serde validates that before it reaches the host (ADR 0066, decision D11).
+//! A new command here is a decision, not a shortcut — that is why there is a
+//! test that pins the list.
 
 use std::sync::Arc;
 
@@ -12,26 +12,26 @@ use norte_ui_host::{ActionAck, BridgeEnvelope, UiAction, UiHost, dto::UiUpdate};
 
 use crate::catalog::HostCatalog;
 
-/// El estado que Tauri inyecta en cada comando.
+/// The state Tauri injects into every command.
 pub struct Bridge {
-    /// En `Arc` porque el bombeo de efectos nativos necesita un handle
-    /// `'static`: el selector de carpeta le CONTESTA al host (#284), y para
-    /// eso tiene que poder llamar a `dispatch` desde su propia task.
+    /// In an `Arc` because pumping native effects needs a `'static` handle:
+    /// the folder picker ANSWERS the host (#284), and for that it has to be
+    /// able to call `dispatch` from its own task.
     host: Arc<UiHost>,
-    /// La foto de arranque, en su sobre (secuencia 0).
+    /// The startup frame, in its envelope (sequence 0).
     inicial: BridgeEnvelope<UiUpdate>,
-    /// Textos y colores. REEMPLAZABLE: los colores salen del tema, y el tema
-    /// se puede cambiar con la ventana abierta (desde su selector, y desde un
-    /// perfil). Los textos no se mueven —el idioma se fija una vez por
-    /// proceso— pero el catálogo viaja entero porque es lo que el renderer
-    /// pide entero.
+    /// Strings and colors. REPLACEABLE: the colors come from the theme, and
+    /// the theme can be changed with the window open (from its picker, and
+    /// from a profile). The strings do not move — the language is fixed once
+    /// per process — but the whole catalogue travels because that is what
+    /// the renderer asks for, whole.
     catalog: std::sync::RwLock<Arc<HostCatalog>>,
-    /// El idioma con el que se construyó, para poder reconstruirlo igual.
+    /// The language it was built with, so it can be rebuilt the same way.
     lang: norte_i18n::Lang,
 }
 
 impl Bridge {
-    /// Monta el puente sobre un host ya arrancado.
+    /// Mounts the bridge over an already-started host.
     #[must_use]
     pub fn new(
         host: UiHost,
@@ -52,98 +52,100 @@ impl Bridge {
         }
     }
 
-    /// Rehace el catálogo con el tema que ahora hay puesto.
+    /// Rebuilds the catalogue with the theme that is now set.
     ///
-    /// Un nombre que no resuelve NO deja la ventana sin colores: se queda el
-    /// catálogo que había. Devuelve si cambió algo, para que quien avisa al
-    /// renderer no le mande a repintar por nada.
-    /// **Puede leer un fichero**: `[ui] theme` es un preset o una RUTA
-    /// (ADR 0020), así que quien la llame decide dónde corre — el bombeo de
-    /// efectos nativos la manda a `spawn_blocking` cuando no es un preset.
-    /// Antes solo miraba presets, y un perfil con `theme = "…/mio.toml"` se
-    /// quedaba sin colores nuevos en silencio.
-    pub fn cambiar_tema(&self, nombre: &str) -> bool {
-        let Ok(tema) = norte_frontend::theme::resolve_theme(Some(nombre)) else {
+    /// A name that does not resolve does NOT leave the window without colors:
+    /// the previous catalogue stays. Returns whether anything changed, so
+    /// whoever notifies the renderer does not send it off to repaint for
+    /// nothing.
+    /// **May read a file**: `[ui] theme` is a preset or a PATH (ADR 0020), so
+    /// whoever calls it decides where it runs — the native-effects pump sends
+    /// it to `spawn_blocking` when it is not a preset. It used to only look
+    /// at presets, and a profile with `theme = "…/mine.toml"` silently ended
+    /// up without new colors.
+    pub fn cambiar_tema(&self, name: &str) -> bool {
+        let Ok(theme) = norte_frontend::theme::resolve_theme(Some(name)) else {
             return false;
         };
-        let mut nuevo = crate::catalog::catalogo(self.host.instance(), self.lang, &tema);
-        // La apariencia se CONSERVA: este camino cambia colores, y rehacer el
-        // catálogo desde cero devolvería las fuentes a las del sistema sin que
-        // nadie lo pidiera. Es el mismo catálogo con otro tema.
-        nuevo.appearance = match self.catalog.read() {
+        let mut updated = crate::catalog::catalogo(self.host.instance(), self.lang, &theme);
+        // The appearance is PRESERVED: this path changes colors, and rebuilding
+        // the catalogue from scratch would reset the fonts to the system's
+        // without anyone asking for that. It is the same catalogue with a
+        // different theme.
+        updated.appearance = match self.catalog.read() {
             Ok(guard) => guard.appearance.clone(),
-            Err(env) => env.into_inner().appearance.clone(),
+            Err(poisoned) => poisoned.into_inner().appearance.clone(),
         };
-        // Un lock envenenado significa que otro hilo panicó CON el catálogo en
-        // la mano. Se sigue: lo que hay dentro es un `Arc` entero y válido, y
-        // dejar la ventana sin poder cambiar de tema por eso sería peor.
+        // A poisoned lock means another thread panicked WHILE holding the
+        // catalogue. We carry on: what is inside is a whole, valid `Arc`, and
+        // leaving the window unable to change theme over that would be worse.
         match self.catalog.write() {
-            Ok(mut guard) => *guard = Arc::new(nuevo),
-            Err(env) => *env.into_inner() = Arc::new(nuevo),
+            Ok(mut guard) => *guard = Arc::new(updated),
+            Err(poisoned) => *poisoned.into_inner() = Arc::new(updated),
         }
         true
     }
 
-    /// El host que hay debajo (para el bombeo y el apagado).
+    /// The host underneath (for pumping and shutdown).
     #[must_use]
     pub fn host(&self) -> &UiHost {
         &self.host
     }
 
-    /// El mismo, compartible: lo necesita el bombeo de efectos nativos, que
-    /// vive en su propia task y le contesta al host.
+    /// The same one, shareable: the native-effects pump needs it, since it
+    /// lives in its own task and answers the host.
     #[must_use]
     pub fn host_compartido(&self) -> Arc<UiHost> {
         Arc::clone(&self.host)
     }
 
-    /// La foto de arranque. Es la secuencia 0 y hay exactamente una: el
-    /// renderer no arranca preguntando por el estado, ya lo tiene.
+    /// The startup frame. It is sequence 0 and there is exactly one: the
+    /// renderer does not start by asking for state, it already has it.
     #[must_use]
     pub fn initial_snapshot(&self) -> BridgeEnvelope<UiUpdate> {
         self.inicial.clone()
     }
 
-    /// Aplica una acción del renderer.
+    /// Applies an action from the renderer.
     ///
     /// # Errors
-    /// Si el host ya no está, y se dice: un renderer que no se entera de que
-    /// el host murió se queda pintando una pantalla congelada.
+    /// If the host is no longer there, and says so: a renderer that does not
+    /// find out the host died is left painting a frozen screen.
     pub async fn dispatch(&self, action: UiAction) -> Result<ActionAck, String> {
         self.host.dispatch(action).await.map_err(|e| e.to_string())
     }
 
-    /// Pide una foto nueva: el renderer perdió el hilo de la secuencia.
+    /// Asks for a new frame: the renderer lost track of the sequence.
     ///
     /// # Errors
-    /// Como [`Bridge::dispatch`].
+    /// As [`Bridge::dispatch`].
     pub async fn request_snapshot(&self) -> Result<ActionAck, String> {
         self.dispatch(UiAction::Resync).await
     }
 
-    /// Textos y colores, ya resueltos en Rust.
+    /// Strings and colors, already resolved in Rust.
     #[must_use]
     pub fn catalog(&self) -> Arc<HostCatalog> {
         match self.catalog.read() {
             Ok(guard) => Arc::clone(&guard),
-            // Ver `cambiar_tema`: lo de dentro sigue siendo un catálogo
-            // entero, y quedarse sin textos es peor que seguir.
-            Err(env) => Arc::clone(&env.into_inner()),
+            // See `cambiar_tema`: what is inside is still a whole catalogue,
+            // and ending up without strings is worse than carrying on.
+            Err(poisoned) => Arc::clone(&poisoned.into_inner()),
         }
     }
 
-    /// Los bytes de la imagen que el visor tiene abierta, si los hay.
+    /// The bytes of the image the viewer has open, if any.
     ///
-    /// Aparte de la foto A PROPÓSITO (ADR 0069): ocho megas en el flujo de
-    /// parches es un mensaje que se reenvía entero en cada `Resync`.
+    /// Separate from the frame ON PURPOSE (ADR 0069): eight megabytes in the
+    /// patch stream is a message that gets resent whole on every `Resync`.
     ///
-    /// Sin RUTA. El renderer no nombra ficheros: se le sirve la imagen que el
-    /// host decidió abrir, ya validada contra los topes —formato por bytes
-    /// mágicos, dimensiones declaradas contra el presupuesto, tamaño— y no la
-    /// que alguien pida.
+    /// No PATH. The renderer does not name files: it is served the image the
+    /// host decided to open, already validated against the caps — format by
+    /// magic bytes, declared dimensions against the budget, size — never the
+    /// one someone asks for.
     ///
     /// # Errors
-    /// El motivo, ya en texto, si el host no está.
+    /// The reason, already as text, if the host is not there.
     pub async fn image_bytes(&self) -> Result<Vec<u8>, String> {
         self.host
             .image_bytes()
@@ -153,23 +155,23 @@ impl Bridge {
     }
 }
 
-/// Lo que el proceso tiene: un puente vivo, o el motivo por el que no.
+/// What the process has: a live bridge, or the reason it does not.
 ///
-/// Arrancar sin daemon NO es una ventana que no abre: es una ventana que
-/// dice qué pasó. Por eso el fallo es un estado y no un `exit`, y por eso
-/// todos los comandos tienen que saber contestarlo.
+/// Starting without a daemon is NOT a window that fails to open: it is a
+/// window that says what happened. That is why the failure is a state and not
+/// an `exit`, and why every command has to know how to answer it.
 pub enum AppState {
-    /// Todo montado.
+    /// Everything mounted.
     Ready(Box<Bridge>),
-    /// No se pudo arrancar; esto es lo que se enseña.
+    /// Could not start; this is what gets shown.
     Failed(String),
 }
 
 impl AppState {
-    /// El puente, o el motivo.
+    /// The bridge, or the reason.
     ///
     /// # Errors
-    /// El mensaje de arranque, ya listo para pintar.
+    /// The startup message, already ready to paint.
     pub fn bridge(&self) -> Result<&Bridge, String> {
         match self {
             Self::Ready(b) => Ok(b),
@@ -178,10 +180,10 @@ impl AppState {
     }
 }
 
-/// Los nombres de los comandos que el binario expone, en orden.
+/// The names of the commands the binary exposes, in order.
 ///
-/// Existe para que la superficie sea una LISTA que se lee, y no algo que hay
-/// que deducir de un macro: añadir uno tiene que ser visible en el diff.
+/// Exists so the surface is a LIST you read, not something you have to
+/// deduce from a macro: adding one has to be visible in the diff.
 pub const COMANDOS: &[&str] = &[
     "initial_snapshot",
     "dispatch",
@@ -191,36 +193,35 @@ pub const COMANDOS: &[&str] = &[
     "window_control",
 ];
 
-/// Lo que la barra de título propia puede pedirle a SU ventana (ADR 0136).
+/// What the window's own title bar can ask of ITS window (ADR 0136).
 ///
-/// Un vocabulario cerrado en vez de los permisos `core:window:*` de Tauri:
-/// esos se conceden a la webview entera y para cualquier ventana, y la
-/// capacidad de esta no concede ninguno (D11). Así la puerta es un comando
-/// del binario que solo actúa sobre la ventana que lo llama, y solo con la
-/// barra propia puesta.
+/// A closed vocabulary instead of Tauri's `core:window:*` permissions: those
+/// are granted to the whole webview and for any window, and this one's
+/// capability grants none of them (D11). This way the door is a binary
+/// command that only acts on the window that calls it, and only with its own
+/// bar in place.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WindowVerb {
-    /// Minimizar.
+    /// Minimize.
     Minimize,
-    /// Maximizar, o restaurar si ya lo está.
+    /// Maximize, or restore if already maximized.
     ToggleMaximize,
-    /// Cerrar, por el mismo camino que la X del escritorio: `[ui]
-    /// confirm_quit` sigue preguntando. Tiene que seguir siendo
-    /// `Window::close()`, que emite `CloseRequested`; `destroy()` se
-    /// saltaría la pregunta y el guardado de la sesión
-    /// (`la_puerta_de_la_ventana_es_estrecha` lo vigila).
+    /// Close, by the same path as the desktop's X: `[ui] confirm_quit` still
+    /// asks. It has to stay `Window::close()`, which emits `CloseRequested`;
+    /// `destroy()` would skip the question and the session save
+    /// (`la_puerta_de_la_ventana_es_estrecha` watches for that).
     Close,
-    /// Empezar a arrastrar la ventana con el botón que está pulsado.
+    /// Start dragging the window with whichever button is pressed.
     Drag,
 }
 
 #[cfg(test)]
 pub(crate) mod tests_soporte {
-    //! Un host contra un daemon DE VERDAD, para los tests de este crate.
+    //! A host against a REAL daemon, for this crate's tests.
     //!
-    //! No hay pantalla ni Node por ningún lado: lo que se prueba es el
-    //! adaptador, y el adaptador no necesita ninguna de las dos cosas.
+    //! There is no screen and no Node anywhere: what is being tested is the
+    //! adapter, and the adapter needs neither.
 
     use std::sync::Arc;
     use std::time::Duration;
@@ -234,15 +235,15 @@ pub(crate) mod tests_soporte {
     use norte_ui_host::{UiHost, UiHostOptions, ViewSnapshot};
     use norte_vfs::Provider;
 
-    /// Levanta daemon + host y devuelve el host con su primera foto.
+    /// Brings up daemon + host and returns the host with its first frame.
     ///
-    /// El `TempDir` se filtra a propósito (`Box::leak` no; se deja vivo en un
-    /// `static`-like): un test que borre el socket a mitad del bombeo mide
-    /// otra cosa.
+    /// The `TempDir` is deliberately leaked (not `Box::leak`; it is kept
+    /// alive in a `static`-like way): a test that deletes the socket
+    /// mid-pump measures something else.
     pub async fn host_de_prueba() -> (UiHost, ViewSnapshot) {
         let dir = tempfile::tempdir().expect("tempdir");
         let mem = Arc::new(MemProvider::new());
-        let vp = |w: &str| VPath::parse(w).expect("wire de test");
+        let vp = |w: &str| VPath::parse(w).expect("test wire");
         mem.mkdir(&vp("mem:///casa")).await.expect("mkdir");
         mem.mkdir(&vp("mem:///casa/docs")).await.expect("mkdir");
         let socket = dir.path().join("d.sock");
@@ -270,7 +271,7 @@ pub(crate) mod tests_soporte {
             },
         )
         .await
-        .expect("conecta");
+        .expect("connects");
         let out = UiHost::start(UiHostOptions {
             backend: Arc::new(backend),
             initial_dir: vp("mem:///casa"),
@@ -293,8 +294,8 @@ pub(crate) mod tests_soporte {
             log_ring: None,
         })
         .await
-        .expect("arranca");
-        // El daemon y su directorio viven lo que viva el proceso de test.
+        .expect("starts");
+        // The daemon and its directory live as long as the test process does.
         std::mem::forget((dir, run));
         out
     }
@@ -304,10 +305,10 @@ pub(crate) mod tests_soporte {
 mod tests {
     use super::*;
 
-    /// La foto de arranque es la secuencia 0 y viene en un sobre de ESTA
-    /// versión del contrato.
+    /// The startup frame is sequence 0 and comes in an envelope of THIS
+    /// contract version.
     #[tokio::test]
-    async fn la_foto_de_arranque_es_la_cero() {
+    async fn startup_frame_is_sequence_zero() {
         let (host, snap) = tests_soporte::host_de_prueba().await;
         let cat = crate::catalog::catalogo(
             host.instance(),
@@ -317,13 +318,14 @@ mod tests {
         let b = Bridge::new(host, snap, cat, norte_i18n::Lang::Es);
         let env = b.initial_snapshot();
         assert_eq!(env.sequence, 0);
-        assert!(env.is_supported(), "el sobre es de la versión que hablamos");
+        assert!(env.is_supported(), "the envelope is the version we speak");
         assert!(matches!(env.payload, UiUpdate::Snapshot(_)));
     }
 
-    /// Una acción del renderer llega al host y vuelve con su acuse.
+    /// An action from the renderer reaches the host and comes back with its
+    /// acknowledgment.
     #[tokio::test]
-    async fn una_accion_va_y_vuelve() {
+    async fn an_action_goes_and_comes_back() {
         let (host, snap) = tests_soporte::host_de_prueba().await;
         let cat = crate::catalog::catalogo(
             host.instance(),
@@ -337,21 +339,22 @@ mod tests {
                 delta: 1,
             })
             .await
-            .expect("host vivo");
+            .expect("host is alive");
         assert!(matches!(ack, ActionAck::Applied { .. }));
     }
 
-    /// Una acción que el renderer se invente NO se interpreta: serde la
-    /// rechaza en la frontera, antes de que el host la vea.
+    /// An action the renderer makes up is NOT interpreted: serde rejects it
+    /// at the boundary, before the host ever sees it.
     #[test]
-    fn una_accion_inventada_no_cruza() {
+    fn a_made_up_action_does_not_cross() {
         let json = serde_json::json!({ "action": "rm_rf", "path": "/" });
         assert!(serde_json::from_value::<UiAction>(json).is_err());
     }
 
-    /// Y una acción con un campo de más tampoco cuela como otra cosa.
+    /// And an action with an extra field does not sneak in as something else
+    /// either.
     #[test]
-    fn una_accion_con_ruta_dentro_no_cuela() {
+    fn an_action_with_a_path_inside_does_not_sneak_in() {
         let json = serde_json::json!({
             "action": "activate",
             "slot_id": 1,
@@ -359,9 +362,9 @@ mod tests {
             "generation": 4,
             "path": "/etc/passwd"
         });
-        // Se ignora el campo sobrante: lo que actúa es la clave opaca, y una
-        // ruta metida por el renderer no llega a ninguna parte.
-        let a: UiAction = serde_json::from_value(json).expect("la acción es válida");
+        // The extra field is ignored: what acts is the opaque key, and a path
+        // slipped in by the renderer does not reach anywhere.
+        let a: UiAction = serde_json::from_value(json).expect("the action is valid");
         assert_eq!(
             a,
             UiAction::Activate {

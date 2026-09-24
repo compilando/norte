@@ -1,64 +1,68 @@
-//! Lo que un PLUGIN pinta en un hueco: un marco de texto con estilo y zonas
-//! pulsables (spec 2026-09-15, fase 3).
+//! What a PLUGIN paints in a slot: a text frame with style and clickable
+//! zones (spec 2026-09-15, phase 3).
 //!
-//! El guest no dibuja: DESCRIBE. Manda líneas de [`crate::ansi::StyledSpan`]
-//! —el mismo tramo que ya usan los previews estilados, con rol validado contra
-//! el conjunto cerrado de `norte_theme::Role`— y una lista de [`Hit`], zonas
-//! que al pulsarse ejecutan un COMANDO del catálogo. Nunca una acción libre:
-//! un plugin no puede hacer por un clic nada que el lector no pudiera hacer
-//! con una tecla, así que la policy queda intacta (regla dura 9).
+//! The guest does not draw: it DESCRIBES. It sends lines of
+//! [`crate::ansi::StyledSpan`] — the same span already used by styled
+//! previews, with a role validated against the closed set of
+//! `norte_theme::Role` — and a list of [`Hit`], zones that run a CATALOGUE
+//! command when clicked. Never a free-form action: a plugin cannot do
+//! anything with a click that the reader could not do with a key, so the
+//! policy stays intact (hard rule 9).
 //!
-//! Las cotas son las del PROTOCOLO (`norte_proto::methods::PANEL_MAX_*`), y
-//! aquí solo se reexportan: las dos superficies —el terminal y la ventana—
-//! tienen que recortar IGUAL, y un marco que una acepta y la otra rechaza es
-//! la divergencia que el ADR 0077 persigue. Escribir los números otra vez en
-//! este crate sería tener dos que deben coincidir y nadie obliga a ello.
+//! The limits are the PROTOCOL's (`norte_proto::methods::PANEL_MAX_*`), and
+//! here they are only re-exported: the two surfaces — the terminal and the
+//! window — have to clip the SAME way, and a frame one accepts and the
+//! other rejects is exactly the divergence ADR 0077 is chasing. Writing the
+//! numbers again in this crate would mean having two that must match and
+//! nothing enforcing it.
 
 use crate::ansi::StyledSpan;
 
-/// Tope de líneas de un marco.
+/// Line limit of a frame.
 ///
-/// Es la del PROTOCOLO, reexportada: un panel de ocho filas que manda mil
-/// líneas describe algo que nadie va a leer, y el tope acota ese gasto sin
-/// convertirlo en un error (recortar es fail-soft, como todo lo cosmético).
-/// Declararla aquí otra vez sería el mismo número escrito en dos sitios, que
-/// es exactamente lo que diverge al primer cambio.
+/// This is the PROTOCOL's, re-exported: an eight-row panel that sends a
+/// thousand lines describes something nobody is going to read, and the
+/// limit caps that cost without turning it into an error (clipping is
+/// fail-soft, like everything cosmetic). Declaring it again here would be
+/// the same number written in two places, which is exactly what diverges
+/// at the first change.
 pub use norte_proto::methods::PANEL_MAX_LINES as MAX_LINES;
 
-/// Tope de tramos por línea. La del protocolo; ver [`MAX_LINES`].
+/// Span-per-line limit. The protocol's; see [`MAX_LINES`].
 pub use norte_proto::methods::PANEL_MAX_SPANS_PER_LINE as MAX_SPANS_PER_LINE;
 
-/// Tope de zonas pulsables de un marco. La del protocolo; ver [`MAX_LINES`].
+/// Clickable-zone limit of a frame. The protocol's; see [`MAX_LINES`].
 pub use norte_proto::methods::PANEL_MAX_HITS as MAX_HITS;
 
-/// Una zona pulsable del marco: al pulsarla corre un comando del catálogo.
+/// A clickable zone of the frame: clicking it runs a catalogue command.
 ///
-/// `row`/`col` son celdas DENTRO del marco, no de la pantalla: quien pinta
-/// sabe dónde cayó el hueco y hace la cuenta. `width` es cuántas celdas ocupa
-/// a lo ancho desde `col`; una zona de alto mayor que una fila se describe con
-/// un `Hit` por fila, que es lo que evita tener que definir solapes en dos
-/// dimensiones.
+/// `row`/`col` are cells INSIDE the frame, not the screen: whoever paints
+/// it knows where the slot landed and does the math. `width` is how many
+/// cells it spans from `col`; a zone taller than one row is described with
+/// one `Hit` per row, which is what avoids having to define overlaps in
+/// two dimensions.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Hit {
-    /// Fila del marco donde empieza, contando desde cero.
+    /// Row of the frame where it starts, counting from zero.
     pub row: u16,
-    /// Columna donde empieza, contando desde cero.
+    /// Column where it starts, counting from zero.
     pub col: u16,
-    /// Cuántas celdas ocupa a lo ancho. Cero = no se puede pulsar.
+    /// How many cells it spans. Zero = cannot be clicked.
     pub width: u16,
-    /// El comando del catálogo que ejecuta. Si no existe, no pasa nada: lo
-    /// resuelve el despacho normal, que ya sabe decir «aquí no».
+    /// The catalogue command it runs. If it does not exist, nothing
+    /// happens: normal dispatch resolves it, and it already knows how to
+    /// say "not here".
     pub command: String,
-    /// Su argumento, si lo lleva (un directorio, un nombre).
+    /// Its argument, if it carries one (a directory, a name).
     pub arg: Option<String>,
 }
 
-/// El código del idioma activo, tal como viaja a un guest.
+/// The active language's code, exactly as it travels to a guest.
 ///
-/// Aquí y no en cada frontend: el terminal y la ventana le dicen lo MISMO al
-/// mismo plugin. Dos tablas de códigos empiezan iguales y se separan en cuanto
-/// aparezca un idioma más — y la diferencia solo se vería con un panel
-/// traducido delante.
+/// Here and not in each frontend: the terminal and the window tell the
+/// SAME thing to the same plugin. Two code tables start out equal and
+/// diverge as soon as one more language appears — and the difference would
+/// only show up in front of a translated panel.
 ///
 /// ```
 /// assert!(matches!(norte_frontend::frame::lang_code(), "es" | "en"));
@@ -71,20 +75,20 @@ pub fn lang_code() -> &'static str {
     }
 }
 
-/// Los comandos que una ZONA de un panel puede nombrar.
+/// The commands a panel ZONE is allowed to name.
 ///
-/// El plugin elige la etiqueta Y el comando, y nada los ata: una zona que pone
-/// «Actualizar» puede nombrar `pane.unpack`, que copia. El consentimiento que
-/// dio el lector fue para PINTAR —la capacidad del manifiesto es `panel`—, no
-/// para conducir el gestor, así que el clic tiene que quedarse en el mismo
-/// alcance que las teclas que recibe un panel enfocado: cromo y moverse entre
-/// paneles.
+/// The plugin picks the label AND the command, and nothing ties them
+/// together: a zone that says "Refresh" can name `pane.unpack`, which
+/// copies. The consent the reader gave was to PAINT — the manifest
+/// capability is `panel` — not to drive the file manager, so the click has
+/// to stay within the same scope as the keys a focused pane receives:
+/// chrome and moving between panes.
 ///
-/// Vive aquí, junto al [`Hit`], y no en cada frontend: el terminal y la
-/// ventana tienen que filtrar IGUAL, y dos listas se separan al primer añadido
-/// (ADR 0077). Lo que un plugin quiera ofrecer más allá de esto se pide con un
-/// comando propio, que pasa por el catálogo, por el consentimiento y por la
-/// policy como cualquier otro.
+/// Lives here, next to [`Hit`], and not in each frontend: the terminal and
+/// the window have to filter the SAME way, and two lists diverge at the
+/// first addition (ADR 0077). Whatever a plugin wants to offer beyond this
+/// is requested with its own command, which goes through the catalogue,
+/// through consent and through policy like any other.
 pub const ZONA_PERMITIDA: &[&str] = &[
     "layout.grow",
     "layout.shrink",
@@ -98,13 +102,13 @@ pub const ZONA_PERMITIDA: &[&str] = &[
     "pane.tree",
 ];
 
-/// ¿Puede una zona de un panel nombrar este comando?
+/// Can a panel zone name this command?
 ///
 /// ```
 /// use norte_frontend::frame::zona_puede;
 ///
 /// assert!(zona_puede("layout.focus-next"));
-/// assert!(!zona_puede("pane.unpack"), "un plugin no conduce el gestor");
+/// assert!(!zona_puede("pane.unpack"), "a plugin does not drive the file manager");
 /// assert!(!zona_puede("app.quit"));
 /// ```
 #[must_use]
@@ -112,22 +116,22 @@ pub fn zona_puede(command: &str) -> bool {
     ZONA_PERMITIDA.contains(&command)
 }
 
-/// Un marco pintable: líneas con estilo y zonas pulsables.
+/// A paintable frame: styled lines and clickable zones.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct StyledFrame {
-    /// Las líneas, de arriba abajo. Una línea vacía es una línea en blanco.
+    /// The lines, top to bottom. An empty line is a blank line.
     pub lines: Vec<Vec<StyledSpan>>,
-    /// Las zonas pulsables, en el orden en que llegaron.
+    /// The clickable zones, in the order they arrived.
     pub hits: Vec<Hit>,
 }
 
 impl StyledFrame {
-    /// Construye un marco ACOTADO a partir de lo que un guest mandó.
+    /// Builds a CLIPPED frame from what a guest sent.
     ///
-    /// Recorta líneas, tramos y zonas a los topes de este módulo, y tira las
-    /// zonas que apunten a una fila que el recorte se llevó: un `Hit` sobre
-    /// una línea que no se pinta es una zona invisible que ejecuta algo, que
-    /// es peor que no tenerla.
+    /// Clips lines, spans and zones to this module's limits, and drops
+    /// zones that point at a row the clipping took away: a `Hit` over a
+    /// line that is not painted is an invisible zone that runs something,
+    /// which is worse than not having it.
     ///
     /// ```
     /// use norte_frontend::frame::{Hit, StyledFrame};
@@ -136,31 +140,31 @@ impl StyledFrame {
     ///     Vec::new(),
     ///     vec![Hit { row: 3, col: 0, width: 4, command: "nav.enter".to_owned(), arg: None }],
     /// );
-    /// assert!(f.hits.is_empty(), "sin líneas no hay dónde pulsar");
+    /// assert!(f.hits.is_empty(), "with no lines there is nowhere to click");
     /// ```
     #[must_use]
     pub fn clamped(mut lines: Vec<Vec<StyledSpan>>, hits: Vec<Hit>) -> Self {
         lines.truncate(MAX_LINES);
-        for linea in &mut lines {
-            linea.truncate(MAX_SPANS_PER_LINE);
+        for line in &mut lines {
+            line.truncate(MAX_SPANS_PER_LINE);
         }
-        let alto = lines.len();
+        let height = lines.len();
         let hits: Vec<Hit> = hits
             .into_iter()
-            .filter(|h| usize::from(h.row) < alto && h.width > 0)
+            .filter(|h| usize::from(h.row) < height && h.width > 0)
             .take(MAX_HITS)
             .collect();
         Self { lines, hits }
     }
 
-    /// El marco que devolvió un guest, ACOTADO y SANEADO.
+    /// The frame a guest returned, CLIPPED and SANITIZED.
     ///
-    /// La conversión vive aquí y no en cada frontend por lo mismo que
-    /// [`crate::ansi::span_de_wire`], que es quien sanea cada tramo: el
-    /// terminal y la ventana tienen que recortar y enmascarar IGUAL. Una
-    /// segunda conversión escrita a mano fue exactamente lo que se coló en el
-    /// terminal —copiaba los campos y se saltaba el enmascarado—, así que la
-    /// ventana no escribe la suya.
+    /// The conversion lives here and not in each frontend for the same
+    /// reason as [`crate::ansi::span_de_wire`], which is what sanitizes
+    /// each span: the terminal and the window have to clip and mask the
+    /// SAME way. A second, hand-written conversion was exactly what crept
+    /// into the terminal — it copied the fields and skipped the masking —
+    /// so the window does not write its own.
     ///
     /// ```
     /// use norte_frontend::frame::StyledFrame;
@@ -169,7 +173,7 @@ impl StyledFrame {
     /// let f = StyledFrame::de_wire(&PanelFrame {
     ///     plugin_id: "git".to_owned(),
     ///     lines: vec![vec![SpanWire {
-    ///         text: "rama".to_owned(),
+    ///         text: "branch".to_owned(),
     ///         role: None,
     ///         fg: None,
     ///         bg: None,
@@ -184,16 +188,16 @@ impl StyledFrame {
     ///     state: None,
     /// });
     /// assert_eq!(f.lines.len(), 1);
-    /// assert!(f.hits.is_empty(), "una zona sobre una fila que no existe se cae");
+    /// assert!(f.hits.is_empty(), "a zone over a row that does not exist is dropped");
     /// ```
     #[must_use]
-    pub fn de_wire(marco: &norte_proto::methods::PanelFrame) -> Self {
-        let lines = marco
+    pub fn de_wire(frame: &norte_proto::methods::PanelFrame) -> Self {
+        let lines = frame
             .lines
             .iter()
-            .map(|linea| linea.iter().map(crate::ansi::span_de_wire).collect())
+            .map(|line| line.iter().map(crate::ansi::span_de_wire).collect())
             .collect();
-        let hits = marco
+        let hits = frame
             .hits
             .iter()
             .map(|h| Hit {
@@ -207,12 +211,12 @@ impl StyledFrame {
         Self::clamped(lines, hits)
     }
 
-    /// La zona pulsable que hay en esa celda del marco, si la hay.
+    /// The clickable zone at that cell of the frame, if there is one.
     ///
-    /// La PRIMERA que case, que es el orden en que el guest las mandó: dos
-    /// zonas solapadas son un error del guest, y elegir la primera es una
-    /// regla que se puede explicar — elegir «la más pequeña» o «la última»
-    /// pediría que el lector adivinara cuál.
+    /// The FIRST one that matches, which is the order the guest sent them
+    /// in: two overlapping zones are a guest error, and picking the first
+    /// is a rule that can be explained — picking "the smallest" or "the
+    /// last" would ask the reader to guess which.
     ///
     /// ```
     /// use norte_frontend::frame::{Hit, StyledFrame};
@@ -229,11 +233,10 @@ impl StyledFrame {
     pub fn hit_at(&self, row: u16, col: u16) -> Option<&Hit> {
         self.hits
             .iter()
-            // El fin se calcula en `u32`: con `saturating_add`, una zona
-            // pegada al tope del espacio de coordenadas perdía su última
-            // celda —el fin saturaba en `u16::MAX` y la comparación es
-            // exclusiva—, así que el borde derecho del marco no se podía
-            // pulsar.
+            // The end is computed in `u32`: with `saturating_add`, a zone
+            // flush against the top of the coordinate space lost its last
+            // cell — the end saturated at `u16::MAX` and the comparison is
+            // exclusive — so the frame's right edge could not be clicked.
             .find(|h| {
                 h.row == row
                     && col >= h.col
@@ -241,7 +244,7 @@ impl StyledFrame {
             })
     }
 
-    /// Cuántas filas ocupa.
+    /// How many rows it takes up.
     #[must_use]
     pub fn height(&self) -> usize {
         self.lines.len()
@@ -272,9 +275,9 @@ mod tests {
     }
 
     #[test]
-    fn las_cotas_recortan_lineas_tramos_y_zonas() {
+    fn the_limits_clip_lines_spans_and_zones() {
         let lines = vec![vec![span("x"); MAX_SPANS_PER_LINE + 10]; MAX_LINES + 10];
-        let hits = (0..u16::try_from(MAX_HITS + 10).expect("cabe"))
+        let hits = (0..u16::try_from(MAX_HITS + 10).expect("fits"))
             .map(|i| hit(i, 0, 1))
             .collect();
         let f = StyledFrame::clamped(lines, hits);
@@ -283,47 +286,49 @@ mod tests {
         assert_eq!(f.hits.len(), MAX_HITS);
     }
 
-    /// Una zona que apunta a una fila recortada se va con ella.
+    /// A zone pointing at a clipped row goes away with it.
     ///
-    /// Si se quedara, el marco tendría una celda que ejecuta algo y no enseña
-    /// nada: un botón invisible, que es peor que un botón que falta.
+    /// If it stayed, the frame would have a cell that runs something and
+    /// shows nothing: an invisible button, which is worse than a missing
+    /// one.
     #[test]
-    fn una_zona_sobre_una_fila_que_no_se_pinta_se_tira() {
+    fn a_zone_over_a_row_that_is_not_painted_is_dropped() {
         let f = StyledFrame::clamped(vec![vec![span("a")], vec![span("b")]], vec![hit(5, 0, 3)]);
         assert!(f.hits.is_empty());
     }
 
-    /// Ancho cero no es una zona: es una coordenada.
+    /// Zero width is not a zone: it is a coordinate.
     #[test]
-    fn una_zona_sin_ancho_no_se_puede_pulsar() {
+    fn a_zone_with_no_width_cannot_be_clicked() {
         let f = StyledFrame::clamped(vec![vec![span("a")]], vec![hit(0, 0, 0)]);
         assert!(f.hits.is_empty());
     }
 
     #[test]
-    fn la_primera_zona_que_case_gana() {
+    fn the_first_zone_that_matches_wins() {
         let mut a = hit(0, 0, 10);
-        a.command = "primera".to_owned();
+        a.command = "first".to_owned();
         let mut b = hit(0, 2, 2);
-        b.command = "segunda".to_owned();
-        let f = StyledFrame::clamped(vec![vec![span("hola")]], vec![a, b]);
-        assert_eq!(f.hit_at(0, 3).map(|h| h.command.as_str()), Some("primera"));
+        b.command = "second".to_owned();
+        let f = StyledFrame::clamped(vec![vec![span("hello")]], vec![a, b]);
+        assert_eq!(f.hit_at(0, 3).map(|h| h.command.as_str()), Some("first"));
     }
 
-    /// El borde derecho es EXCLUSIVO: una zona de tres celdas desde la 2 cubre
-    /// 2, 3 y 4, y no la 5.
+    /// The right edge is EXCLUSIVE: a three-cell zone from 2 covers 2, 3
+    /// and 4, and not 5.
     #[test]
-    fn el_borde_derecho_de_una_zona_no_entra() {
-        let f = StyledFrame::clamped(vec![vec![span("hola")]], vec![hit(0, 2, 3)]);
+    fn a_zones_right_edge_does_not_count() {
+        let f = StyledFrame::clamped(vec![vec![span("hello")]], vec![hit(0, 2, 3)]);
         assert!(f.hit_at(0, 1).is_none());
         assert!(f.hit_at(0, 2).is_some());
         assert!(f.hit_at(0, 4).is_some());
         assert!(f.hit_at(0, 5).is_none());
     }
 
-    /// Una zona al final del espacio de coordenadas no desborda al sumar.
+    /// A zone at the end of the coordinate space does not overflow when
+    /// summed.
     #[test]
-    fn una_zona_pegada_al_tope_no_desborda() {
+    fn a_zone_flush_against_the_top_does_not_overflow() {
         let f = StyledFrame::clamped(vec![vec![span("a")]], vec![hit(0, u16::MAX - 1, 10)]);
         assert!(f.hit_at(0, u16::MAX).is_some());
     }

@@ -1,95 +1,99 @@
-//! La barra de menús: las mismas órdenes que el teclado, ordenadas por tema.
+//! The menu bar: the same commands as the keyboard, sorted by topic.
 //!
-//! No añade capacidades. Añade una forma de ENCONTRARLAS: la paleta pide que
-//! sepas el nombre de lo que buscas y `F1` pide que leas, mientras que un menú
-//! se recorre. Es la vía para quien llega de un gestor con menús y para quien
-//! usa el ratón, y su contenido son ids del catálogo compartido — un comando
-//! que no exista aquí no puede aparecer en un menú.
+//! It adds no capabilities. It adds a way to FIND them: the palette expects
+//! you to know the name of what you are looking for and `F1` expects you
+//! to read, while a menu is browsed. It is the path for whoever comes from
+//! a manager with menus and for whoever uses the mouse, and its content is
+//! ids from the shared catalogue — a command that does not exist here
+//! cannot appear in a menu.
 //!
-//! Dentro de un menú, las órdenes van en SECCIONES (ADR 0125): diecisiete
-//! entradas seguidas se leen como una lista que hay que recorrer entera, y
-//! cinco grupos de tres se leen de un vistazo. El cursor no ve las secciones —
-//! recorre las órdenes como una sola lista—; las ven los que pintan.
+//! Inside a menu, commands go in SECTIONS (ADR 0125): seventeen entries in
+//! a row read as a list that has to be browsed whole, and five groups of
+//! three read at a glance. The cursor does not see the sections — it
+//! browses the commands as a single list — whoever paints does.
 
-/// Un grupo de órdenes dentro de un menú.
+/// A group of commands inside a menu.
 #[derive(Debug, Clone, Copy)]
 pub struct Section {
-    /// Clave Fluent del rótulo (`menu-section-*`), o `None` para una
-    /// separación sin nombre: cuando el grupo se entiende solo, un rótulo es
-    /// ruido.
+    /// Fluent key of the label (`menu-section-*`), or `None` for an
+    /// unnamed separation: when the group is self-explanatory, a label is
+    /// noise.
     pub title: Option<&'static str>,
-    /// Ids de comando, en el orden en que se pintan.
+    /// Command ids, in the order they are painted.
     pub items: &'static [&'static str],
 }
 
-/// Un menú: su título y sus secciones.
+/// A menu: its title and its sections.
 #[derive(Debug, Clone, Copy)]
 pub struct Menu {
-    /// Clave Fluent del título (`menu-*`).
+    /// Fluent key of the title (`menu-*`).
     pub title: &'static str,
-    /// Las secciones, de arriba abajo.
+    /// The sections, top to bottom.
     pub sections: &'static [Section],
 }
 
 impl Menu {
-    /// Cuántas órdenes tiene, todas las secciones juntas.
+    /// How many commands it has, all sections together.
     #[must_use]
     pub fn len(&self) -> usize {
         self.sections.iter().map(|s| s.items.len()).sum()
     }
 
-    /// ¿No tiene ninguna orden?
+    /// Does it have no command at all?
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
-    /// Las órdenes en el orden en que se pintan, sin secciones: es lo que
-    /// recorre el cursor.
+    /// The commands in the order they are painted, without sections: this
+    /// is what the cursor browses.
     pub fn items(&self) -> impl Iterator<Item = &'static str> + '_ {
         self.sections.iter().flat_map(|s| s.items.iter().copied())
     }
 
-    /// La orden `i` de la lista plana.
+    /// Command `i` of the flat list.
     #[must_use]
     pub fn item(&self, i: usize) -> Option<&'static str> {
         self.items().nth(i)
     }
 
-    /// Si una sección EMPIEZA en la orden `i` —y no es la primera—, su
-    /// rótulo: `Some(None)` es una separación sin nombre, `Some(Some(k))` una
-    /// con rótulo. `None`: `i` sigue en la sección de la anterior.
+    /// If a section STARTS at command `i` — and it is not the first one —
+    /// its label: `Some(None)` is an unnamed separation, `Some(Some(k))`
+    /// one with a label. `None`: `i` continues in the previous one's
+    /// section.
     ///
-    /// La primera sección no lleva separación: la raya de arriba del menú ya
-    /// la hace. Un rótulo en la primera sí se pinta, y por eso se devuelve.
+    /// The first section carries no separator: the menu's top rule already
+    /// does that. A label on the first one IS painted, and that is why it
+    /// is returned.
     #[must_use]
     pub fn section_at(&self, i: usize) -> Option<Option<&'static str>> {
-        let mut inicio = 0;
+        let mut start = 0;
         for (k, s) in self.sections.iter().enumerate() {
-            if inicio == i && !s.items.is_empty() && (k > 0 || s.title.is_some()) {
+            if start == i && !s.items.is_empty() && (k > 0 || s.title.is_some()) {
                 return Some(s.title);
             }
-            inicio += s.items.len();
+            start += s.items.len();
         }
         None
     }
 }
 
-/// Qué clase de orden es, para pintarla como lo que es.
+/// What kind of command it is, so it is painted as what it is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ItemRole {
-    /// Una orden cualquiera.
+    /// Any regular command.
     Normal,
-    /// Borra o no se puede deshacer: se pinta en el color de peligro, para
-    /// que la mano que baja por el menú la vea ANTES de pulsarla.
+    /// Deletes, or cannot be undone: painted in the danger color, so the
+    /// hand moving down the menu sees it BEFORE clicking it.
     Destructive,
-    /// La hace un modelo de IA: lleva la marca `✦`, porque lo que propone no
-    /// lo ha decidido norte y conviene leerlo antes de aceptarlo.
+    /// An AI model does it: it carries the `✦` mark, because what it
+    /// proposes was not decided by norte and is worth reading before
+    /// accepting it.
     Ai,
 }
 
 impl ItemRole {
-    /// El nombre estable que cruza el puente de la ventana.
+    /// The stable name that crosses the window's bridge.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -100,10 +104,11 @@ impl ItemRole {
     }
 }
 
-/// El papel de una orden del menú, DERIVADO del efecto que el catálogo le
-/// declara (ADR 0126, que reemplaza aquí la lista propia de ADR 0125): borrar
-/// se pinta como peligro y mandar datos a un modelo lleva `✦`. Era el mismo
-/// hecho que la ventana de solo lectura consultaba por su lado, en otra lista.
+/// A menu command's role, DERIVED from the effect the catalogue declares
+/// for it (ADR 0126, which replaces the standalone list here from ADR
+/// 0125): deleting is painted as danger and sending data to a model
+/// carries `✦`. It was the same fact the read-only window consulted on its
+/// own side, in another list.
 #[must_use]
 pub fn role(id: &str) -> ItemRole {
     match crate::keymap::catalogue::effect(id) {
@@ -113,21 +118,22 @@ pub fn role(id: &str) -> ItemRole {
     }
 }
 
-/// Atajo para declarar una sección.
+/// Shorthand for declaring a section.
 const fn sec(title: Option<&'static str>, items: &'static [&'static str]) -> Section {
     Section { title, items }
 }
 
-/// Los menús, de izquierda a derecha.
+/// The menus, left to right.
 ///
-/// Ni un id inventado: un test comprueba que todos existen en el catálogo y
-/// que ninguno está declarado `Planned`, porque un menú que ofrece algo que no
-/// está construido es peor que no tener menú.
+/// Not one invented id: a test checks that all of them exist in the
+/// catalogue and that none is declared `Planned`, because a menu that
+/// offers something not yet built is worse than not having a menu.
 pub const MENUS: &[Menu] = &[
-    // Diez grupos por lo que el lector QUIERE HACER, no por dónde vive el
-    // comando: leer un fichero, cambiarlo, elegir sobre qué, ir a otro sitio,
-    // mover los paneles, las pestañas, buscar, qué se ve, las herramientas y
-    // la ayuda. Todo lo construido está en alguno; nada en dos.
+    // Ten groups by what the reader WANTS TO DO, not by where the command
+    // lives: reading a file, changing it, choosing what to act on, going
+    // somewhere else, moving the panes, the tabs, searching, what is
+    // shown, the tools and help. Everything built is in one of them;
+    // nothing in two.
     Menu {
         title: "menu-file",
         sections: &[
@@ -135,8 +141,8 @@ pub const MENUS: &[Menu] = &[
                 None,
                 &["pane.view", "pane.edit", "pane.edit-new", "pane.open"],
             ),
-            // #139: las propiedades son del FICHERO, así que van con lo que se
-            // hace a un fichero, no con lo que se cambia de la pantalla.
+            // #139: properties belong to the FILE, so they go with what is
+            // done to a file, not with what changes on the screen.
             sec(
                 None,
                 &["pane.properties", "pane.dir-size", "pane.copy-path"],
@@ -144,9 +150,10 @@ pub const MENUS: &[Menu] = &[
             sec(None, &["app.quit"]),
         ],
     },
-    // Lo que ESCRIBE: aparte de lo que solo lee, porque es lo que pasa por el
-    // journal y lo que un lector quiere encontrar junto. Borrar va en su
-    // propia sección: es lo único de aquí que no se deshace con un gesto.
+    // What WRITES: apart from what only reads, because it is what goes
+    // through the journal and what a reader wants to find together.
+    // Deleting has its own section: it is the only thing here that does
+    // not undo with a gesture.
     Menu {
         title: "menu-operate",
         sections: &[
@@ -202,16 +209,16 @@ pub const MENUS: &[Menu] = &[
             sec(Some("menu-section-by-kind"), &["mark.files", "mark.dirs"]),
         ],
     },
-    // A DÓNDE mira un panel: subir, volver, favoritos, volúmenes, conectar.
-    // #140 los ponía en Paneles por esa misma razón; con un menú propio de
-    // navegación, es aquí donde se buscan.
+    // WHERE a pane looks: up, back, favorites, volumes, connect. #140 put
+    // them in Panes for that same reason; with a navigation menu of its
+    // own, this is where they are looked for.
     Menu {
         title: "menu-go",
         sections: &[
-            // La primera del menú porque es la que sirve cuando no sabes
-            // cuál de las otras quieres, y porque los cuatro presets
-            // importados no la atan a ninguna tecla: aquí es donde la
-            // encuentran.
+            // First in the menu because it is the one that helps when you
+            // do not know which of the others you want, and because the
+            // four imported presets do not bind it to any key: this is
+            // where they find it.
             sec(None, &["app.goto"]),
             sec(
                 None,
@@ -303,18 +310,18 @@ pub const MENUS: &[Menu] = &[
                 &[
                     "pane.toggle-hidden",
                     "pane.columns",
-                    // #138: el orden es de la VISTA, y aquí es donde se
-                    // cambia lo que la vista enseña.
+                    // #138: the sort belongs to the VIEW, and this is
+                    // where what the view shows gets changed.
                     "pane.sort-menu",
                     "pane.names-encoding",
                 ],
             ),
-            // Lo que se abre AL LADO del listado. #136: el árbol es otra
-            // columna de navegación, como el sidebar. #323: el registro va
-            // junto a procesos —los dos contestan «¿qué está haciendo
-            // esto?»—, y el mapa de disco con ellos (fase 4). La línea de
-            // tiempo (fase 7) no tiene atajo en ningún preset: aquí es su
-            // única forma de teclado.
+            // What opens BESIDE the listing. #136: the tree is another
+            // navigation column, like the sidebar. #323: the log goes
+            // next to processes — both answer "what is this doing?" — and
+            // the disk map with them (phase 4). The timeline (phase 7)
+            // has no shortcut in any preset: this is its only keyboard
+            // path.
             sec(
                 Some("menu-section-side-panels"),
                 &[
@@ -326,19 +333,19 @@ pub const MENUS: &[Menu] = &[
                     "layout.log",
                     "layout.disk-map",
                     "layout.timeline",
-                    // #362: el terminal empotrado. Va con los paneles del lado
-                    // y no con `app.terminal` en el menú de órdenes, porque lo
-                    // que abre es un PANEL: lo que se administra en este menú
-                    // es qué se ve al lado del listado, y esto es una cosa más
-                    // que se ve al lado.
+                    // #362: the embedded terminal. It goes with the side
+                    // panes and not with `app.terminal` in the commands
+                    // menu, because what it opens is a PANE: what this menu
+                    // manages is what shows beside the listing, and this is
+                    // one more thing shown beside it.
                     "layout.terminal",
                 ],
             ),
             sec(None, &["layout.pick", "app.theme"]),
         ],
     },
-    // Lo que se administra: extensiones, agentes, ajustes, perfiles. La
-    // paleta va aquí y no en Ayuda, porque desde ella se HACE.
+    // What is managed: extensions, agents, settings, profiles. The palette
+    // goes here and not in Help, because it is used to DO things.
     Menu {
         title: "menu-tools",
         sections: &[
@@ -356,10 +363,10 @@ pub const MENUS: &[Menu] = &[
     },
 ];
 
-/// Qué menú está abierto y en qué orden va el cursor.
+/// Which menu is open and where the cursor is within it.
 ///
-/// Puro y sin render: el TUI lo pinta y la GUI lo pintará distinto, pero
-/// recorrer un menú no se decide dos veces.
+/// Pure and render-free: the TUI paints it and the GUI will paint it
+/// differently, but browsing a menu is not decided twice.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MenuState {
     menu: usize,
@@ -373,53 +380,55 @@ impl Default for MenuState {
 }
 
 impl MenuState {
-    /// El primer menú, primer elemento.
+    /// The first menu, first item.
     #[must_use]
     pub const fn new() -> Self {
         Self { menu: 0, item: 0 }
     }
 
-    /// Reabre por el menú que estaba abierto la última vez.
+    /// Reopens on whichever menu was open last time.
     ///
-    /// Un menú que siempre se abre por el primero obliga a recorrer la barra
-    /// entera cada vez, y quien usa dos entradas del mismo menú lo paga en
-    /// cada gesto. Un índice que ya no existe —la barra cambió entre una
-    /// apertura y la siguiente— cae al primero en vez de no abrir nada.
+    /// A menu that always opens on the first one forces browsing the
+    /// whole bar every time, and whoever uses two entries of the same menu
+    /// pays for it on every gesture. An index that no longer exists — the
+    /// bar changed between one opening and the next — falls back to the
+    /// first instead of opening nothing.
     ///
-    /// El CURSOR sí vuelve al principio: dentro de un menú la lista es corta y
-    /// se lee entera, y recordar también la fila haría que la misma tecla
-    /// ejecutara cosas distintas según lo último que se rozó.
+    /// The CURSOR does go back to the start: inside a menu the list is
+    /// short and read whole, and also remembering the row would make the
+    /// same key run different things depending on what was last touched.
     ///
-    /// Vive aquí porque es una decisión de presentación y los dos frontends
-    /// tienen que tomarla igual: un menú que en la ventana recuerda y en el
-    /// terminal no son dos programas.
+    /// Lives here because it is a presentation decision and both frontends
+    /// have to make it the same way: a menu that remembers in the window
+    /// and does not in the terminal are not one program.
     #[must_use]
     pub fn reopen_at(menu: usize) -> Self {
-        let mut estado = Self::new();
-        estado.open(menu);
-        estado
+        let mut state = Self::new();
+        state.open(menu);
+        state
     }
 
-    /// Qué menú está abierto.
+    /// Which menu is open.
     #[must_use]
     pub const fn menu(&self) -> usize {
         self.menu
     }
 
-    /// Qué elemento va resaltado.
+    /// Which item is highlighted.
     #[must_use]
     pub const fn item(&self) -> usize {
         self.item
     }
 
-    /// El id del comando resaltado.
+    /// The id of the highlighted command.
     #[must_use]
     pub fn selected(&self) -> Option<&'static str> {
         MENUS.get(self.menu)?.item(self.item)
     }
 
-    /// Cambia de menú, ciclando. El cursor vuelve al primero: mantenerlo
-    /// donde estaba lo dejaría en un elemento que el menú nuevo no tiene.
+    /// Switches menu, cycling. The cursor goes back to the first one:
+    /// keeping it where it was would leave it on an item the new menu does
+    /// not have.
     pub fn cycle_menu(&mut self, delta: isize) {
         let n = MENUS.len();
         if n == 0 {
@@ -431,7 +440,7 @@ impl MenuState {
         self.item = 0;
     }
 
-    /// Mueve el cursor dentro del menú abierto, ciclando.
+    /// Moves the cursor within the open menu, cycling.
     pub fn cycle_item(&mut self, delta: isize) {
         let Some(n) = MENUS.get(self.menu).map(Menu::len) else {
             return;
@@ -444,7 +453,7 @@ impl MenuState {
             usize::try_from((i + delta).rem_euclid(isize::try_from(n).unwrap_or(1))).unwrap_or(0);
     }
 
-    /// Abre un menú por índice y pone el cursor al principio.
+    /// Opens a menu by index and puts the cursor at the start.
     pub fn open(&mut self, menu: usize) {
         if menu < MENUS.len() {
             self.menu = menu;
@@ -452,7 +461,7 @@ impl MenuState {
         }
     }
 
-    /// Pone el cursor en un elemento del menú abierto.
+    /// Puts the cursor on an item of the open menu.
     pub fn point_at(&mut self, item: usize) {
         if MENUS.get(self.menu).is_some_and(|m| item < m.len()) {
             self.item = item;
@@ -462,37 +471,37 @@ impl MenuState {
 
 #[cfg(test)]
 mod tests {
-    /// Cada ítem del menú tiene ETIQUETA en los dos idiomas.
+    /// Every menu item has a LABEL in both languages.
     ///
-    /// Sin esto, un comando nuevo sale en el menú con su clave cruda
-    /// —`menu-item-pane-properties` en mitad de la lista—, que es exactamente
-    /// lo que pasó al añadir los de #138 y #139: la suite entera en verde y la
-    /// pantalla enseñando el identificador. El menú lo pinta el frontend, así
-    /// que el gate vive aquí. Los rótulos de sección, igual.
+    /// Without this, a new command comes out in the menu with its raw key
+    /// — `menu-item-pane-properties` in the middle of the list — which is
+    /// exactly what happened when adding #138's and #139's: the whole
+    /// suite green and the screen showing the identifier. The frontend
+    /// paints the menu, so the gate lives here. Same for section labels.
     #[test]
-    fn cada_item_del_menu_tiene_etiqueta_en_los_dos_idiomas() {
+    fn every_menu_item_has_a_label_in_both_languages() {
         for lang in [norte_i18n::Lang::Es, norte_i18n::Lang::En] {
             let _ = norte_i18n::force(lang);
             for menu in MENUS {
-                let titulo = norte_i18n::t(menu.title);
+                let title = norte_i18n::t(menu.title);
                 assert!(
-                    !titulo.is_empty() && titulo != menu.title,
-                    "{lang:?}: el menú {} no tiene título",
+                    !title.is_empty() && title != menu.title,
+                    "{lang:?}: menu {} has no title",
                     menu.title
                 );
                 for id in menu.items() {
-                    let clave = format!("menu-item-{}", id.replace('.', "-"));
-                    let etiqueta = norte_i18n::t(&clave);
+                    let key = format!("menu-item-{}", id.replace('.', "-"));
+                    let label = norte_i18n::t(&key);
                     assert!(
-                        !etiqueta.is_empty() && etiqueta != clave,
-                        "{lang:?}: {id} sale en el menú sin etiqueta ({clave})"
+                        !label.is_empty() && label != key,
+                        "{lang:?}: {id} appears in the menu with no label ({key})"
                     );
                 }
-                for clave in menu.sections.iter().filter_map(|s| s.title) {
-                    let rotulo = norte_i18n::t(clave);
+                for key in menu.sections.iter().filter_map(|s| s.title) {
+                    let label = norte_i18n::t(key);
                     assert!(
-                        !rotulo.is_empty() && rotulo != clave,
-                        "{lang:?}: la sección {clave} no tiene rótulo"
+                        !label.is_empty() && label != key,
+                        "{lang:?}: section {key} has no label"
                     );
                 }
             }
@@ -502,85 +511,85 @@ mod tests {
     use super::*;
     use crate::keymap::catalogue::{Status, lookup};
 
-    /// Ni un id inventado, y ninguno `Planned`: un menú que ofrece algo que no
-    /// está construido es peor que no tener menú — el lector lo pulsa y no
-    /// pasa nada, sin explicación.
+    /// Not one invented id, and none `Planned`: a menu that offers
+    /// something not yet built is worse than not having a menu — the
+    /// reader clicks it and nothing happens, with no explanation.
     #[test]
-    fn todo_lo_que_ofrece_un_menu_existe_y_esta_construido() {
+    fn everything_a_menu_offers_exists_and_is_built() {
         for m in MENUS {
             for id in m.items() {
-                let def = lookup(id).unwrap_or_else(|| panic!("{id} no está en el catálogo"));
-                assert_eq!(def.status, Status::Live, "{id} está declarado Planned");
+                let def = lookup(id).unwrap_or_else(|| panic!("{id} is not in the catalogue"));
+                assert_eq!(def.status, Status::Live, "{id} is declared Planned");
             }
         }
     }
 
-    /// Ningún comando en dos menús: dos sitios para lo mismo es un menú que
-    /// no enseña dónde están las cosas.
+    /// No command in two menus: two places for the same thing is a menu
+    /// that does not show where things are.
     #[test]
-    fn ningun_comando_esta_en_dos_menus() {
-        let mut vistos = std::collections::BTreeSet::new();
+    fn no_command_is_in_two_menus() {
+        let mut seen = std::collections::BTreeSet::new();
         for m in MENUS {
             for id in m.items() {
-                assert!(vistos.insert(id), "{id} aparece en dos menús");
+                assert!(seen.insert(id), "{id} appears in two menus");
             }
         }
     }
 
-    /// Una sección vacía pintaría una raya sin nada debajo.
+    /// An empty section would paint a rule with nothing under it.
     #[test]
-    fn ninguna_seccion_esta_vacia() {
+    fn no_section_is_empty() {
         for m in MENUS {
             for s in m.sections {
-                assert!(!s.items.is_empty(), "{}: sección vacía", m.title);
+                assert!(!s.items.is_empty(), "{}: empty section", m.title);
             }
         }
     }
 
-    /// Las secciones se anuncian donde empiezan, la primera sin raya.
+    /// Sections are announced where they start, the first one with no rule.
     #[test]
-    fn section_at_marca_el_principio_de_cada_seccion() {
-        let operar = MENUS
+    fn section_at_marks_the_start_of_each_section() {
+        let operate = MENUS
             .iter()
             .find(|m| m.title == "menu-operate")
-            .expect("Operar");
-        assert_eq!(operar.section_at(0), None, "la primera no lleva raya");
-        assert_eq!(operar.section_at(1), None, "Mover sigue en la de Copiar");
-        let borrar = operar
+            .expect("Operate");
+        assert_eq!(operate.section_at(0), None, "the first one carries no rule");
+        assert_eq!(operate.section_at(1), None, "Move stays in Copy's section");
+        let delete = operate
             .items()
             .position(|id| id == "pane.delete")
-            .expect("Borrar");
-        assert_eq!(operar.section_at(borrar), Some(None), "raya sin rótulo");
-        let empaquetar = operar
+            .expect("Delete");
+        assert_eq!(operate.section_at(delete), Some(None), "rule with no label");
+        let pack = operate
             .items()
             .position(|id| id == "pane.pack")
-            .expect("Empaquetar");
+            .expect("Pack");
         assert_eq!(
-            operar.section_at(empaquetar),
+            operate.section_at(pack),
             Some(Some("menu-section-archives"))
         );
-        assert_eq!(operar.item(borrar), Some("pane.delete"));
+        assert_eq!(operate.item(delete), Some("pane.delete"));
     }
 
     #[test]
-    fn borrar_es_destructivo_y_la_ia_se_marca() {
+    fn delete_is_destructive_and_ai_is_marked() {
         assert_eq!(role("pane.delete-permanent"), ItemRole::Destructive);
         assert_eq!(role("pane.ai-rename"), ItemRole::Ai);
         assert_eq!(role("pane.copy"), ItemRole::Normal);
     }
 
     #[test]
-    fn cambiar_de_menu_devuelve_el_cursor_al_principio() {
+    fn switching_menu_returns_the_cursor_to_the_start() {
         let mut s = MenuState::new();
         s.cycle_item(2);
         assert_eq!(s.item(), 2);
         s.cycle_menu(1);
         assert_eq!(s.menu(), 1);
-        assert_eq!(s.item(), 0, "el elemento 2 puede no existir aquí");
+        assert_eq!(s.item(), 0, "item 2 might not exist here");
     }
 
     #[test]
-    fn los_dos_recorridos_ciclan() {
+    fn both_traversals_cycle() {
         let mut s = MenuState::new();
         s.cycle_menu(-1);
         assert_eq!(s.menu(), MENUS.len() - 1);
@@ -588,11 +597,12 @@ mod tests {
         assert_eq!(s.item(), MENUS[MENUS.len() - 1].len() - 1);
     }
 
-    /// Apuntar fuera de rango NO mueve el cursor: el emisor de índices es el
-    /// ratón, y un índice imposible es un bug nuestro, no algo que deba dejar
-    /// el cursor sobre un elemento que no existe.
+    /// Pointing out of range does NOT move the cursor: the emitter of
+    /// indices is the mouse, and an impossible index is a bug of ours, not
+    /// something that should leave the cursor on an item that does not
+    /// exist.
     #[test]
-    fn apuntar_fuera_de_rango_no_mueve_nada() {
+    fn pointing_out_of_range_moves_nothing() {
         let mut s = MenuState::new();
         s.point_at(999);
         assert_eq!(s.item(), 0);

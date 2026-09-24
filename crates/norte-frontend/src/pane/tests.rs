@@ -17,15 +17,16 @@ fn pane(names: &[&str]) -> PaneState {
     PaneState::new(VPath::parse("mem:///").unwrap(), es)
 }
 
-/// **Señalar no es mover el cursor**, y con un filtro vivo esa diferencia es
-/// la que hace que el visor acoplado se entere.
+/// **Pointing is not moving the cursor**, and with a live filter that
+/// difference is what lets the docked viewer find out.
 ///
-/// En `Mode::Filter` lo señalado es la selección del quick y el cursor real no
-/// se mira: `set_cursor` movía algo que nadie está siguiendo, así que la tecla
-/// decía que había funcionado y el panel se quedaba igual.
+/// In `Mode::Filter` what is pointed at is the quick search's selection and
+/// the real cursor is not looked at: `set_cursor` used to move something
+/// nobody is following, so the key claimed it worked and the panel stayed
+/// the same.
 #[test]
-fn senalar_mueve_la_seleccion_del_filtro_y_el_cursor_cuando_no_lo_hay() {
-    // Sin filtro: señala moviendo el cursor real.
+fn point_at_moves_the_filters_selection_and_the_cursor_when_there_is_none() {
+    // No filter: pointing moves the real cursor.
     let mut p = pane(&["a.png", "b.png", "c.png"]);
     p.senalar(2);
     assert_eq!(p.cursor(), 2);
@@ -34,41 +35,43 @@ fn senalar_mueve_la_seleccion_del_filtro_y_el_cursor_cuando_no_lo_hay() {
         Some("mem:///c.png".to_owned())
     );
 
-    // Con filtro: se mueve la SELECCIÓN, no el cursor.
+    // With a filter: the SELECTION moves, not the cursor.
     //
-    // El listado se ORDENA, así que los índices son los de la lista ya
-    // ordenada: `alfa.png` (0), `alto.png` (1), `zeta.png` (2). Y el filtro
-    // casa por SUBCADENA, por eso la consulta es `al` y no `a`: con `a` sola
-    // también entraría `zeta.png` y no quedaría nada fuera que probar.
+    // The listing gets SORTED, so the indices are the already-sorted list's:
+    // `alfa.png` (0), `alto.png` (1), `zeta.png` (2). And the filter matches
+    // by SUBSTRING, which is why the query is `al` and not `a`: with `a`
+    // alone `zeta.png` would also match and nothing would be left out to
+    // test.
     let mut p = pane(&["alfa.png", "zeta.png", "alto.png"]);
     p.quick_start(crate::nav::Mode::Filter);
     p.quick_char('a');
-    p.quick_char('l'); // visibles: "alfa.png" (0) y "alto.png" (1)
-    let cursor_antes = p.cursor();
+    p.quick_char('l'); // visible: "alfa.png" (0) and "alto.png" (1)
+    let cursor_before = p.cursor();
     assert_eq!(
         p.selected().map(|e| e.path.to_wire()),
         Some("mem:///alfa.png".to_owned()),
-        "el filtro empieza en su primer match"
+        "the filter starts on its first match"
     );
     p.senalar(1);
     assert_eq!(
         p.selected().map(|e| e.path.to_wire()),
         Some("mem:///alto.png".to_owned()),
-        "señalar movió la selección DEL FILTRO"
+        "pointing moved the FILTER's selection"
     );
-    assert_eq!(p.cursor(), cursor_antes, "y no el cursor real");
+    assert_eq!(p.cursor(), cursor_before, "and not the real cursor");
 
-    // Una fila que el filtro no enseña no se puede señalar: no se toca nada.
+    // A row the filter does not show cannot be pointed at: nothing is
+    // touched.
     p.senalar(2);
     assert_eq!(
         p.selected().map(|e| e.path.to_wire()),
         Some("mem:///alto.png".to_owned()),
-        "«zeta.png» está filtrada fuera: la selección se queda donde estaba"
+        "\"zeta.png\" is filtered out: the selection stays where it was"
     );
 }
 
-/// Un pane sobre un subdirectorio, que es donde la fila `..` aparece.
-fn pane_hijo(names: &[&str]) -> PaneState {
+/// A pane over a subdirectory, which is where the `..` row appears.
+fn child_pane(names: &[&str]) -> PaneState {
     let es = names
         .iter()
         .map(|n| e(&format!("mem:///casa/{n}"), EntryKind::File))
@@ -78,17 +81,17 @@ fn pane_hijo(names: &[&str]) -> PaneState {
     p
 }
 
-/// El operando de organizar deja fuera la fila `..` y los directorios.
+/// The organize operand leaves out the `..` row and the directories.
 ///
-/// Las dos cosas se vieron pilotando la fase 8: el árbol proponía mover
-/// el DIRECTORIO PADRE dentro de una carpeta nueva —la trampa que
-/// `real_entries` ya documenta, y que se salta quien lee `entries()`— y
-/// proponía mover una carpeta que otro movimiento del mismo plan usaba de
-/// destino, con lo que lo aplicado dejaba de ser lo revisado.
+/// Both things were seen while piloting phase 8: the tree proposed moving
+/// the PARENT DIRECTORY into a new folder —the trap `real_entries` already
+/// documents, and that whoever reads `entries()` falls into— and it proposed
+/// moving a folder that another move of the same plan used as a
+/// destination, so what got applied stopped being what was reviewed.
 #[test]
-fn organizar_no_ve_ni_el_padre_ni_los_directorios() {
-    let mut p = pane_hijo(&[]);
-    // Una carpeta de verdad entre las entradas.
+fn organizing_sees_neither_the_parent_nor_the_directories() {
+    let mut p = child_pane(&[]);
+    // A real folder among the entries.
     p.set_listing(
         VPath::parse("mem:///casa").unwrap(),
         vec![
@@ -97,140 +100,142 @@ fn organizar_no_ve_ni_el_padre_ni_los_directorios() {
             e("mem:///casa/b.txt", EntryKind::File),
         ],
     );
-    assert!(p.is_parent_row(0), "el pilar del test: la fila está");
+    assert!(p.is_parent_row(0), "the test's pillar: the row is there");
     assert_eq!(
         p.organizable_names(),
         vec!["a.txt".to_owned(), "b.txt".to_owned()],
-        "ni el padre ni la carpeta entran en lo que se va a mover"
+        "neither the parent nor the folder go into what is about to move"
     );
-    // Los nombres que YA ocupan el directorio sí cuentan la carpeta —son
-    // justo los que distinguen una nueva de una que estaba— y siguen sin
-    // contar al padre.
-    // En el orden del listado, que pone los directorios delante.
+    // The names that ALREADY occupy the directory do count the folder —they
+    // are exactly the ones that tell a new one apart from one that was
+    // there— and still do not count the parent.
+    // In the listing's order, which puts directories first.
     assert_eq!(
         p.existing_names(),
         vec!["fotos".to_owned(), "a.txt".to_owned(), "b.txt".to_owned()]
     );
 }
 
-/// La fila `..` es la PRIMERA, y en una raíz no aparece: no hay a dónde
-/// subir, y una fila que no lleva a ningún sitio es peor que no tenerla.
+/// The `..` row is FIRST, and at a root it does not appear: there is nowhere
+/// to go up to, and a row that leads nowhere is worse than not having it.
 #[test]
-fn la_fila_de_subir_va_primera_y_no_esta_en_la_raiz() {
-    let p = pane_hijo(&["a", "b"]);
-    assert_eq!(p.entries().len(), 3, "las dos entradas y la de subir");
+fn the_go_up_row_comes_first_and_is_not_at_the_root() {
+    let p = child_pane(&["a", "b"]);
+    assert_eq!(p.entries().len(), 3, "the two entries and the go-up one");
     assert!(p.is_parent_row(0));
     assert!(!p.is_parent_row(1));
     assert_eq!(p.parent_target(), Some(&VPath::parse("mem:///").unwrap()));
 
-    let mut raiz = pane(&["a"]);
-    raiz.set_parent_row(true);
-    assert_eq!(raiz.entries().len(), 1, "en la raíz no hay fila de subir");
-    assert!(!raiz.is_parent_row(0));
-    assert_eq!(raiz.parent_target(), None);
+    let mut root = pane(&["a"]);
+    root.set_parent_row(true);
+    assert_eq!(root.entries().len(), 1, "at the root there is no go-up row");
+    assert!(!root.is_parent_row(0));
+    assert_eq!(root.parent_target(), None);
 }
 
-/// Y NO es un operando. Este es el invariante que hace segura la fila:
-/// ochenta y siete sitios preguntan «qué hay señalado» para copiarlo o
-/// borrarlo, y sobre ella la respuesta es «nada».
+/// And it is NOT an operand. This is the invariant that makes the row safe:
+/// eighty-seven call sites ask "what is pointed at" to copy or delete it,
+/// and over it the answer is "nothing".
 #[test]
-fn la_fila_de_subir_no_es_un_operando() {
-    let mut p = pane_hijo(&["a"]);
-    assert_eq!(p.cursor(), 0, "el cursor nace encima de ella");
+fn the_go_up_row_is_not_an_operand() {
+    let mut p = child_pane(&["a"]);
+    assert_eq!(p.cursor(), 0, "the cursor is born over it");
     assert!(
         p.selected().is_none(),
-        "sobre `..` no hay nada señalado: si hubiera, F8 borraría el padre"
+        "over `..` nothing is pointed at: if it were, F8 would delete the parent"
     );
     p.cursor_down();
-    assert!(p.selected().is_some(), "y sobre una entrada de verdad, sí");
+    assert!(p.selected().is_some(), "and over a real entry, it is");
 }
 
-/// Pero SÍ se puede describir: «qué se opera» y «qué se señala» son dos
-/// preguntas, y sobre `..` tienen respuestas distintas.
+/// But it CAN be described: "what does this act on" and "what is pointed
+/// at" are two questions, and over `..` they have different answers.
 ///
-/// Los paneles que siguen al cursor —la hoja de atributos, el visor
-/// acoplado— preguntaban la primera y decían «nada bajo el cursor»
-/// teniendo una fila delante. En una ventana recién abierta el cursor
-/// nace sobre `..`, así que el panel de detalles arrancaba vacío SIEMPRE
-/// y parecía roto.
+/// The panels that follow the cursor —the attribute sheet, the docked
+/// viewer— used to ask the first one and say "nothing under the cursor"
+/// while a row sat right there. In a freshly opened window the cursor is
+/// born over `..`, so the details panel started ALWAYS empty and looked
+/// broken.
 #[test]
-fn la_fila_de_subir_no_es_un_operando_pero_si_se_puede_describir() {
-    let mut p = pane_hijo(&["a"]);
-    assert!(p.selected().is_none(), "no es operando");
-    let bajo = p.cursor_entry().expect("pero hay una fila bajo el cursor");
+fn the_go_up_row_is_not_an_operand_but_can_be_described() {
+    let mut p = child_pane(&["a"]);
+    assert!(p.selected().is_none(), "not an operand");
+    let under = p
+        .cursor_entry()
+        .expect("but there is a row under the cursor");
     assert_eq!(
-        bajo.path,
+        under.path,
         VPath::parse("mem:///").unwrap(),
-        "y es la que lleva al padre"
+        "and it is the one that leads to the parent"
     );
-    assert_eq!(bajo.kind, EntryKind::Dir);
+    assert_eq!(under.kind, EntryKind::Dir);
 
     p.cursor_down();
     assert_eq!(
         p.cursor_entry().map(|e| &e.path),
         p.selected().map(|e| &e.path),
-        "sobre una entrada de verdad las dos preguntas contestan lo mismo"
+        "over a real entry both questions answer the same"
     );
 }
 
-/// Y en un listado vacío no hay nada que describir tampoco.
+/// And with no rows there is nothing to describe either.
 #[test]
-fn sin_filas_no_hay_nada_bajo_el_cursor() {
+fn with_no_rows_there_is_nothing_under_the_cursor() {
     let p = PaneState::new(VPath::parse("mem:///casa").unwrap(), Vec::new());
     assert!(p.cursor_entry().is_none());
 }
 
-/// El quick search en modo Filter TAMPOCO convierte la fila `..` en
-/// operando.
+/// The quick search in Filter mode does NOT turn the `..` row into an
+/// operand either.
 ///
-/// `QuickSearch::new` pliega `entries` ENTERO, fila sintética incluida, y
-/// con la query vacía la selección nace en el índice 0. La guarda miraba
-/// `self.cursor`, que en Filter no se mueve, así que abrir el filtro
-/// bastaba para que `selected()` devolviera el directorio PADRE: F8 sobre
-/// él borra el padre, que es exactamente lo que esta fila existe para
-/// impedir.
+/// `QuickSearch::new` folds `entries` WHOLE, synthetic row included, and
+/// with an empty query the selection is born at index 0. The guard used to
+/// look at `self.cursor`, which does not move in Filter, so opening the
+/// filter was enough for `selected()` to return the PARENT directory: F8
+/// over it deletes the parent, which is exactly what this row exists to
+/// prevent.
 #[test]
-fn el_filtro_no_convierte_la_fila_de_subir_en_operando() {
-    let mut p = pane_hijo(&["a", "b"]);
+fn the_filter_does_not_turn_the_go_up_row_into_an_operand() {
+    let mut p = child_pane(&["a", "b"]);
     p.quick_start(crate::nav::Mode::Filter);
     assert!(
         p.selected().is_none(),
-        "el filtro recién abierto señala la fila 0, que es `..`: {:?}",
+        "the freshly opened filter points at row 0, which is `..`: {:?}",
         p.selected().map(|e| e.path.to_wire())
     );
-    // Y por ahí es por donde llegaba al borrado: sin marcas,
-    // `marked_paths()` cae en `selected()`, y F8 abre el modal con lo
-    // primero de esa lista.
+    // And that is how it reached the delete: with no marks,
+    // `marked_paths()` falls back to `selected()`, and F8 opens the modal
+    // with the first thing on that list.
     assert!(
         p.marked_paths().is_empty(),
-        "el padre no puede ser el operando de F8: {:?}",
+        "the parent cannot be F8's operand: {:?}",
         p.marked_paths()
     );
     assert_eq!(
         p.cursor_entry().map(|e| &e.path),
         Some(&VPath::parse("mem:///").unwrap()),
-        "describirla sí"
+        "but describing it does work"
     );
 }
 
-/// Y la bandera «esto es la fila de subir» sigue a lo SEÑALADO, no al
-/// cursor real.
+/// And the "this is the go-up row" flag follows what is POINTED AT, not the
+/// real cursor.
 ///
-/// Con el filtro eligiendo una entrada de verdad y el cursor todavía en
-/// la 0, la hoja de atributos preguntaba por el cursor y describía `..`
-/// mientras el listado resaltaba otra fila — y el nombre hostil que el
-/// lector estaba mirando no se marcaba.
+/// With the filter choosing a real entry and the cursor still at 0, the
+/// attribute sheet used to ask about the cursor and describe `..` while the
+/// listing highlighted a different row — and the hostile name the reader
+/// was looking at did not get marked.
 #[test]
-fn la_bandera_de_la_fila_de_subir_sigue_a_lo_senalado() {
-    let mut p = pane_hijo(&["a", "b"]);
-    assert!(p.cursor_is_parent_row(), "sin filtro, manda el cursor");
+fn the_go_up_flag_follows_what_is_pointed_at() {
+    let mut p = child_pane(&["a", "b"]);
+    assert!(p.cursor_is_parent_row(), "with no filter, the cursor rules");
 
     p.quick_start(crate::nav::Mode::Filter);
     p.quick_char('b');
-    assert_eq!(p.cursor(), 0, "en Filter el cursor REAL no se mueve");
+    assert_eq!(p.cursor(), 0, "in Filter the REAL cursor does not move");
     assert!(
         !p.cursor_is_parent_row(),
-        "pero lo señalado es `b`, no `..`"
+        "but what is pointed at is `b`, not `..`"
     );
     assert_eq!(
         p.cursor_entry().and_then(|e| e.path.file_name()),
@@ -238,45 +243,49 @@ fn la_bandera_de_la_fila_de_subir_sigue_a_lo_senalado() {
     );
 }
 
-/// Ni se puede marcar, POR NINGUNO de los caminos que marcan.
+/// It cannot be marked either, through NONE of the paths that mark.
 ///
-/// Marcarla metería el directorio PADRE en la lista de lo que se copia o
-/// se borra, que es la peor forma de este bug. El test recorre todas las
-/// puertas: la del cursor, la de bloque, la de rango, la de una fila
-/// suelta, el invertir y el patrón.
+/// Marking it would put the PARENT directory into the list of what gets
+/// copied or deleted, which is the worst form of this bug. The test walks
+/// every door: the cursor's, the bulk one, the range one, a single row's,
+/// inverting, and the pattern.
 #[test]
-fn la_fila_de_subir_no_se_marca_por_ningun_camino() {
-    let padre = VPath::parse("mem:///").unwrap();
-    let mut p = pane_hijo(&["a", "b"]);
+fn the_go_up_row_is_not_marked_through_any_path() {
+    let parent = VPath::parse("mem:///").unwrap();
+    let mut p = child_pane(&["a", "b"]);
 
-    p.toggle_mark(); // el cursor está sobre `..`
+    p.toggle_mark(); // the cursor is over `..`
     p.mark_all();
     p.mark_range(0, 2);
     p.set_mark(0, true);
     p.invert_marks();
     let _ = p.mark_glob("*", true);
     assert!(
-        !p.marked_paths().contains(&padre),
-        "el padre JAMÁS entra en lo marcado: {:?}",
+        !p.marked_paths().contains(&parent),
+        "the parent NEVER goes into what is marked: {:?}",
         p.marked_paths()
     );
-    // Y lo demás sí se marca: la guarda protege una fila, no rompe el
-    // marcado.
-    assert_eq!(p.marks_len(), 2, "las dos entradas de verdad");
+    // And everything else does get marked: the guard protects one row, it
+    // does not break marking.
+    assert_eq!(p.marks_len(), 2, "the two real entries");
 }
 
-/// Lo que se COPIA a un pane nuevo no la lleva.
+/// What gets COPIED to a new pane does not carry it.
 ///
-/// `entries()` la incluye —es la lista que se pinta, y el índice 0 es lo
-/// que `is_parent_row` responde—, así que copiarla a otro pane la
-/// convertía en una entrada de verdad: el pane nuevo se ponía LA SUYA
-/// encima y la heredada quedaba en medio del listado, con el nombre del
-/// padre y marcable.
+/// `entries()` includes it —it is the list that gets painted, and index 0
+/// is what `is_parent_row` answers about— so copying it to another pane
+/// turned it into a real entry: the new pane set up ITS OWN on top and the
+/// inherited one stayed in the middle of the listing, with the parent's
+/// name and markable.
 #[test]
-fn real_entries_deja_fuera_la_fila_de_subir() {
-    let p = pane_hijo(&["a", "b"]);
-    assert_eq!(p.entries().len(), 3, "lo que se pinta lleva la de subir");
-    assert_eq!(p.real_entries().len(), 2, "lo que se copia, no");
+fn real_entries_leaves_out_the_go_up_row() {
+    let p = child_pane(&["a", "b"]);
+    assert_eq!(
+        p.entries().len(),
+        3,
+        "what gets painted carries the go-up one"
+    );
+    assert_eq!(p.real_entries().len(), 2, "what gets copied does not");
     assert!(
         !p.real_entries()
             .iter()
@@ -285,19 +294,19 @@ fn real_entries_deja_fuera_la_fila_de_subir() {
         p.real_entries()
     );
 
-    let mut raiz = pane(&["a"]);
-    raiz.set_parent_row(true);
+    let mut root = pane(&["a"]);
+    root.set_parent_row(true);
     assert_eq!(
-        raiz.real_entries().len(),
-        raiz.entries().len(),
-        "en una raíz no hay fila que quitar"
+        root.real_entries().len(),
+        root.entries().len(),
+        "at a root there is no row to remove"
     );
 }
 
-/// El objetivo del cursor: la carpeta si lo es, y si no este directorio.
-/// Sobre `..`, este directorio — jamás el padre.
+/// The cursor's target: the folder if it is one, and this directory
+/// otherwise. Over `..`, this directory — never the parent.
 #[test]
-fn target_dir_es_la_carpeta_bajo_el_cursor_y_si_no_la_propia() {
+fn target_dir_is_the_folder_under_the_cursor_and_otherwise_its_own() {
     let casa = VPath::parse("mem:///casa").unwrap();
     let mut p = PaneState::new(
         casa.clone(),
@@ -309,40 +318,43 @@ fn target_dir_es_la_carpeta_bajo_el_cursor_y_si_no_la_propia() {
     );
     p.set_parent_row(true);
 
-    assert!(p.is_parent_row(p.cursor()), "el cursor nace sobre `..`");
-    assert_eq!(p.target_dir(), &casa, "sobre `..`, esta ruta, no el padre");
+    assert!(p.is_parent_row(p.cursor()), "the cursor is born over `..`");
+    assert_eq!(
+        p.target_dir(),
+        &casa,
+        "over `..`, this path, not the parent"
+    );
 
     p.cursor_down();
     assert_eq!(
         p.target_dir(),
         &VPath::parse("mem:///casa/dir").unwrap(),
-        "sobre una carpeta, esa carpeta"
+        "over a folder, that folder"
     );
 
     p.cursor_down();
-    assert_eq!(p.target_dir(), &casa, "sobre un fichero, esta ruta");
+    assert_eq!(p.target_dir(), &casa, "over a file, this path");
 
     p.cursor_down();
     assert_eq!(
         p.target_dir(),
         &casa,
-        "un enlace no se sigue (M0): esta ruta"
+        "a link is not followed (M0): this path"
     );
 }
 
-/// Y si una entrada con la ruta del padre se cuela igualmente, tampoco se
-/// marca.
+/// And if an entry with the parent's path sneaks in anyway, it does not get
+/// marked either.
 ///
-/// Defensa en profundidad, y no la principal: la principal es no copiarla
-/// ([`PaneState::real_entries`]). Esta es la red que convierte el próximo
-/// escape en «no pasa nada» en vez de en un borrado del padre. Es seguro
-/// mirar la RUTA aquí y no en `is_parent_row`: la ruta de una entrada de
-/// este directorio es siempre `dir/nombre`, así que solo la fila sintética
-/// —o una copia suya— puede ser exactamente el padre; un enlace al padre
-/// tiene la suya propia.
+/// Defense in depth, and not the main one: the main one is not copying it
+/// ([`PaneState::real_entries`]). This is the net that turns the next slip
+/// into "nothing happens" instead of deleting the parent. It is safe to look
+/// at the PATH here and not in `is_parent_row`: an entry's path in this
+/// directory is always `dir/name`, so only the synthetic row —or a copy of
+/// it— can be exactly the parent; a link to the parent has its own.
 #[test]
-fn una_entrada_con_la_ruta_del_padre_no_se_marca() {
-    let padre = VPath::parse("mem:///").unwrap();
+fn an_entry_with_the_parents_path_is_not_marked() {
+    let parent = VPath::parse("mem:///").unwrap();
     let mut p = PaneState::new(
         VPath::parse("mem:///casa").unwrap(),
         vec![
@@ -356,58 +368,60 @@ fn una_entrada_con_la_ruta_del_padre_no_se_marca() {
     p.invert_marks();
     let _ = p.mark_glob("*", true);
     assert!(
-        !p.marked_paths().contains(&padre),
-        "el padre no entra en lo marcado ni colado como entrada: {:?}",
+        !p.marked_paths().contains(&parent),
+        "the parent does not go into what is marked, not even sneaked in as an entry: {:?}",
         p.marked_paths()
     );
 }
 
-/// Reordenar no la mueve del sitio: va primera, no se ordena con las
-/// demás. Ordenar por tamaño la mandaría al medio del listado.
+/// Re-sorting does not move it from its spot: it goes first, it is not
+/// sorted with the rest. Sorting by size would send it to the middle of the
+/// listing.
 #[test]
-fn la_fila_de_subir_sigue_primera_tras_reordenar() {
+fn the_go_up_row_stays_first_after_re_sorting() {
     use crate::sort::{SortColumn, SortDir, SortSpec};
-    let mut p = pane_hijo(&["a", "b", "c"]);
+    let mut p = child_pane(&["a", "b", "c"]);
     p.set_sort(SortSpec {
         column: SortColumn::Size,
         dir: SortDir::Desc,
         dirs_first: false,
     });
-    assert!(p.is_parent_row(0), "sigue la primera");
+    assert!(p.is_parent_row(0), "still first");
     assert_eq!(p.entries().len(), 4);
 }
 
-/// Y un relleno paginado no la duplica ni la pierde: sale del merge y
-/// vuelve después, porque el merge empareja por clave de orden.
+/// And a paginated fill neither duplicates it nor loses it: it comes out of
+/// the merge and comes back afterwards, because the merge pairs by sort key.
 #[test]
-fn un_relleno_no_duplica_la_fila_de_subir() {
-    let mut p = pane_hijo(&["b"]);
+fn a_fill_does_not_duplicate_the_go_up_row() {
+    let mut p = child_pane(&["b"]);
     p.extend(vec![e("mem:///casa/a", EntryKind::File)]);
     p.extend(vec![e("mem:///casa/c", EntryKind::File)]);
-    let subir = p
+    let up = p
         .entries()
         .iter()
         .filter(|x| x.path == VPath::parse("mem:///").unwrap())
         .count();
-    assert_eq!(subir, 1, "una sola fila de subir: {:?}", p.entries());
+    assert_eq!(up, 1, "a single go-up row: {:?}", p.entries());
     assert!(p.is_parent_row(0));
     assert_eq!(p.entries().len(), 4);
 }
 
-/// Apagarla la quita, y encenderla la trae, sin tocar el listado.
+/// Turning it off removes it, and turning it on brings it back, without
+/// touching the listing.
 #[test]
-fn se_puede_apagar_y_encender() {
-    let mut p = pane_hijo(&["a"]);
+fn it_can_be_turned_off_and_on() {
+    let mut p = child_pane(&["a"]);
     assert_eq!(p.entries().len(), 2);
     p.set_parent_row(false);
-    assert_eq!(p.entries().len(), 1, "solo la entrada de verdad");
+    assert_eq!(p.entries().len(), 1, "only the real entry");
     assert!(!p.is_parent_row(0));
     p.set_parent_row(true);
     assert!(p.is_parent_row(0));
 }
 
 #[test]
-fn set_sort_reordena_reancla_y_extiende_bajo_el_spec() {
+fn set_sort_resorts_re_anchors_and_extends_under_the_spec() {
     use crate::sort::{SortColumn, SortDir, SortSpec};
     let mk = |n: &str, size: Option<u64>| {
         let mut e = e(&format!("mem:///{n}"), EntryKind::File);
@@ -419,16 +433,16 @@ fn set_sort_reordena_reancla_y_extiende_bajo_el_spec() {
         vec![mk("a", Some(30)), mk("b", Some(10)), mk("c", Some(20))],
     );
     p.cursor_down(); // "b"
-    p.toggle_mark(); // marca "b"
+    p.toggle_mark(); // marks "b"
     let spec = SortSpec {
         column: SortColumn::Size,
         dir: SortDir::Asc,
         dirs_first: true,
     };
     p.set_sort(spec);
-    let orden: Vec<_> = p.entries().iter().map(|e| e.path.clone()).collect();
+    let order: Vec<_> = p.entries().iter().map(|e| e.path.clone()).collect();
     assert_eq!(
-        orden,
+        order,
         vec![
             VPath::parse("mem:///b").unwrap(),
             VPath::parse("mem:///c").unwrap(),
@@ -438,35 +452,35 @@ fn set_sort_reordena_reancla_y_extiende_bajo_el_spec() {
     assert_eq!(
         p.selected().map(|e| e.path.clone()),
         Some(VPath::parse("mem:///b").unwrap()),
-        "cursor re-anclado por path"
+        "cursor re-anchored by path"
     );
-    assert_eq!(p.marks_len(), 1, "las marcas van por identidad");
+    assert_eq!(p.marks_len(), 1, "marks go by identity");
 
-    // Un fill que llega DESPUÉS mergea bajo el spec activo.
+    // A fill that arrives AFTERWARDS merges under the active spec.
     p.set_loading(true);
     p.extend(vec![mk("d", Some(15))]);
-    let orden: Vec<_> = p.entries().iter().map(|e| e.path.clone()).collect();
+    let order: Vec<_> = p.entries().iter().map(|e| e.path.clone()).collect();
     assert_eq!(
-        orden,
+        order,
         vec![
             VPath::parse("mem:///b").unwrap(),
             VPath::parse("mem:///d").unwrap(),
             VPath::parse("mem:///c").unwrap(),
             VPath::parse("mem:///a").unwrap()
         ],
-        "el lote entra en su posición bajo size/asc"
+        "the batch enters its position under size/asc"
     );
 }
 
-/// #107: ocultar es PRESENTACIÓN — el provider lista todo, el pane
-/// aparta las de punto inicial a un stash y las devuelve al mostrar,
-/// mezcladas en orden (reusa `extend`). Solo el ÚLTIMO segmento
-/// decide: `a.txt` no es oculto.
+/// #107: hiding is PRESENTATION — the provider lists everything, the pane
+/// sets the leading-dot ones aside into a stash and returns them when shown,
+/// merged in order (reuses `extend`). Only the LAST segment decides:
+/// `a.txt` is not hidden.
 #[test]
-fn ocultar_aparta_los_dotfiles_y_mostrar_los_devuelve_en_orden() {
+fn hiding_sets_dotfiles_aside_and_showing_returns_them_in_order() {
     let mut p = pane(&[".git", "a.txt", ".hidden", "b"]);
     assert_eq!(p.entries().len(), 4);
-    assert!(p.show_hidden(), "default: se muestra todo");
+    assert!(p.show_hidden(), "default: everything is shown");
     p.set_show_hidden(false);
     let names: Vec<_> = p.entries().iter().map(|e| e.path.clone()).collect();
     assert_eq!(
@@ -475,19 +489,19 @@ fn ocultar_aparta_los_dotfiles_y_mostrar_los_devuelve_en_orden() {
             VPath::parse("mem:///a.txt").unwrap(),
             VPath::parse("mem:///b").unwrap()
         ],
-        "solo el último segmento con '.' inicial se oculta"
+        "only the last segment starting with '.' is hidden"
     );
     assert_eq!(p.hidden_count(), 2);
     p.set_show_hidden(true);
-    assert_eq!(p.entries().len(), 4, "mostrar restaura TODAS");
+    assert_eq!(p.entries().len(), 4, "showing restores ALL of them");
     assert_eq!(p.hidden_count(), 0);
-    // Y el orden vuelve a ser el canónico (merge, no append).
+    // And the order is canonical again (merge, not append).
     let first = p.entries().first().map(|e| e.path.clone());
     assert_eq!(first, Some(VPath::parse("mem:///.git").unwrap()));
 }
 
 #[test]
-fn un_listado_nuevo_bajo_ocultacion_filtra_al_entrar() {
+fn a_new_listing_under_hiding_filters_on_entry() {
     let mut p = pane(&["x"]);
     p.set_show_hidden(false);
     p.set_listing(
@@ -504,7 +518,7 @@ fn un_listado_nuevo_bajo_ocultacion_filtra_al_entrar() {
 }
 
 #[test]
-fn un_fill_paginado_bajo_ocultacion_aparta_el_lote() {
+fn a_paginated_fill_under_hiding_sets_the_batch_aside() {
     let mut p = pane(&["a"]);
     p.set_show_hidden(false);
     p.set_loading(true);
@@ -514,29 +528,29 @@ fn un_fill_paginado_bajo_ocultacion_aparta_el_lote() {
     ]);
     assert_eq!(p.entries().len(), 2, "a + c");
     assert_eq!(p.hidden_count(), 1);
-    // Un lote SOLO de ocultas no rompe nada.
+    // A batch of hidden entries ONLY breaks nothing.
     p.extend(vec![e("mem:///.d", EntryKind::File)]);
     assert_eq!(p.entries().len(), 2);
     assert_eq!(p.hidden_count(), 2);
 }
 
-/// Ocultar PODA las marcas de las entradas que desaparecen de la vista
-/// (misma disciplina que `refill`, #103): una selección invisible
-/// alimentando el siguiente F8 es exactamente el hazard que el
-/// contador `pruned_marks` existe para hacer ruidoso.
+/// Hiding PRUNES the marks of entries that disappear from view (same
+/// discipline as `refill`, #103): an invisible selection feeding the next
+/// F8 is exactly the hazard the `pruned_marks` counter exists to make
+/// noisy.
 #[test]
-fn ocultar_poda_las_marcas_de_los_dotfiles_y_lo_reporta() {
+fn hiding_prunes_dotfile_marks_and_reports_it() {
     let mut p = pane(&[".secret", "a"]);
     p.mark_all();
     assert_eq!(p.marks_len(), 2);
     p.set_show_hidden(false);
-    assert_eq!(p.marks_len(), 1, "la marca de .secret cae");
-    assert_eq!(p.pruned_marks(), 1, "y JAMÁS en silencio");
+    assert_eq!(p.marks_len(), 1, "the .secret mark drops");
+    assert_eq!(p.pruned_marks(), 1, "and NEVER silently");
     assert_eq!(p.marked_paths(), vec![VPath::parse("mem:///a").unwrap()]);
 }
 
 #[test]
-fn ocultar_reancla_el_cursor_por_path() {
+fn hiding_re_anchors_the_cursor_by_path() {
     let mut p = pane(&[".a", ".b", "c"]);
     p.cursor_down();
     p.cursor_down(); // "c"
@@ -546,12 +560,12 @@ fn ocultar_reancla_el_cursor_por_path() {
     assert_eq!(
         p.selected().map(|e| e.path.clone()),
         Some(VPath::parse("mem:///c").unwrap()),
-        "el cursor sigue sobre la MISMA entrada visible"
+        "the cursor stays on the SAME visible entry"
     );
 }
 
 #[test]
-fn refill_bajo_ocultacion_reemplaza_el_stash_sin_duplicar() {
+fn refill_under_hiding_replaces_the_stash_without_duplicating() {
     let mut p = pane(&[".a", "b"]);
     p.set_show_hidden(false);
     assert_eq!(p.hidden_count(), 1);
@@ -561,16 +575,16 @@ fn refill_bajo_ocultacion_reemplaza_el_stash_sin_duplicar() {
         e("mem:///b", EntryKind::File),
     ]);
     assert_eq!(p.entries().len(), 1);
-    assert_eq!(p.hidden_count(), 2, "stash FRESCO del refill, sin dup");
+    assert_eq!(p.hidden_count(), 2, "a FRESH refill stash, no dup");
     p.set_show_hidden(true);
-    assert_eq!(p.entries().len(), 3, "sin duplicados tras mostrar");
+    assert_eq!(p.entries().len(), 3, "no duplicates after showing");
 }
 
-/// Regla 1: la decisión es por BYTES del último segmento — un nombre
-/// no-UTF8 que empieza por `.` (0x2E) se oculta igual; uno hostil que
-/// no, sigue visible.
+/// Rule 1: the decision is by BYTES of the last segment — a non-UTF8 name
+/// starting with `.` (0x2E) is hidden all the same; a hostile one that does
+/// not stays visible.
 #[test]
-fn ocultar_decide_por_bytes_no_por_texto() {
+fn hiding_decides_by_bytes_not_by_text() {
     let dir = VPath::parse("mem:///").unwrap();
     let dot_hostile = dir
         .clone()
@@ -590,19 +604,19 @@ fn ocultar_decide_por_bytes_no_por_texto() {
     assert_eq!(p.entries().len(), 1);
     assert_eq!(p.entries()[0].path, plain_hostile);
     p.set_show_hidden(true);
-    assert_eq!(p.entries().len(), 2, "los bytes vuelven intactos");
+    assert_eq!(p.entries().len(), 2, "the bytes come back intact");
 }
 
 #[test]
-fn cursor_se_mueve_con_clamp() {
+fn the_cursor_moves_with_a_clamp() {
     let mut p = pane(&["a", "b", "c"]);
     assert_eq!(p.cursor(), 0);
-    p.cursor_up(); // clamp en 0
+    p.cursor_up(); // clamps at 0
     assert_eq!(p.cursor(), 0);
     p.cursor_down();
     p.cursor_down();
     assert_eq!(p.cursor(), 2);
-    p.cursor_down(); // clamp en len-1
+    p.cursor_down(); // clamps at len-1
     assert_eq!(p.cursor(), 2);
     p.home();
     assert_eq!(p.cursor(), 0);
@@ -611,11 +625,11 @@ fn cursor_se_mueve_con_clamp() {
 }
 
 #[test]
-fn selected_respeta_el_filtro_quick() {
+fn selected_honours_the_quick_filter() {
     let mut p = pane(&["alfa", "beta", "alto"]);
     p.quick_start(crate::nav::Mode::Filter);
     p.quick_char('a');
-    // "alfa" y "alto" casan; el selected es el primero filtrado.
+    // "alfa" and "alto" match; selected is the first filtered one.
     assert_eq!(
         p.selected().unwrap().path,
         VPath::parse("mem:///alfa").unwrap()
@@ -628,7 +642,7 @@ fn selected_respeta_el_filtro_quick() {
 }
 
 #[test]
-fn set_listing_resetea_cursor_y_cierra_quick() {
+fn set_listing_resets_the_cursor_and_closes_the_quick_search() {
     let mut p = pane(&["a", "b"]);
     p.cursor_down();
     p.quick_start(crate::nav::Mode::Filter);
@@ -642,22 +656,22 @@ fn set_listing_resetea_cursor_y_cierra_quick() {
 }
 
 #[test]
-fn page_se_mueve_con_clamp() {
+fn the_page_moves_with_a_clamp() {
     let mut p = pane(&["a", "b", "c"]);
-    p.page_down(100); // clamp en len-1
+    p.page_down(100); // clamps at len-1
     assert_eq!(p.cursor(), 2);
-    p.page_up(100); // clamp en 0
+    p.page_up(100); // clamps at 0
     assert_eq!(p.cursor(), 0);
 
-    let mut vacia = pane(&[]);
-    vacia.page_down(100); // no-op, sin panic
-    assert_eq!(vacia.cursor(), 0);
-    vacia.page_up(100);
-    assert_eq!(vacia.cursor(), 0);
+    let mut empty = pane(&[]);
+    empty.page_down(100); // no-op, no panic
+    assert_eq!(empty.cursor(), 0);
+    empty.page_up(100);
+    assert_eq!(empty.cursor(), 0);
 }
 
 #[test]
-fn begin_loading_deja_estado_transitorio() {
+fn begin_loading_leaves_transitory_state() {
     let mut p = pane(&["a", "b", "c"]);
     p.cursor_down();
     p.begin_loading(VPath::parse("mem:///nuevo").unwrap());
@@ -676,7 +690,7 @@ fn begin_loading_deja_estado_transitorio() {
 }
 
 #[test]
-fn end_en_lista_vacia_no_panica() {
+fn end_on_an_empty_list_does_not_panic() {
     let mut p = PaneState::new(VPath::parse("mem:///").unwrap(), vec![]);
     p.home();
     p.end();
@@ -687,35 +701,35 @@ fn end_en_lista_vacia_no_panica() {
 }
 
 #[test]
-fn toggle_marca_y_desmarca_la_entrada_bajo_cursor() {
+fn toggle_marks_and_unmarks_the_entry_under_the_cursor() {
     let mut p = pane(&["a", "b", "c"]);
-    p.cursor_down(); // cursor en "b"
+    p.cursor_down(); // cursor on "b"
     assert_eq!(p.marks_len(), 0);
     p.toggle_mark();
     assert_eq!(p.marks_len(), 1);
     assert!(p.is_marked(&e("mem:///b", EntryKind::File)));
     assert!(!p.is_marked(&e("mem:///a", EntryKind::File)));
-    p.toggle_mark(); // desmarca
+    p.toggle_mark(); // unmarks
     assert_eq!(p.marks_len(), 0);
     assert!(!p.is_marked(&e("mem:///b", EntryKind::File)));
 }
 
 #[test]
-fn marked_paths_sin_marcas_devuelve_el_target_del_cursor() {
+fn marked_paths_with_no_marks_returns_the_cursors_target() {
     let mut p = pane(&["a", "b", "c"]);
     p.cursor_down(); // "b"
     assert_eq!(p.marked_paths(), vec![VPath::parse("mem:///b").unwrap()]);
 }
 
 #[test]
-fn marked_paths_con_marcas_en_orden_de_entries() {
+fn marked_paths_with_marks_in_entries_order() {
     let mut p = pane(&["a", "b", "c"]);
     p.cursor_down();
     p.cursor_down();
-    p.toggle_mark(); // marca "c"
+    p.toggle_mark(); // marks "c"
     p.home();
-    p.toggle_mark(); // marca "a"
-    // Orden = el de `entries` (determinista), no el de inserción.
+    p.toggle_mark(); // marks "a"
+    // Order = `entries`' (deterministic), not insertion order.
     assert_eq!(
         p.marked_paths(),
         vec![
@@ -726,7 +740,7 @@ fn marked_paths_con_marcas_en_orden_de_entries() {
 }
 
 #[test]
-fn set_listing_limpia_las_marcas() {
+fn set_listing_clears_the_marks() {
     let mut p = pane(&["a", "b"]);
     p.toggle_mark();
     assert_eq!(p.marks_len(), 1);
@@ -738,7 +752,7 @@ fn set_listing_limpia_las_marcas() {
 }
 
 #[test]
-fn begin_loading_limpia_las_marcas() {
+fn begin_loading_clears_the_marks() {
     let mut p = pane(&["a", "b"]);
     p.toggle_mark();
     p.begin_loading(VPath::parse("mem:///nuevo").unwrap());
@@ -746,19 +760,19 @@ fn begin_loading_limpia_las_marcas() {
 }
 
 #[test]
-fn toggle_bajo_filtro_marca_la_seleccion_visible() {
+fn toggle_under_a_filter_marks_the_visible_selection() {
     let mut p = pane(&["alfa", "beta", "alto"]);
     p.quick_start(crate::nav::Mode::Filter);
-    p.quick_char('a'); // "alfa" y "alto" visibles; selección = "alfa"
+    p.quick_char('a'); // "alfa" and "alto" visible; selection = "alfa"
     p.toggle_mark();
     assert!(p.is_marked(&e("mem:///alfa", EntryKind::File)));
     assert!(!p.is_marked(&e("mem:///beta", EntryKind::File)));
 }
 
 #[test]
-fn marca_identidad_por_bytes_del_path_nombre_hostil() {
-    // Un nombre con bytes NO-UTF8 (0xFF): la marca lo distingue por su
-    // VPath exacto, sin degradar a lossy (regla 1).
+fn mark_identity_is_by_the_paths_bytes_hostile_name() {
+    // A name with NON-UTF8 bytes (0xFF): the mark tells it apart by its
+    // exact VPath, without degrading to lossy (rule 1).
     let hostile = VPath::parse("mem:///")
         .unwrap()
         .join(norte_proto::Segment::new(vec![0xFF, 0xFE]).unwrap());
@@ -782,17 +796,17 @@ fn marca_identidad_por_bytes_del_path_nombre_hostil() {
             },
         ],
     );
-    // #54: `new` normaliza — orden por bytes crudos pone "a" (0x61) antes
-    // que 0xFF, así que la hostil queda en el índice 1, no en el cursor 0.
+    // #54: `new` normalises — sorting by raw bytes puts "a" (0x61) before
+    // 0xFF, so the hostile one ends up at index 1, not at cursor 0.
     p.cursor_down();
-    p.toggle_mark(); // marca la hostil
+    p.toggle_mark(); // marks the hostile one
     assert!(p.marks.contains(&hostile));
     assert!(!p.marks.contains(&benign));
     assert_eq!(p.marked_paths(), vec![hostile]);
 }
 
 #[test]
-fn clear_marks_vacia_el_set() {
+fn clear_marks_empties_the_set() {
     let mut p = pane(&["a", "b"]);
     p.toggle_mark();
     p.cursor_down();
@@ -803,15 +817,15 @@ fn clear_marks_vacia_el_set() {
 }
 
 #[test]
-fn marked_paths_sin_entries_ni_marcas_es_vacio() {
+fn marked_paths_with_no_entries_and_no_marks_is_empty() {
     let p = PaneState::new(VPath::parse("mem:///").unwrap(), vec![]);
     assert!(p.marked_paths().is_empty());
 }
 
 #[test]
-fn marcas_distinguen_gemelos_nfc_y_nfd_sin_plegar() {
-    // é en NFC (0xC3 0xA9) vs NFD (0x65 0xCC 0x81): bytes distintos, misma
-    // forma visual. La marca NO debe plegarlos (trampa macOS: preserva bytes).
+fn marks_tell_nfc_and_nfd_twins_apart_without_folding() {
+    // é in NFC (0xC3 0xA9) vs NFD (0x65 0xCC 0x81): different bytes, same
+    // visual shape. The mark must NOT fold them (macOS trap: preserve bytes).
     let nfc = VPath::parse("mem:///")
         .unwrap()
         .join(norte_proto::Segment::new(vec![0xC3, 0xA9]).unwrap());
@@ -840,30 +854,31 @@ fn marcas_distinguen_gemelos_nfc_y_nfd_sin_plegar() {
     p.toggle_mark();
     p.cursor_down();
     p.toggle_mark();
-    assert_eq!(p.marks_len(), 2, "nfc y nfd son DOS marcas distintas");
+    assert_eq!(p.marks_len(), 2, "nfc and nfd are TWO different marks");
     assert!(p.marks.contains(&nfc));
     assert!(p.marks.contains(&nfd));
 }
 
-// --- S1: memoria de cursor por directorio + foco pendiente (spec
-// 2026-07-24 §S1) ---------------------------------------------------
+// --- S1: per-directory cursor memory + pending focus (spec 2026-07-24
+// §S1) ---------------------------------------------------
 
-/// Round trip básico: dejar un dir con el cursor movido, navegar a otro,
-/// volver — el cursor se restaura donde quedó (no en 0).
+/// Basic round trip: leave a dir with the cursor moved, navigate to
+/// another, come back — the cursor is restored where it was left (not at
+/// 0).
 #[test]
-fn cursor_memory_round_trip_basico() {
+fn cursor_memory_basic_round_trip() {
     let mut p = pane(&["a", "b", "c"]);
     p.set_cursor(2); // "c"
-    p.remember_cursor(); // simula el punto de captura de begin_loading
+    p.remember_cursor(); // simulates begin_loading's capture point
     p.set_listing(
         VPath::parse("mem:///otro").unwrap(),
         vec![e("mem:///otro/x", EntryKind::File)],
     );
-    assert_eq!(p.cursor(), 0, "dir nuevo, sin memoria: 0 de siempre");
+    assert_eq!(p.cursor(), 0, "new dir, no memory: the usual 0");
 
-    // Volver al dir original: begin_loading (aquí simulado con
-    // remember_cursor + set_listing, igual que la GUI real) debe
-    // restaurar el cursor recordado.
+    // Back to the original dir: begin_loading (here simulated with
+    // remember_cursor + set_listing, same as the real GUI) must restore
+    // the remembered cursor.
     p.remember_cursor();
     p.set_listing(
         VPath::parse("mem:///").unwrap(),
@@ -873,40 +888,40 @@ fn cursor_memory_round_trip_basico() {
             e("mem:///c", EntryKind::File),
         ],
     );
-    assert_eq!(p.cursor(), 2, "restaura el cursor recordado de mem:///");
+    assert_eq!(p.cursor(), 2, "restores the cursor remembered for mem:///");
 }
 
-/// Si el listado del dir recordado encogió, la restauración clampa.
+/// If the remembered dir's listing shrank, the restore clamps.
 #[test]
-fn cursor_memory_restaura_con_clamp_si_encogio() {
+fn cursor_memory_restores_with_a_clamp_if_it_shrank() {
     let mut p = pane(&["a", "b", "c"]);
     p.set_cursor(2); // "c"
     p.remember_cursor();
     p.set_listing(VPath::parse("mem:///otro").unwrap(), vec![]);
     p.remember_cursor();
-    // Volvemos a "mem:///" pero ahora con solo 1 entrada.
+    // We go back to "mem:///" but now with only 1 entry.
     p.set_listing(
         VPath::parse("mem:///").unwrap(),
         vec![e("mem:///a", EntryKind::File)],
     );
-    assert_eq!(p.cursor(), 0, "clamp: solo hay índice 0 disponible");
+    assert_eq!(p.cursor(), 0, "clamp: only index 0 is available");
 }
 
-/// LRU: al superar el cap (64), la entrada más antigua se descarta.
+/// LRU: past the cap (64), the oldest entry is dropped.
 #[test]
-fn cursor_memory_lru_evict_al_superar_cap() {
+fn cursor_memory_lru_evicts_past_the_cap() {
     let mut p = PaneState::new(VPath::parse("mem:///d0").unwrap(), vec![]);
-    // 65 dirs distintos, cada uno con cursor=7 (arbitrario, no importa el
-    // clamp aquí: cada listing tiene una sola entrada, pero lo que se
-    // recuerda es el valor crudo antes del clamp del set_cursor).
+    // 65 different dirs, each with cursor=7 (arbitrary, the clamp does not
+    // matter here: each listing has a single entry, but what is remembered
+    // is the raw value before set_cursor's clamp).
     for i in 0..65 {
-        p.set_cursor(7); // clamp interno no afecta: listado vacío -> 0
+        p.set_cursor(7); // internal clamp does not matter: empty listing -> 0
         p.remember_cursor();
         p.set_listing(VPath::parse(&format!("mem:///d{}", i + 1)).unwrap(), vec![]);
     }
-    // La entrada para "mem:///d0" (la primerísima, antes del bucle) debe
-    // haber sido expulsada: si no lo fue, volver a "mem:///d0" con un
-    // listado de 65 entradas restauraría el cursor a un índice != 0.
+    // The entry for "mem:///d0" (the very first one, before the loop) must
+    // have been evicted: if it was not, going back to "mem:///d0" with a
+    // 65-entry listing would restore the cursor to an index != 0.
     let mut entries = Vec::new();
     for i in 0..65 {
         entries.push(e(&format!("mem:///d0/x{i:02}"), EntryKind::File));
@@ -916,134 +931,134 @@ fn cursor_memory_lru_evict_al_superar_cap() {
     assert_eq!(
         p.cursor(),
         0,
-        "d0 fue expulsado de la memoria LRU (cap 64), no hay nada que restaurar"
+        "d0 was evicted from the LRU memory (cap 64), there is nothing to restore"
     );
 }
 
-/// El ancla es BYTE a BYTE, y con los dos gemelos de normalización
-/// delante se ve por qué importa (#122).
+/// The anchor is BYTE for BYTE, and with the two normalization twins in
+/// front, it is clear why it matters (#122).
 ///
-/// `é` en NFC (`c3a9`) y `é` en NFD (`65cc81`) se pintan igual y son dos
-/// ficheros distintos. Un hit semántico —o cualquier otro `pending_focus`—
-/// sobre el NFD tiene que aterrizar en el NFD. El día que alguien meta un
-/// `nfc()` «de ayuda» en esta comparación, el cursor caerá en el otro
-/// fichero: en macOS y en SMB, donde los dos conviven de verdad, eso es
-/// abrir, copiar o borrar el que no era.
+/// `é` in NFC (`c3a9`) and `é` in NFD (`65cc81`) paint the same and are two
+/// different files. A semantic hit —or any other `pending_focus`— over the
+/// NFD one has to land on the NFD one. The day someone adds a "helpful"
+/// `nfc()` to this comparison, the cursor will land on the other file:
+/// on macOS and on SMB, where the two really do coexist, that means
+/// opening, copying, or deleting the wrong one.
 #[test]
-fn el_ancla_distingue_los_gemelos_de_normalizacion() {
+fn the_anchor_tells_normalization_twins_apart() {
     let nfc = "mem:///caf\u{e9}.txt";
     let nfd = "mem:///cafe\u{301}.txt";
     assert_ne!(
         VPath::parse(nfc).unwrap().to_wire(),
         VPath::parse(nfd).unwrap().to_wire(),
-        "los gemelos son DOS rutas: si esto falla, el test de abajo no prueba nada"
+        "the twins are TWO paths: if this fails, the test below proves nothing"
     );
-    for buscado in [nfd, nfc] {
+    for wanted in [nfd, nfc] {
         let mut p = pane(&["otro"]);
-        p.set_pending_focus(VPath::parse(buscado).unwrap());
+        p.set_pending_focus(VPath::parse(wanted).unwrap());
         p.set_listing(
             VPath::parse("mem:///").unwrap(),
             vec![e(nfc, EntryKind::File), e(nfd, EntryKind::File)],
         );
-        // Por la RUTA de la fila y no por un índice: `set_listing`
-        // reordena, y un índice escrito a mano prueba el orden del
-        // sort, no el ancla.
+        // By the row's PATH and not by an index: `set_listing` re-sorts,
+        // and a hand-written index would test the sort's order, not the
+        // anchor.
         assert_eq!(
             p.entries()[p.cursor()].path.to_wire(),
-            VPath::parse(buscado).unwrap().to_wire(),
-            "el ancla de {buscado} cayó en el gemelo equivocado"
+            VPath::parse(wanted).unwrap().to_wire(),
+            "the anchor for {wanted} landed on the wrong twin"
         );
     }
 }
 
-/// Los nombres marcados, en orden, para leer un aserto de un vistazo.
-fn marcados(p: &PaneState) -> Vec<String> {
+/// The marked names, in order, to read an assertion at a glance.
+fn marked(p: &PaneState) -> Vec<String> {
     p.marked_entries()
         .iter()
         .map(|e| String::from_utf8_lossy(e.path.file_name().unwrap().as_bytes()).into_owned())
         .collect()
 }
 
-/// `shift+↑`: el espejo exacto de `space`. Marca la fila del cursor y
-/// SUBE, sin envolver en la primera.
+/// `shift+↑`: the exact mirror of `space`. Marks the cursor's row and moves
+/// UP, without wrapping at the first one.
 #[test]
-fn toggle_mark_and_retreat_es_el_espejo_de_advance() {
+fn toggle_mark_and_retreat_is_the_mirror_of_advance() {
     let mut p = pane(&["a", "b", "c", "d"]);
     p.set_cursor(2); // "c"
     p.toggle_mark_and_retreat();
     p.toggle_mark_and_retreat();
-    assert_eq!(marcados(&p), ["b", "c"]);
+    assert_eq!(marked(&p), ["b", "c"]);
     assert_eq!(p.cursor(), 0);
-    // En la primera fila no envuelve: marca y se queda.
+    // At the first row it does not wrap: it marks and stays.
     p.toggle_mark_and_retreat();
-    assert_eq!(marcados(&p), ["a", "b", "c"]);
+    assert_eq!(marked(&p), ["a", "b", "c"]);
     assert_eq!(p.cursor(), 0);
 }
 
-/// **El tramo lo decide la fila del CURSOR, no cada fila.**
+/// **The stretch is decided by the CURSOR's row, not each row.**
 ///
-/// Es lo que hace el gesto reversible —repetirlo deshace lo que hizo— y
-/// lo que da sentido a la frase de Far: «para deseleccionar, mantén Shift
-/// y muévete en la dirección contraria». Si cada fila se toggleara por su
-/// cuenta, un tramo a medio marcar quedaría alternado.
+/// This is what makes the gesture reversible —repeating it undoes what it
+/// did— and what gives Far's phrase its meaning: "to deselect, hold Shift
+/// and move in the opposite direction". If each row toggled on its own, a
+/// half-marked stretch would end up alternating.
 #[test]
-fn una_pagina_marca_o_desmarca_segun_la_fila_del_cursor() {
+fn a_page_marks_or_unmarks_based_on_the_cursors_row() {
     let mut p = pane(&["a", "b", "c", "d", "e"]);
     p.toggle_mark_page(3, true);
-    assert_eq!(marcados(&p), ["a", "b", "c", "d"]);
+    assert_eq!(marked(&p), ["a", "b", "c", "d"]);
     assert_eq!(p.cursor(), 3);
 
-    // El cursor está ahora sobre "d", que SÍ está marcada: el mismo gesto
-    // hacia arriba desmarca en vez de marcar.
+    // The cursor is now on "d", which IS marked: the same gesture upward
+    // unmarks instead of marking.
     p.toggle_mark_page(3, false);
-    assert_eq!(marcados(&p), Vec::<String>::new());
+    assert_eq!(marked(&p), Vec::<String>::new());
     assert_eq!(p.cursor(), 0);
 }
 
-/// El tramo llega hasta donde llega el CURSOR, no hasta donde se pidió:
-/// contra el tope, `n` filas son menos de `n`.
+/// The stretch reaches as far as the CURSOR gets, not as far as requested:
+/// against the edge, `n` rows are fewer than `n`.
 #[test]
-fn una_pagina_contra_el_tope_marca_solo_lo_que_recorre() {
+fn a_page_against_the_edge_marks_only_what_it_travels() {
     let mut p = pane(&["a", "b", "c"]);
     p.set_cursor(1);
     p.toggle_mark_page(10, true);
-    assert_eq!(marcados(&p), ["b", "c"], "nunca envuelve al principio");
+    assert_eq!(marked(&p), ["b", "c"], "never wraps at the start");
     assert_eq!(p.cursor(), 2);
 }
 
-/// **Krusader `Shift+Home`/`Shift+End`: marcan un lado y LIMPIAN el otro.**
+/// **Krusader `Shift+Home`/`Shift+End`: mark one side and CLEAR the other.**
 ///
-/// Literal de su documentación («selects everything above the cursor and
-/// deselects everything below the cursor, if selected»), y es lo que los
-/// distingue de «añade un tramo»: quien los usa para acotar una selección
-/// cuenta con que lo de fuera se va.
+/// Literally from its documentation ("selects everything above the cursor
+/// and deselects everything below the cursor, if selected"), and it is what
+/// tells them apart from "add a stretch": whoever uses them to bound a
+/// selection counts on what is outside going away.
 #[test]
-fn los_del_borde_limpian_el_otro_lado() {
+fn the_edge_gestures_clear_the_other_side() {
     let mut p = pane(&["a", "b", "c", "d", "e"]);
     p.set_cursor(4);
-    p.toggle_mark(); // "e" marcada a mano, al otro lado del corte
+    p.toggle_mark(); // "e" marked by hand, on the other side of the cut
     p.set_cursor(1);
 
     p.mark_to_top();
-    assert_eq!(marcados(&p), ["a", "b"], "«e» tenía que irse");
-    assert_eq!(p.cursor(), 1, "el borde NO mueve el cursor");
+    assert_eq!(marked(&p), ["a", "b"], "\"e\" had to go");
+    assert_eq!(p.cursor(), 1, "the edge gesture does NOT move the cursor");
 
     p.mark_to_bottom();
-    assert_eq!(marcados(&p), ["b", "c", "d", "e"], "y ahora se va «a»");
+    assert_eq!(marked(&p), ["b", "c", "d", "e"], "and now \"a\" goes");
 }
 
-/// La fila `..` no se marca por ninguno de los caminos nuevos: es la
-/// misma puerta (`markable_indices`/`marcar`) que ya la deja fuera.
+/// The `..` row is not marked through any of the new paths either: it is
+/// the same door (`markable_indices`/`mark`) that already keeps it out.
 #[test]
-fn el_padre_no_entra_por_los_caminos_nuevos() {
-    let mut p = pane_hijo(&["a", "b"]);
+fn the_parent_does_not_get_in_through_the_new_paths() {
+    let mut p = child_pane(&["a", "b"]);
     p.set_parent_row(true);
-    p.set_cursor(0); // la fila `..`
+    p.set_cursor(0); // the `..` row
     p.mark_to_bottom();
     assert!(
-        !marcados(&p).iter().any(|n| n == ".."),
-        "el padre jamás es un operando: {:?}",
-        marcados(&p)
+        !marked(&p).iter().any(|n| n == ".."),
+        "the parent is never an operand: {:?}",
+        marked(&p)
     );
     p.set_cursor(2);
     p.mark_to_top();
@@ -1051,21 +1066,21 @@ fn el_padre_no_entra_por_los_caminos_nuevos() {
         p.marked_entries()
             .iter()
             .all(|e| Some(&e.path) != p.parent_target()),
-        "ni marcando hacia arriba desde abajo"
+        "not even marking upward from below"
     );
 }
 
-/// `set_pending_focus` gana sobre la memoria y se consume una sola vez.
+/// `set_pending_focus` wins over the memory and is consumed only once.
 #[test]
-fn pending_focus_gana_sobre_memoria_y_se_consume_una_vez() {
+fn pending_focus_wins_over_memory_and_is_consumed_once() {
     let mut p = pane(&["a", "b", "c"]);
-    p.set_cursor(2); // "c" — esto quedará en memoria para "mem:///"
+    p.set_cursor(2); // "c" — this will stay in memory for "mem:///"
     p.remember_cursor();
     p.set_listing(
         VPath::parse("mem:///a").unwrap(),
         vec![e("mem:///a/x", EntryKind::File)],
     );
-    // Foco pendiente hacia "b" al volver a "mem:///".
+    // Pending focus toward "b" on returning to "mem:///".
     p.set_pending_focus(VPath::parse("mem:///b").unwrap());
     p.remember_cursor();
     p.set_listing(
@@ -1079,17 +1094,16 @@ fn pending_focus_gana_sobre_memoria_y_se_consume_una_vez() {
     assert_eq!(
         p.selected().unwrap().path,
         VPath::parse("mem:///b").unwrap(),
-        "pending_focus gana sobre la memoria (que apuntaba a \"c\")"
+        "pending_focus wins over the memory (which pointed at \"c\")"
     );
 
-    // Segunda vuelta, SIN volver a fijar pending_focus: si el hint no
-    // se hubiese consumido, seguiría ganando y aterrizaríamos otra vez
-    // en "b" pase lo que pase. Movemos el cursor a "a" (índice 0) antes
-    // de salir para que la memoria prediga un resultado DISTINTO de
-    // "b" — solo la memoria (no un pending_focus fantasma) explica el
-    // resultado.
+    // Second round, WITHOUT setting pending_focus again: if the hint had
+    // not been consumed, it would still win and we would land on "b" again
+    // no matter what. We move the cursor to "a" (index 0) before leaving so
+    // the memory predicts a result DIFFERENT from "b" — only the memory
+    // (not a ghost pending_focus) explains the result.
     p.set_cursor(0); // "a"
-    p.remember_cursor(); // sobrescribe la memoria de "mem:///" a 0
+    p.remember_cursor(); // overwrites "mem:///"'s memory to 0
     p.set_listing(
         VPath::parse("mem:///a").unwrap(),
         vec![e("mem:///a/x", EntryKind::File)],
@@ -1106,23 +1120,23 @@ fn pending_focus_gana_sobre_memoria_y_se_consume_una_vez() {
     assert_eq!(
         p.selected().unwrap().path,
         VPath::parse("mem:///a").unwrap(),
-        "consumido: la segunda vuelta usa memoria (a), no el pending_focus viejo (b)"
+        "consumed: the second round uses the memory (a), not the old pending_focus (b)"
     );
 }
 
-/// Revisión S, M2: un `cd` que FALLA no debe dejar un `pending_focus`
-/// fantasma vivo para un `set_listing` futuro y sin relación —
-/// `clear_pending_focus` (llamado por el caller en la rama de error del
-/// `cd`) lo descarta SIN consumirlo contra ningún listado.
+/// Review S, M2: a `cd` that FAILS must not leave a ghost `pending_focus`
+/// alive for a future, unrelated `set_listing` — `clear_pending_focus`
+/// (called by the caller on the `cd`'s error branch) discards it WITHOUT
+/// consuming it against any listing.
 #[test]
-fn clear_pending_focus_descarta_el_hint_sin_listado() {
+fn clear_pending_focus_discards_the_hint_without_a_listing() {
     let mut p = pane(&["a", "b", "c"]);
     p.set_pending_focus(VPath::parse("mem:///b").unwrap());
     p.clear_pending_focus();
-    // Un `set_listing` posterior (el reintento del `cd`, o uno
-    // totalmente distinto) NO aterriza en "b": no hay memoria para
-    // "mem:///" en este pane fresco, así que el cursor cae al 0 de
-    // siempre — si el hint hubiera sobrevivido, "b" ganaría igual.
+    // A LATER `set_listing` (the `cd`'s retry, or a completely different
+    // one) does NOT land on "b": there is no memory for "mem:///" in this
+    // fresh pane, so the cursor falls to the usual 0 — if the hint had
+    // survived, "b" would still win.
     p.set_listing(
         VPath::parse("mem:///").unwrap(),
         vec![
@@ -1131,14 +1145,14 @@ fn clear_pending_focus_descarta_el_hint_sin_listado() {
             e("mem:///c", EntryKind::File),
         ],
     );
-    assert_eq!(p.cursor(), 0, "el hint descartado no debe ganar");
+    assert_eq!(p.cursor(), 0, "the discarded hint must not win");
 }
 
-/// Bytes hostiles (segmento 0xFF/0xFE, forma wire del corpus): la
-/// memoria y el `pending_focus` identifican por PATH EXACTO en bytes, sin
-/// normalizar (regla 1 — nunca se pliegan gemelos hostiles).
+/// Hostile bytes (segment 0xFF/0xFE, the corpus's wire form): the memory
+/// and `pending_focus` identify by EXACT byte PATH, not normalised (rule 1
+/// — hostile twins are never folded).
 #[test]
-fn cursor_memory_y_pending_focus_byte_exacto_con_path_hostil() {
+fn cursor_memory_and_pending_focus_are_byte_exact_with_a_hostile_path() {
     let root = VPath::parse("mem:///").unwrap();
     let hostile = root
         .clone()
@@ -1165,13 +1179,13 @@ fn cursor_memory_y_pending_focus_byte_exacto_con_path_hostil() {
             },
         ],
     );
-    // "new" normaliza: 0xFF > 0x61 => hostile queda en el índice 1.
+    // "new" normalises: 0xFF > 0x61 => hostile ends up at index 1.
     p.set_cursor(1);
     assert_eq!(p.selected().unwrap().path, hostile);
 
-    // Simula entrar al dir hostil (cd) y salir de nuevo (parent-nav): el
-    // hint se fija DESPUÉS de entrar, justo antes de volver al padre —
-    // igual que `nav.parent` real (spec §S1 punto 3).
+    // Simulates entering the hostile dir (cd) and leaving again
+    // (parent-nav): the hint is set AFTER entering, right before going back
+    // to the parent — same as real `nav.parent` (spec §S1 point 3).
     p.remember_cursor();
     p.set_listing(hostile.clone(), vec![]);
     p.set_pending_focus(hostile.clone());
@@ -1198,22 +1212,23 @@ fn cursor_memory_y_pending_focus_byte_exacto_con_path_hostil() {
     assert_eq!(
         p.selected().unwrap().path,
         hostile,
-        "pending_focus casa por bytes exactos, sin plegar la forma hostil"
+        "pending_focus matches by exact bytes, without folding the hostile form"
     );
 }
 
-/// `begin_loading` captura el dir VIEJO (y su cursor) antes de pisar el
-/// estado con el destino nuevo — es el punto de captura real para la
-/// GUI (`PaneState::begin_loading` se llama ANTES del fetch async).
+/// `begin_loading` captures the OLD dir (and its cursor) before
+/// overwriting the state with the new destination — it is the real
+/// capture point for the GUI (`PaneState::begin_loading` is called BEFORE
+/// the async fetch).
 #[test]
-fn begin_loading_graba_el_dir_viejo_antes_de_pisarlo() {
+fn begin_loading_records_the_old_dir_before_overwriting_it() {
     let mut p = pane(&["a", "b", "c"]);
-    p.set_cursor(2); // "c" en "mem:///"
+    p.set_cursor(2); // "c" in "mem:///"
     p.begin_loading(VPath::parse("mem:///nuevo").unwrap());
-    assert_eq!(p.cursor(), 0, "el destino arranca en 0 mientras carga");
-    // set_listing del MISMO dir nuevo no debe alterar lo grabado del
-    // dir viejo: volver a "mem:///" restaura el cursor grabado por
-    // begin_loading, no un valor corrupto.
+    assert_eq!(p.cursor(), 0, "the destination starts at 0 while loading");
+    // set_listing of the SAME new dir must not alter what was recorded for
+    // the old dir: going back to "mem:///" restores the cursor
+    // begin_loading recorded, not a corrupted value.
     p.set_listing(
         VPath::parse("mem:///nuevo").unwrap(),
         vec![e("mem:///nuevo/x", EntryKind::File)],
@@ -1230,27 +1245,27 @@ fn begin_loading_graba_el_dir_viejo_antes_de_pisarlo() {
     assert_eq!(
         p.cursor(),
         2,
-        "begin_loading grabó (mem:///, 2) antes de pisar el dir"
+        "begin_loading recorded (mem:///, 2) before overwriting the dir"
     );
 }
 
 #[test]
-fn set_cursor_fija_con_clamp() {
+fn set_cursor_sets_with_a_clamp() {
     let mut p = pane(&["a", "b", "c"]);
     p.set_cursor(2);
     assert_eq!(p.cursor(), 2);
-    p.set_cursor(99); // clamp en len-1
+    p.set_cursor(99); // clamps at len-1
     assert_eq!(p.cursor(), 2);
     p.set_cursor(0);
     assert_eq!(p.cursor(), 0);
 
-    let mut vacia = pane(&[]);
-    vacia.set_cursor(5); // no-op, sin panic
-    assert_eq!(vacia.cursor(), 0);
+    let mut empty = pane(&[]);
+    empty.set_cursor(5); // no-op, no panic
+    assert_eq!(empty.cursor(), 0);
 }
 
 #[test]
-fn set_loading_togglea_el_flag() {
+fn set_loading_toggles_the_flag() {
     let mut p = pane(&["a"]);
     assert!(!p.loading());
     p.set_loading(true);
@@ -1260,10 +1275,10 @@ fn set_loading_togglea_el_flag() {
 }
 
 #[test]
-fn quick_next_mueve_el_cursor_real_con_wrap() {
-    // #54: `new` normaliza (dirs primero, alfabético dentro del grupo).
-    // "aa"(dir) y "ac"(file) casan con 'a'; "bb"(dir) queda en medio (no
-    // casa) para seguir probando que Tab SALTA el no-match intermedio.
+fn quick_next_moves_the_real_cursor_with_wrap() {
+    // #54: `new` normalises (dirs first, alphabetical within the group).
+    // "aa"(dir) and "ac"(file) match 'a'; "bb"(dir) stays in the middle (no
+    // match) to keep testing that Tab SKIPS the non-matching one in between.
     let mut p = PaneState::new(
         VPath::parse("mem:///").unwrap(),
         vec![
@@ -1274,20 +1289,23 @@ fn quick_next_mueve_el_cursor_real_con_wrap() {
     );
     p.quick_start(crate::nav::Mode::Jump);
     p.quick_char('a');
-    assert_eq!(p.cursor(), 0, "salta al primer match");
-    assert!(p.quick_visible().is_none(), "en salto el listado va entero");
+    assert_eq!(p.cursor(), 0, "jumps to the first match");
+    assert!(
+        p.quick_visible().is_none(),
+        "in jump mode the whole listing shows"
+    );
     p.quick_next();
     assert_eq!(
         p.cursor(),
         2,
-        "Tab: siguiente match, salta el no-match intermedio"
+        "Tab: next match, skips the non-matching one in between"
     );
     p.quick_next();
     assert_eq!(p.cursor(), 0, "wrap");
 }
 
 #[test]
-fn quick_getter_expone_la_query_viva() {
+fn the_quick_getter_exposes_the_live_query() {
     let mut p = pane(&["a"]);
     assert!(p.quick().is_none());
     p.quick_start(crate::nav::Mode::Filter);
@@ -1297,9 +1315,10 @@ fn quick_getter_expone_la_query_viva() {
     assert!(p.quick().is_none());
 }
 
-/// `extend` re-ordena TODO y re-ancla el cursor al PATH seleccionado.
+/// `extend` re-sorts EVERYTHING and re-anchors the cursor to the selected
+/// PATH.
 #[test]
-fn extend_reordena_y_reancla_por_path() {
+fn extend_re_sorts_and_re_anchors_by_path() {
     let mut first = vec![
         e("mem:///m", EntryKind::File),
         e("mem:///z", EntryKind::File),
@@ -1311,28 +1330,28 @@ fn extend_reordena_y_reancla_por_path() {
         e("mem:///a", EntryKind::File),
         e("mem:///b", EntryKind::File),
     ]);
-    let orden: Vec<_> = p
+    let order: Vec<_> = p
         .entries()
         .iter()
         .map(|e| e.path.file_name().unwrap().as_bytes().to_vec())
         .collect();
     assert_eq!(
-        orden,
+        order,
         vec![b"a".to_vec(), b"b".to_vec(), b"m".to_vec(), b"z".to_vec()]
     );
     assert_eq!(
         p.selected().unwrap().path,
         VPath::parse("mem:///z").unwrap(),
-        "la selección sigue el path pese al re-orden"
+        "the selection follows the path despite the re-sort"
     );
 }
 
-/// #124: el alto del viewport lo devuelve el frontend tras pintar, y de
-/// ahí salen el salto de página (una pantalla menos una fila de
-/// contexto) y el radio de la sonda de stat. Sin frame pintado mandan
-/// los fallbacks.
+/// #124: the viewport's height is reported back by the frontend after
+/// painting, and from it come the page jump (one screen minus one row of
+/// context) and the stat probe's radius. With no frame painted, the
+/// fallbacks rule.
 #[test]
-fn el_viewport_pintado_manda_en_pagina_y_sonda() {
+fn the_painted_viewport_rules_the_page_and_the_probe() {
     let lazy = |n: &str| {
         let mut x = e(&format!("mem:///{n}"), EntryKind::File);
         x.size = None;
@@ -1340,77 +1359,84 @@ fn el_viewport_pintado_manda_en_pagina_y_sonda() {
     };
     let entries: Vec<Entry> = (0..100).map(|i| lazy(&format!("f{i:03}"))).collect();
     let mut p = PaneState::new(VPath::parse("mem:///").unwrap(), entries);
-    assert_eq!(p.viewport_rows(), None, "sin pintar todavía");
-    assert_eq!(p.page_step(), DEFAULT_PAGE, "sin frame: fallback histórico");
+    assert_eq!(p.viewport_rows(), None, "not painted yet");
+    assert_eq!(
+        p.page_step(),
+        DEFAULT_PAGE,
+        "no frame: the historical fallback"
+    );
     assert_eq!(
         p.needs_stat_window(3).len(),
         4,
-        "sin frame manda el fallback del caller: cursor 0 ± 3"
+        "with no frame the caller's fallback rules: cursor 0 ± 3"
     );
 
     p.set_viewport_rows(30);
     assert_eq!(p.viewport_rows(), Some(30));
-    assert_eq!(p.page_step(), 29, "una pantalla menos una fila de contexto");
+    assert_eq!(p.page_step(), 29, "one screen minus one row of context");
     assert_eq!(
         p.needs_stat_window(3).len(),
         31,
-        "el radio pasa a ser el alto REAL, no el fallback"
+        "the radius becomes the REAL height, not the fallback"
     );
 
-    // Un pane de una sola fila sigue avanzando (jamás un salto de 0).
+    // A one-row pane still advances (never a jump of 0).
     p.set_viewport_rows(1);
     assert_eq!(p.page_step(), 1);
-    // Pane tapado (visor abierto): vuelve a mandar el fallback.
+    // Covered pane (viewer open): the fallback rules again.
     p.set_viewport_rows(0);
     assert_eq!(p.viewport_rows(), None);
     assert_eq!(p.page_step(), DEFAULT_PAGE);
 }
 
-/// #123: `needs_stat_at` filtra un rango ABSOLUTO explícito (el que la
-/// GUI recibe de `uniform_list`), con el mismo criterio que la ventana
-/// por radio: solo `File` sin `size`, y los índices fuera del listado se
-/// ignoran en vez de reventar.
+/// #123: `needs_stat_at` filters an explicit ABSOLUTE range (the one the
+/// GUI gets from `uniform_list`), with the same criterion as the
+/// radius-based window: only `File`s with no `size`, and indices outside
+/// the listing are ignored instead of blowing up.
 #[test]
-fn needs_stat_at_filtra_el_rango_explicito() {
+fn needs_stat_at_filters_the_explicit_range() {
     let lazy = |n: &str| {
         let mut x = e(&format!("mem:///{n}"), EntryKind::File);
         x.size = None;
         x
     };
-    let mut ya = lazy("b");
-    ya.size = Some(7);
+    let mut already = lazy("b");
+    already.size = Some(7);
     let mut dir = lazy("c");
     dir.kind = EntryKind::Dir;
-    // `PaneState::new` ordena (dirs primero): [c, a, b, d].
+    // `PaneState::new` sorts (dirs first): [c, a, b, d].
     let p = PaneState::new(
         VPath::parse("mem:///").unwrap(),
-        vec![lazy("a"), ya, dir, lazy("d")],
+        vec![lazy("a"), already, dir, lazy("d")],
     );
     let paths = p.needs_stat_at(0..99);
-    let nombres: Vec<String> = paths
+    let names: Vec<String> = paths
         .iter()
         .map(norte_proto::VPath::display_lossy)
         .collect();
     assert!(
-        nombres.iter().any(|n| n.ends_with("/a")) && nombres.iter().any(|n| n.ends_with("/d")),
-        "los File lazy del rango: {nombres:?}"
+        names.iter().any(|n| n.ends_with("/a")) && names.iter().any(|n| n.ends_with("/d")),
+        "the lazy Files of the range: {names:?}"
     );
-    assert_eq!(paths.len(), 2, "ni el Dir ni el ya hidratado: {nombres:?}");
+    assert_eq!(
+        paths.len(),
+        2,
+        "neither the Dir nor the already-hydrated one: {names:?}"
+    );
     assert!(
         p.needs_stat_at(50..99).is_empty(),
-        "un rango fuera del listado no aporta nada"
+        "a range outside the listing contributes nothing"
     );
 }
 
-/// El cursor EN EL TOPE se queda en el tope mientras el listado se
-/// rellena: la primera página de un dir paginado llega en orden de
-/// `readdir` (hash del FS), así que su primer elemento ORDENADO es
-/// arbitrario — anclar por path ahí dejaba el cursor clavado en mitad
-/// del listado final (en un dir de 5000 ficheros, el pane abría
-/// mostrando la COLA en vez del principio). Anclar por path sigue
-/// valiendo en cuanto el usuario mueve el cursor.
+/// The cursor AT THE TOP stays at the top while the listing fills in: a
+/// paginated dir's first page arrives in `readdir` order (FS hash), so its
+/// SORTED first element is arbitrary — anchoring by path there pinned the
+/// cursor in the middle of the final listing (in a 5000-file dir, the pane
+/// opened showing the TAIL instead of the start). Anchoring by path still
+/// applies as soon as the user moves the cursor.
 #[test]
-fn extend_con_el_cursor_en_el_tope_lo_deja_en_el_tope() {
+fn extend_with_the_cursor_at_the_top_leaves_it_at_the_top() {
     let mut p = PaneState::new(
         VPath::parse("mem:///").unwrap(),
         vec![e("mem:///m", EntryKind::File)],
@@ -1420,20 +1446,20 @@ fn extend_con_el_cursor_en_el_tope_lo_deja_en_el_tope() {
         e("mem:///a", EntryKind::File),
         e("mem:///b", EntryKind::File),
     ]);
-    assert_eq!(p.cursor(), 0, "el cursor sigue en la primera fila");
+    assert_eq!(p.cursor(), 0, "the cursor stays on the first row");
     assert_eq!(
         p.selected().unwrap().path,
         VPath::parse("mem:///a").unwrap(),
-        "y esa fila es el principio REAL del listado ya mergeado"
+        "and that row is the REAL start of the already-merged listing"
     );
 }
 
-/// #54: el merge incremental produce EXACTAMENTE el mismo orden que
-/// `sort_entries` sobre el total (dirs primero, NFC, empate por bytes) —
-/// incluidos NFD/NFC mezclados y no-UTF8.
+/// #54: the incremental merge produces EXACTLY the same order as
+/// `sort_entries` over the whole thing (dirs first, NFC, tie-break by
+/// bytes) — including mixed NFD/NFC and non-UTF8.
 #[test]
-fn extend_merge_equivale_a_sort_completo() {
-    let lotes: Vec<Vec<Entry>> = vec![
+fn extend_merge_is_equivalent_to_a_full_sort() {
+    let batches: Vec<Vec<Entry>> = vec![
         vec![
             e("mem:///zeta", EntryKind::File),
             e("mem:///Adir", EntryKind::Dir),
@@ -1441,28 +1467,28 @@ fn extend_merge_equivale_a_sort_completo() {
         vec![e("mem:///an%CC%83o", EntryKind::File)], // NFD
         vec![
             e("mem:///a%C3%B1o2", EntryKind::File), // NFC
-            e("mem:///%FF%FE", EntryKind::File),    // no-UTF8
+            e("mem:///%FF%FE", EntryKind::File),    // non-UTF8
         ],
         vec![e("mem:///Bdir", EntryKind::Dir)],
-        // Sobrelargo (>255 bytes): el orden no tiene camino especial por
-        // longitud, pero que quede pineado en la equivalencia.
+        // Overlong (>255 bytes): the order has no special path by length,
+        // but let it be pinned into the equivalence.
         vec![e(&format!("mem:///{}", "x".repeat(300)), EntryKind::File)],
     ];
     let mut p = PaneState::new(VPath::parse("mem:///").unwrap(), Vec::new());
-    for lote in lotes.clone() {
-        p.extend(lote);
+    for batch in batches.clone() {
+        p.extend(batch);
     }
-    let mut plano: Vec<Entry> = lotes.into_iter().flatten().collect();
-    crate::sort_entries(&mut plano);
-    assert_eq!(p.entries(), plano.as_slice(), "merge ≡ sort completo");
+    let mut flat: Vec<Entry> = batches.into_iter().flatten().collect();
+    crate::sort_entries(&mut flat);
+    assert_eq!(p.entries(), flat.as_slice(), "merge ≡ full sort");
 }
 
-/// El histograma de nombres que `extend` SUMA por lotes es el mismo que
-/// medir el listado entero de golpe (ADR 0124): sumar es la optimización,
-/// no otro resultado.
+/// The name histogram `extend` SUMS per batch is the same as measuring the
+/// whole listing at once (ADR 0124): summing is the optimisation, not a
+/// different result.
 #[test]
-fn extend_mide_los_nombres_igual_que_de_golpe() {
-    let lotes: Vec<Vec<Entry>> = vec![
+fn extend_measures_names_the_same_as_all_at_once() {
+    let batches: Vec<Vec<Entry>> = vec![
         vec![e("mem:///corto", EntryKind::File)],
         vec![
             e("mem:///un-nombre-bastante-largo.png", EntryKind::File),
@@ -1471,22 +1497,22 @@ fn extend_mide_los_nombres_igual_que_de_golpe() {
         vec![e("mem:///otro-nombre-largo-ya.pdf", EntryKind::File)],
     ];
     let mut p = PaneState::new(VPath::parse("mem:///").unwrap(), Vec::new());
-    for lote in lotes.clone() {
-        p.extend(lote);
+    for batch in batches.clone() {
+        p.extend(batch);
     }
-    let de_golpe = PaneState::new(
+    let all_at_once = PaneState::new(
         VPath::parse("mem:///").unwrap(),
-        lotes.into_iter().flatten().collect(),
+        batches.into_iter().flatten().collect(),
     );
-    assert_eq!(p.name_width_p80(), de_golpe.name_width_p80());
-    assert!(p.name_width_p80() >= 20, "lo largo cuenta");
+    assert_eq!(p.name_width_p80(), all_at_once.name_width_p80());
+    assert!(p.name_width_p80() >= 20, "the long one counts");
 }
 
-/// El contrato "ordénalas antes" deja de ser footgun: `set_listing`/`new`
-/// normalizan internamente (claves + orden) — un caller desordenado ya
-/// no rompe el invariante del merge.
+/// The "sort them first" contract stops being a footgun: `set_listing`/`new`
+/// normalise internally (keys + order) — an unsorted caller no longer
+/// breaks the merge's invariant.
 #[test]
-fn set_listing_normaliza_aunque_llegue_desordenado() {
+fn set_listing_normalises_even_when_it_arrives_unsorted() {
     let mut p = PaneState::new(VPath::parse("mem:///").unwrap(), Vec::new());
     p.set_listing(
         VPath::parse("mem:///d").unwrap(),
@@ -1496,7 +1522,7 @@ fn set_listing_normaliza_aunque_llegue_desordenado() {
         ],
     );
     assert_eq!(p.entries()[0].path, VPath::parse("mem:///d/a").unwrap());
-    // Y el extend posterior sigue mergeando bien sobre esa base.
+    // And the later extend still merges fine over that base.
     p.extend(vec![e("mem:///d/m", EntryKind::File)]);
     let names: Vec<_> = p.entries().iter().map(|x| x.path.clone()).collect();
     assert_eq!(
@@ -1509,83 +1535,83 @@ fn set_listing_normaliza_aunque_llegue_desordenado() {
     );
 }
 
-/// Empate de clave NFC entre lotes (misma forma normalizada, bytes
-/// crudos distintos: NFD en el lote 1 vs NFC en el lote 2) — el
-/// desempate lo decide `name_bytes` crudo, igual que `sort_entries`, NO
-/// el orden de llegada del merge (que solo desempata IZQUIERDA=empate
-/// exacto de clave, y aquí las claves NFC coinciden pero los bytes no).
+/// NFC key tie between batches (same normalised form, different raw bytes:
+/// NFD in batch 1 vs NFC in batch 2) — the tie-break is decided by raw
+/// `name_bytes`, same as `sort_entries`, NOT the merge's arrival order
+/// (which only breaks a LEFT=exact key tie, and here the NFC keys match but
+/// the bytes do not).
 #[test]
-fn extend_desempata_por_bytes_crudos_igual_que_sort_completo() {
+fn extend_breaks_ties_by_raw_bytes_same_as_a_full_sort() {
     let nfd = e("mem:///an%CC%83o", EntryKind::File); // "año" NFD
     let nfc = e("mem:///a%C3%B1o", EntryKind::File); // "año" NFC
     let mut p = PaneState::new(VPath::parse("mem:///").unwrap(), Vec::new());
     p.extend(vec![nfd.clone()]);
     p.extend(vec![nfc.clone()]);
-    let mut plano = vec![nfd, nfc];
-    crate::sort_entries(&mut plano);
+    let mut flat = vec![nfd, nfc];
+    crate::sort_entries(&mut flat);
     assert_eq!(
         p.entries(),
-        plano.as_slice(),
-        "el empate de clave NFC entre lotes se resuelve igual que sort_entries"
+        flat.as_slice(),
+        "the NFC key tie between batches resolves the same as sort_entries"
     );
 }
 
-/// ADVERSARIAL A (mutación, review encoding #54): la NFC llega ANTES que
-/// la NFD — el orden de llegada CONTRADICE el desempate por bytes crudos
-/// (NFD `61 6E CC 83` < NFC `61 C3 B1`). Un merge sin `.then_with(bytes)`
-/// pasaría el test gemelo de arriba (allí llegada y bytes coinciden) pero
-/// muere aquí.
+/// ADVERSARIAL A (mutation, encoding review #54): the NFC one arrives
+/// BEFORE the NFD one — arrival order CONTRADICTS the raw-byte tie-break
+/// (NFD `61 6E CC 83` < NFC `61 C3 B1`). A merge with no
+/// `.then_with(bytes)` would pass the twin test above (there, arrival and
+/// bytes agree) but dies here.
 #[test]
-fn adversarial_nfc_llega_antes_que_nfd() {
+fn adversarial_nfc_arrives_before_nfd() {
     let nfd = e("mem:///an%CC%83o", EntryKind::File);
     let nfc = e("mem:///a%C3%B1o", EntryKind::File);
     let mut p = PaneState::new(VPath::parse("mem:///").unwrap(), Vec::new());
     p.extend(vec![nfc.clone()]);
     p.extend(vec![nfd.clone()]);
-    let mut plano = vec![nfc, nfd];
-    crate::sort_entries(&mut plano);
-    assert_eq!(p.entries(), plano.as_slice());
+    let mut flat = vec![nfc, nfd];
+    crate::sort_entries(&mut flat);
+    assert_eq!(p.entries(), flat.as_slice());
     assert_eq!(
         p.entries()[0].path,
         VPath::parse("mem:///an%CC%83o").unwrap(),
-        "NFD primero por bytes crudos, no por orden de llegada"
+        "NFD first by raw bytes, not by arrival order"
     );
 }
 
-/// ADVERSARIAL B (mutación, review encoding #54): inversión NFC↔bytes.
-/// NFD "ñu" = `6E CC 83 75`, "o" = `6F`: por clave NFC (`C3 B1 75`)
-/// ñu > o, pero por bytes crudos ñu < o. Un `cmp_keyed` que use los
-/// bytes como clave PRIMARIA (ignorando la NFC persistida) invierte el
-/// orden — spec §6.1 rota en macOS/NFD sin que el resto de la suite lo
-/// note. Cruza frontera de lote a propósito.
+/// ADVERSARIAL B (mutation, encoding review #54): NFC↔bytes inversion.
+/// NFD "ñu" = `6E CC 83 75`, "o" = `6F`: by NFC key (`C3 B1 75`) ñu > o,
+/// but by raw bytes ñu < o. A `cmp_keyed` that uses the bytes as the
+/// PRIMARY key (ignoring the persisted NFC) inverts the order — spec §6.1
+/// breaks on macOS/NFD without the rest of the suite noticing. Crosses a
+/// batch boundary on purpose.
 #[test]
-fn adversarial_inversion_nfc_vs_bytes_entre_lotes() {
+fn adversarial_nfc_vs_bytes_inversion_across_batches() {
     let nfd_enye = e("mem:///n%CC%83u", EntryKind::File);
     let o = e("mem:///o", EntryKind::File);
     let mut p = PaneState::new(VPath::parse("mem:///").unwrap(), Vec::new());
     p.extend(vec![nfd_enye.clone()]);
     p.extend(vec![o.clone()]);
-    let mut plano = vec![nfd_enye, o];
-    crate::sort_entries(&mut plano);
-    assert_eq!(p.entries(), plano.as_slice());
+    let mut flat = vec![nfd_enye, o];
+    crate::sort_entries(&mut flat);
+    assert_eq!(p.entries(), flat.as_slice());
     assert_eq!(
         p.entries()[0].path,
         VPath::parse("mem:///o").unwrap(),
-        "'o' primero: la clave primaria es NFC, no los bytes crudos"
+        "'o' first: the primary key is NFC, not the raw bytes"
     );
 }
 
 #[test]
-fn extend_vacio_es_noop() {
+fn extend_with_an_empty_batch_is_a_noop() {
     let mut p = pane(&["a"]);
     p.extend(vec![]);
     assert_eq!(p.entries().len(), 1);
     assert_eq!(p.cursor(), 0);
 }
 
-/// `extend` re-aplica el filtro vivo sobre el listado nuevo.
+/// `extend` re-applies the live filter over the new listing.
 #[test]
-fn extend_reaplica_el_filtro() {
+fn extend_re_applies_the_filter() {
     let mut p = pane(&["a1"]);
     p.quick_start(crate::nav::Mode::Filter);
     p.quick_char('a');
@@ -1593,19 +1619,23 @@ fn extend_reaplica_el_filtro() {
         e("mem:///a2", EntryKind::File),
         e("mem:///zz", EntryKind::File),
     ]);
-    assert_eq!(p.quick_visible().unwrap().len(), 2, "a2 entra, zz no");
+    assert_eq!(
+        p.quick_visible().unwrap().len(),
+        2,
+        "a2 gets in, zz does not"
+    );
 }
 
-/// `refill` conserva el cursor por índice con clamp y re-aplica el filtro.
+/// `refill` keeps the cursor by clamped index and re-applies the filter.
 #[test]
-fn refill_conserva_cursor_por_indice_con_clamp() {
+fn refill_keeps_the_cursor_by_clamped_index() {
     let mut p = pane(&["a", "b", "c"]);
     p.set_cursor(2); // "c"
     p.refill(vec![
         e("mem:///a", EntryKind::File),
         e("mem:///b", EntryKind::File),
     ]);
-    assert_eq!(p.cursor(), 1, "clamp a la última entrada del listado nuevo");
+    assert_eq!(p.cursor(), 1, "clamps to the new listing's last entry");
     assert_eq!(p.entries().len(), 2);
 }
 
@@ -1723,7 +1753,7 @@ fn set_listing_to_the_same_dir_still_clears_marks() {
     // Deliberate, not a bug: `set_listing` means "a listing arrived for a
     // directory I navigated to" — even a `cd` that lands back on the SAME
     // dir clears marks. Only `refill` means "refresh" and preserves what
-    // survives; this is the case neither `set_listing_limpia_las_marcas`
+    // survives; this is the case neither `set_listing_clears_the_marks`
     // (different dir) nor the `refill` tests (same dir, but via `refill`)
     // cover.
     let mut p = PaneState::new(
@@ -1739,13 +1769,13 @@ fn set_listing_to_the_same_dir_still_clears_marks() {
     assert_eq!(p.marks_len(), 0);
 }
 
-/// El refresco NO puede vaciar las columnas. Un listado fresco del MISMO
-/// dir llega SIN size/mtime (stat perezoso, #52), así que instalarlo tal
-/// cual deja las celdas de tamaño y fecha en blanco hasta que la sonda
-/// las rellena: con el watcher (#106) refrescando en cada evento, eso es
-/// un parpadeo constante. `refill` hereda por path lo que ya se sabía.
+/// The refresh must NOT be able to empty the columns. A fresh listing of
+/// the SAME dir arrives WITHOUT size/mtime (lazy stat, #52), so installing
+/// it as-is leaves the size and date cells blank until the probe fills
+/// them: with the watcher (#106) refreshing on every event, that is
+/// constant flicker. `refill` inherits by path what was already known.
 #[test]
-fn refill_hereda_size_y_mtime_ya_conocidos() {
+fn refill_inherits_already_known_size_and_mtime() {
     let mut entries = vec![
         e("mem:///a", EntryKind::File),
         e("mem:///b", EntryKind::File),
@@ -1755,7 +1785,7 @@ fn refill_hereda_size_y_mtime_ya_conocidos() {
     crate::sort_entries(&mut entries);
     let mut p = PaneState::new(VPath::parse("mem:///").unwrap(), entries);
 
-    // Lo que devuelve un `fs.list` del mismo dir: pelado.
+    // What an `fs.list` of the same dir returns: bare.
     p.refill(vec![
         e("mem:///a", EntryKind::File),
         e("mem:///b", EntryKind::File),
@@ -1765,71 +1795,71 @@ fn refill_hereda_size_y_mtime_ya_conocidos() {
         .entries()
         .iter()
         .find(|x| x.path == VPath::parse("mem:///a").unwrap())
-        .expect("a sigue en el listado");
-    assert_eq!(a.size, Some(42), "el tamaño conocido sobrevive al refresco");
-    assert_eq!(a.mtime_ms, Some(1000), "y la fecha también");
+        .expect("a is still in the listing");
+    assert_eq!(a.size, Some(42), "the known size survives the refresh");
+    assert_eq!(a.mtime_ms, Some(1000), "and so does the date");
     let b = p
         .entries()
         .iter()
         .find(|x| x.path == VPath::parse("mem:///b").unwrap())
-        .expect("b sigue en el listado");
-    assert_eq!(b.size, None, "lo que nunca se supo sigue sin saberse");
+        .expect("b is still in the listing");
+    assert_eq!(b.size, None, "what was never known stays unknown");
 }
 
-/// La herencia anterior no puede congelar un valor rancio: el listado
-/// fresco manda cuando SÍ trae el dato (un provider que lo conoce), y la
-/// sonda posterior manda siempre — si no, un fichero que crece mostraría
-/// para siempre el tamaño con el que se listó la primera vez.
+/// The inheritance above must not be able to freeze a stale value: the
+/// fresh listing wins when it DOES bring the data (a provider that knows
+/// it), and the later probe always wins — otherwise a growing file would
+/// forever show the size it was listed with the first time.
 #[test]
-fn el_dato_fresco_gana_a_la_herencia_y_la_sonda_gana_a_ambos() {
+fn fresh_data_beats_inheritance_and_the_probe_beats_both() {
     let mut entries = vec![e("mem:///a", EntryKind::File)];
     entries[0].size = Some(42);
     let mut p = PaneState::new(VPath::parse("mem:///").unwrap(), entries);
 
-    let mut fresco = e("mem:///a", EntryKind::File);
-    fresco.size = Some(100);
-    p.refill(vec![fresco]);
-    assert_eq!(p.entries()[0].size, Some(100), "el listado fresco manda");
+    let mut fresh = e("mem:///a", EntryKind::File);
+    fresh.size = Some(100);
+    p.refill(vec![fresh]);
+    assert_eq!(p.entries()[0].size, Some(100), "the fresh listing wins");
 
     p.hydrate(&VPath::parse("mem:///a").unwrap(), Some(7), Some(7));
-    assert_eq!(p.entries()[0].size, Some(7), "la sonda es autoritativa");
+    assert_eq!(p.entries()[0].size, Some(7), "the probe is authoritative");
     p.hydrate(&VPath::parse("mem:///a").unwrap(), None, None);
     assert_eq!(
         p.entries()[0].size,
         Some(7),
-        "una sonda que no sabe nada jamás borra lo que sí se sabe"
+        "a probe that knows nothing never erases what IS known"
     );
 }
 
-/// #52: hydrate por path rellena size/mtime de la entrada viva; un path
-/// desconocido es no-op; el orden no cambia (size/mtime no ordenan).
+/// #52: hydrate by path fills in the live entry's size/mtime; an unknown
+/// path is a no-op; the order does not change (size/mtime do not sort).
 #[test]
-fn hydrate_rellena_sin_reordenar_y_es_noop_si_no_esta() {
+fn hydrate_fills_in_without_re_sorting_and_is_a_noop_if_absent() {
     let mut entries = vec![
         e("mem:///a", EntryKind::File),
         e("mem:///b", EntryKind::File),
         e("mem:///c", EntryKind::File),
     ];
-    entries[1].size = Some(999); // "b" ya venía hidratada
+    entries[1].size = Some(999); // "b" was already hydrated
     crate::sort_entries(&mut entries);
     let mut p = PaneState::new(VPath::parse("mem:///").unwrap(), entries);
 
     p.hydrate(&VPath::parse("mem:///a").unwrap(), Some(5), Some(1000));
-    // La sonda PISA lo que hubiera: acaba de mirar el fichero. Antes se
-    // conservaba el valor previo, y eso congelaba un tamaño heredado de
-    // antes del refresco (ver `inherit_known_metadata`).
+    // The probe OVERWRITES whatever there was: it just looked at the file.
+    // It used to keep the previous value, and that froze a size inherited
+    // from before the refresh (see `inherit_known_metadata`).
     p.hydrate(&VPath::parse("mem:///b").unwrap(), Some(1), Some(2));
     p.hydrate(&VPath::parse("mem:///no-existe").unwrap(), Some(7), Some(7)); // no-op
 
-    let orden: Vec<_> = p
+    let order: Vec<_> = p
         .entries()
         .iter()
         .map(|e| e.path.file_name().unwrap().as_bytes().to_vec())
         .collect();
     assert_eq!(
-        orden,
+        order,
         vec![b"a".to_vec(), b"b".to_vec(), b"c".to_vec()],
-        "hydrate no reordena"
+        "hydrate does not re-sort"
     );
 
     let a = p
@@ -1848,7 +1878,7 @@ fn hydrate_rellena_sin_reordenar_y_es_noop_si_no_esta() {
     assert_eq!(
         b.size,
         Some(1),
-        "el dato recién medido gana al que ya había"
+        "the freshly measured data beats what was already there"
     );
 
     let c = p
@@ -1856,34 +1886,35 @@ fn hydrate_rellena_sin_reordenar_y_es_noop_si_no_esta() {
         .iter()
         .find(|e| e.path == VPath::parse("mem:///c").unwrap())
         .unwrap();
-    assert_eq!(c.size, None, "sin hydrate para c, sigue None");
+    assert_eq!(c.size, None, "with no hydrate for c, it stays None");
 }
 
-/// `refresh_quick` re-aplica el filtro sin tocar entries ni cursor real.
+/// `refresh_quick` re-applies the filter without touching entries or the
+/// real cursor.
 #[test]
-fn refresh_quick_no_toca_entries_ni_cursor() {
+fn refresh_quick_does_not_touch_entries_or_the_cursor() {
     let mut p = pane(&["a1", "a2"]);
     p.quick_start(crate::nav::Mode::Filter);
     p.quick_char('a');
-    let antes: Vec<_> = p.entries().to_vec();
+    let before: Vec<_> = p.entries().to_vec();
     let cur = p.cursor();
     p.refresh_quick();
-    assert_eq!(p.entries(), antes.as_slice());
+    assert_eq!(p.entries(), before.as_slice());
     assert_eq!(p.cursor(), cur);
     assert_eq!(p.quick_visible().unwrap().len(), 2);
 }
 
-/// #98/F1 (fixture `cp866_papka` del corpus): el quick search casa
-/// contra el texto que el usuario VE. Con reinterpretación IBM866
-/// activa, teclear «п» encuentra la entrada pintada «Папка» — y el
-/// cache de folds se invalida en AMBOS caminos: quick vivo al ciclar
-/// (`set_name_encoding`) y quick arrancado después (`new` con enc).
+/// #98/F1 (corpus fixture `cp866_papka`): the quick search matches against
+/// the text the user SEES. With IBM866 reinterpretation active, typing "п"
+/// finds the entry painted "Папка" — and the fold cache is invalidated on
+/// BOTH paths: a live quick search when cycling (`set_name_encoding`) and
+/// a quick search started afterwards (`new` with enc).
 #[test]
-fn quick_search_casa_contra_el_texto_reinterpretado() {
+fn the_quick_search_matches_against_the_reinterpreted_text() {
     let papka = norte_testkit::corpus::hostile_names()
         .into_iter()
         .find(|n| n.id == "cp866_papka")
-        .expect("fixture del corpus")
+        .expect("corpus fixture")
         .bytes;
     let dir = VPath::parse("mem:///").unwrap();
     let seg = norte_proto::Segment::new(papka).unwrap();
@@ -1898,24 +1929,24 @@ fn quick_search_casa_contra_el_texto_reinterpretado() {
         e("mem:///otro.txt", EntryKind::File),
     ];
 
-    // Camino 1: quick VIVO, luego ciclar — el fold se re-pliega.
+    // Path 1: LIVE quick search, then cycle — the fold re-folds.
     let mut p = PaneState::new(dir.clone(), entries.clone());
     p.quick_start(Mode::Filter);
     p.quick_char('\u{043f}'); // п
     assert_eq!(
         p.quick_visible().map(<[usize]>::len),
         Some(0),
-        "sin reinterpretar, п no casa contra el lossy"
+        "without reinterpreting, п does not match the lossy form"
     );
-    // Cicla hasta IBM866 (la sugerencia con estas muestras).
+    // Cycles to IBM866 (the suggestion for these samples).
     assert_eq!(p.cycle_name_encoding(), Some("IBM866"));
     assert_eq!(
         p.quick_visible().map(<[usize]>::len),
         Some(1),
-        "con IBM866 el filtro casa contra «Папка»"
+        "with IBM866 the filter matches \"Папка\""
     );
 
-    // Camino 2: ciclar primero, quick después (folds nacen con enc).
+    // Path 2: cycle first, quick search afterwards (folds are born with enc).
     let mut p = PaneState::new(dir, entries);
     assert_eq!(p.cycle_name_encoding(), Some("IBM866"));
     p.quick_start(Mode::Filter);
@@ -2190,280 +2221,303 @@ fn marked_dirs_ignores_unmarked_directories() {
     assert_eq!(p.marked_dirs(), 0);
 }
 
-// --- ratón T1: rango y marca por índice -------------------------------
+// --- mouse T1: range and mark by index -------------------------------
 
-/// El rango marca en LOS DOS SENTIDOS: el ancla de un shift+click o de
-/// un barrido puede quedar por encima o por debajo del puntero, y el
-/// frontend no debe tener que ordenarlos antes de llamar. Devuelve las
-/// marcas que CAMBIÓ (convención de `mark_glob`), no el total.
+/// The range marks in BOTH DIRECTIONS: a shift+click's or a sweep's anchor
+/// can sit above or below the pointer, and the frontend must not have to
+/// sort them before calling. Returns the marks it CHANGED (`mark_glob`'s
+/// convention), not the total.
 #[test]
-fn mark_range_marca_en_los_dos_sentidos() {
+fn mark_range_marks_in_both_directions() {
     let mut p = pane(&["a", "b", "c", "d"]);
-    assert_eq!(p.mark_range(1, 2), 2, "b y c");
+    assert_eq!(p.mark_range(1, 2), 2, "b and c");
     p.clear_marks();
-    assert_eq!(p.mark_range(2, 1), 2, "al revés, el MISMO rango");
+    assert_eq!(p.mark_range(2, 1), 2, "reversed, the SAME range");
     assert_eq!(p.marked_paths().len(), 2);
     assert!(p.is_marked(&e("mem:///b", EntryKind::File)));
     assert!(p.is_marked(&e("mem:///c", EntryKind::File)));
     assert!(!p.is_marked(&e("mem:///a", EntryKind::File)));
     assert!(!p.is_marked(&e("mem:///d", EntryKind::File)));
-    // Solo AÑADE: re-marcar lo ya marcado cambia 0 aunque la selección
-    // siga llena — el caller lee el contador, no lo confunde con el total.
+    // Only ADDS: re-marking what is already marked changes 0 even though
+    // the selection is still full — the caller reads the counter, it does
+    // not confuse it with the total.
     assert_eq!(p.mark_range(1, 2), 0);
     assert_eq!(p.marks_len(), 2);
 }
 
-/// Bajo un filtro vivo el rango alcanza SOLO lo visible, igual que
-/// `mark_all`: lo que el usuario no ve no se marca. Sin esta regla, un
-/// rango cuyos extremos abrazan una entrada oculta por el filtro la
-/// marcaría a ciegas y la siguiente operación masiva (copiar, BORRAR)
-/// se ensancharía sobre un fichero que nadie eligió.
+/// Under a live filter the range reaches ONLY what is visible, same as
+/// `mark_all`: what the user does not see does not get marked. Without
+/// this rule, a range whose ends straddle an entry hidden by the filter
+/// would mark it blindly, and the next bulk operation (copy, DELETE) would
+/// widen onto a file nobody chose.
 #[test]
-fn mark_range_bajo_filtro_solo_marca_lo_visible() {
+fn mark_range_under_a_filter_only_marks_the_visible() {
     let mut p = pane(&["alfa", "beta", "alga"]);
     p.quick_start(Mode::Filter);
     p.quick_char('a');
-    p.quick_char('l'); // deja visibles "alfa" y "alga", oculta "beta"
-    let visibles = p.quick_visible().expect("filtro activo").to_vec();
-    assert_eq!(visibles.len(), 2, "el filtro deja dos");
-    // Rango sobre TODO el listado: los extremos abrazan la oculta.
+    p.quick_char('l'); // leaves "alfa" and "alga" visible, hides "beta"
+    let visible = p.quick_visible().expect("active filter").to_vec();
+    assert_eq!(visible.len(), 2, "the filter leaves two");
+    // Range over the WHOLE listing: the ends straddle the hidden one.
     assert_eq!(p.mark_range(0, p.entries().len() - 1), 2);
     assert!(p.is_marked(&e("mem:///alfa", EntryKind::File)));
     assert!(p.is_marked(&e("mem:///alga", EntryKind::File)));
     assert!(
         !p.is_marked(&e("mem:///beta", EntryKind::File)),
-        "beta estaba oculta por el filtro: jamás se marca"
+        "beta was hidden by the filter: never marked"
     );
-    assert_eq!(p.marks_len(), 2, "marked_paths cae al cursor: clava el SET");
+    assert_eq!(
+        p.marks_len(),
+        2,
+        "marked_paths falls back to the cursor: pin the SET"
+    );
 }
 
-/// Listado vacío (o índices fuera de rango) = no-op, sin panic: el
-/// frontend resuelve el índice desde la posición del puntero y puede
-/// llegar tarde a un pane que acaba de vaciarse.
+/// An empty listing (or indices out of range) = no-op, no panic: the
+/// frontend resolves the index from the pointer's position and can arrive
+/// late at a pane that just emptied out.
 #[test]
-fn mark_range_en_listado_vacio_no_hace_nada() {
+fn mark_range_on_an_empty_listing_does_nothing() {
     let mut p = PaneState::new(VPath::parse("mem:///").unwrap(), Vec::new());
     assert_eq!(p.mark_range(0, 0), 0);
     assert_eq!(p.mark_range(3, 9), 0);
     assert_eq!(p.marks_len(), 0);
     let mut q = pane(&["a"]);
-    assert_eq!(q.mark_range(5, 7), 0, "rango entero fuera del listado");
+    assert_eq!(
+        q.mark_range(5, 7),
+        0,
+        "the whole range is outside the listing"
+    );
     assert_eq!(q.marks_len(), 0);
 }
 
-/// Un rango que se sale del listado se RECORTA, no se rechaza: es
-/// exactamente lo que produce un hit test en el hueco bajo la última
-/// fila, y rechazarlo entero convertiría un barrido hasta el final del
-/// pane en un no-op.
+/// A range that runs off the listing gets CLAMPED, not rejected: it is
+/// exactly what a hit test in the blank area below the last row produces,
+/// and rejecting it whole would turn a sweep to the end of the pane into a
+/// no-op.
 #[test]
-fn mark_range_recorta_al_listado() {
+fn mark_range_clamps_to_the_listing() {
     let mut p = pane(&["a", "b", "c"]);
-    assert_eq!(p.mark_range(1, 999), 2, "marca hasta la última entrada");
+    assert_eq!(p.mark_range(1, 999), 2, "marks up to the last entry");
     assert_eq!(p.marks_len(), 2);
     assert!(!p.is_marked(&e("mem:///a", EntryKind::File)));
 }
 
-/// `set_mark` nombra UNA fila por índice (lo que necesita el
-/// ctrl+click), a diferencia de `toggle_mark`, que solo alcanza el
-/// cursor. Fuera de rango: no-op.
+/// `set_mark` names ONE row by index (what ctrl+click needs), unlike
+/// `toggle_mark`, which only ever reaches the cursor. Out of range: no-op.
 #[test]
-fn set_mark_pone_y_quita_una_sola_entrada() {
+fn set_mark_sets_and_clears_a_single_entry() {
     let mut p = pane(&["a", "b"]);
     p.set_mark(1, true);
     assert_eq!(p.marked_paths(), vec![VPath::parse("mem:///b").unwrap()]);
     p.set_mark(1, false);
     assert_eq!(p.marks_len(), 0);
     p.set_mark(9, true);
-    assert_eq!(p.marks_len(), 0, "índice fuera del listado: no-op");
+    assert_eq!(p.marks_len(), 0, "index outside the listing: no-op");
 }
 
-/// Marcar respeta el filtro y DESMARCAR no. El índice viene de un frame
-/// ya pintado contra un listado que no es estable (un fill inserta, un
-/// refill poda, un re-orden mueve): puede nombrar otra entrada, y bajo
-/// filtro una que el usuario no ve. Marcar de más ENSANCHA la siguiente
-/// operación masiva sobre un fichero que nadie eligió; desmarcar de más
-/// solo la encoge. Solo lo primero destruye datos, así que solo lo
-/// primero se rechaza.
+/// Marking honours the filter and UNMARKING does not. The index comes from
+/// an already-painted frame against a listing that is not stable (a fill
+/// inserts, a refill prunes, a re-sort moves): it can name a different
+/// entry, and under a filter one the user does not see. Marking too much
+/// WIDENS the next bulk operation onto a file nobody chose; unmarking too
+/// much only SHRINKS it. Only the first destroys data, so only the first
+/// is rejected.
 #[test]
-fn set_mark_marca_solo_lo_visible_pero_desmarca_siempre() {
-    // Ordenado: alfa(0), alga(1), beta(2), zeta(3).
+fn set_mark_marks_only_the_visible_but_always_unmarks() {
+    // Sorted: alfa(0), alga(1), beta(2), zeta(3).
     let mut p = pane(&["alfa", "beta", "alga", "zeta"]);
-    p.set_mark(2, true); // "beta" marcada ANTES de filtrar
+    p.set_mark(2, true); // "beta" marked BEFORE filtering
     p.quick_start(Mode::Filter);
     p.quick_char('a');
-    p.quick_char('l'); // visibles: alfa(0) y alga(1); ocultas: beta, zeta
-    // Estado de partida asimétrico (lección de los tests de #103): la
-    // fila que se intenta marcar NO puede estar ya marcada, o marcarla
-    // de más no cambiaría el total y el test no vería nada.
+    p.quick_char('l'); // visible: alfa(0) and alga(1); hidden: beta, zeta
+    // Asymmetric starting state (lesson from the #103 tests): the row
+    // being marked must NOT already be marked, or marking it extra would
+    // not change the total and the test would see nothing.
     p.set_mark(3, true);
     assert_eq!(
         p.marks_len(),
         1,
-        "marcar una fila oculta ('zeta'): rechazado — solo queda 'beta'"
+        "marking a hidden row ('zeta'): rejected — only 'beta' is left"
     );
     assert!(!p.is_marked(&e("mem:///zeta", EntryKind::File)));
     p.set_mark(2, false);
     assert_eq!(
         p.marks_len(),
         0,
-        "desmarcar una fila oculta: siempre permitido (solo encoge)"
+        "unmarking a hidden row: always allowed (it only shrinks)"
     );
     p.set_mark(0, true);
-    assert_eq!(p.marks_len(), 1, "la visible sí se marca");
+    assert_eq!(p.marks_len(), 1, "the visible one does get marked");
 }
 
-// --- ratón T1 (fix): el barrido rebota contra su baseline -------------
+// --- mouse T1 (fix): the sweep rubber-bands against its baseline -------------
 
-/// El barrido DEVUELVE lo que el puntero se pasó. Un barrido aditivo
-/// deja marcado todo lo que llegó a tocar: pasarse veinte filas y
-/// volver dejaba diecisiete ficheros marcados, y como el exceso ocurre
-/// en el borde del viewport bajo autoscroll, esas filas son justo las
-/// que acaban de salir de la pantalla — la siguiente operación masiva
-/// actuaría sobre ficheros invisibles de los que el usuario se echó
-/// atrás, sin más reparación que un ctrl+click por fila.
+/// The sweep GIVES BACK what the pointer overshot. An additive sweep
+/// leaves marked everything it ever touched: overshooting by twenty rows
+/// and coming back left seventeen files marked, and since the overshoot
+/// happens at the viewport's edge under autoscroll, those rows are
+/// precisely the ones that just scrolled out of sight — the next bulk
+/// operation would act on invisible files the user pulled back from, with
+/// no repair beyond one ctrl+click per row.
 #[test]
-fn el_barrido_devuelve_las_filas_del_exceso_al_retroceder() {
-    let nombres: Vec<String> = (0..10).map(|i| format!("f{i}")).collect();
-    let refs: Vec<&str> = nombres.iter().map(String::as_str).collect();
+fn the_sweep_gives_back_the_overshot_rows_on_retreat() {
+    let names: Vec<String> = (0..10).map(|i| format!("f{i}")).collect();
+    let refs: Vec<&str> = names.iter().map(String::as_str).collect();
     let mut p = pane(&refs);
     p.begin_sweep();
-    p.apply_sweep(2, 8); // el puntero se pasa hasta la 8
+    p.apply_sweep(2, 8); // the pointer overshoots to 8
     assert_eq!(p.marks_len(), 7);
-    p.apply_sweep(2, 4); // y el usuario vuelve
-    assert_eq!(p.marks_len(), 3, "solo 2, 3 y 4 siguen marcadas");
+    p.apply_sweep(2, 4); // and the user comes back
+    assert_eq!(p.marks_len(), 3, "only 2, 3 and 4 stay marked");
     assert!(!p.is_marked(&e("mem:///f5", EntryKind::File)));
     assert!(!p.is_marked(&e("mem:///f8", EntryKind::File)));
 }
 
-/// La baseline es una foto del CONJUNTO de marcas: lo marcado a mano
-/// antes del gesto sobrevive a cada retroceso. Sin esto, rebotar el
-/// barrido borraría una selección que el usuario construyó con
-/// ctrl+click.
+/// The baseline is a snapshot of the mark SET: what was marked by hand
+/// before the gesture survives every retreat. Without this, rubber-banding
+/// the sweep would erase a selection the user built with ctrl+click.
 #[test]
-fn el_barrido_conserva_lo_marcado_antes_del_gesto() {
+fn the_sweep_keeps_what_was_marked_before_the_gesture() {
     let mut p = pane(&["a", "b", "c", "d", "e"]);
-    p.set_mark(0, true); // marcado a mano, fuera del rango del barrido
+    p.set_mark(0, true); // marked by hand, outside the sweep's range
     p.begin_sweep();
     p.apply_sweep(2, 4);
     assert_eq!(p.marks_len(), 4);
-    p.apply_sweep(2, 2); // retrocede del todo
-    assert_eq!(p.marks_len(), 2, "queda 'a' (a mano) y 'c' (el ancla)");
+    p.apply_sweep(2, 2); // retreats all the way
+    assert_eq!(
+        p.marks_len(),
+        2,
+        "'a' (by hand) and 'c' (the anchor) remain"
+    );
     assert!(p.is_marked(&e("mem:///a", EntryKind::File)));
     assert!(p.is_marked(&e("mem:///c", EntryKind::File)));
 }
 
-/// `begin_sweep` suelta la baseline del gesto anterior: sin eso, un
-/// barrido nuevo restauraría la foto del anterior y borraría en
-/// silencio todo lo marcado entre medias.
+/// `begin_sweep` drops the previous gesture's baseline: without that, a
+/// new sweep would restore the previous one's snapshot and silently erase
+/// everything marked in between.
 #[test]
-fn begin_sweep_no_restaura_la_baseline_del_gesto_anterior() {
+fn begin_sweep_does_not_restore_the_previous_gestures_baseline() {
     let mut p = pane(&["a", "b", "c", "d"]);
     p.begin_sweep();
-    p.apply_sweep(0, 1); // gesto 1: marca a, b
-    p.set_mark(3, true); // ctrl+click entre gestos
-    p.begin_sweep(); // gesto 2
+    p.apply_sweep(0, 1); // gesture 1: marks a, b
+    p.set_mark(3, true); // ctrl+click between gestures
+    p.begin_sweep(); // gesture 2
     p.apply_sweep(2, 2);
-    assert_eq!(p.marks_len(), 4, "a, b y d sobreviven; c es del barrido");
+    assert_eq!(
+        p.marks_len(),
+        4,
+        "a, b and d survive; c belongs to the sweep"
+    );
     assert!(p.is_marked(&e("mem:///d", EntryKind::File)));
 }
 
-/// Un cambio de listado suelta la baseline: restaurarla sobre entradas
-/// que se movieron resucitaría marcas que el prune ya había tirado.
+/// A listing change drops the baseline: restoring it over entries that
+/// moved would resurrect marks the prune had already dropped.
 #[test]
-fn un_refill_suelta_la_baseline_del_barrido() {
+fn a_refill_drops_the_sweeps_baseline() {
     let mut p = pane(&["a", "b", "c"]);
     p.begin_sweep();
     p.apply_sweep(0, 2);
     assert_eq!(p.marks_len(), 3);
-    // "c" desaparece del dir; el refill poda su marca.
+    // "c" disappears from the dir; the refill prunes its mark.
     p.refill(vec![
         e("mem:///a", EntryKind::File),
         e("mem:///b", EntryKind::File),
     ]);
     assert_eq!(p.pruned_marks(), 1);
-    p.apply_sweep(0, 0); // el barrido sigue vivo y re-fotografía
-    assert_eq!(p.marks_len(), 2, "a y b: 'c' NO resucita");
+    p.apply_sweep(0, 0); // the sweep is still armed and re-snapshots
+    assert_eq!(p.marks_len(), 2, "a and b: 'c' does NOT come back");
     assert_eq!(p.entries().len(), 2);
 }
 
-/// El barrido sigue respetando el filtro (pasa por `mark_range`), y la
-/// baseline conserva las marcas ocultas que no puede tocar.
+/// The sweep still honours the filter (it goes through `mark_range`), and
+/// the baseline keeps the hidden marks it cannot touch.
 #[test]
-fn el_barrido_bajo_filtro_solo_alcanza_lo_visible() {
-    // El listado se ordena: alfa(0), alga(1), beta(2).
+fn the_sweep_under_a_filter_only_reaches_the_visible() {
+    // The listing gets sorted: alfa(0), alga(1), beta(2).
     let mut p = pane(&["alfa", "beta", "alga"]);
-    p.set_mark(2, true); // "beta", marcada antes de filtrar
+    p.set_mark(2, true); // "beta", marked before filtering
     p.quick_start(Mode::Filter);
     p.quick_char('a');
-    p.quick_char('l'); // visibles: "alfa" (0) y "alga" (1)
+    p.quick_char('l'); // visible: "alfa" (0) and "alga" (1)
     p.begin_sweep();
     p.apply_sweep(0, 2);
-    assert_eq!(p.marks_len(), 3, "las dos visibles + la oculta de antes");
+    assert_eq!(
+        p.marks_len(),
+        3,
+        "the two visible ones + the earlier hidden one"
+    );
     p.apply_sweep(0, 0);
-    assert_eq!(p.marks_len(), 2, "suelta 'alga'; 'beta' oculta sobrevive");
+    assert_eq!(
+        p.marks_len(),
+        2,
+        "releases 'alga'; the hidden 'beta' survives"
+    );
     assert!(p.is_marked(&e("mem:///beta", EntryKind::File)));
 }
 
-/// El barrido re-marca lo que VUELVE a entrar en el rango. Marcar y
-/// desmarcar por delta (solo lo que entra y lo que sale) es lo que hace
-/// que un motion cueste una fila y no un repaso del listado, pero un
-/// delta mal cerrado dejaría huecos sin marcar en mitad del rango —
-/// invisibles hasta que la operación masiva se saltara un fichero.
+/// The sweep re-marks what comes BACK into the range. Marking and
+/// unmarking by delta (only what enters and what leaves) is what makes a
+/// motion cost one row and not a pass over the listing, but a badly closed
+/// delta would leave unmarked gaps in the middle of the range — invisible
+/// until the bulk operation skipped a file.
 #[test]
-fn el_barrido_re_marca_lo_que_vuelve_a_entrar_en_el_rango() {
-    let nombres: Vec<String> = (0..10).map(|i| format!("f{i}")).collect();
-    let refs: Vec<&str> = nombres.iter().map(String::as_str).collect();
+fn the_sweep_re_marks_what_comes_back_into_the_range() {
+    let names: Vec<String> = (0..10).map(|i| format!("f{i}")).collect();
+    let refs: Vec<&str> = names.iter().map(String::as_str).collect();
     let mut p = pane(&refs);
     p.begin_sweep();
     p.apply_sweep(2, 8);
-    p.apply_sweep(2, 4); // retrocede: suelta 5..8
-    p.apply_sweep(2, 6); // y vuelve a avanzar
-    assert_eq!(p.marks_len(), 5, "2..6 sin huecos");
+    p.apply_sweep(2, 4); // retreats: releases 5..8
+    p.apply_sweep(2, 6); // and advances again
+    assert_eq!(p.marks_len(), 5, "2..6 with no gaps");
     for i in 2..=6 {
         assert!(
             p.is_marked(&e(&format!("mem:///f{i}"), EntryKind::File)),
-            "f{i} debe seguir marcada"
+            "f{i} must still be marked"
         );
     }
     assert!(!p.is_marked(&e("mem:///f7", EntryKind::File)));
 }
 
-/// Los índices de `quick_visible` vienen en orden ASCENDENTE. No es un
-/// detalle: `is_markable` los busca en BINARIO, así que un día en que
-/// `nav` devolviera otro orden el filtro dejaría de aplicarse a filas
-/// sueltas — marcando en silencio lo que el usuario no ve.
+/// `quick_visible`'s indices come in ASCENDING order. This is not a
+/// detail: `is_markable` looks them up with BINARY search, so a day when
+/// `nav` returned a different order would stop the filter applying to
+/// single rows — silently marking what the user does not see.
 #[test]
-fn quick_visible_viene_en_orden_ascendente() {
+fn quick_visible_comes_in_ascending_order() {
     let mut p = pane(&["alfa", "beta", "alga", "zeta", "algo"]);
     p.quick_start(Mode::Filter);
     p.quick_char('a');
     p.quick_char('l');
-    let vis = p.quick_visible().expect("filtro activo");
-    assert!(vis.len() > 1, "hacen falta varios para ver el orden");
+    let vis = p.quick_visible().expect("active filter");
+    assert!(vis.len() > 1, "several are needed to see the order");
     assert!(
         vis.windows(2).all(|w| w[0] < w[1]),
-        "índices ascendentes y sin repetir: {vis:?}"
+        "ascending indices with no repeats: {vis:?}"
     );
 }
 
-/// `apply_sweep` sin `begin_sweep` se auto-fotografía en la primera
-/// llamada: un frontend que se salte el armado sigue rebotando bien en
-/// vez de acumular.
+/// `apply_sweep` with no `begin_sweep` self-snapshots on the first call: a
+/// frontend that skips arming it still rubber-bands correctly instead of
+/// accumulating.
 #[test]
-fn apply_sweep_sin_begin_se_fotografia_en_la_primera_llamada() {
+fn apply_sweep_with_no_begin_snapshots_on_the_first_call() {
     let mut p = pane(&["a", "b", "c", "d"]);
     p.set_mark(3, true);
     p.apply_sweep(0, 2);
     p.apply_sweep(0, 0);
-    assert_eq!(p.marks_len(), 2, "queda 'a' (barrido) y 'd' (previa)");
+    assert_eq!(p.marks_len(), 2, "'a' (sweep) and 'd' (previous) remain");
 }
 
-// --- #313: extensión, clase, y restaurar ------------------------------
+// --- #313: extension, class, and restore ------------------------------
 
-/// La extensión de la entrada bajo el cursor marca a sus iguales, y la
-/// gemela las desmarca. Es el `Alt+Gray+`/`Alt+Gray-` de Total Commander.
+/// The cursor entry's extension marks its equals, and the twin unmarks
+/// them. It is Total Commander's `Alt+Gray+`/`Alt+Gray-`.
 #[test]
-fn la_extension_del_cursor_marca_a_sus_iguales() {
+fn the_cursors_extension_marks_its_equals() {
     let mut p = PaneState::new(
         VPath::parse("mem:///").unwrap(),
         vec![
@@ -2472,18 +2526,22 @@ fn la_extension_del_cursor_marca_a_sus_iguales() {
             e("mem:///c.txt", EntryKind::File),
         ],
     );
-    assert_eq!(p.mark_same_extension(true), 2, "las dos `.rs`");
+    assert_eq!(p.mark_same_extension(true), 2, "the two `.rs` ones");
     assert_eq!(p.marks_len(), 2);
-    assert_eq!(p.mark_same_extension(false), 2, "y la gemela las suelta");
+    assert_eq!(
+        p.mark_same_extension(false),
+        2,
+        "and the twin releases them"
+    );
     assert_eq!(p.marks_len(), 0);
 }
 
-/// Un fichero oculto NO tiene extensión, tiene nombre: `.bashrc` no marca
-/// a todos los `bashrc` del mundo, ni a los demás ocultos. Misma regla que
-/// el renombrado por plantilla, y a propósito — dos definiciones de «la
-/// extensión» marcarían un conjunto y renombrarían otro.
+/// A hidden file has NO extension, it has a name: `.bashrc` does not mark
+/// every `bashrc` in the world, nor the other hidden ones. Same rule as
+/// template renaming, and on purpose — two definitions of "the extension"
+/// would mark one set and rename another.
 #[test]
-fn un_nombre_que_empieza_por_punto_no_tiene_extension() {
+fn a_name_starting_with_a_dot_has_no_extension() {
     let mut p = PaneState::new(
         VPath::parse("mem:///").unwrap(),
         vec![
@@ -2495,11 +2553,11 @@ fn un_nombre_que_empieza_por_punto_no_tiene_extension() {
     assert_eq!(p.marks_len(), 0);
 }
 
-/// Los nombres son BYTES: dos que colapsarían al mismo carácter de
-/// reemplazo al pasarlos por `String` siguen teniendo extensiones
-/// distintas.
+/// Names are BYTES: two that would collapse to the same replacement
+/// character when passed through `String` still have different
+/// extensions.
 #[test]
-fn la_extension_se_compara_en_bytes() {
+fn the_extension_is_compared_in_bytes() {
     let mut p = PaneState::new(
         VPath::parse("mem:///").unwrap(),
         vec![
@@ -2511,14 +2569,14 @@ fn la_extension_se_compara_en_bytes() {
     assert_eq!(
         p.mark_same_extension(true),
         2,
-        "solo las dos que comparten los MISMOS bytes de extensión"
+        "only the two that share the SAME extension bytes"
     );
 }
 
-/// Ficheros o directorios, y un enlace cuenta como fichero — es lo que
-/// hace con él cualquier operación de este panel.
+/// Files or directories, and a link counts as a file — that is what any
+/// operation of this panel does with it.
 #[test]
-fn marcar_solo_ficheros_o_solo_carpetas() {
+fn marking_only_files_or_only_folders() {
     let mut p = PaneState::new(
         VPath::parse("mem:///").unwrap(),
         vec![
@@ -2527,15 +2585,15 @@ fn marcar_solo_ficheros_o_solo_carpetas() {
             e("mem:///enlace", EntryKind::Symlink),
         ],
     );
-    assert_eq!(p.mark_kind(false), 2, "el fichero y el enlace");
+    assert_eq!(p.mark_kind(false), 2, "the file and the link");
     p.clear_marks();
-    assert_eq!(p.mark_kind(true), 1, "solo el directorio");
+    assert_eq!(p.mark_kind(true), 1, "only the directory");
 }
 
-/// La red del que pulsó «desmarcar todo» sin querer, y la del que pulsó
-/// «restaurar» sin querer: va y vuelve.
+/// The net for whoever pressed "unmark all" by accident, and for whoever
+/// pressed "restore" by accident: it goes and it comes back.
 #[test]
-fn restaurar_devuelve_la_seleccion_anterior_y_se_deshace() {
+fn restoring_returns_the_previous_selection_and_undoes_itself() {
     let mut p = PaneState::new(
         VPath::parse("mem:///").unwrap(),
         vec![
@@ -2543,17 +2601,21 @@ fn restaurar_devuelve_la_seleccion_anterior_y_se_deshace() {
             e("mem:///b", EntryKind::File),
         ],
     );
-    assert_eq!(p.restore_previous_marks(), None, "sin foto, nada");
+    assert_eq!(p.restore_previous_marks(), None, "no snapshot, nothing");
     p.mark_all();
     p.clear_marks();
     assert_eq!(p.restore_previous_marks(), Some(2));
-    assert_eq!(p.restore_previous_marks(), Some(0), "y vuelve a irse");
+    assert_eq!(
+        p.restore_previous_marks(),
+        Some(0),
+        "and it undoes itself again"
+    );
 }
 
-/// Una entrada que ya no está no se resucita, y un `cd` tira la foto: sus
-/// rutas son de otro directorio.
+/// An entry that is no longer there does not come back, and a `cd` drops
+/// the snapshot: its paths belong to a different directory.
 #[test]
-fn la_foto_no_sobrevive_a_un_cd_ni_resucita_lo_borrado() {
+fn the_snapshot_does_not_survive_a_cd_nor_resurrect_what_was_deleted() {
     let dir = VPath::parse("mem:///d").unwrap();
     let mut p = PaneState::new(
         dir.clone(),
@@ -2564,12 +2626,12 @@ fn la_foto_no_sobrevive_a_un_cd_ni_resucita_lo_borrado() {
     );
     p.mark_all();
     p.clear_marks();
-    // `b` desaparece del listado sin cambiar de directorio.
+    // `b` disappears from the listing without changing directory.
     p.refill(vec![e("mem:///d/a", EntryKind::File)]);
     assert_eq!(
         p.restore_previous_marks(),
         Some(1),
-        "vuelve solo lo que sigue estando"
+        "only what is still there comes back"
     );
 
     p.mark_all();
@@ -2581,7 +2643,7 @@ fn la_foto_no_sobrevive_a_un_cd_ni_resucita_lo_borrado() {
     assert_eq!(
         p.restore_previous_marks(),
         None,
-        "un cd tira la foto: sus rutas no nombran nada de aquí"
+        "a cd drops the snapshot: its paths name nothing here"
     );
 }
 
@@ -3277,52 +3339,48 @@ fn mark_glob_backslash_matches_only_when_escaped() {
     );
 }
 
-/// #117-follow-up: los valores de columnas `plugin:` viven en un
-/// side-map del pane (espejo de `decorations` — claves por `VPath` del
-/// listado ACTUAL): `plugin_cell` los sirve RE-enmascarados
-/// defensivamente (doctrina P1: los consumidores no confían en el
-/// ingest), y un listado nuevo los invalida igual que las decoraciones.
+/// #117-follow-up: `plugin:` column values live in a side-map of the pane
+/// (a mirror of `decorations` — keyed by the CURRENT listing's `VPath`):
+/// `plugin_cell` serves them defensively RE-masked (P1 doctrine: consumers
+/// do not trust the ingest), and a new listing invalidates them just like
+/// the decorations.
 #[test]
-fn plugin_columns_side_map_re_enmascara_y_se_limpia() {
+fn the_plugin_columns_side_map_re_masks_and_clears_itself() {
     let mut p = pane(&["a", "b"]);
     let path = VPath::parse("mem:///a").unwrap();
     let mut per_path = std::collections::HashMap::new();
-    // Valor con RLO crudo: el render jamás lo pinta sin U+FFFD.
+    // A value with a raw RLO: the render never paints it without U+FFFD.
     per_path.insert(path.clone(), "main\u{202E}evil".to_owned());
     let mut cols = std::collections::HashMap::new();
     cols.insert("plugin:git/branch".to_owned(), per_path);
     p.set_plugin_columns(cols);
     let cell = p
         .plugin_cell("plugin:git/branch", &path)
-        .expect("valor presente");
+        .expect("value present");
     assert!(
         !cell.contains('\u{202E}'),
-        "hazard crudo en la celda: {cell:?}"
+        "raw hazard in the cell: {cell:?}"
     );
-    assert!(
-        cell.contains('\u{FFFD}'),
-        "el hazard se enmascara: {cell:?}"
-    );
+    assert!(cell.contains('\u{FFFD}'), "the hazard is masked: {cell:?}");
     assert!(cell.starts_with("main"));
-    // Columna desconocida o path sin valor → None (blanco).
+    // Unknown column or path with no value → None (blank).
     assert_eq!(p.plugin_cell("plugin:git/otro", &path), None);
     assert_eq!(
         p.plugin_cell("plugin:git/branch", &VPath::parse("mem:///b").unwrap()),
         None
     );
-    // Un listado nuevo invalida el side-map (claves de OTRO listado).
+    // A new listing invalidates the side-map (keys of ANOTHER listing).
     p.set_listing(VPath::parse("mem:///d").unwrap(), Vec::new());
     assert_eq!(p.plugin_cell("plugin:git/branch", &path), None);
 }
 
-/// Audit F4 (#117-follow-up): las claves del side-map son `VPath`
-/// BYTE-exactas — dos nombres no-UTF8 distintos cuyo display lossy
-/// COLAPSA al mismo `�` (corpus `lossy_collapse_ff`/`_fe`) conservan
-/// celdas separadas. Si alguien "simplifica" mañana keyeando por
-/// display, los valores se mezclarían entre ficheros distintos y esto
-/// se pone rojo.
+/// Audit F4 (#117-follow-up): the side-map's keys are BYTE-exact `VPath`s
+/// — two different non-UTF8 names whose lossy display COLLAPSES to the
+/// same `�` (corpus `lossy_collapse_ff`/`_fe`) keep separate cells. If
+/// someone "simplifies" tomorrow by keying on display, the values would
+/// mix between different files and this goes red.
 #[test]
-fn plugin_columns_clava_por_bytes_no_por_display() {
+fn plugin_columns_pins_by_bytes_not_by_display() {
     let mut p = pane(&[]);
     let ff = VPath::parse("mem:///%FF").unwrap();
     let fe = VPath::parse("mem:///%FE").unwrap();
@@ -3346,7 +3404,7 @@ fn plugin_columns_clava_por_bytes_no_por_display() {
 /// para la entrada bajo el CURSOR, enmascarado y acotado; sin valor, no
 /// sale; y no se pulsa.
 #[test]
-fn los_elementos_de_plugin_dicen_la_columna_bajo_el_cursor() {
+fn plugin_items_report_the_column_under_the_cursor() {
     use crate::statusbar::{PLUGIN_ITEM_MAX_CELLS, plugin_items};
     let mut p = pane(&["a", "b", "c"]);
     let mut per_path = std::collections::HashMap::new();
@@ -3358,71 +3416,72 @@ fn los_elementos_de_plugin_dicen_la_columna_bajo_el_cursor() {
     let mut cols = std::collections::HashMap::new();
     cols.insert("plugin:git/branch".to_owned(), per_path);
     p.set_plugin_columns(cols);
-    let pares = [
+    let pairs = [
         ("git".to_owned(), "branch".to_owned()),
         ("git".to_owned(), "nada".to_owned()),
     ];
 
     p.set_cursor(0);
-    let v = plugin_items(&p, &pares, norte_i18n::Lang::Es);
-    assert_eq!(v.len(), 1, "la columna sin valor no sale: {v:?}");
+    let v = plugin_items(&p, &pairs, norte_i18n::Lang::Es);
+    assert_eq!(v.len(), 1, "the column with no value does not show: {v:?}");
     assert_eq!(v[0].id, "plugin:git/branch");
     assert_eq!(v[0].text, "main");
-    assert_eq!(v[0].command, None, "un plugin de columnas no conduce");
+    assert_eq!(v[0].command, None, "a columns plugin does not navigate");
     assert!(v[0].tooltip.contains("git") && v[0].tooltip.contains("branch"));
 
     p.set_cursor(1);
-    let largo = &plugin_items(&p, &pares, norte_i18n::Lang::Es)[0].text;
-    assert!(!largo.contains('\u{202E}'), "enmascarado: {largo:?}");
-    assert!(largo.ends_with('…'), "acotado: {largo:?}");
-    assert!(unicode_width::UnicodeWidthStr::width(largo.as_str()) <= PLUGIN_ITEM_MAX_CELLS);
+    let long = &plugin_items(&p, &pairs, norte_i18n::Lang::Es)[0].text;
+    assert!(!long.contains('\u{202E}'), "masked: {long:?}");
+    assert!(long.ends_with('…'), "bounded: {long:?}");
+    assert!(unicode_width::UnicodeWidthStr::width(long.as_str()) <= PLUGIN_ITEM_MAX_CELLS);
 
     p.set_cursor(2);
     assert!(
-        plugin_items(&p, &pares, norte_i18n::Lang::Es).is_empty(),
-        "entrada sin dato"
+        plugin_items(&p, &pairs, norte_i18n::Lang::Es).is_empty(),
+        "entry with no data"
     );
 }
 
-/// ADR 0137: lo que se pide al plugin es lo pintado MÁS lo de la barra, sin
-/// repetir.
+/// ADR 0137: what is requested from the plugin is what is painted PLUS
+/// what the bar needs, without repeats.
 #[test]
-fn las_columnas_pedidas_suman_las_de_la_barra() {
+fn the_requested_columns_add_up_the_bars_ones() {
     let st = crate::columns::ColumnsSettings::default();
-    let pares = [
+    let pairs = [
         ("git".to_owned(), "branch".to_owned()),
         ("git".to_owned(), "branch".to_owned()),
     ];
     assert_eq!(
-        crate::columns::plugin_requests(&st, &pares, "file"),
+        crate::columns::plugin_requests(&st, &pairs, "file"),
         vec![("git".to_owned(), "branch".to_owned())]
     );
 }
 
 #[test]
-fn la_regla_de_marcas_dice_que_tramos_llevan_alguna() {
-    let nombres: Vec<String> = (0..100).map(|i| format!("f{i:03}")).collect();
-    let refs: Vec<&str> = nombres.iter().map(String::as_str).collect();
+fn the_mark_ruler_says_which_segments_carry_any() {
+    let names: Vec<String> = (0..100).map(|i| format!("f{i:03}")).collect();
+    let refs: Vec<&str> = names.iter().map(String::as_str).collect();
     let mut p = pane(&refs);
-    assert!(p.mark_ruler(10).is_empty(), "sin marcas no hay regla");
-    // Filas 5, 7 (mismo tramo) y 99 (el último).
+    assert!(p.mark_ruler(10).is_empty(), "no marks, no ruler");
+    // Rows 5, 7 (same segment) and 99 (the last one).
     for i in [5, 7, 99] {
         p.set_cursor(i);
         p.toggle_mark();
     }
     assert_eq!(p.mark_ruler(10), vec![0, 9]);
     assert_eq!(p.mark_ruler(100), vec![5, 7, 99]);
-    assert!(p.mark_ruler(0).is_empty(), "cero tramos, nada");
-    // Más tramos que filas: cada fila cae en el suyo, sin pasarse.
+    assert!(p.mark_ruler(0).is_empty(), "zero segments, nothing");
+    // More segments than rows: each row falls into its own, without
+    // overshooting.
     assert!(p.mark_ruler(u16::MAX).iter().all(|t| *t < u16::MAX));
 }
 
-/// La pasada única de la cabecera dice exactamente lo mismo que las tres
-/// funciones a las que sustituye: si divergen, la ventana y la TUI cuentan
-/// marcas distintas del mismo listado.
+/// The header's single pass says exactly the same as the three functions
+/// it replaces: if they diverge, the window and the TUI count different
+/// marks for the same listing.
 #[test]
-fn el_resumen_de_marcas_coincide_con_las_tres_pasadas() {
-    let mut entradas = Vec::new();
+fn the_marks_summary_matches_the_three_separate_passes() {
+    let mut entries = Vec::new();
     for i in 0..40u64 {
         let kind = if i % 4 == 0 {
             EntryKind::Dir
@@ -3431,19 +3490,23 @@ fn el_resumen_de_marcas_coincide_con_las_tres_pasadas() {
         };
         let mut x = e(&format!("mem:///n{i:02}"), kind);
         x.size = Some(i * 100);
-        entradas.push(x);
+        entries.push(x);
     }
-    let mut p = PaneState::new(VPath::parse("mem:///").unwrap(), entradas);
+    let mut p = PaneState::new(VPath::parse("mem:///").unwrap(), entries);
     assert_eq!(p.marks_summary(10), crate::MarksSummary::default());
     for i in [0, 3, 4, 5, 17, 39] {
         p.set_cursor(i);
         p.toggle_mark();
     }
-    for tramos in [0, 1, 7, 10, 40, 100] {
-        let r = p.marks_summary(tramos);
-        assert_eq!(r.bytes, p.marked_bytes(), "bytes con {tramos} tramos");
-        assert_eq!(r.dirs, p.marked_dirs(), "dirs con {tramos} tramos");
-        assert_eq!(r.ruler, p.mark_ruler(tramos), "regla con {tramos} tramos");
+    for segments in [0, 1, 7, 10, 40, 100] {
+        let r = p.marks_summary(segments);
+        assert_eq!(r.bytes, p.marked_bytes(), "bytes with {segments} segments");
+        assert_eq!(r.dirs, p.marked_dirs(), "dirs with {segments} segments");
+        assert_eq!(
+            r.ruler,
+            p.mark_ruler(segments),
+            "ruler with {segments} segments"
+        );
     }
     assert!(p.marks_summary(10).dirs > 0 && p.marks_summary(10).bytes > 0);
 }

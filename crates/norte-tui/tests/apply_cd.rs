@@ -1,6 +1,6 @@
-//! Qué le hace `apply_cd` al `Fill` en vuelo de cada hueco, evento a evento:
-//! `Replaced` y `Refreshed` sueltan el del pane afectado y solo ese;
-//! `Failed`, `Cancelled` y `Filling` lo conservan.
+//! What `apply_cd` does to each slot's `Fill` in flight, event by event:
+//! `Replaced` and `Refreshed` drop the affected pane's and only that one;
+//! `Failed`, `Cancelled` and `Filling` keep it.
 
 use norte_frontend::layout::BySlot;
 use norte_tui::fill::{Fill, FillMsg};
@@ -9,8 +9,7 @@ use norte_tui::navigate::{Cd, apply_cd};
 use norte_tui::panel::{PaneSlots, SLOT_LEFT, SLOT_RIGHT};
 use norte_tui::probes::{DecorateFetch, Probed};
 
-/// Dos paneles de mentira: `apply_cd` solo les pregunta qué hueco ocupa
-/// cada posición.
+/// Two fake panes: `apply_cd` only asks them which slot each position occupies.
 fn panes() -> PaneSlots {
     let d = norte_proto::VPath::parse("mem:///x").expect("wire");
     PaneSlots::new(
@@ -29,21 +28,22 @@ fn fill() -> Fill {
     Fill { rx }
 }
 
-/// El hueco del pane 0 ocupado y el del 1 libre: la disposición de
-/// partida de casi todos estos casos.
+/// Pane 0's slot occupied and pane 1's free: the starting layout for almost
+/// all of these cases.
 fn en_el_pane_0() -> BySlot<Fill> {
     let mut f = BySlot::new();
     f.insert(SLOT_LEFT, fill());
     f
 }
 
-/// **Una navegación en espejo archiva los DOS drenadores.**
+/// **A mirrored navigation files away BOTH drains.**
 ///
-/// Es la razón entera por la que `Cd::Espejado` existe. Un `cd` devuelve UN
-/// desenlace y los doce sitios que lo archivan no saben de espejos; si el del
-/// panel espejado se quedara por el camino, su `Fill` —que ES el drenador de
-/// ese listado— se soltaría sin `finish_listing`, y ese panel se quedaría con
-/// el listado truncado bajo un «cargando…» que ya no apaga nadie (#78).
+/// It is the entire reason `Cd::Espejado` exists. A `cd` returns ONE
+/// outcome and the twelve places that file it away do not know about
+/// mirrors; if the mirrored panel's got left behind, its `Fill` — which IS
+/// that listing's drain — would be dropped with no `finish_listing`, and
+/// that panel would be left with the listing truncated under a "loading…"
+/// nobody ever turns off again (#78).
 #[test]
 fn un_espejo_archiva_los_dos_rellenos() {
     let mut f = BySlot::new();
@@ -69,16 +69,16 @@ fn un_espejo_archiva_los_dos_rellenos() {
     );
     assert!(
         f.get(hueco(0)).is_some(),
-        "el del panel que el lector movió"
+        "the reading panel's, the one the reader moved"
     );
     assert!(
         f.get(hueco(1)).is_some(),
-        "y el del panel que lo repitió: tirarlo lo deja a medio llenar"
+        "and the one that repeated it: dropping it leaves it half-filled"
     );
 }
 
-/// Y cada mitad se archiva con SU semántica: un reemplazo suelta el relleno
-/// de su panel aunque la otra mitad esté paginando.
+/// And each half is filed away with ITS OWN semantics: a replace drops its
+/// pane's fill even if the other half is still paginating.
 #[test]
 fn en_un_espejo_cada_mitad_se_archiva_por_su_cuenta() {
     let mut f = en_el_pane_0();
@@ -92,20 +92,20 @@ fn en_un_espejo_cada_mitad_se_archiva_por_su_cuenta() {
         &mut lp,
         &mut sr,
         Cd::Espejado {
-            // El lector reemplazó: su relleno viejo sobra.
+            // The reading pane replaced: its old fill is no longer needed.
             lector: Box::new(Cd::Replaced(0)),
-            // El espejo pagina: el suyo se queda.
+            // The mirror is paginating: its own stays.
             espejo: Box::new(Cd::Filling {
                 pane: 1,
                 fill: fill(),
             }),
         },
     );
-    assert!(f.get(hueco(0)).is_none(), "el reemplazo soltó el suyo");
-    assert!(f.get(hueco(1)).is_some(), "y el que pagina lo conserva");
+    assert!(f.get(hueco(0)).is_none(), "the replace dropped its own");
+    assert!(f.get(hueco(1)).is_some(), "and the paginating one keeps it");
 }
 
-/// Un REEMPLAZO del mismo pane suelta su relleno obsoleto.
+/// A REPLACE of the same pane drops its obsolete fill.
 #[test]
 fn replaced_suelta_el_fill_del_pane() {
     let mut f = en_el_pane_0();
@@ -115,11 +115,11 @@ fn replaced_suelta_el_fill_del_pane() {
     apply_cd(&panes(), &mut f, &mut df, &mut lp, &mut sr, Cd::Replaced(0));
     assert!(
         f.get(hueco(0)).is_none(),
-        "el fill del listado viejo se suelta"
+        "the old listing's fill is dropped"
     );
 }
 
-/// Un reemplazo de OTRO pane no toca el relleno vivo.
+/// A replace of ANOTHER pane does not touch a live fill.
 #[test]
 fn replaced_de_otro_pane_no_toca() {
     let mut f = en_el_pane_0();
@@ -127,11 +127,11 @@ fn replaced_de_otro_pane_no_toca() {
     let mut df: BySlot<DecorateFetch> = BySlot::new();
     let mut sr: Option<SearchRun> = None;
     apply_cd(&panes(), &mut f, &mut df, &mut lp, &mut sr, Cd::Replaced(1));
-    assert!(f.get(hueco(0)).is_some(), "el fill del pane 0 sobrevive");
+    assert!(f.get(hueco(0)).is_some(), "pane 0's fill survives");
 }
 
-/// #78: un cd FALLIDO NO suelta el relleno — el pane sigue en su listado
-/// anterior, que se sigue rellenando (soltarlo lo colgaba en loading).
+/// #78: a FAILED cd does NOT drop the fill — the pane stays on its
+/// previous listing, which keeps filling (dropping it hung it in loading).
 #[test]
 fn failed_conserva_el_fill() {
     let mut f = en_el_pane_0();
@@ -148,11 +148,11 @@ fn failed_conserva_el_fill() {
     );
     assert!(
         f.get(hueco(0)).is_some(),
-        "el fill del listado anterior sigue vivo tras un cd fallido"
+        "the previous listing's fill is still alive after a failed cd"
     );
 }
 
-/// Un cd abandonado no toca nada.
+/// An abandoned cd touches nothing.
 #[test]
 fn cancelled_conserva_el_fill() {
     let mut f = en_el_pane_0();
@@ -163,10 +163,10 @@ fn cancelled_conserva_el_fill() {
     assert!(f.get(hueco(0)).is_some());
 }
 
-/// Un listado nuevo ocupa el hueco DE SU PANE y solo ese: el relleno del
-/// otro pane sigue drenando. Es lo que hace que `pane.mirror` —que manda
-/// el OTRO pane a un sitio sin mover el foco— no pueda dejar a medias el
-/// pane que el lector está mirando.
+/// A new listing occupies ITS OWN pane's slot and only that: the other
+/// pane's fill keeps draining. It is what lets `pane.mirror` — which sends
+/// the OTHER pane somewhere without moving focus — not leave the pane the
+/// reader is looking at half-done.
 #[test]
 fn filling_de_un_pane_no_toca_el_hueco_del_otro() {
     let mut f = en_el_pane_0();
@@ -184,16 +184,16 @@ fn filling_de_un_pane_no_toca_el_hueco_del_otro() {
             fill: fill(),
         },
     );
+    assert!(f.get(hueco(0)).is_some(), "pane 0's fill stays in its slot");
     assert!(
-        f.get(hueco(0)).is_some(),
-        "el relleno del pane 0 sigue en su hueco"
+        f.get(hueco(1)).is_some(),
+        "and the new one occupies its own"
     );
-    assert!(f.get(hueco(1)).is_some(), "y el nuevo ocupa el suyo");
 }
 
-/// #118: Ctrl+R re-listó el pane 0 (listado COMPLETO nuevo) — su
-/// drenador viejo duplicaría filas si siguiera vivo. La dedup de la
-/// sonda #52 también caduca: el listado nuevo re-lazifica las entries.
+/// #118: Ctrl+R re-listed pane 0 (a whole NEW listing) — its old drain
+/// would duplicate rows if it stayed alive. Probe #52's dedup also expires:
+/// the new listing re-lazifies the entries.
 #[test]
 fn refreshed_suelta_el_fill_del_pane_relistado() {
     let mut f = en_el_pane_0();
@@ -210,13 +210,13 @@ fn refreshed_suelta_el_fill_del_pane_relistado() {
     );
     assert!(
         f.get(hueco(0)).is_none(),
-        "el drenador del listado viejo se suelta"
+        "the old listing's drain is dropped"
     );
-    assert!(lp.is_empty(), "la dedup de la sonda #52 caduca");
+    assert!(lp.is_empty(), "probe #52's dedup expires");
 }
 
-/// #118: Esc a medias — el pane 1 NO llegó a re-listarse, su relleno
-/// paginado sigue siendo válido (#78: soltarlo lo colgaba en loading).
+/// #118: Esc halfway through — pane 1 was NEVER re-listed, its paginated
+/// fill is still valid (#78: dropping it hung it in loading).
 #[test]
 fn refreshed_a_medias_conserva_el_fill_del_pane_no_relistado() {
     let mut f: norte_frontend::layout::BySlot<Fill> = norte_frontend::layout::BySlot::new();
@@ -234,13 +234,13 @@ fn refreshed_a_medias_conserva_el_fill_del_pane_no_relistado() {
     );
     assert!(
         f.get(hueco(1)).is_some(),
-        "el fill del pane NO re-listado sobrevive al Esc a medias"
+        "the NOT re-listed pane's fill survives the halfway Esc"
     );
 }
 
-/// Y el simétrico: un refresh de los DOS panes suelta los dos huecos.
+/// And the symmetric case: a refresh of BOTH panes drops both slots.
 #[test]
-fn refreshed_de_ambos_panes_suelta_los_dos_huecos() {
+fn refreshed_de_ambos_paneles_suelta_los_dos_huecos() {
     let mut f: norte_frontend::layout::BySlot<Fill> = norte_frontend::layout::BySlot::new();
     f.insert(SLOT_LEFT, fill());
     f.insert(SLOT_RIGHT, fill());
@@ -258,8 +258,8 @@ fn refreshed_de_ambos_panes_suelta_los_dos_huecos() {
     assert!(f.get(hueco(0)).is_none() && f.get(hueco(1)).is_none());
 }
 
-/// #118: refresh totalmente abandonado (Esc antes del primer pane) o
-/// ambos panes en modo virtual: nada cambió, nada se toca.
+/// #118: a fully abandoned refresh (Esc before the first pane) or both
+/// panes in virtual mode: nothing changed, nothing is touched.
 #[test]
 fn refreshed_vacio_no_toca_nada() {
     let mut f = en_el_pane_0();
@@ -276,7 +276,7 @@ fn refreshed_vacio_no_toca_nada() {
     );
     assert!(
         f.get(hueco(0)).is_some(),
-        "sin pane re-listado, el fill sigue"
+        "with no pane re-listed, the fill stays"
     );
-    assert!(!lp.is_empty(), "sin pane re-listado, la dedup sigue");
+    assert!(!lp.is_empty(), "with no pane re-listed, the dedup stays");
 }

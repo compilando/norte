@@ -1,5 +1,5 @@
-//! `provider_contract!` sobre el FS real (tempdir): la misma suite que pasa
-//! `MemProvider`, contra disco. En CI corre en los 3 OS (fase 12).
+//! `provider_contract!` over the real FS (tempdir): the same suite
+//! `MemProvider` passes, against disk. Runs on all 3 OSes in CI (phase 12).
 
 use norte_vfs_local::LocalProvider;
 
@@ -15,11 +15,11 @@ norte_vfs::provider_contract! {
     factory: {
         let dir = tempfile::tempdir().expect("tempdir");
         let base = dir.path().to_path_buf();
-        // La papelera, DENTRO de la raíz del provider: así el contrato puede
-        // exigir que el destino recuperable sea una ruta que este provider
-        // resuelve, y de paso ningún test acaba en la papelera de verdad del
-        // desarrollador. Se crea sola la primera vez que se entierra algo, así
-        // que los demás tests del contrato no ven ninguna entrada de más.
+        // The trash, INSIDE the provider's root: this way the contract can
+        // require the recoverable destination to be a path this provider
+        // resolves, and no test ends up in the developer's real trash
+        // along the way. It creates itself the first time something is
+        // buried, so the contract's other tests see no extra entry.
         LocalProvider::rooted(base.clone())
             .with_trash_home(base.join(".xdg"))
             .with_guard(Box::new(dir))

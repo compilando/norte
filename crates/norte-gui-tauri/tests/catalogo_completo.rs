@@ -1,38 +1,38 @@
-//! Toda clave Fluent que el renderer pide EXISTE en el catálogo.
+//! Every Fluent key the renderer asks for EXISTS in the catalogue.
 //!
-//! `Screen::t` contesta una clave que no está con la clave misma, así que una
-//! que falte no se cae: se PINTA. Se descubrió con `hostile-name`, que no
-//! existía y llevaba tiempo saliendo literal en la insignia de todo nombre
-//! alterado — en ocho superficies, y sin que ningún test dijera nada, porque
-//! el catálogo de los tests del renderer es un fixture que se la inventaba.
+//! `Screen::t` answers a missing key with the key itself, so a missing one
+//! does not crash: it gets PAINTED. Discovered with `hostile-name`, which did
+//! not exist and had been showing up literally in the badge of every altered
+//! name for a while — on eight surfaces, and with no test saying anything,
+//! because the renderer tests' catalogue is a fixture that made it up.
 //!
-//! El test lee el TypeScript, que es la única fuente de verdad de qué pide
-//! quien pinta: una lista escrita a mano se separaría de él en la primera
-//! superficie nueva.
+//! The test reads the TypeScript, which is the only source of truth for what
+//! the painter asks for: a hand-written list would drift from it at the
+//! first new surface.
 
 use std::collections::BTreeSet;
 
-/// Los ficheros del renderer que piden claves.
+/// The renderer files that ask for keys.
 ///
-/// `main.ts` también: llama a `screen.t(...)`, y mirar solo `render.ts`
-/// dejaba fuera todo lo que se pinta desde el arranque.
+/// `main.ts` too: it calls `screen.t(...)`, and looking only at `render.ts`
+/// left out everything painted from startup.
 const FUENTES: &[(&str, &str)] = &[
     ("render.ts", include_str!("../ui/src/render.ts")),
     ("main.ts", include_str!("../ui/src/main.ts")),
 ];
 
-/// Las formas de pedir una clave. Las TRES, no una.
+/// The ways of asking for a key. All THREE, not one.
 ///
-/// El barrido miraba solo `this.t("` con comilla doble, así que no veía la
-/// función libre `tr(...)` ni las plantillas. Por ahí se coló `task-foreign`,
-/// que no existe en ningún catálogo y que este test daba por verde.
+/// The sweep used to look only at `this.t("` with a double quote, so it did
+/// not see the free function `tr(...)` nor the templates. `task-foreign`
+/// slipped through there, which exists in no catalogue and which this test
+/// used to call green.
 const LLAMADAS: &[&str] = &["this.t(", "screen.t(", "tr("];
 
-/// Las claves que el renderer le pide al catálogo.
+/// The keys the renderer asks the catalogue for.
 ///
-/// Un sitio de llamada cuyo argumento NO es un literal se exige que esté
-/// registrado en [`COMPUESTAS`]: ignorarlo en silencio es lo que dejaba pasar
-/// las plantillas.
+/// A call site whose argument is NOT a literal is required to be registered
+/// in [`COMPUESTAS`]: silently ignoring it is what let the templates through.
 fn claves_pedidas() -> BTreeSet<String> {
     let mut out = BTreeSet::new();
     for (nombre, fuente) in FUENTES {
@@ -41,28 +41,28 @@ fn claves_pedidas() -> BTreeSet<String> {
             while let Some(i) = fuente[desde..].find(llamada) {
                 let inicio = desde + i + llamada.len();
                 desde = inicio;
-                // El ARGUMENTO entero, hasta el paréntesis que cierra: un
-                // `t(a ? "x" : "y")` pide DOS claves, y quedarse con la
-                // primera —o con ninguna— es el agujero de siempre.
+                // The WHOLE argument, up to the closing parenthesis: a
+                // `t(a ? "x" : "y")` asks for TWO keys, and keeping only the
+                // first — or none — is the usual hole.
                 let arg = argumento(&fuente[inicio..]);
                 let literales = comillas(arg);
                 if !literales.is_empty() {
                     out.extend(literales);
                     continue;
                 }
-                // Una plantilla o una variable: solo vale si está declarada
-                // como compuesta, o si la clave la elige RUST —y entonces la
-                // comprueba `norte-ui-host/tests/catalogo_del_host.rs`, que
-                // lee el código del host por el mismo motivo que este lee el
-                // del renderer.
+                // A template or a variable: only valid if it is declared as
+                // composite, or if the key is chosen by RUST — and then
+                // `norte-ui-host/tests/catalogo_del_host.rs` checks it, which
+                // reads the host's code for the same reason this one reads
+                // the renderer's.
                 assert!(
                     COMPUESTAS.iter().any(|(p, _)| arg.contains(p))
                         || DEL_HOST.iter().any(|v| arg.starts_with(v)),
-                    "{nombre}: `{llamada}{arg}` pide una clave que este test \
-                     no puede resolver y que no está en `COMPUESTAS`. Una \
-                     clave que el barrido no ve se pinta como su propio \
-                     identificador el día que falte, y eso es exactamente lo \
-                     que este test viene a impedir."
+                    "{nombre}: `{llamada}{arg}` asks for a key this test \
+                     cannot resolve and that is not in `COMPUESTAS`. A key \
+                     the sweep does not see gets painted as its own \
+                     identifier the day it is missing, and that is exactly \
+                     what this test is here to prevent."
                 );
             }
         }
@@ -70,8 +70,7 @@ fn claves_pedidas() -> BTreeSet<String> {
     out
 }
 
-/// El argumento de una llamada, desde justo tras su `(` hasta el `)` que la
-/// cierra.
+/// A call's argument, from right after its `(` to the `)` that closes it.
 fn argumento(resto: &str) -> &str {
     let mut nivel = 1i32;
     for (i, c) in resto.char_indices() {
@@ -89,7 +88,7 @@ fn argumento(resto: &str) -> &str {
     resto
 }
 
-/// Los literales entre comillas dobles de un trozo de TypeScript.
+/// The double-quoted literals in a chunk of TypeScript.
 fn comillas(s: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut resto = s;
@@ -104,41 +103,42 @@ fn comillas(s: &str) -> Vec<String> {
     out
 }
 
-/// Los argumentos cuya clave la ELIGE el host, en Rust.
+/// The arguments whose key is CHOSEN by the host, in Rust.
 ///
-/// No es una excepción: es un traspaso. Estas claves las comprueba
-/// `norte-ui-host/tests/catalogo_del_host.rs` leyendo el código del host,
-/// igual que este test lee el del renderer. Nombrarlas aquí obliga a que
-/// añadir una forma nueva de recibir una clave desde el host pase por los dos
-/// ficheros; el barrido anterior simplemente no las veía.
+/// It is not an exception: it is a handoff. These keys are checked by
+/// `norte-ui-host/tests/catalogo_del_host.rs`, reading the host's code, the
+/// same way this test reads the renderer's. Naming them here forces adding a
+/// new way of receiving a key from the host to go through both files; the
+/// previous sweep simply did not see them.
 const DEL_HOST: &[&str] = &[
     "ack.reason_key",
     "out.notice.key",
     "slot.state.reason_key",
     "top.title_key",
-    // El título del panel de salida de un programa (#312): el host la elige
-    // entre literales suyos, que el barrido del host sí sigue.
+    // A program's output pane's title (#312): the host chooses it among its
+    // own literals, which the host's sweep does follow.
     "output.title_key",
     "c.label_key",
-    // `taskNode` recibe el traductor y compone `gui-task-kind-…`, que está
-    // en `COMPUESTAS`.
+    // `taskNode` receives the translator and composes `gui-task-kind-…`,
+    // which is in `COMPUESTAS`.
     "k",
 ];
 
-/// Las que se componen con un sufijo variable, con sus valores posibles.
+/// The ones composed with a variable suffix, with their possible values.
 ///
-/// A mano y con su valor: son las únicas que un `grep` no puede resolver, y
-/// dejarlas fuera sería el mismo agujero que este test viene a tapar.
+/// By hand and with their value: these are the only ones a `grep` cannot
+/// resolve, and leaving them out would be the same hole this test is here to
+/// close.
 const COMPUESTAS: &[(&str, &[&str])] = &[
     ("help-callout-", &["note", "warn", "tip"]),
-    // Los mandos de nivel del panel de registro (#326). El sufijo es el
-    // vocabulario CERRADO de `LogLevel::wire`, y esta lista es la otra mitad:
-    // un nivel nuevo allí rompe aquí, que es donde hay que enterarse de que
-    // le falta su cadena.
+    // The log panel's level controls (#326). The suffix is `LogLevel::wire`'s
+    // CLOSED vocabulary, and this list is the other half: a new level there
+    // breaks here, which is where it needs to be noticed that it is missing
+    // its string.
     ("log-level-", &["error", "warn", "info", "debug", "trace"]),
-    // El sufijo es `TaskView::kind`, que lo produce `clase_de_task` en el
-    // host con un `match` exhaustivo: esta lista es la otra mitad de ese
-    // `match`, y una variante nueva de `TaskKind` rompe allí primero.
+    // The suffix is `TaskView::kind`, produced by `clase_de_task` in the host
+    // with an exhaustive `match`: this list is that `match`'s other half,
+    // and a new `TaskKind` variant breaks there first.
     (
         "gui-task-kind-",
         &[
@@ -185,13 +185,13 @@ fn el_renderer_no_pide_ninguna_clave_que_no_exista() {
     }
     assert!(
         faltan.is_empty(),
-        "el renderer pinta estas claves tal cual, porque no están en el \
-         catálogo: {faltan:?}"
+        "the renderer paints these keys as-is, because they are not in the \
+         catalogue: {faltan:?}"
     );
 }
 
-/// Y las dos mitades del catálogo dicen lo mismo: una clave que solo está en
-/// un idioma es una ventana que habla en dos.
+/// And the catalogue's two halves say the same thing: a key that is only in
+/// one language is a window that speaks two.
 #[test]
 fn los_dos_idiomas_tienen_las_mismas_claves() {
     let en: BTreeSet<String> = norte_i18n::message_ids(norte_i18n::Lang::En)
@@ -204,6 +204,6 @@ fn los_dos_idiomas_tienen_las_mismas_claves() {
     let falta_en_ingles: Vec<&String> = es.difference(&en).collect();
     assert!(
         falta_en_castellano.is_empty() && falta_en_ingles.is_empty(),
-        "solo en inglés: {falta_en_castellano:?}; solo en español: {falta_en_ingles:?}"
+        "only in English: {falta_en_castellano:?}; only in Spanish: {falta_en_ingles:?}"
     );
 }

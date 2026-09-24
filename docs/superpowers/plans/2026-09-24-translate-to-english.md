@@ -42,6 +42,12 @@ Translate:
 
 Do NOT touch:
 
+- **The EXPECTED value of an assertion.** `assert_eq!(render(), "carpeta")`
+  pins what the code produces; translating `"carpeta"` to a guessed English
+  word breaks the test (it happened: `metadata.rs` expected "directory" where
+  `en.ftl` says "folder"). Translate the assertion's *message*, never what it
+  compares — unless the code under test changed the same literal in your edit.
+
 - Anything in `TRANSLATION_WIRE_SURFACE.md` (serde names, `rename`, method
   names, config keys, env vars, CLI flags, Fluent ids, file names on disk).
 - `*.ftl`, `crates/norte-help/topics/**`, golden and snapshot files

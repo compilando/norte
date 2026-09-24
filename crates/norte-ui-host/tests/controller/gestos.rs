@@ -1031,7 +1031,7 @@ async fn the_session_returns_the_sort_and_the_hidden_ones() {
             marks: Vec::new(),
         },
     );
-    *fake.sesion.lock().expect("sesión") = (
+    *fake.sesion.lock().expect("session") = (
         norte_proto::methods::Session {
             version: norte_frontend::session::SCHEMA_VERSION,
             revision: 7,

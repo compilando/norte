@@ -253,9 +253,9 @@ fn entry_tolerates_unknown_fields() {
         "kind": "file",
         "size": 1,
         "mtime_ms": null,
-        "campo_del_futuro": {"x": 1}
+        "future_field": {"x": 1}
     }"#;
-    let e: Entry = serde_json::from_str(json).expect("campos desconocidos se ignoran");
+    let e: Entry = serde_json::from_str(json).expect("unknown fields are ignored");
     assert_eq!(e.kind, EntryKind::File);
 }
 
@@ -263,7 +263,7 @@ fn entry_tolerates_unknown_fields() {
 fn entry_optional_fields_default() {
     // Backward-compat: absent optional fields → None, not an error.
     let json = r#"{"path": "file:///a", "kind": "other"}"#;
-    let e: Entry = serde_json::from_str(json).expect("opcionales ausentes valen None");
+    let e: Entry = serde_json::from_str(json).expect("absent optionals default to None");
     assert_eq!(e.size, None);
     assert_eq!(e.mtime_ms, None);
 }
@@ -327,7 +327,7 @@ fn full_fold_round_trips_on_the_wire() {
         flags: CapabilityFlags::CASE_PRESERVING | CapabilityFlags::FULL_FOLD,
         max_path: None,
     };
-    let json = serde_json::to_value(c).expect("serializa");
+    let json = serde_json::to_value(c).expect("serializes");
     assert_eq!(json["flags"], "CASE_PRESERVING | FULL_FOLD");
     assert_eq!(roundtrip(&c), c);
 }
@@ -340,7 +340,7 @@ fn confined_writes_round_trips_on_the_wire() {
         flags: CapabilityFlags::CONFINED_WRITES,
         max_path: None,
     };
-    let json = serde_json::to_value(c).expect("serializa");
+    let json = serde_json::to_value(c).expect("serializes");
     assert_eq!(json["flags"], "CONFINED_WRITES");
     assert_eq!(roundtrip(&c), c);
 }
@@ -355,7 +355,7 @@ fn posix_mode_round_trips_on_the_wire() {
         flags: CapabilityFlags::POSIX_MODE,
         max_path: None,
     };
-    let json = serde_json::to_value(c).expect("serializa");
+    let json = serde_json::to_value(c).expect("serializes");
     assert_eq!(json["flags"], "POSIX_MODE");
     assert_eq!(roundtrip(&c), c);
 }

@@ -1196,7 +1196,7 @@ mod tests {
     /// the second archive would collide with the first's file. It's the
     /// same rejection, and the same key, as the rename prompt.
     #[test]
-    fn empaquetar_rehusa_un_nombre_con_el_caracter_de_reemplazo() {
+    fn pack_refuses_a_name_with_the_replacement_character() {
         let mut app = app_dos_panes();
         app.modal = Some(Modal::Pack {
             name: "caf\u{FFFD}.zip".to_owned(),
@@ -1212,7 +1212,7 @@ mod tests {
     /// And an extension norte doesn't know how to WRITE gets stated in the
     /// dialog, instead of packing a zip named like a rar.
     #[test]
-    fn empaquetar_rehusa_una_extension_que_no_se_escribe() {
+    fn pack_refuses_an_extension_it_cant_write() {
         let mut app = app_dos_panes();
         app.modal = Some(Modal::Pack {
             name: "stuff.rar".to_owned(),
@@ -1229,7 +1229,7 @@ mod tests {
     /// ORIGINAL name. Untouched, confirm uses the RAW bytes (rule 1: a
     /// non-UTF8 name copied unedited never goes through lossy).
     #[test]
-    fn transfer_name_sin_editar_conserva_los_bytes_originales() {
+    fn transfer_name_unedited_keeps_the_original_bytes() {
         let dir = VPath::parse("mem:///").unwrap();
         let hostile = dir
             .clone()
@@ -1264,7 +1264,7 @@ mod tests {
     /// still contains U+FFFD (leftover from a hostile name's lossy prefill)
     /// gets REJECTED — confirming it would write mojibake to disk.
     #[test]
-    fn transfer_name_editado_usa_el_texto_y_rechaza_fffd() {
+    fn transfer_name_edited_uses_the_text_and_rejects_fffd() {
         let dir = VPath::parse("mem:///").unwrap();
         let hostile = dir
             .clone()
@@ -1306,7 +1306,7 @@ mod tests {
     /// without changing the name is an error (no-op), and a new name builds
     /// the destination in the same dir.
     #[test]
-    fn rename_construye_en_el_mismo_dir_y_rechaza_el_mismo_nombre() {
+    fn rename_builds_in_the_same_dir_and_rejects_the_same_name() {
         let mut app = app_with_entries(&["a.txt"]);
         app.open_rename();
         assert!(
@@ -1328,7 +1328,7 @@ mod tests {
     /// one keeps `from` BYTE-EXACT for every corpus name — the source never
     /// goes through text, only the new name is typed.
     #[test]
-    fn rename_de_cada_nombre_hostil_del_corpus_conserva_el_from() {
+    fn rename_of_every_hostile_corpus_name_keeps_the_from() {
         let dir = VPath::parse("mem:///").unwrap();
         for (i, hostile) in norte_testkit::corpus::hostile_names().iter().enumerate() {
             let from = dir
@@ -1365,7 +1365,7 @@ mod tests {
     /// #104: F7's modal validates with `VPath`'s rules and returns the full
     /// destination; invalid = diagnostic in the modal, never a submit.
     #[test]
-    fn el_modal_mkdir_valida_y_construye_el_destino() {
+    fn the_mkdir_modal_validates_and_builds_the_destination() {
         let mut app = app_with_entries(&["a"]);
         app.open_mkdir();
         for c in "docs".chars() {
@@ -1424,7 +1424,7 @@ mod tests {
     /// The pane is `file://` on purpose: creating a file to edit it gets
     /// refused where there's no native way to, and `mem://` doesn't have
     /// one.
-    fn app_local_para_crear() -> App {
+    fn local_app_to_create() -> App {
         let d = VPath::parse("file:///tmp").expect("wire");
         App::new(
             super::super::Pane::new(d.clone(), Vec::new()),
@@ -1433,8 +1433,8 @@ mod tests {
     }
 
     #[test]
-    fn el_modal_de_fichero_nuevo_valida_y_construye_el_destino() {
-        let mut app = app_local_para_crear();
+    fn the_new_file_modal_validates_and_builds_the_destination() {
+        let mut app = local_app_to_create();
         app.open_edit_new();
         for c in "notes.txt".chars() {
             app.prompt_push(PromptKind::EditNew, c);
@@ -1475,8 +1475,8 @@ mod tests {
     /// file gets created where the reader was looking when they typed the
     /// name.
     #[test]
-    fn el_fichero_nuevo_se_crea_donde_se_abrio_el_dialogo() {
-        let mut app = app_local_para_crear();
+    fn the_new_file_gets_created_where_the_dialog_was_opened() {
+        let mut app = local_app_to_create();
         app.open_edit_new();
         for c in "notes.txt".chars() {
             app.prompt_push(PromptKind::EditNew, c);
@@ -1500,7 +1500,7 @@ mod tests {
     /// `quit`, so without this guard quitting norte went through an editing
     /// session nobody asked for first.
     #[test]
-    fn pedir_salir_tira_el_programa_pendiente() {
+    fn requesting_quit_drops_the_pending_program() {
         let mut app = app_with_entries(&["a"]);
         app.pending_shell = Some(crate::app::PendingShell {
             argv: vec![std::ffi::OsString::from("vi")],

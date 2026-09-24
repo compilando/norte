@@ -50,7 +50,7 @@ pub fn profiles_dir_from(get: &impl Fn(&str) -> Option<OsString>) -> Option<Path
 }
 
 /// Names Win32 treats as devices no matter the extension behind them.
-const RESERVADOS: [&str; 22] = [
+const RESERVED: [&str; 22] = [
     "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
     "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
 ];
@@ -96,18 +96,18 @@ const RESERVADOS: [&str; 22] = [
 /// ```
 #[must_use]
 pub fn valid_profile_name(name: &OsStr) -> bool {
-    let texto = name.to_string_lossy();
-    if texto.is_empty() || texto == "." || texto == ".." {
+    let text = name.to_string_lossy();
+    if text.is_empty() || text == "." || text == ".." {
         return false;
     }
-    if texto.contains(['/', '\\', ':', '\0']) {
+    if text.contains(['/', '\\', ':', '\0']) {
         return false;
     }
-    if texto.ends_with('.') || texto.ends_with(' ') {
+    if text.ends_with('.') || text.ends_with(' ') {
         return false;
     }
-    let raiz = texto.split('.').next().unwrap_or(&texto);
-    !RESERVADOS.iter().any(|r| raiz.eq_ignore_ascii_case(r))
+    let root = text.split('.').next().unwrap_or(&text);
+    !RESERVED.iter().any(|r| root.eq_ignore_ascii_case(r))
 }
 
 /// One profile's directory, or `None` when the name cannot be one.
@@ -204,11 +204,11 @@ pub fn standard_layers_no_project_with_profile(name: Option<&OsStr>) -> Layers {
 /// system resolve the name, so on a case-folding filesystem asking for `WORK`
 /// opens `work` — #245, exactly, and `norte_frontend::layout::config::load`
 /// learned it first for the same reason.
-fn existe_en_el_listado(dir: &Path, name: &OsStr) -> bool {
-    let Some(padre) = dir.parent() else {
+fn is_in_the_listing(dir: &Path, name: &OsStr) -> bool {
+    let Some(parent) = dir.parent() else {
         return false;
     };
-    list_profiles(padre).is_ok_and(|v| v.iter().any(|n| n == name))
+    list_profiles(parent).is_ok_and(|v| v.iter().any(|n| n == name))
 }
 
 /// Who asked for this profile. It decides what happens when it does not load
@@ -232,17 +232,17 @@ pub enum ProfileSource {
 #[derive(Debug, thiserror::Error)]
 pub enum ProfileError {
     /// The name cannot be a directory inside `profiles/`.
-    #[error("«{}» no puede ser el nombre de un perfil", name.to_string_lossy())]
+    #[error("\"{}\" cannot be a profile name", name.to_string_lossy())]
     BadName {
         /// The name that was asked for.
         name: OsString,
     },
     /// There is nowhere to put a profile layer: no user config directory
     /// resolved, so `profiles/` has no parent.
-    #[error("no hay directorio de configuración de usuario donde colgar un perfil")]
+    #[error("no user configuration directory to hang a profile on")]
     NoHome,
     /// The profile directory is not there.
-    #[error("el perfil «{}» no está en {}", name.to_string_lossy(), dir.display())]
+    #[error("profile \"{}\" is not in {}", name.to_string_lossy(), dir.display())]
     NotFound {
         /// The name that was asked for.
         name: OsString,
@@ -345,7 +345,7 @@ pub fn load_with<T>(
     };
 
     let layers = layers_for(Some(name));
-    let problema: Option<ProfileError> = if valid_profile_name(name) {
+    let problem: Option<ProfileError> = if valid_profile_name(name) {
         match layers
             .dirs
             .iter()
@@ -358,7 +358,7 @@ pub fn load_with<T>(
             // would start as something else without a word — the outcome D7
             // declares fatal for an explicit request.
             None => Some(ProfileError::NoHome),
-            Some(dir) if !existe_en_el_listado(&dir, name) => Some(ProfileError::NotFound {
+            Some(dir) if !is_in_the_listing(&dir, name) => Some(ProfileError::NotFound {
                 name: name.to_owned(),
                 dir,
             }),
@@ -379,7 +379,7 @@ pub fn load_with<T>(
         })
     };
 
-    let Some(problema) = problema else {
+    let Some(problem) = problem else {
         return Ok(Loaded {
             config: load(&layers)?,
             active: None,
@@ -390,14 +390,14 @@ pub fn load_with<T>(
     // Before blaming the profile, load without it. If THAT fails too, the real
     // fault is in a layer the reader owns outright, and reporting the profile
     // would send them to fix the wrong file.
-    let sin_perfil = load(&layers_for(None))?;
+    let without_profile = load(&layers_for(None))?;
     match source {
         ProfileSource::Sticky => Ok(Loaded {
-            config: sin_perfil,
+            config: without_profile,
             active: None,
-            degraded: Some(problema.to_string()),
+            degraded: Some(problem.to_string()),
         }),
-        ProfileSource::Explicit | ProfileSource::Switch => Err(problema),
+        ProfileSource::Explicit | ProfileSource::Switch => Err(problem),
     }
 }
 
@@ -434,7 +434,7 @@ pub fn list_profiles(dir: &Path) -> std::io::Result<Vec<OsString>> {
         // directory can already rewrite the `norte.toml` next to it, so
         // following one grants nothing new.
         //
-        // It also has to agree with `existe_en_el_listado`, which asks this
+        // It also has to agree with `is_in_the_listing`, which asks this
         // same question for `load_with_profile`. Two answers to one question
         // is how a profile loads by name and never appears in the picker.
         if std::fs::metadata(entry.path()).is_ok_and(|m| m.is_dir()) {
@@ -445,59 +445,59 @@ pub fn list_profiles(dir: &Path) -> std::io::Result<Vec<OsString>> {
     Ok(out)
 }
 
-/// Lo que un perfil GUARDA de la pantalla actual (#306, ADR 0079).
+/// What a profile SAVES from the current screen (#306, ADR 0079).
 ///
-/// Un tipo y no seis argumentos: son seis cosas que van juntas o no van, y la
-/// mitad son `Option`.
+/// One type and not six arguments: these are six things that go together or
+/// not at all, and half are `Option`.
 #[derive(Debug, Default)]
 pub struct ProfileSnapshot {
-    /// El título a enseñar (`[profile] title`), si el lector puso uno.
+    /// The title to display (`[profile] title`), if the reader set one.
     pub title: Option<String>,
-    /// La disposición viva, ya en TOML — la serializa quien la tiene
-    /// (`norte_frontend::layout::config::to_toml`): este crate no conoce el
-    /// árbol de huecos y no debe.
+    /// The live layout, already in TOML — serialized by whoever holds it
+    /// (`norte_frontend::layout::config::to_toml`): this crate does not know
+    /// the slot tree and must not.
     pub layout_toml: Option<String>,
-    /// Los escalares de `[ui]` que DIFIEREN de lo que ya dice la capa del
-    /// usuario. Solo esos: copiar los que coinciden añade ruido que luego
-    /// nadie sabe si es deliberado.
+    /// The `[ui]` scalars that DIFFER from what the user layer already says.
+    /// Only those: copying the ones that match would add noise nobody could
+    /// later tell was deliberate.
     pub ui: Vec<(String, toml_edit::Value)>,
-    /// `[profile.start]`: dónde abre cada hueco la primera vez, por id de
-    /// hueco en texto (TOML no tiene claves numéricas).
+    /// `[profile.start]`: where each slot opens the first time, by slot id as
+    /// text (TOML has no numeric keys).
     pub start: Vec<(String, String)>,
-    /// El `keymap.toml` a copiar tal cual, si el perfil de partida tenía uno.
+    /// The `keymap.toml` to copy as is, if the starting profile had one.
     ///
-    /// Se copia BYTE a BYTE y no se reescribe: es un fichero del lector, con
-    /// sus comentarios, y «guardar como» produce un perfil que se comporta
-    /// igual que el que tenías — si cambiaste atajos, el nuevo los lleva.
+    /// Copied BYTE for BYTE and not rewritten: it is the reader's file, with
+    /// their comments, and "save as" produces a profile that behaves like the
+    /// one you had — if you changed shortcuts, the new one carries them.
     pub keymap: Option<Vec<u8>>,
 }
 
-/// El nombre del fichero de disposición que escribe [`save_profile`].
+/// The name of the layout file [`save_profile`] writes.
 ///
-/// Fijo, y por eso no lo elige quien llama: el `norte.toml` del perfil apunta
-/// a él con `[ui] layout`, y dos nombres para lo mismo es una pareja que se
-/// puede desparejar.
+/// Fixed, and that is why the caller does not choose it: the profile's
+/// `norte.toml` points to it with `[ui] layout`, and two names for the same
+/// thing is a pair that can come apart.
 pub const PROFILE_LAYOUT_NAME: &str = "workspace";
 
-/// Escribe `profiles/<nombre>/` con lo que hay en pantalla (#306).
+/// Writes `profiles/<name>/` with what is on screen (#306).
 ///
-/// Devuelve el directorio del perfil.
+/// Returns the profile's directory.
 ///
-/// **No comprueba si ya existe**: quien llama pregunta antes, porque la
-/// respuesta a «ya hay uno con ese nombre» es del humano y no de un escritor.
-/// Lo que sí hace es no tocar lo que no escribe: un perfil que ya tenía otros
-/// ficheros los conserva.
+/// **Does not check whether it already exists**: the caller asks beforehand,
+/// because the answer to "is there already one with that name?" belongs to
+/// the human, not to a writer. What it does do is leave alone what it does
+/// not write: a profile that already had other files keeps them.
 ///
-/// El `norte.toml` se compone con los mismos `persist_*` que el resto de la
-/// familia —lock, tmp+rename, comentarios preservados—, así que guardar sobre
-/// un perfil escrito a mano no se lleva por delante lo que hubiera.
+/// The `norte.toml` is composed with the same `persist_*` family as the rest
+/// — lock, tmp+rename, comments preserved — so saving over a hand-written
+/// profile does not run over whatever was there.
 ///
 /// # Errors
-/// Lo que falle al crear los directorios o al escribir cualquiera de los tres
-/// ficheros. Un nombre que [`valid_profile_name`] rechaza es
-/// [`std::io::ErrorKind::InvalidInput`]: un nombre de perfil acaba siendo un
-/// directorio, y componer la ruta con uno inválido es lo que este guard existe
-/// para impedir.
+/// Whatever fails while creating the directories or writing any of the three
+/// files. A name [`valid_profile_name`] rejects is
+/// [`std::io::ErrorKind::InvalidInput`]: a profile name ends up being a
+/// directory, and composing the path with an invalid one is what this guard
+/// exists to prevent.
 pub fn save_profile(
     profiles_dir: &Path,
     name: &OsStr,
@@ -507,7 +507,7 @@ pub fn save_profile(
     if !valid_profile_name(name) {
         return Err(Error::new(
             ErrorKind::InvalidInput,
-            "ese nombre no puede ser un directorio de perfil",
+            "that name cannot be a profile directory",
         ));
     }
     let dir = profiles_dir.join(name);
@@ -526,23 +526,23 @@ pub fn save_profile(
             toml_edit::Value::from(PROFILE_LAYOUT_NAME),
         )?;
     }
-    for (clave, valor) in &snap.ui {
-        crate::load::persist_set(&dir, "ui", clave, valor.clone())?;
+    for (key, value) in &snap.ui {
+        crate::load::persist_set(&dir, "ui", key, value.clone())?;
     }
-    if let Some(titulo) = &snap.title {
+    if let Some(title) = &snap.title {
         crate::load::persist_set(
             &dir,
             "profile",
             "title",
-            toml_edit::Value::from(titulo.as_str()),
+            toml_edit::Value::from(title.as_str()),
         )?;
     }
-    for (hueco, destino) in &snap.start {
+    for (slot, destination) in &snap.start {
         crate::load::persist_set(
             &dir,
             "profile.start",
-            hueco,
-            toml_edit::Value::from(destino.as_str()),
+            slot,
+            toml_edit::Value::from(destination.as_str()),
         )?;
     }
     if let Some(bytes) = &snap.keymap {
@@ -552,77 +552,76 @@ pub fn save_profile(
 }
 
 #[cfg(test)]
-mod tests_guardar {
+mod tests_save {
     use super::*;
 
-    /// **Guardar un perfil escribe las tres piezas** (#306): la disposición
-    /// con su `[ui] layout` apuntándola, dónde abre cada hueco, y el keymap
-    /// que se lleva del perfil de partida.
+    /// **Saving a profile writes all three pieces** (#306): the layout with
+    /// its `[ui] layout` pointing at it, where each slot opens, and the
+    /// keymap carried over from the starting profile.
     #[test]
-    fn guardar_un_perfil_escribe_las_tres_piezas() {
-        let raiz = tempfile::tempdir().expect("tempdir");
+    fn saving_a_profile_writes_the_three_pieces() {
+        let root = tempfile::tempdir().expect("tempdir");
         let snap = ProfileSnapshot {
-            title: Some("Fotos".to_owned()),
+            title: Some("Photos".to_owned()),
             layout_toml: Some("kind = \"slot\"\n".to_owned()),
             ui: vec![("theme".to_owned(), toml_edit::Value::from("nord"))],
-            start: vec![("1".to_owned(), "file:///fotos".to_owned())],
-            keymap: Some(b"# mis teclas\n".to_vec()),
+            start: vec![("1".to_owned(), "file:///photos".to_owned())],
+            keymap: Some(b"# my keys\n".to_vec()),
         };
-        let dir = save_profile(raiz.path(), OsStr::new("fotos"), &snap).expect("guarda");
+        let dir = save_profile(root.path(), OsStr::new("photos"), &snap).expect("saves");
 
         let toml = std::fs::read_to_string(dir.join("norte.toml")).expect("norte.toml");
         assert!(toml.contains("layout = \"workspace\""), "{toml}");
         assert!(toml.contains("theme = \"nord\""), "{toml}");
-        assert!(toml.contains("title = \"Fotos\""), "{toml}");
-        assert!(toml.contains("file:///fotos"), "{toml}");
+        assert!(toml.contains("title = \"Photos\""), "{toml}");
+        assert!(toml.contains("file:///photos"), "{toml}");
         assert_eq!(
             std::fs::read_to_string(dir.join("layouts/workspace.toml")).expect("layout"),
             "kind = \"slot\"\n"
         );
         assert_eq!(
             std::fs::read(dir.join("keymap.toml")).expect("keymap"),
-            b"# mis teclas\n"
+            b"# my keys\n"
         );
     }
 
-    /// Un nombre que no puede ser un directorio se rechaza ANTES de tocar
-    /// disco: componer la ruta con `..` es lo que este guard existe para
-    /// impedir.
+    /// A name that cannot be a directory is refused BEFORE touching disk:
+    /// composing the path with `..` is what this guard exists to prevent.
     #[test]
-    fn un_nombre_que_no_es_directorio_no_escribe_nada() {
-        let raiz = tempfile::tempdir().expect("tempdir");
-        for malo in ["..", "", "a/b", "."] {
-            let e = save_profile(raiz.path(), OsStr::new(malo), &ProfileSnapshot::default())
-                .expect_err("no vale");
-            assert_eq!(e.kind(), std::io::ErrorKind::InvalidInput, "{malo}");
+    fn a_name_that_is_not_a_directory_writes_nothing() {
+        let root = tempfile::tempdir().expect("tempdir");
+        for bad in ["..", "", "a/b", "."] {
+            let e = save_profile(root.path(), OsStr::new(bad), &ProfileSnapshot::default())
+                .expect_err("not valid");
+            assert_eq!(e.kind(), std::io::ErrorKind::InvalidInput, "{bad}");
         }
         assert_eq!(
-            std::fs::read_dir(raiz.path()).expect("read_dir").count(),
+            std::fs::read_dir(root.path()).expect("read_dir").count(),
             0,
-            "y no se creó ni un directorio"
+            "and not even a directory was created"
         );
     }
 
-    /// Guardar SOBRE uno que ya existe reescribe sus piezas y deja el resto de
-    /// sus ficheros como estaban: un perfil es del lector, no de este
-    /// escritor.
+    /// Saving OVER one that already exists rewrites its pieces and leaves the
+    /// rest of its files as they were: a profile belongs to the reader, not
+    /// to this writer.
     #[test]
-    fn guardar_encima_conserva_lo_que_no_escribe() {
-        let raiz = tempfile::tempdir().expect("tempdir");
-        let dir = raiz.path().join("fotos");
+    fn saving_over_keeps_what_it_does_not_write() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let dir = root.path().join("photos");
         std::fs::create_dir_all(&dir).expect("mkdir");
-        std::fs::write(dir.join("openers.toml"), b"# los mios\n").expect("openers");
+        std::fs::write(dir.join("openers.toml"), b"# mine\n").expect("openers");
 
         let snap = ProfileSnapshot {
             layout_toml: Some("kind = \"slot\"\n".to_owned()),
             ..ProfileSnapshot::default()
         };
-        save_profile(raiz.path(), OsStr::new("fotos"), &snap).expect("guarda");
+        save_profile(root.path(), OsStr::new("photos"), &snap).expect("saves");
 
         assert_eq!(
             std::fs::read(dir.join("openers.toml")).expect("openers"),
-            b"# los mios\n",
-            "lo que no escribe, no lo toca"
+            b"# mine\n",
+            "what it does not write, it does not touch"
         );
     }
 }
@@ -633,86 +632,87 @@ mod tests {
     use std::ffi::{OsStr, OsString};
     use std::path::PathBuf;
 
-    /// Un árbol con un perfil `name` cuyo `norte.toml` NO parsea (una errata
-    /// realista: una clave desconocida, que `deny_unknown_fields` hace fatal).
-    fn arbol_con_perfil_roto(
+    /// A tree with a profile `name` whose `norte.toml` does NOT parse (a
+    /// realistic typo: an unknown key, which `deny_unknown_fields` makes
+    /// fatal).
+    fn tree_with_broken_profile(
         name: &str,
     ) -> (
         impl Fn(Option<&OsStr>) -> Layers + use<>,
         Vec<tempfile::TempDir>,
     ) {
-        arbol(name, "[ui]\nthem = \"nord\"\n")
+        tree(name, "[ui]\nthem = \"nord\"\n")
     }
 
-    /// Un árbol con un perfil `name` sano.
-    fn arbol_con_perfil_sano(
+    /// A tree with a healthy profile `name`.
+    fn tree_with_healthy_profile(
         name: &str,
     ) -> (
         impl Fn(Option<&OsStr>) -> Layers + use<>,
         Vec<tempfile::TempDir>,
     ) {
-        arbol(name, "[ui]\ntheme = \"nord\"\n")
+        tree(name, "[ui]\ntheme = \"nord\"\n")
     }
 
-    /// Un árbol SIN perfiles: solo la capa de usuario.
-    fn arbol_sin_perfiles() -> (
+    /// A tree with NO profiles: only the user layer.
+    fn tree_without_profiles() -> (
         impl Fn(Option<&OsStr>) -> Layers + use<>,
         Vec<tempfile::TempDir>,
     ) {
-        let usuario = tempfile::tempdir().expect("tempdir");
-        let raiz = usuario.path().to_path_buf();
+        let user = tempfile::tempdir().expect("tempdir");
+        let root = user.path().to_path_buf();
         let f = move |n: Option<&OsStr>| Layers {
             dirs: match n {
-                None => vec![(raiz.clone(), Layer::User)],
+                None => vec![(root.clone(), Layer::User)],
                 Some(n) => vec![
-                    (raiz.clone(), Layer::User),
-                    (raiz.join("profiles").join(n), Layer::Profile),
+                    (root.clone(), Layer::User),
+                    (root.join("profiles").join(n), Layer::Profile),
                 ],
             },
         };
-        (f, vec![usuario])
+        (f, vec![user])
     }
 
-    fn arbol(
+    fn tree(
         name: &str,
-        contenido: &str,
+        content: &str,
     ) -> (
         impl Fn(Option<&OsStr>) -> Layers + use<>,
         Vec<tempfile::TempDir>,
     ) {
-        let usuario = tempfile::tempdir().expect("tempdir");
-        let dir = usuario.path().join("profiles").join(name);
+        let user = tempfile::tempdir().expect("tempdir");
+        let dir = user.path().join("profiles").join(name);
         std::fs::create_dir_all(&dir).expect("mkdir");
-        std::fs::write(dir.join("norte.toml"), contenido).expect("write");
-        let raiz = usuario.path().to_path_buf();
+        std::fs::write(dir.join("norte.toml"), content).expect("write");
+        let root = user.path().to_path_buf();
         let f = move |n: Option<&OsStr>| Layers {
             dirs: match n {
-                None => vec![(raiz.clone(), Layer::User)],
+                None => vec![(root.clone(), Layer::User)],
                 Some(n) => vec![
-                    (raiz.clone(), Layer::User),
-                    (raiz.join("profiles").join(n), Layer::Profile),
+                    (root.clone(), Layer::User),
+                    (root.join("profiles").join(n), Layer::Profile),
                 ],
             },
         };
-        // Los guards VUELVEN: un `TempDir` que cae borra el árbol, y un test
-        // que los pierde acaba probando el camino de «el directorio no está»
-        // sin enterarse.
-        (f, vec![usuario])
+        // The guards COME BACK: a `TempDir` that is dropped deletes the tree,
+        // and a test that loses them ends up testing the "the directory is
+        // not there" path without realizing it.
+        (f, vec![user])
     }
 
-    /// Un nombre de perfil no puede apuntar la CAPA a cualquier sitio del
-    /// disco. `Path::join` con una ruta absoluta —o con un prefijo de unidad en
-    /// Windows— sustituye la base ENTERA, y `..` sube.
+    /// A profile name must not be able to point the LAYER anywhere on disk.
+    /// `Path::join` with an absolute path — or with a drive prefix on
+    /// Windows — replaces the WHOLE base, and `..` climbs up.
     #[test]
-    fn un_nombre_no_puede_salirse_del_directorio_de_perfiles() {
-        for malo in [
+    fn a_name_cannot_escape_the_profiles_directory() {
+        for bad in [
             "",
             ".",
             "..",
             "../../../tmp/pwn",
             "/etc/norte",
             "C:",
-            "notas:secreto",
+            "notes:secret",
             "work/../..",
             "work.",
             "work ",
@@ -720,20 +720,20 @@ mod tests {
             "con.toml",
         ] {
             assert!(
-                !valid_profile_name(OsStr::new(malo)),
-                "«{malo}» no puede ser un nombre de perfil"
+                !valid_profile_name(OsStr::new(bad)),
+                "\"{bad}\" cannot be a profile name"
             );
         }
-        for bueno in ["work", "photos", "mi perfil", "work.2"] {
-            assert!(valid_profile_name(OsStr::new(bueno)), "«{bueno}» sí vale");
+        for good in ["work", "photos", "my profile", "work.2"] {
+            assert!(valid_profile_name(OsStr::new(good)), "\"{good}\" is valid");
         }
     }
 
-    /// Y la puerta no es solo el validador: `profile_dir_from` y el resolutor
-    /// de capas se NIEGAN a construir la ruta, en vez de construirla y confiar
-    /// en que alguien mire.
+    /// And the gate is not just the validator: `profile_dir_from` and the
+    /// layer resolver REFUSE to build the path, instead of building it and
+    /// trusting someone to look.
     #[test]
-    fn un_nombre_hostil_no_produce_ni_ruta_ni_capa() {
+    fn a_hostile_name_produces_neither_a_path_nor_a_layer() {
         let e = env(&[("NORTE_CONFIG_DIR", "/custom")]);
         assert_eq!(profile_dir_from(&e, OsStr::new("..")), None);
         assert_eq!(profile_dir_from(&e, OsStr::new("/etc/norte")), None);
@@ -741,118 +741,121 @@ mod tests {
         let l = standard_layers_with_profile_on(false, &e, Some(OsStr::new("../../etc")));
         assert!(
             l.dirs.iter().all(|(_, k)| *k != Layer::Profile),
-            "no se cuela una capa que apunte fuera: {:?}",
+            "a layer pointing outside slipped through: {:?}",
             l.dirs
         );
     }
 
-    /// El nombre tiene que estar en el LISTADO, byte a byte. Dejar resolver al
-    /// sistema de ficheros abre `work` cuando se pidió `WORK` en macOS y
-    /// Windows — #245, y es lo que D4 prometía y no estaba.
+    /// The name has to be in the LISTING, byte for byte. Letting the
+    /// filesystem resolve it opens `work` when `WORK` was asked for on macOS
+    /// and Windows — #245, exactly, and what D4 promised and was missing.
     #[test]
-    fn el_nombre_se_compara_contra_el_listado_byte_a_byte() {
-        let (dirs, _guards) = arbol_con_perfil_sano("work");
+    fn the_name_is_compared_against_the_listing_byte_for_byte() {
+        let (dirs, _guards) = tree_with_healthy_profile("work");
         let err = load_with_profile(&dirs, Some(OsStr::new("WORK")), ProfileSource::Explicit)
-            .expect_err("no hay ningún perfil que se llame así");
+            .expect_err("there is no profile with that name");
         assert!(matches!(err, ProfileError::NotFound { .. }), "{err:?}");
     }
 
-    /// Un nombre hostil sigue la misma regla de tres respuestas que un perfil
-    /// roto: fatal si lo nombró el humano, degradado si venía de la sesión.
+    /// A hostile name follows the same three-answer rule as a broken profile:
+    /// fatal if the human named it, degraded if it came from the session.
     #[test]
-    fn un_nombre_hostil_sigue_la_regla_de_tres_respuestas() {
-        let (dirs, _guards) = arbol_con_perfil_sano("work");
+    fn a_hostile_name_follows_the_three_answer_rule() {
+        let (dirs, _guards) = tree_with_healthy_profile("work");
         let err = load_with_profile(&dirs, Some(OsStr::new("..")), ProfileSource::Explicit)
-            .expect_err("aborta");
+            .expect_err("aborts");
         assert!(matches!(err, ProfileError::BadName { .. }), "{err:?}");
 
         let r = load_with_profile(&dirs, Some(OsStr::new("..")), ProfileSource::Sticky)
-            .expect("arranca sin perfil");
+            .expect("starts with no profile");
         assert_eq!(r.active, None);
         assert!(r.degraded.is_some());
     }
 
-    /// `--profile` roto ABORTA: el lector pidió ese perfil por su nombre, y
-    /// arrancar como otra cosa sería contestar otra pregunta.
+    /// A broken `--profile` ABORTS: the reader asked for that profile by
+    /// name, and starting as something else would answer a different
+    /// question.
     #[test]
-    fn explicito_y_roto_es_fatal() {
-        let (dirs, _guards) = arbol_con_perfil_roto("work");
+    fn explicit_and_broken_is_fatal() {
+        let (dirs, _guards) = tree_with_broken_profile("work");
         let err = load_with_profile(&dirs, Some(OsStr::new("work")), ProfileSource::Explicit)
-            .expect_err("tiene que abortar");
+            .expect_err("has to abort");
         assert!(
             format!("{err}").contains("norte.toml"),
-            "y decir qué fichero: {err}"
+            "and say which file: {err}"
         );
     }
 
-    /// El PEGAJOSO roto arranca sin capa de perfil y lo dice. Abortar dejaría
-    /// al lector fuera del programa, sin manera de elegir otro.
+    /// A broken STICKY one starts with no profile layer and says so.
+    /// Aborting would leave the reader outside the program, with no way to
+    /// choose another.
     #[test]
-    fn pegajoso_y_roto_arranca_sin_perfil_y_lo_dice() {
-        let (dirs, _guards) = arbol_con_perfil_roto("work");
+    fn sticky_and_broken_starts_with_no_profile_and_says_so() {
+        let (dirs, _guards) = tree_with_broken_profile("work");
         let r = load_with_profile(&dirs, Some(OsStr::new("work")), ProfileSource::Sticky)
-            .expect("arranca igual");
-        assert_eq!(r.active, None, "sin capa de perfil");
-        assert!(r.degraded.is_some(), "y no en silencio");
+            .expect("starts anyway");
+        assert_eq!(r.active, None, "no profile layer");
+        assert!(r.degraded.is_some(), "and not silently");
     }
 
-    /// Cambiar EN CALIENTE a uno roto se RECHAZA: el llamante se queda con la
-    /// configuración que ya tenía. Un perfil a medio aplicar no es un estado
-    /// que este diseño admita.
+    /// Switching LIVE to a broken one is REFUSED: the caller keeps the
+    /// configuration it already had. A half-applied profile is not a state
+    /// this design admits.
     #[test]
-    fn cambiar_a_uno_roto_se_rechaza() {
-        let (dirs, _guards) = arbol_con_perfil_roto("work");
+    fn switching_to_a_broken_one_is_refused() {
+        let (dirs, _guards) = tree_with_broken_profile("work");
         let err = load_with_profile(&dirs, Some(OsStr::new("work")), ProfileSource::Switch)
-            .expect_err("el cambio se rechaza");
+            .expect_err("the switch is refused");
         assert!(format!("{err}").contains("norte.toml"), "{err}");
     }
 
-    /// Un perfil que NO EXISTE sigue la misma regla: es la misma pregunta
-    /// («¿puedo usar el que pediste?») con la misma respuesta por procedencia.
+    /// A profile that does NOT EXIST follows the same rule: it is the same
+    /// question ("can I use the one you asked for?") with the same answer by
+    /// source.
     #[test]
-    fn un_perfil_que_no_existe_sigue_la_misma_regla() {
-        let (dirs, _guards) = arbol_sin_perfiles();
+    fn a_profile_that_does_not_exist_follows_the_same_rule() {
+        let (dirs, _guards) = tree_without_profiles();
         assert!(
-            load_with_profile(&dirs, Some(OsStr::new("fantasma")), ProfileSource::Explicit)
-                .is_err()
+            load_with_profile(&dirs, Some(OsStr::new("ghost")), ProfileSource::Explicit).is_err()
         );
-        let r = load_with_profile(&dirs, Some(OsStr::new("fantasma")), ProfileSource::Sticky)
-            .expect("arranca");
+        let r = load_with_profile(&dirs, Some(OsStr::new("ghost")), ProfileSource::Sticky)
+            .expect("starts");
         assert_eq!(r.active, None);
         assert!(r.degraded.is_some());
     }
 
-    /// Y el camino feliz sigue siendo el camino feliz.
+    /// And the happy path is still the happy path.
     #[test]
-    fn un_perfil_sano_queda_activo_y_sin_degradar() {
-        let (dirs, _guards) = arbol_con_perfil_sano("work");
+    fn a_healthy_profile_ends_up_active_and_not_degraded() {
+        let (dirs, _guards) = tree_with_healthy_profile("work");
         let r = load_with_profile(&dirs, Some(OsStr::new("work")), ProfileSource::Sticky)
-            .expect("carga");
+            .expect("loads");
         assert_eq!(r.active.as_deref(), Some(OsStr::new("work")));
         assert!(r.degraded.is_none());
         assert_eq!(r.config.ui_theme.as_deref(), Some("nord"));
     }
 
-    /// Un `norte.toml` DEL USUARIO roto es fatal para las tres procedencias.
-    /// Degradar aquí escondería el error de la capa que ADR 0035 declara
-    /// suya: «arrancar ignorándolas en silencio sería peor que no arrancar».
+    /// A broken USER `norte.toml` is fatal for all three sources. Degrading
+    /// here would hide the error in the layer ADR 0035 declares its own:
+    /// "starting while silently ignoring it would be worse than not
+    /// starting".
     #[test]
-    fn una_capa_de_usuario_rota_es_fatal_incluso_degradando() {
-        let usuario = tempfile::tempdir().expect("tempdir");
-        std::fs::write(usuario.path().join("norte.toml"), "[ui]\nthem = 1\n").expect("write");
-        let raiz = usuario.path().to_path_buf();
+    fn a_broken_user_layer_is_fatal_even_while_degrading() {
+        let user = tempfile::tempdir().expect("tempdir");
+        std::fs::write(user.path().join("norte.toml"), "[ui]\nthem = 1\n").expect("write");
+        let root = user.path().to_path_buf();
         let dirs = move |n: Option<&OsStr>| Layers {
             dirs: match n {
-                None => vec![(raiz.clone(), Layer::User)],
+                None => vec![(root.clone(), Layer::User)],
                 Some(n) => vec![
-                    (raiz.clone(), Layer::User),
-                    (raiz.join("profiles").join(n), Layer::Profile),
+                    (root.clone(), Layer::User),
+                    (root.join("profiles").join(n), Layer::Profile),
                 ],
             },
         };
         assert!(
-            load_with_profile(&dirs, Some(OsStr::new("fantasma")), ProfileSource::Sticky).is_err(),
-            "la capa del usuario no se degrada por el camino del perfil"
+            load_with_profile(&dirs, Some(OsStr::new("ghost")), ProfileSource::Sticky).is_err(),
+            "the user layer does not degrade through the profile path"
         );
     }
 
@@ -865,7 +868,7 @@ mod tests {
     }
 
     #[test]
-    fn el_dir_de_perfiles_cuelga_del_dir_de_usuario() {
+    fn the_profiles_dir_hangs_off_the_user_dir() {
         let e = env(&[("NORTE_CONFIG_DIR", "/custom")]);
         assert_eq!(
             profiles_dir_on(false, &e),
@@ -873,11 +876,11 @@ mod tests {
         );
     }
 
-    /// Bajo `NORTE_CONFIG_DIR` el resolutor es hermético (solo esa capa y
-    /// `./.norte`), y el perfil tiene que quedarse DENTRO de esa hermeticidad
-    /// o los tests dejarían de aislar lo que dicen aislar.
+    /// Under `NORTE_CONFIG_DIR` the resolver is hermetic (only that layer and
+    /// `./.norte`), and the profile has to stay INSIDE that hermeticity or
+    /// the tests would stop isolating what they claim to isolate.
     #[test]
-    fn con_norte_config_dir_el_perfil_sigue_dentro() {
+    fn with_norte_config_dir_the_profile_stays_inside() {
         let e = env(&[("NORTE_CONFIG_DIR", "/custom")]);
         let l = standard_layers_with_profile_on(false, &e, Some(OsStr::new("work")));
         assert_eq!(
@@ -891,17 +894,17 @@ mod tests {
     }
 
     #[test]
-    fn sin_perfil_las_capas_son_las_de_siempre() {
+    fn with_no_profile_the_layers_are_the_usual_ones() {
         let e = env(&[("NORTE_CONFIG_DIR", "/custom")]);
-        let con = standard_layers_with_profile_on(false, &e, None);
-        let sin = crate::dirs::standard_layers_on(false, &e);
-        assert_eq!(con.dirs, sin.dirs);
+        let with = standard_layers_with_profile_on(false, &e, None);
+        let without = crate::dirs::standard_layers_on(false, &e);
+        assert_eq!(with.dirs, without.dirs);
     }
 
-    /// El perfil va DESPUÉS de usuario y ANTES de proyecto, con las tres capas
-    /// presentes (el caso hermético de arriba no tiene `System`).
+    /// The profile goes AFTER user and BEFORE project, with all three layers
+    /// present (the hermetic case above has no `System`).
     #[test]
-    fn el_perfil_se_intercala_entre_usuario_y_proyecto() {
+    fn the_profile_is_spliced_between_user_and_project() {
         let e = env(&[("HOME", "/home/u")]);
         let l = standard_layers_with_profile_on(false, &e, Some(OsStr::new("photos")));
         let kinds: Vec<Layer> = l.dirs.iter().map(|(_, k)| *k).collect();
@@ -911,22 +914,22 @@ mod tests {
         );
     }
 
-    /// Un consumidor de valores del core (`[archive]`, `[ai]`) no ve la capa de
-    /// perfil: no puede fijar nada de lo suyo (D2) y no tiene por qué saber qué
-    /// perfil eligió un frontend.
+    /// A consumer of core values (`[archive]`, `[ai]`) does not see the
+    /// profile layer: it cannot set anything of its own (D2) and has no
+    /// reason to know which profile a frontend chose.
     #[test]
-    fn no_project_tampoco_trae_perfil() {
+    fn no_project_does_not_bring_a_profile_either() {
         let e = env(&[("HOME", "/home/u")]);
         let l = standard_layers_no_project_on(false, &e, Some(OsStr::new("work")));
         let kinds: Vec<Layer> = l.dirs.iter().map(|(_, k)| *k).collect();
         assert_eq!(kinds, vec![Layer::System, Layer::User]);
     }
 
-    /// Sin capa de USUARIO no hay dónde colgar un perfil, y en vez de inventar
-    /// una ruta se devuelven las capas tal cual: pedir un perfil que no puede
-    /// existir no puede fabricar un directorio bajo el cwd.
+    /// With no USER layer there is nowhere to hang a profile, and instead of
+    /// inventing a path the layers are returned as is: asking for a profile
+    /// that cannot exist cannot manufacture a directory under the cwd.
     #[test]
-    fn sin_capa_de_usuario_el_perfil_no_se_inventa() {
+    fn with_no_user_layer_the_profile_is_not_invented() {
         let e = env(&[]);
         let l = standard_layers_with_profile_on(false, &e, Some(OsStr::new("work")));
         assert!(l.dirs.iter().all(|(_, k)| *k != Layer::Profile));

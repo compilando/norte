@@ -262,7 +262,7 @@ impl Estado {
         let backend = Arc::clone(backend);
         let buzon = buzon.clone();
         tokio::spawn(async move {
-            let encolada = if con.mover {
+            let queued = if con.mover {
                 backend
                     .move_(con.from.clone(), con.to.clone(), politica, a_la_cola)
                     .await
@@ -271,7 +271,7 @@ impl Estado {
                     .copy(con.from.clone(), con.to.clone(), politica, a_la_cola)
                     .await
             };
-            let mensaje = match encolada {
+            let mensaje = match queued {
                 Ok(task) => Mensaje::TaskNueva(Box::new((task, afectados, Some(con)))),
                 Err(e) => Mensaje::TaskFallida(Box::new(e)),
             };
@@ -1887,13 +1887,13 @@ impl Estado {
         // no work row is left: that way the one that took a while is seen
         // finished.
         let abre = self.tira.wants_panel(self.reloj_tira());
-        let hay = self.hay_trabajo();
-        let abierto = self.hueco_de_kind("processes").is_some();
-        if abre && !abierto {
+        let has_work = self.has_work();
+        let open = self.hueco_de_kind("processes").is_some();
+        if abre && !open {
             self.procesos_auto = true;
             return self.abrir_hueco_de_kind("processes", backend, buzon).1;
         }
-        if !hay && abierto && self.procesos_auto {
+        if !has_work && open && self.procesos_auto {
             self.procesos_auto = false;
             return self.cerrar_hueco_de_kind("processes", backend, buzon).1;
         }
@@ -1933,14 +1933,14 @@ impl Estado {
                     bps: *bps,
                 }),
         );
-        let Some(cuando) = self.tira.next_change_ms(ahora) else {
+        let Some(when) = self.tira.next_change_ms(ahora) else {
             return;
         };
-        if self.tira_despertar == Some(cuando) {
+        if self.tira_despertar == Some(when) {
             return;
         }
-        self.tira_despertar = Some(cuando);
-        let espera = std::time::Duration::from_millis(u64::try_from(cuando - ahora).unwrap_or(0));
+        self.tira_despertar = Some(when);
+        let espera = std::time::Duration::from_millis(u64::try_from(when - ahora).unwrap_or(0));
         let buzon = buzon.clone();
         tokio::spawn(async move {
             tokio::time::sleep(espera).await;
@@ -1986,7 +1986,7 @@ impl Estado {
     ///
     /// Asks the LIVE progress because that is where the typed class is; the
     /// projected view only carries its name.
-    fn hay_trabajo(&self) -> bool {
+    fn has_work(&self) -> bool {
         // Only this connection's, for the same reason as in `anotar_tira`:
         // a previous daemon's work is never going to finish, and the panel
         // would not close.

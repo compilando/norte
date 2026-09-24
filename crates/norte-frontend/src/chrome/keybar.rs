@@ -1,35 +1,35 @@
-//! La barra de teclas de función (spec 2026-09-10): diez celdas, `F1`–`F10`,
-//! con lo que cada una hace en la pantalla actual.
+//! The function-key bar (spec 2026-09-10): ten cells, `F1`-`F10`, with what
+//! each one does on the current screen.
 //!
-//! DERIVADA del keymap efectivo, nunca escrita a mano: reatar `F5` cambia su
-//! etiqueta, y una pantalla que no ata `F7` deja la celda en blanco. Es la
-//! seña de identidad del gestor ortodoxo y la ayuda de descubrimiento más
-//! barata que hay; los dos frontends la pintan de aquí.
+//! DERIVED from the effective keymap, never hand-written: rebinding `F5`
+//! changes its label, and a screen that does not bind `F7` leaves the cell
+//! blank. It is the orthodox file manager's signature and the cheapest
+//! discovery help there is; both frontends paint it from here.
 
 use crate::keymap::Effective;
 use norte_i18n::{Lang, t_in};
 
-/// Una celda de la barra.
+/// One cell of the bar.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KeyCell {
     /// `1`..=`10`.
     pub key: u8,
-    /// La etiqueta corta, en el idioma pedido. Vacía = la tecla no ata nada
-    /// en esta pantalla.
+    /// The short label, in the requested language. Empty = the key does not
+    /// bind anything on this screen.
     pub label: String,
-    /// El comando que corre, si alguno.
+    /// The command that runs, if any.
     pub command: Option<String>,
 }
 
-/// Cuántas celdas tiene la barra.
+/// How many cells the bar has.
 pub const CELLS: u8 = 10;
 
-/// Las diez celdas de una pantalla, en el idioma dado.
+/// The ten cells of a screen, in the given language.
 ///
-/// La etiqueta es la del MENÚ (`menu-item-<cmd>`, que existe para todo
-/// comando vivo), y si no la hay, la descripción de la ayuda
-/// (`help-cmd-<cmd>`), y si tampoco, el último tramo del id: un comando de
-/// plugin o uno que nadie tradujo sigue diciendo algo.
+/// The label is the MENU's (`menu-item-<cmd>`, which exists for every live
+/// command), and if there is none, the help description (`help-cmd-<cmd>`),
+/// and if there is not one either, the last segment of the id: a plugin
+/// command or one nobody translated still says something.
 ///
 /// ```
 /// use norte_frontend::keybar::cells_in;
@@ -70,25 +70,25 @@ pub fn cells_in(eff: &Effective, lang: Lang) -> Vec<KeyCell> {
         .collect()
 }
 
-/// La etiqueta corta de un comando, en el idioma dado.
+/// The short label of a command, in the given language.
 fn label_in(command: &str, lang: Lang) -> String {
     let dashed = command.replace('.', "-");
     for prefix in ["menu-item-", "help-cmd-"] {
-        let clave = format!("{prefix}{dashed}");
-        let texto = t_in(lang, &clave);
-        // El contrato de `t_in` es devolver la clave cuando falta.
-        if texto != clave {
-            return texto;
+        let key = format!("{prefix}{dashed}");
+        let text = t_in(lang, &key);
+        // `t_in`'s contract is to return the key when it is missing.
+        if text != key {
+            return text;
         }
     }
     command.rsplit('.').next().unwrap_or(command).to_owned()
 }
 
-/// Dónde cae cada celda en una fila de `width` celdas: `(x0, ancho)` por
-/// tecla, en orden. La fila se reparte a partes iguales y el resto se lo
-/// quedan las últimas, para que las diez existan siempre que haya diez
-/// celdas; con menos, las que caben. Pintado y zonas del ratón salen de
-/// aquí, así que miden lo mismo.
+/// Where each cell falls in a row of `width` cells: `(x0, width)` per key,
+/// in order. The row is split into equal parts and the remainder goes to
+/// the last ones, so that all ten exist whenever there are ten cells; with
+/// fewer, whichever fit. Painting and the mouse zones come from here, so
+/// they measure the same.
 #[must_use]
 pub fn layout(width: usize) -> Vec<(usize, usize)> {
     let n = usize::from(CELLS);
@@ -108,31 +108,31 @@ pub fn layout(width: usize) -> Vec<(usize, usize)> {
         .collect()
 }
 
-/// El texto de una celda que mide `width`: el número pegado a la
-/// izquierda y la etiqueta detrás, con mayúscula inicial y CORTADA por el
-/// final si no cabe — `7New dire` se lee, `7New …ctory` no: en ocho celdas
-/// lo que dice algo es el principio. `F` no se pinta: diez celdas de `F` no
-/// dicen nada y cuestan diez columnas.
+/// The text of a cell that measures `width`: the number flush to the left
+/// and the label behind it, capitalized and CUT at the end if it does not
+/// fit — `7New dire` reads, `7New …ctory` does not: in eight cells what
+/// says something is the beginning. `F` is not painted: ten cells of `F`
+/// say nothing and cost ten columns.
 #[must_use]
 pub fn cell_text(cell: &KeyCell, width: usize) -> String {
     let num = cell.key.to_string();
-    // Una celda que no puede con su propio número va en blanco: pintar `10`
-    // en una celda de una columna desplazaría todas las de su derecha
-    // respecto a sus zonas (revisión m11).
+    // A cell that cannot even fit its own number goes blank: painting `10`
+    // in a one-column cell would shift every cell to its right relative to
+    // their zones (review m11).
     if width < num.len() {
         return " ".repeat(width);
     }
-    // Un espacio entre el número y la etiqueta cuando la celda da para él y
-    // para algo que leer (spec 2026-09-15): `1 Ayuda` se lee de un vistazo y
-    // `1Ayuda` hay que separarlo con la vista. En celdas estrechas se cede el
-    // espacio antes que una letra, que es lo que de verdad dice qué hace la
-    // tecla.
-    let separador = usize::from(width >= num.len() + 4);
+    // A space between the number and the label when the cell has room for
+    // it and for something to read (spec 2026-09-15): `1 Help` reads at a
+    // glance and `1Help` needs the eye to separate it. In narrow cells the
+    // space gives way before a letter, which is what actually says what the
+    // key does.
+    let separator = usize::from(width >= num.len() + 4);
     let room = width - num.len();
-    let num = format!("{num}{}", " ".repeat(separador));
-    let room = room - separador;
-    // Mayúscula inicial ANTES de medir, y se mide lo que se pinta: `ß` sube a
-    // `SS` y ocupa dos (revisión m7).
+    let num = format!("{num}{}", " ".repeat(separator));
+    let room = room - separator;
+    // Capitalize BEFORE measuring, and what is painted is what is measured:
+    // `ß` becomes `SS` and takes up two (review m7).
     let mut chars = cell.label.chars();
     let capitalized: String = chars
         .next()
@@ -149,15 +149,15 @@ pub fn cell_text(cell: &KeyCell, width: usize) -> String {
         label.push(c);
         used += w;
     }
-    // Cortada, y con una palabra ENTERA antes del corte: se queda en esa.
-    // `7 Crear di` o `9 Barra de` pegados al número de la celda siguiente se
-    // leían como palabras rotas; `7 Crear` deja el hueco que separa las dos
-    // celdas. Sin palabra entera que conservar, el corte de siempre
-    // (`7 Renomb`): el principio de la palabra dice más que nada.
+    // Cut, and with a WHOLE word before the cut: it stops there. `7 Crear
+    // di` or `9 Barra de` glued to the next cell's number used to read as
+    // broken words; `7 Crear` leaves the gap that separates the two cells.
+    // With no whole word to keep, the usual cut (`7 Renomb`): the start of
+    // the word says more than nothing.
     if label.len() < capitalized.len()
-        && let Some(espacio) = label.rfind(' ')
+        && let Some(space) = label.rfind(' ')
     {
-        label.truncate(espacio);
+        label.truncate(space);
         used = crate::display::cells(&label);
     }
     format!("{num}{label}{}", " ".repeat(room - used))
@@ -167,53 +167,53 @@ pub fn cell_text(cell: &KeyCell, width: usize) -> String {
 mod tests {
     use super::*;
 
-    /// La fila se reparte entera y en orden; con menos de diez celdas, las
-    /// que caben; y el texto de una celda mide exactamente su ancho.
-    /// Una etiqueta que no cabe se corta en la última palabra ENTERA si hay
-    /// una: `7 Crear di` pegado a `8 Borrar` se leía como una sola palabra
-    /// rota; `7 Crear` deja el hueco que separa las dos celdas.
+    /// The row is split whole and in order; with fewer than ten cells,
+    /// whichever fit; and a cell's text measures exactly its width. A label
+    /// that does not fit is cut at the last WHOLE word if there is one:
+    /// `7 Crear di` glued to `8 Borrar` used to read as a single broken
+    /// word; `7 Crear` leaves the gap that separates the two cells.
     #[test]
-    fn el_corte_respeta_la_ultima_palabra_entera() {
+    fn the_cut_respects_the_last_whole_word() {
         let c = |label: &str| KeyCell {
             key: 7,
             label: label.into(),
             command: Some("pane.mkdir".into()),
         };
-        assert_eq!(cell_text(&c("crear directorio"), 10), "7 Crear   ");
-        assert_eq!(cell_text(&c("barra de teclas"), 10), "7 Barra   ");
-        // Sin una palabra entera que conservar, el corte de siempre: el
-        // principio de la palabra dice más que nada.
-        assert_eq!(cell_text(&c("renombrar"), 8), "7 Renomb");
-        // Y lo que cabe, cabe entero.
-        assert_eq!(cell_text(&c("ver"), 8), "7 Ver   ");
+        assert_eq!(cell_text(&c("create directory"), 10), "7 Create  ");
+        assert_eq!(cell_text(&c("key bar"), 10), "7 Key bar ");
+        // With no whole word to keep, the usual cut: the start of the word
+        // says more than nothing.
+        assert_eq!(cell_text(&c("rename"), 8), "7 Rename");
+        // And what fits, fits whole.
+        assert_eq!(cell_text(&c("view"), 8), "7 View  ");
     }
 
     #[test]
-    fn el_reparto_cubre_la_fila_y_el_texto_mide_su_celda() {
+    fn the_split_covers_the_row_and_the_text_measures_its_cell() {
         let l = layout(83);
         assert_eq!(l.len(), 10);
         assert_eq!(l[0], (0, 8));
-        assert_eq!(l[9].0 + l[9].1, 83, "la última acaba en el borde");
+        assert_eq!(l[9].0 + l[9].1, 83, "the last one ends at the edge");
         assert!(l.windows(2).all(|w| w[0].0 + w[0].1 == w[1].0));
         assert_eq!(layout(4).len(), 4);
         let c = KeyCell {
             key: 10,
-            label: "Salir de norte ya".into(),
+            label: "Quit norte now".into(),
             command: Some("app.quit".into()),
         };
         assert_eq!(crate::display::cells(&cell_text(&c, 8)), 8);
         assert!(cell_text(&c, 8).starts_with("10"));
-        let vacia = KeyCell {
+        let empty = KeyCell {
             key: 7,
             label: String::new(),
             command: None,
         };
-        assert_eq!(cell_text(&vacia, 6), "7     ");
+        assert_eq!(cell_text(&empty, 6), "7     ");
     }
 
-    /// Sin traducción de menú ni de ayuda, el último tramo del id.
+    /// With no menu or help translation, the last segment of the id.
     #[test]
-    fn la_etiqueta_cae_al_id_cuando_nadie_lo_tradujo() {
+    fn the_label_falls_back_to_the_id_when_nobody_translated_it() {
         assert_eq!(
             label_in("plugin:acme:frobnicate", Lang::En),
             "plugin:acme:frobnicate"

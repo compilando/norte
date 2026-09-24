@@ -15,7 +15,7 @@ async fn arrancar_con_marca(attach: bool) -> norte_ui_host::ViewSnapshot {
     body.slots.get_mut(&1).expect("slot").marks =
         vec![VPath::parse("mem:///casa/a.txt").expect("vpath")];
     session.body = serde_json::to_value(&body).expect("json");
-    *fake.sesion.lock().expect("sesión") = (session, true);
+    *fake.sesion.lock().expect("session") = (session, true);
     let (h, _snap) = UiHost::start(UiHostOptions {
         backend: Arc::new(fake),
         initial_dir: VPath::parse("mem:///casa").expect("vpath"),

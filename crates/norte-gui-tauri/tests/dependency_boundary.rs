@@ -1,40 +1,42 @@
-//! La frontera de la VENTANA, comprobada contra el grafo real de cargo.
+//! The WINDOW's boundary, checked against cargo's real graph.
 //!
-//! Un frontend que solo habla con el daemon no puede arrastrar el motor ni un
-//! provider (ADR 0066, decisión D10). El caso que motivó este test: la ventana
-//! dependía de `norte-vfs-local` —el único crate con `unsafe`, `openat2` y
-//! `ConfinedRoot`— para UNA conversión de cadena a `VPath` (#254). La
-//! conversión vive ahora en `norte-vfs`, que es el crate del trait y no toca
-//! disco; esto es lo que impide que la arista vuelva.
+//! A frontend that only talks to the daemon cannot drag in the engine or a
+//! provider (ADR 0066, decision D10). The case that prompted this test: the
+//! window depended on `norte-vfs-local` — the only crate with `unsafe`,
+//! `openat2` and `ConfinedRoot` — for ONE string-to-`VPath` conversion
+//! (#254). The conversion now lives in `norte-vfs`, the trait's crate, which
+//! does not touch disk; this is what keeps that edge from coming back.
 //!
-//! Las dependencias de DESARROLLO no cuentan: un test puede usar lo que le
-//! haga falta sin que viaje en el binario de nadie.
+//! DEV dependencies do not count: a test can use whatever it needs without
+//! it traveling in anyone's binary.
 
 use std::collections::{HashMap, HashSet};
 
-/// Lo que jamás debe alcanzar a `norte-gui-tauri` en tiempo de ejecución.
+/// What must never reach `norte-gui-tauri` at runtime.
 ///
-/// `norte-vfs-local` NO está: `norte-frontend` ya lo consume para los paths
-/// nativos, y el host vive sobre `norte-frontend` a propósito. Lo que se
-/// vigila aquí es que no aparezca un toolkit ni el core.
+/// `norte-vfs-local` is NOT here: `norte-frontend` already consumes it for
+/// native paths, and the host lives over `norte-frontend` on purpose. What is
+/// watched here is that no toolkit and no core show up.
 const PROHIBIDAS: &[&str] = &[
-    // El motor y sus vecinos: esta ventana habla por un socket (ADR 0066).
+    // The engine and its neighbors: this window talks over a socket (ADR
+    // 0066).
     "norte-core",
     "norte-index",
     "norte-ai",
     "norte-plugin-host",
     "norte-compare",
     "norte-sync",
-    // Y NINGÚN provider. `norte-vfs-local` es el único crate del proyecto al
-    // que se le permite `unsafe`, y lleva dentro `openat2` y `ConfinedRoot`:
-    // arrastrarlo a un proceso cuyo único transporte es un socket, para
-    // convertir una cadena en un `VPath`, es lo contrario de lo que la ADR
-    // promete (#254). La conversión vive en `norte-vfs`, que no toca disco.
+    // And NO provider at all. `norte-vfs-local` is the only crate in the
+    // project allowed `unsafe`, and it carries `openat2` and `ConfinedRoot`
+    // inside: dragging it into a process whose only transport is a socket,
+    // to convert a string into a `VPath`, is the opposite of what the ADR
+    // promises (#254). The conversion lives in `norte-vfs`, which does not
+    // touch disk.
     "norte-vfs-local",
     "norte-vfs-sftp",
     "norte-vfs-object",
     "norte-vfs-archive",
-    // Ni otro toolkit de pintado: el renderer de esta ventana es la webview.
+    // Nor another painting toolkit: this window's renderer is the webview.
     "gpui",
     "ratatui",
     "crossterm",
@@ -51,13 +53,13 @@ fn la_ventana_no_arrastra_un_provider_ni_el_core() {
         .expect("cargo metadata");
     assert!(
         salida.status.success(),
-        "cargo metadata falló: {}",
+        "cargo metadata failed: {}",
         String::from_utf8_lossy(&salida.stderr)
     );
-    let meta: serde_json::Value = serde_json::from_slice(&salida.stdout).expect("metadata es json");
+    let meta: serde_json::Value = serde_json::from_slice(&salida.stdout).expect("metadata is json");
     let nodos = meta["resolve"]["nodes"].as_array().expect("nodes");
 
-    // id → (nombre, deps que NO son de desarrollo)
+    // id → (name, deps that are NOT dev)
     let mut grafo: HashMap<&str, (String, Vec<&str>)> = HashMap::new();
     for n in nodos {
         let id = n["id"].as_str().expect("id");
@@ -78,7 +80,7 @@ fn la_ventana_no_arrastra_un_provider_ni_el_core() {
         .iter()
         .find(|(_, (nombre, _))| nombre == "norte-gui-tauri")
         .map(|(id, _)| *id)
-        .expect("norte-gui-tauri está en el grafo");
+        .expect("norte-gui-tauri is in the graph");
 
     let mut vistos: HashSet<&str> = HashSet::new();
     let mut pila = vec![raiz];
@@ -99,11 +101,11 @@ fn la_ventana_no_arrastra_un_provider_ni_el_core() {
     culpables.dedup();
     assert!(
         culpables.is_empty(),
-        "la ventana alcanza lo que no debe: {culpables:?}"
+        "the window reaches something it should not: {culpables:?}"
     );
 }
 
-/// El nombre del paquete de un id del resolvedor, leído de `packages`.
+/// A resolver id's package name, read from `packages`.
 fn nombre_de(id: &str, meta: &serde_json::Value) -> String {
     meta["packages"]
         .as_array()

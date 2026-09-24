@@ -1,14 +1,14 @@
-//! Quién se come la tecla cuando hay overlays apilados.
+//! Who eats the key when overlays are stacked.
 //!
-//! Dos preguntas y nada más: si el modal gana sobre cualquier otro overlay
-//! ([`modal_wins`]) y si una página de ayuda ABIERTA ENCIMA de un modal le ha
-//! quitado el teclado ([`help_owns_keys`]). Y las dos escrituras que mantienen
-//! esa respuesta honesta: [`settle_help_over_modal`], que borra el recuerdo al
-//! empezar cada vuelta, y [`close_stale_overlays`], que cierra lo que un modal
-//! nuevo acaba de dejar obsoleto. Las lecturas las consultaba la cadena de
-//! teclado del binario, y también el enrutador de pegado
-//! ([`crate::paste::route_paste`]) — que es lo que hacía imposible sacar el
-//! pegado de `main.rs` sin sacar esto antes.
+//! Two questions and nothing else: whether the modal wins over any other
+//! overlay ([`modal_wins`]), and whether a help page OPEN OVER a modal has
+//! taken the keyboard away from it ([`help_owns_keys`]). And the two writes
+//! that keep that answer honest: [`settle_help_over_modal`], which clears
+//! the memory at the start of every turn, and [`close_stale_overlays`],
+//! which closes what a new modal has just made stale. The reads used to be
+//! consulted by the binary's key chain, and also by the paste router
+//! ([`crate::paste::route_paste`]) — which is what made it impossible to
+//! pull paste out of `main.rs` without pulling this out first.
 
 use norte_core::backend::Backend;
 use norte_i18n::t;
@@ -16,28 +16,28 @@ use norte_i18n::t;
 use crate::app::{App, HelpView, Modal, Palette};
 use crate::keymap::parse_plugin_key;
 
-/// MINOR-4 (H1 close): un modal puede llegar de forma ASÍNCRONA (p. ej.
-/// `Modal::ApproveAgentOp`, vía `ConnEvent` — un agente pide aprobación en
-/// cualquier momento) mientras la palette está abierta. Sin este guard, el
-/// run loop resolvía la tecla contra la palette PRIMERO (`app.palette.is_some()`
-/// se comprobaba antes que `app.modal.is_some()`): un Enter pulsado para
-/// responder al modal en realidad despachaba la fila resaltada de la
-/// palette EN SILENCIO, y el modal de seguridad seguía esperando una
-/// respuesta que nunca llegó por esa tecla. El modal SIEMPRE gana: la rama
-/// de la palette del run loop excluye este caso de su condición (deja de
-/// consumir la tecla) y la rama del modal cierra la palette, ahora obsoleta,
-/// nada más entrar — la MISMA tecla cae al modal en la misma iteración.
+/// MINOR-4 (H1 close): a modal can arrive ASYNCHRONOUSLY (e.g.
+/// `Modal::ApproveAgentOp`, via `ConnEvent` — an agent can ask for approval
+/// at any moment) while the palette is open. Without this guard, the run
+/// loop resolved the key against the palette FIRST (`app.palette.is_some()`
+/// was checked before `app.modal.is_some()`): an Enter pressed to answer the
+/// modal actually dispatched the palette's highlighted row IN SILENCE, and
+/// the security modal kept waiting for an answer that never arrived through
+/// that key. The modal ALWAYS wins: the run loop's palette arm excludes this
+/// case from its condition (it stops consuming the key) and the modal arm
+/// closes the palette, now stale, the moment it enters — the SAME key falls
+/// through to the modal in the same iteration.
 ///
-/// GENERALIZADO a TODOS los overlays: el guard valía solo para la palette y
-/// los ajustes, pero el modal se pinta el ÚLTIMO —por encima de CUALQUIER
-/// overlay ([`crate::ui::draw`])— mientras la cadena de teclado del run
-/// loop resolvía ANTES contra el selector de tema, el picker de columnas, el
-/// gestor de extensiones, el popup de navegación, el diálogo de búsqueda y la
-/// ayuda. Los píxeles decían «responde al modal» y la tecla se iba a otra
-/// parte: en el diálogo de búsqueda y en el campo de nombre del popup se
-/// colaba como TEXTO tecleado, y en el gestor de extensiones como un
-/// `dialog.toggle-enabled`/`dialog.remove` sobre el plugin resaltado — la
-/// misma edición silenciosa de MINOR-4, con peor desenlace.
+/// GENERALIZED to ALL overlays: the guard only used to hold for the palette
+/// and the settings overlay, but the modal is painted LAST — over ANY
+/// overlay ([`crate::ui::draw`]) — while the run loop's key chain resolved
+/// BEFORE it against the theme selector, the column picker, the extension
+/// manager, the nav popup, the search dialog and the help. The pixels said
+/// "answer the modal" and the key went somewhere else: into the search
+/// dialog and the popup's name field it slipped in as TYPED text, and into
+/// the extension manager as a `dialog.toggle-enabled`/`dialog.remove` over
+/// the highlighted plugin — the same silent bug as MINOR-4, with a worse
+/// outcome.
 #[must_use]
 pub fn modal_wins(app: &App) -> bool {
     app.modal.is_some()
@@ -77,8 +77,8 @@ pub fn help_owns_keys(app: &App) -> bool {
             } else {
                 debug_assert!(
                     !help.over_modal,
-                    "`over_modal` con `app.modal` vacío: \
-                     `settle_help_over_modal` no corrió esta vuelta"
+                    "`over_modal` with `app.modal` empty: \
+                     `settle_help_over_modal` did not run this turn"
                 );
                 true
             }
@@ -135,46 +135,46 @@ pub fn settle_help_over_modal(app: &mut App) {
 pub fn close_stale_overlays(app: &mut App) {
     app.palette = None;
     app.settings = None;
-    // K3c: y con ajustes se va el editor de atajos, que vive ENCIMA de él —
-    // dejarlo huérfano sobre un overlay cerrado haría que `Esc` cayera a los
-    // panes en vez de volver donde el lector estaba. Además sus filas expiran
-    // por la misma razón que las de la palette: el modal va a cambiar el estado
-    // contra el que se construyeron.
+    // K3c: and with settings the shortcuts editor goes too, since it lives
+    // ON TOP of it — leaving it orphaned over a closed overlay would make
+    // `Esc` fall through to the panes instead of returning where the reader
+    // was. Its rows also expire for the same reason the palette's do: the
+    // modal is about to change the state they were built against.
     app.shortcuts = None;
     if app.help.as_ref().is_some_and(|help| !help.over_modal) {
         app.help = None;
     }
 }
 
-/// up/down sobre los modales con ventana propia — el scroll del plan IA
-/// (M4-IA, audit MAJOR-3) y el cursor de los hits semánticos (M4-IA-2).
-/// Mueven la VENTANA o el CURSOR y JAMÁS confirman/cancelan: mismo par de
-/// comandos que los pickers (`ALLOW_PICKER`); para `dialog_action` up/down
-/// están FUERA del allowlist de decisión de estos modales (devuelve `None`,
-/// pin en tests/modal.rs), así que el enrutado vive aquí, como el dispatch
-/// de los pickers vive en su `on_*_key`. `true` = comando CONSUMIDO.
-/// `F1` (o lo que el keymap ate a `app.help`) SOBRE un modal abierto: abre la
-/// ayuda del contexto de ESE modal. `true` = comando CONSUMIDO.
+/// up/down over the modals that have their own window — the AI plan's
+/// scroll (M4-IA, audit MAJOR-3) and the semantic hits cursor (M4-IA-2).
+/// They move the WINDOW or the CURSOR and NEVER confirm/cancel: the same
+/// pair of commands as the pickers (`ALLOW_PICKER`); for `dialog_action`
+/// up/down are OUTSIDE these modals' decision allowlist (returns `None`,
+/// pinned in tests/modal.rs), so the routing lives here, the same way the
+/// pickers' dispatch lives in their `on_*_key`. `true` = command CONSUMED.
+/// `F1` (or whatever the keymap binds to `app.help`) OVER an open modal:
+/// opens the help for THAT modal's context. `true` = command CONSUMED.
 ///
-/// Vive aquí por lo mismo que [`modal_scroll`]: `app.help` es un comando de
-/// `[global]`, no un verbo `dialog.*`, así que el allowlist del modal concreto
-/// ([`crate::app::dialog_action`]) lo deja caer — y sin esta rama la única tecla que el
-/// lector tiene garantizada sería inerte justo donde más falta hace, delante de
-/// una pregunta que no entiende. Es el gemelo del interruptor de
-/// `on_help_key`: la misma tecla que abre la ayuda la cierra, y lo
-/// hardcodeado es el SIGNIFICADO, jamás la tecla.
+/// Lives here for the same reason as [`modal_scroll`]: `app.help` is a
+/// `[global]` command, not a `dialog.*` verb, so the specific modal's
+/// allowlist ([`crate::app::dialog_action`]) drops it — and without this
+/// branch the one key the reader is guaranteed would be inert exactly where
+/// it is needed most, in front of a question they do not understand. It is
+/// the twin of the `on_help_key` toggle: the same key that opens the help
+/// closes it, and what is hardcoded is the MEANING, never the key.
 ///
-/// Qué modales lo admiten es una DECISIÓN, no la resaca del enrutado: lo dice
-/// [`crate::help_context::help_over_modal_allowed`], exhaustivo sobre
-/// `Modal` y sin comodín (review MINOR-3). Los seis editores de TEXTO LIBRE
+/// Which modals allow it is a DECISION, not routing hangover: it is said by
+/// [`crate::help_context::help_over_modal_allowed`], exhaustive over `Modal`
+/// and with no wildcard (review MINOR-3). The six FREE-TEXT editors
 /// (`Mkdir`, `MarkPattern`, `CommandLine`, `AiRenameInstruction`,
-/// `SemanticQuery`, `TransferName`) y el TOFU de Lua responden `false`: hoy
-/// tampoco llegan aquí
-/// —el run loop los intercepta antes para leer teclas CRUDAS (decisión 8 del
-/// plan H1: el keymap no puede reinterpretar lo que se está escribiendo)—, y
-/// preguntarlo AQUÍ es lo que impide que mover uno de ellos al keymap `dialog`
-/// abra el agujero en silencio. Sus contextos existen en el vocabulario y sus
-/// páginas se alcanzan por el índice.
+/// `SemanticQuery`, `TransferName`) and Lua's TOFU answer `false`: today they
+/// do not even reach here either — the run loop intercepts them earlier to
+/// read RAW keys (decision 8 of the H1 plan: the keymap must not
+/// reinterpret what is being typed) — and asking it HERE is what stops
+/// moving one of them into the `dialog` keymap from silently opening the
+/// hole. Their contexts exist in the vocabulary and their pages are reached
+/// through the index.
 pub fn modal_help_toggle(
     app: &mut App,
     cmd: &str,
@@ -184,9 +184,9 @@ pub fn modal_help_toggle(
     if cmd != "app.help" {
         return false;
     }
-    // No consumir la tecla cuando la ayuda no puede abrirse: quien decide
-    // vuelve a ser el allowlist del modal (`dialog_action`), que deja caer
-    // `app.help` — la tecla queda INERTE, que es lo que se quiere.
+    // Do not consume the key when the help cannot open: the one who decides
+    // is again the modal's allowlist (`dialog_action`), which drops
+    // `app.help` — the key stays INERT, which is what is wanted.
     if app
         .modal
         .as_ref()
@@ -194,19 +194,18 @@ pub fn modal_help_toggle(
     {
         return false;
     }
-    // Sin foto de plugins (H3e): esta rama es SÍNCRONA — la cadena de teclas
-    // del modal lo es — y pedirla cuesta una ida y vuelta al daemon. La
-    // degradación es exactamente la documentada para `plugins: None`: la ayuda
-    // que se abre sobre un diálogo no ofrece filas de extensión. Es la
-    // superficie donde menos se echa en falta: el lector está contestando una
-    // pregunta, no explorando el catálogo, y el grupo entero está a un `Esc` y
-    // un F1 de distancia.
+    // No plugin snapshot (H3e): this branch is SYNCHRONOUS — the modal's key
+    // chain is — and requesting it costs a round trip to the daemon. The
+    // degradation is exactly the one documented for `plugins: None`: help
+    // opened over a dialog offers no extension rows. It is the surface where
+    // it is missed least: the reader is answering a question, not exploring
+    // the catalogue, and the whole group is one `Esc` and one F1 away.
     open_contextual_help(app, lang, help_lines, None);
     true
 }
 
-/// `dialog.pane-up/down` sobre un modal con ventana propia: mueve la ventana
-/// o el cursor y JAMÁS confirma ni cancela. `true` = comando CONSUMIDO.
+/// `dialog.pane-up/down` over a modal with its own window: moves the window
+/// or the cursor and NEVER confirms nor cancels. `true` = command CONSUMED.
 pub fn modal_scroll(app: &mut App, cmd: &str) -> bool {
     if !matches!(cmd, "dialog.up" | "dialog.down") {
         return false;
@@ -217,9 +216,9 @@ pub fn modal_scroll(app: &mut App, cmd: &str) -> bool {
             app.ai_plan_scroll(down);
             true
         }
-        // Fase 8: el árbol de organizar tiene la misma ventana, y sin scroll
-        // un plan de más de diez líneas no se podría aprobar nunca — el gate
-        // pide haber llegado al final.
+        // Phase 8: the organize tree has the same window, and without
+        // scroll a plan of more than ten lines could never be approved — the
+        // gate requires having reached the end.
         Some(Modal::OrganizePlan { .. }) => {
             app.organize_plan_scroll(down);
             true
@@ -228,9 +227,9 @@ pub fn modal_scroll(app: &mut App, cmd: &str) -> bool {
             app.semantic_cursor(down);
             true
         }
-        // #311: sin esto, un lote de cuarenta ficheros con el que NO cuadra en
-        // la fila doce enseñaba cinco «correcto» y «… y 35 más», y no había
-        // tecla que llegara al malo.
+        // #311: without this, a batch of forty files with the mismatch on
+        // row twelve showed five "correct" and "… and 35 more", and there
+        // was no key that reached the bad one.
         Some(Modal::Checksums { .. }) => {
             app.checksums_scroll(down);
             true
@@ -297,12 +296,13 @@ pub fn refuses_over_modal(lang: norte_help::Lang, context: &str, over_modal: boo
     over_modal && norte_help::topic_for_context(lang, context).is_none()
 }
 
-/// Abre la ayuda en la página del CONTEXTO en el que está el lector.
+/// Opens the help on the page for the CONTEXT the reader is in.
 ///
-/// El contexto lo decide [`crate::help_context::help_context`] y no esta
-/// función: qué página corresponde a qué pantalla es una decisión del corpus,
-/// exhaustiva y sin comodín. Si ese contexto no tiene página y hay un modal
-/// delante, se dice y no se abre nada ([`refuses_over_modal`]).
+/// The context is decided by [`crate::help_context::help_context`], not this
+/// function: which page matches which screen is a corpus decision,
+/// exhaustive and with no wildcard. If that context has no page and there is
+/// a modal in front, it says so and opens nothing
+/// ([`refuses_over_modal`]).
 pub fn open_contextual_help(
     app: &mut App,
     lang: norte_help::Lang,
@@ -315,9 +315,9 @@ pub fn open_contextual_help(
         app.message = Some(t("msg-help-no-dialog-page"));
         return;
     }
-    // H3d: los hechos del contexto se CONGELAN aquí, antes de la primera
-    // maquetación — un veredicto no puede cambiar bajo el cursor del lector a
-    // mitad de página (`App::freeze_help_facts`).
+    // H3d: the context facts are FROZEN here, before the first layout pass —
+    // a verdict must not change under the reader's cursor mid-page
+    // (`App::freeze_help_facts`).
     app.freeze_help_facts();
     app.help = Some(HelpView::new_at(
         lang,
@@ -325,37 +325,37 @@ pub fn open_contextual_help(
         context,
         over_modal,
     ));
-    // H3e: el estado de los plugins se CONGELA con el resto de los hechos, en
-    // las dos mitades a la vez (barra lateral y resolver) —
+    // H3e: the plugin state is FROZEN along with the rest of the facts, in
+    // both halves at once (sidebar and resolver) —
     // `App::freeze_help_plugins`.
     //
-    // SIEMPRE, incluso sin catálogo: el resolver vive en `App` y sobrevive al
-    // cierre del overlay, así que no congelar aquí dejaría en pie la foto de la
-    // ayuda ANTERIOR. Un catálogo vacío es la respuesta honesta a «no lo pude
-    // averiguar» — ninguna fila de extensión, y todo comando `plugin:`
-    // atenuado — y fail-closed es la dirección en la que equivocarse.
+    // ALWAYS, even with no catalogue: the resolver lives in `App` and
+    // survives the overlay closing, so not freezing here would leave the
+    // PREVIOUS help's snapshot standing. An empty catalogue is the honest
+    // answer to "I could not find out" — no extension rows, and every
+    // `plugin:` command dimmed — and fail-closed is the direction to err in.
     app.freeze_help_plugins(plugins.map_or(&[], |l| l.plugins.as_slice()));
 }
 
-/// Abre la ayuda en una página CONCRETA del corpus, por su id.
+/// Opens the help on a SPECIFIC corpus page, by its id.
 ///
-/// El hermano de [`open_contextual_help`] para quien ya sabe qué página quiere
-/// —el indicador de sesión suelta de la barra, que no es una pantalla en la
-/// que el lector esté sino un hecho sobre esta ventana— y el mismo camino que
-/// `F1` sobre una fila de la paleta: [`HelpView::new_at_topic`], con la página
-/// como RAÍZ para que `Esc` cierre en vez de volver a un índice que nadie
-/// pidió. Los hechos se congelan igual que en la contextual.
+/// The sibling of [`open_contextual_help`] for whoever already knows which
+/// page they want — the bar's detached-session indicator, which is not a
+/// screen the reader is in but a fact about this window — and the same path
+/// as `F1` over a palette row: [`HelpView::new_at_topic`], with the page as
+/// the trail's ROOT so `Esc` closes it instead of walking back to an index
+/// nobody asked for. Facts are frozen the same way as in the contextual one.
 ///
-/// Un id sin página en este idioma no abre nada: el corpus ata los ids que
-/// este crate usa, así que llegar aquí sería una página borrada, y abrir el
-/// índice a cambio sería contestar a otra pregunta.
+/// An id with no page in this language opens nothing: the corpus binds the
+/// ids this crate uses, so getting here would mean a deleted page, and
+/// opening the index instead would be answering a different question.
 pub fn open_help_topic(
     app: &mut App,
     lang: norte_help::Lang,
     help_lines: &[ratatui::text::Line<'static>],
     topic: &str,
 ) {
-    let Some(pagina) = norte_help::topic(lang, topic) else {
+    let Some(page) = norte_help::topic(lang, topic) else {
         return;
     };
     let over_modal = app.modal.is_some();
@@ -363,7 +363,7 @@ pub fn open_help_topic(
     app.help = Some(HelpView::new_at_topic(
         lang,
         help_lines.to_vec(),
-        &pagina.id,
+        &page.id,
         over_modal,
     ));
     app.freeze_help_plugins(&[]);
@@ -453,8 +453,8 @@ pub fn palette_help(
     match palette_help_target(app, lang).map(|topic| topic.id.clone()) {
         Some(id) => {
             app.palette = None;
-            // H3d: mismo congelado que `open_contextual_help` — la ayuda que
-            // se abre desde la palette es la misma ayuda.
+            // H3d: same freeze as `open_contextual_help` — the help opened
+            // from the palette is the same help.
             app.freeze_help_facts();
             app.help = Some(HelpView::new_at_topic(
                 lang,
@@ -467,12 +467,12 @@ pub fn palette_help(
     }
 }
 
-/// ¿Puede un evento de vigilancia disparar un refresh AHORA? (#106,
-/// review MAJOR-2): con cualquier overlay abierto o un quick search
-/// tecleándose, `refresh_panes` consumiría las teclas del usuario (su loop
-/// de cancelación descarta todo lo que no sea Esc/Ctrl-C) y Esc pasaría a
-/// significar «abandona el refresh» — jamás pisar la interacción en curso.
-/// El evento queda encolado (capacidad 1) y dispara al despejarse.
+/// Can a watch event fire a refresh NOW? (#106, review MAJOR-2): with any
+/// overlay open or a quick search being typed, `refresh_panes` would consume
+/// the user's keys (its cancellation loop discards everything that is not
+/// Esc/Ctrl-C) and Esc would come to mean "abandon the refresh" — never step
+/// on the interaction in progress. The event stays queued (capacity 1) and
+/// fires once things clear.
 #[must_use]
 pub fn watch_refresh_allowed(app: &App) -> bool {
     app.modal.is_none()
@@ -496,7 +496,7 @@ mod palette_modal_guard_tests {
     use norte_proto::VPath;
 
     fn app() -> App {
-        let d = VPath::parse("file:///x").expect("wire de test");
+        let d = VPath::parse("file:///x").expect("test wire");
         App::new(Pane::new(d.clone(), Vec::new()), Pane::new(d, Vec::new()))
     }
 
@@ -514,35 +514,34 @@ mod palette_modal_guard_tests {
         }
     }
 
-    /// MINOR-4 (H1 close): con SOLO la palette abierta, no hay nada que
-    /// preceder — el guard no dispara. Con AMBOS abiertos (un modal llegó
-    /// asíncronamente encima de la palette), el modal debe ganar.
+    /// MINOR-4 (H1 close): with ONLY the palette open, there is nothing to
+    /// precede — the guard does not fire. With BOTH open (a modal arrived
+    /// asynchronously over the palette), the modal must win.
     #[test]
-    fn modal_preempts_palette_solo_cuando_ambos_estan_abiertos() {
+    fn modal_preempts_palette_only_when_both_are_open() {
         let mut a = app();
-        assert!(!modal_wins(&a), "sin modal, nadie precede a nadie");
+        assert!(!modal_wins(&a), "with no modal, nobody precedes anybody");
         a.palette = Some(Palette::new(Vec::new()));
         assert!(
             !modal_wins(&a),
-            "solo la palette abierta: la palette maneja sus teclas normalmente"
+            "only the palette open: the palette handles its keys normally"
         );
         a.modal = Some(approval_modal());
         assert!(
             modal_wins(&a),
-            "un modal en vuelo con la palette abierta DEBE ganarle"
+            "a modal in flight with the palette open MUST beat it"
         );
     }
 
-    /// El guard vale para CUALQUIER overlay, no solo palette/ajustes: el
-    /// modal se pinta el último (por encima de todos), así que la tecla que
-    /// el usuario dirige a lo que VE tiene que llegarle. Antes el selector
-    /// de tema, el picker de columnas, el gestor de extensiones, el popup de
-    /// navegación, el diálogo de búsqueda y la ayuda resolvían PRIMERO y se
-    /// comían la respuesta al modal (en los dos con campo de texto, como
-    /// texto tecleado; en extensiones, como toggle/borrado del plugin
-    /// resaltado).
+    /// The guard holds for ANY overlay, not just palette/settings: the modal
+    /// is painted last (over everything), so the key the user aims at what
+    /// they SEE has to reach it. Before, the theme selector, the column
+    /// picker, the extension manager, the nav popup, the search dialog and
+    /// the help resolved FIRST and ate the answer meant for the modal (in
+    /// the two with a text field, as typed text; in extensions, as a
+    /// toggle/delete of the highlighted plugin).
     #[test]
-    fn el_modal_gana_a_todos_los_overlays() {
+    fn the_modal_beats_every_overlay() {
         let mut a = app();
         a.theme_picker = Some(crate::app::ThemePicker {
             names: Vec::new(),
@@ -557,50 +556,53 @@ mod palette_modal_guard_tests {
             foco: crate::app::ExtFoco::Lista,
         });
         a.help = Some(crate::app::HelpView::new(norte_i18n::Lang::En, Vec::new()));
-        assert!(!modal_wins(&a), "sin modal, cada overlay manda en su tecla");
+        assert!(
+            !modal_wins(&a),
+            "with no modal, each overlay rules its own key"
+        );
         a.modal = Some(approval_modal());
         assert!(
             modal_wins(&a),
-            "con overlays abiertos, el modal sigue ganando la tecla"
+            "with overlays open, the modal still wins the key"
         );
     }
 
-    /// #106 (review MAJOR-2): un evento de vigilancia JAMÁS refresca con
-    /// un overlay abierto o un quick search tecleándose — `refresh_panes`
-    /// se comería las teclas y Esc cambiaría de significado. El evento
-    /// queda encolado y dispara al despejarse.
+    /// #106 (review MAJOR-2): a watch event NEVER refreshes with an overlay
+    /// open or a quick search being typed — `refresh_panes` would eat the
+    /// keys and Esc would change meaning. The event stays queued and fires
+    /// once things clear.
     #[test]
-    fn watch_refresh_gateado_por_overlays() {
+    fn watch_refresh_gated_by_overlays() {
         let mut a = app();
-        assert!(watch_refresh_allowed(&a), "sin overlays: permitido");
+        assert!(watch_refresh_allowed(&a), "no overlays: allowed");
         a.modal = Some(approval_modal());
-        assert!(!watch_refresh_allowed(&a), "modal abierto: encolado");
+        assert!(!watch_refresh_allowed(&a), "modal open: queued");
         a.modal = None;
         a.help = Some(crate::app::HelpView::new(norte_i18n::Lang::En, Vec::new()));
-        assert!(!watch_refresh_allowed(&a), "ayuda abierta: encolado");
+        assert!(!watch_refresh_allowed(&a), "help open: queued");
         a.help = None;
         a.panes[0].quick_start(nav::Mode::Filter);
         assert!(
             !watch_refresh_allowed(&a),
-            "quick search tecleándose: encolado"
+            "quick search being typed: queued"
         );
     }
 
-    /// S3: el mismo caso para `app.settings` — un modal en vuelo (p.ej. una
-    /// aprobación de policy) gana sobre el overlay de ajustes abierto.
+    /// S3: the same case for `app.settings` — a modal in flight (e.g. a
+    /// policy approval) wins over the open settings overlay.
     #[test]
-    fn modal_preempts_settings_solo_cuando_ambos_estan_abiertos() {
+    fn modal_preempts_settings_only_when_both_are_open() {
         let mut a = app();
         assert!(!modal_wins(&a));
         a.settings = Some(Settings::new(Vec::new()));
         assert!(
             !modal_wins(&a),
-            "solo el overlay de ajustes abierto: maneja sus teclas normalmente"
+            "only the settings overlay open: it handles its keys normally"
         );
         a.modal = Some(approval_modal());
         assert!(
             modal_wins(&a),
-            "un modal en vuelo con ajustes abierto DEBE ganarle"
+            "a modal in flight with settings open MUST beat it"
         );
     }
 }
@@ -612,81 +614,85 @@ mod palette_help_tests {
     use norte_proto::VPath;
 
     fn app() -> App {
-        let d = VPath::parse("file:///x").expect("wire de test");
+        let d = VPath::parse("file:///x").expect("test wire");
         App::new(Pane::new(d.clone(), Vec::new()), Pane::new(d, Vec::new()))
     }
 
-    /// La palette abierta con UNA fila, la de `key`, bajo el cursor. Las filas
-    /// se construyen a mano y no del keymap efectivo a propósito: lo que se
-    /// prueba es qué hace `F1` con la clave de despacho de la fila resaltada, y
-    /// una fila de plugin no sale de `COMMANDS`.
+    /// The palette open with ONE row, `key`'s, under the cursor. The rows
+    /// are built by hand and not from the live keymap on purpose: what is
+    /// being tested is what `F1` does with the highlighted row's dispatch
+    /// key, and a plugin row does not come from `COMMANDS`.
     fn app_with_palette_on(key: &str) -> App {
         let mut app = app();
         app.palette = Some(Palette::new(vec![crate::palette::Row {
             key: key.to_owned(),
             text: key.to_owned(),
-            desc: "descripción de prueba".to_owned(),
+            desc: "test description".to_owned(),
             chord: "—".to_owned(),
             hostile: false,
         }]));
         app
     }
 
-    /// `F1` sobre una fila de la palette abre la página que documenta ese
-    /// comando: los dos son vistas del mismo modelo a dos densidades, así que
-    /// cruzar de la rápida a la que explica no debería costar re-teclear.
+    /// `F1` over a palette row opens the page that documents that command:
+    /// the two are views of the same model at two densities, so crossing
+    /// from the quick one to the explaining one should not cost a re-type.
     #[test]
-    fn f1_en_la_palette_abre_la_pagina_del_comando_bajo_el_cursor() {
+    fn f1_in_the_palette_opens_the_page_for_the_command_under_the_cursor() {
         let app = app_with_palette_on("pane.copy");
-        let open = palette_help_target(&app, norte_help::Lang::En).expect("pane.copy tiene página");
+        let open = palette_help_target(&app, norte_help::Lang::En).expect("pane.copy has a page");
         assert_eq!(open.id.as_str(), "copying");
     }
 
-    /// …y la abre de verdad: la palette se cierra (la tecla siguiente es de la
-    /// ayuda, que es lo que se ve) y la página llega como RAÍZ del rastro —
-    /// `Esc` cierra el overlay en vez de caminar a un índice que el lector no
-    /// pidió, igual que la ayuda contextual de un modal.
+    /// …and it really opens it: the palette CLOSES (the next key belongs to
+    /// the help, which is what is seen) and the page arrives as the trail's
+    /// ROOT — `Esc` closes the overlay instead of walking to an index the
+    /// reader did not ask for, same as a modal's contextual help.
     #[test]
-    fn abrir_la_pagina_cierra_la_palette_y_llega_sin_historial() {
+    fn opening_the_page_closes_the_palette_and_arrives_with_no_history() {
         let mut app = app_with_palette_on("pane.copy");
         palette_help(&mut app, norte_help::Lang::En, &[]);
-        assert!(app.palette.is_none(), "la palette se cierra");
-        let help = app.help.as_mut().expect("la ayuda se abrió");
+        assert!(app.palette.is_none(), "the palette closes");
+        let help = app.help.as_mut().expect("the help opened");
         assert_eq!(help.state.current().as_str(), "copying");
         assert!(
             !help.over_modal,
-            "la rama de la palette solo corre sin modal en pantalla"
+            "the palette's branch only runs with no modal on screen"
         );
-        assert!(!help.state.back(), "sin historial: Esc cierra");
-        assert!(app.message.is_none(), "y nada que disculparse");
+        assert!(!help.state.back(), "no history: Esc closes");
+        assert!(app.message.is_none(), "and nothing to apologize for");
     }
 
-    /// Una fila SIN página no abre nada y lo dice: mejor que abrir el índice y
-    /// dejar al lector buscando qué tenía que ver con lo que pidió.
+    /// A row WITHOUT a page opens nothing and says so: better than opening
+    /// the index and leaving the reader hunting for what it had to do with
+    /// what they asked for.
     #[test]
-    fn una_fila_sin_pagina_lo_dice() {
-        // Un id SINTÉTICO, y no un comando real de la allowlist: desde H3h no
-        // queda ninguno sin página, así que un test que se apoyara en ese
-        // hueco mediría el corpus y no la rama. Esta rama sigue existiendo —
-        // `topic_for_command` puede contestar `None` — y lo que se pinta
-        // entonces es lo que hay que fijar.
+    fn a_row_with_no_page_says_so() {
+        // A SYNTHETIC id, not a real allowlist command: since H3h none is
+        // left without a page, so a test relying on that gap would be
+        // measuring the corpus, not the branch. This branch still exists —
+        // `topic_for_command` can answer `None` — and what gets painted then
+        // is what needs pinning down.
         let mut app = app_with_palette_on("app.no-such-command");
         assert!(palette_help_target(&app, norte_help::Lang::En).is_none());
         palette_help(&mut app, norte_help::Lang::En, &[]);
-        assert!(app.help.is_none(), "no se abre el índice por consolar");
-        assert!(app.palette.is_some(), "y la palette se queda donde estaba");
+        assert!(
+            app.help.is_none(),
+            "the index is not opened as a consolation"
+        );
+        assert!(app.palette.is_some(), "and the palette stays where it was");
         assert_eq!(
             app.message.as_deref(),
             Some(norte_i18n::t("msg-palette-no-help").as_str())
         );
     }
 
-    /// La `key` de una fila de PLUGIN es `plugin:{id}:{command}` (P1): ningún
-    /// tema del corpus la documenta y no es un comando del host. Toma el camino
-    /// de «sin página» — ni pánico, ni una página ajena, ni un `Command::parse`
-    /// que no le corresponde.
+    /// A PLUGIN row's `key` is `plugin:{id}:{command}` (P1): no corpus topic
+    /// documents it and it is not a host command. It takes the "no page"
+    /// path — no panic, no unrelated page, no `Command::parse` that is not
+    /// its to make.
     #[test]
-    fn una_fila_de_plugin_toma_el_camino_de_sin_pagina() {
+    fn a_plugin_row_takes_the_no_page_path() {
         let mut app = app_with_palette_on("plugin:dev.norte.demo:greet");
         assert!(palette_help_target(&app, norte_help::Lang::En).is_none());
         palette_help(&mut app, norte_help::Lang::En, &[]);
@@ -698,10 +704,10 @@ mod palette_help_tests {
         );
     }
 
-    /// Sin ninguna fila visible (un filtro que no casa nada) no hay comando que
-    /// documentar: mismo camino, sin `unwrap` de por medio.
+    /// With no row visible (a filter matching nothing) there is no command
+    /// to document: same path, with no `unwrap` involved.
     #[test]
-    fn sin_fila_visible_no_hay_pagina() {
+    fn with_no_row_visible_there_is_no_page() {
         let mut app = app_with_palette_on("pane.copy");
         for c in "zzzz".chars() {
             app.palette.as_mut().expect("abierta").push_char(c);

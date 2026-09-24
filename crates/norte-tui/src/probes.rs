@@ -1,13 +1,15 @@
-//! Lo que se pide EN SEGUNDO PLANO para rellenar lo que el listado dejó a
-//! medias.
+//! What gets requested IN THE BACKGROUND to fill in what the listing left
+//! half-done.
 //!
-//! Cuatro sondas con la misma forma —lanzar, un `Receiver`, y la supersesión
-//! como cancelación: soltar el receptor descarta la respuesta— y todas nacieron
-//! en el root del binario `ntc`, que es un crate DISTINTO de esta lib. Son la
-//! base de la que cuelgan las tareas largas de panel (`crate::jobs`, cuando salga) y el ritual de aterrizaje de un `cd`, así que salen antes que ellos.
+//! Four probes with the same shape — launch, a `Receiver`, and supersession
+//! as cancellation: dropping the receiver discards the response — and all of
+//! them were born in the `ntc` binary's root, which is a crate DISTINCT from
+//! this lib. They are the foundation the pane's long tasks hang off
+//! (`crate::jobs`, when it lands) and the `cd` landing ritual, so they leave
+//! before those do.
 //!
-//! [`Probed`] es el dedup: un stat que falló no se reintenta hasta que el
-//! listado se renueve, para no martillear un provider roto.
+//! [`Probed`] is the dedup: a stat that failed is not retried until the
+//! listing is renewed, so as not to hammer a broken provider.
 
 use norte_core::backend::Backend;
 use norte_frontend::layout::SlotId;
@@ -16,49 +18,48 @@ use norte_proto::{Entry, Error, VPath};
 use crate::viewer::Viewer;
 use crate::viewer_open::{Modo, viewer_for_width};
 
-/// Sonda de stat del VIEWPORT (#52): hidrata size/mtime de las entradas
-/// VISIBLES que el listado lazy dejó en None — no solo la enfocada, o las
-/// columnas Tamaño/Fecha quedan en blanco en todas las demás filas. A lo
-/// sumo UNA tanda en vuelo, acotada a [`STAT_BATCH_MAX`] paths y resuelta
-/// con concurrencia [`STAT_BATCH_CONCURRENCY`] (una sesión remota no puede
-/// pagar N RTT en serie). Dedup por `(pane, path)` en el conjunto `probed`
-/// del run loop: un stat fallido no se reintenta hasta que el listado se
-/// renueve (sin martillear un provider roto). Cada stat va acotado con
-/// timeout (`STAT_PROBE_TIMEOUT`): un provider colgado no bloquea la tanda
-/// para siempre.
+/// VIEWPORT stat probe (#52): hydrates size/mtime for the VISIBLE entries the
+/// lazy listing left as None — not just the focused one, or the Size/Date
+/// columns stay blank in every other row. At most ONE batch in flight,
+/// bounded to [`STAT_BATCH_MAX`] paths and resolved with
+/// [`STAT_BATCH_CONCURRENCY`] concurrency (a remote session cannot afford N
+/// RTTs in series). Dedup by `(pane, path)` in the run loop's `probed` set: a
+/// failed stat is not retried until the listing is renewed (so as not to
+/// hammer a broken provider). Each stat is bounded with a timeout
+/// (`STAT_PROBE_TIMEOUT`): a hung provider does not block the batch forever.
 pub struct StatProbe {
-    /// Los stats resueltos: `(pane, path, entry)`. Soltar el receptor descarta
-    /// la tanda, que es la cancelación de esta sonda.
+    /// The resolved stats: `(pane, path, entry)`. Dropping the receiver
+    /// discards the batch, which is this probe's cancellation.
     pub rx: tokio::sync::oneshot::Receiver<Vec<(usize, VPath, Entry)>>,
 }
 
-/// Dedup de la sonda #52: `(pane, path)` ya pedidos. Se vacía con cada
-/// listado nuevo (cd/refresh) — las entries vuelven a nacer lazy.
+/// Dedup for probe #52: `(pane, path)` already requested. Cleared on every
+/// new listing (cd/refresh) — entries are born lazy again.
 pub type Probed = std::collections::HashSet<(usize, VPath)>;
 
-/// Radio en filas de la ventana que la sonda #52 hidrata alrededor del
-/// cursor de cada pane (aproximación del viewport: el alto real lo decide
-/// el widget al pintar). Cubre un terminal alto con margen.
+/// Row radius of the window that probe #52 hydrates around each pane's
+/// cursor (an approximation of the viewport: the real height is decided by
+/// the widget when painting). Covers a tall terminal with margin.
 pub const STAT_WINDOW_RADIUS: usize = 64;
 
-/// Tope de paths por tanda de la sonda #52: lo que no entre se pide en la
-/// siguiente vuelta, ya sin los que la tanda anterior hidrató.
+/// Cap on paths per batch for probe #52: whatever does not fit is requested
+/// on the next round, already without the ones the previous batch hydrated.
 pub const STAT_BATCH_MAX: usize = 64;
 
-/// Stats simultáneos dentro de una tanda (#52): acota las peticiones en
-/// vuelo contra el daemon sin serializar la latencia de la pantalla entera.
+/// Simultaneous stats within a batch (#52): bounds requests in flight
+/// against the daemon without serializing the whole screen's latency.
 pub const STAT_BATCH_CONCURRENCY: usize = 8;
 
-/// Tope del stat de la sonda on-focus (#52, MINOR-1): un provider remoto
-/// colgado no debe dejar la sonda en vuelo indefinidamente — vencido el
-/// plazo se trata como fallo (entrada se queda en `None`, no se reintenta
-/// hasta cambiar la selección).
+/// Timeout for the on-focus probe's stat (#52, MINOR-1): a hung remote
+/// provider must not leave the probe in flight indefinitely — once the
+/// deadline is past it is treated as a failure (the entry stays `None`, not
+/// retried until the selection changes).
 pub const STAT_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
-/// Lanza la tanda de `StatProbe`: clona el `Backend` (barato, Arc interno) y
-/// los paths para que la task no retenga el préstamo del run loop. Los
-/// fallos (error del provider o timeout) simplemente no vuelven — la entrada
-/// se queda lazy y la dedup del run loop evita el reintento en bucle.
+/// Launches the `StatProbe` batch: clones the `Backend` (cheap, internal
+/// Arc) and the paths so the task does not hold the run loop's borrow.
+/// Failures (a provider error or a timeout) simply do not come back — the
+/// entry stays lazy and the run loop's dedup avoids retrying in a loop.
 pub fn spawn_stat_probe(backend: &Backend, paths: Vec<(usize, VPath)>) -> StatProbe {
     use futures::StreamExt as _;
     let (tx, rx) = tokio::sync::oneshot::channel();
@@ -84,25 +85,26 @@ pub fn spawn_stat_probe(backend: &Backend, paths: Vec<(usize, VPath)>) -> StatPr
     StatProbe { rx }
 }
 
-/// Sonda de stat de la fila seleccionada del panel de diferencias (#157).
-/// Molde de [`StatProbe`], reducido a lo que ese caso necesita: como mucho
-/// dos paths (los dos lados de una fila), así que no hace falta
-/// `STAT_BATCH_CONCURRENCY` ni un tope de tanda — la propia selección ya
-/// acota cuántos hay que pedir.
+/// Stat probe for the diffs panel's selected row (#157).
+/// A mold of [`StatProbe`], reduced to what that case needs: at most two
+/// paths (the row's two sides), so neither `STAT_BATCH_CONCURRENCY` nor a
+/// batch cap is needed — the selection itself already bounds how many must
+/// be requested.
 pub struct CompareStatProbe {
-    /// Los stats resueltos: `None` = ese lado no tiene el fichero.
+    /// The resolved stats: `None` = that side does not have the file.
     pub rx: tokio::sync::oneshot::Receiver<Vec<(VPath, Option<Entry>)>>,
-    /// La comparación bajo la que se pidió (#198): el resultado solo vale
-    /// para ella.
+    /// The comparison it was requested under (#198): the result is only
+    /// valid for that one.
     pub generation: u64,
 }
 
-/// Lanza la sonda #157: un `stat` por path, con el mismo timeout que la del
-/// pane normal para no dejarla en vuelo para siempre contra un provider
-/// colgado. Un fallo (error o timeout) viaja como `(path, None)` en vez de
-/// perderse — a diferencia de [`spawn_stat_probe`], aquí SÍ hace falta saber
-/// qué se pidió y no llegó: es lo que `App::hydrate_compare_size` usa para
-/// marcarlo sondeado y no reintentarlo cada frame.
+/// Launches probe #157: one `stat` per path, with the same timeout as the
+/// normal pane's so it is not left in flight forever against a hung
+/// provider. A failure (error or timeout) travels as `(path, None)` instead
+/// of being dropped — unlike [`spawn_stat_probe`], here it DOES matter to
+/// know what was requested and did not arrive: that is what
+/// `App::hydrate_compare_size` uses to mark it probed and not retry it every
+/// frame.
 pub fn spawn_compare_stat_probe(
     backend: &Backend,
     paths: Vec<VPath>,
@@ -131,36 +133,37 @@ pub fn spawn_compare_stat_probe(
     CompareStatProbe { rx, generation }
 }
 
-/// Fetch de decoraciones de plugin EN VUELO (G3b, ADR 0037): el pane/dir
-/// destino y el canal one-shot. Molde de [`StatProbe`] — UNO POR PANE
-/// (#117-follow-up review MINOR-2: con un slot global, un cd en el pane B
-/// pisaba el fetch en vuelo del A y sus columnas `plugin:` configuradas
-/// quedaban en blanco hasta el próximo cd de A — con las columnas ahora
-/// config-driven eso contradecía «jamás una columna permanentemente en
-/// blanco»). `dir` se conserva para descartar una respuesta TARDÍA que ya
-/// no corresponde al listado actual del pane. Límite heredado del diseño
-/// de decoraciones (review MINOR-3): `paths` es la página YA listada al
-/// asentar el cd — entradas drenadas DESPUÉS por el fill incremental
-/// (#52/#54) no viajan en la petición y pintan blanco hasta el próximo
-/// re-list (documentado, mismo alcance que las decoraciones).
-/// Valores de columnas `plugin:` por id Display → `VPath` → celda saneada
-/// (#117-follow-up) — el shape que consume `PaneState::set_plugin_columns`.
+/// Plugin decorations fetch IN FLIGHT (G3b, ADR 0037): the target pane/dir
+/// and the one-shot channel. A mold of [`StatProbe`] — ONE PER PANE
+/// (#117-follow-up review MINOR-2: with a global slot, a cd in pane B
+/// stomped on A's fetch in flight and its configured `plugin:` columns
+/// stayed blank until A's next cd — with columns now config-driven that
+/// contradicted "never a column permanently blank"). `dir` is kept to
+/// discard a LATE response that no longer matches the pane's current
+/// listing. Limit inherited from the decorations design (review MINOR-3):
+/// `paths` is the page ALREADY listed when the cd settled — entries drained
+/// LATER by incremental fill (#52/#54) do not travel in the request and
+/// paint blank until the next re-list (documented, same scope as the
+/// decorations).
+/// `plugin:` column values by Display id → `VPath` → sanitized cell
+/// (#117-follow-up) — the shape `PaneState::set_plugin_columns` consumes.
 pub type PluginColumnValues =
     std::collections::HashMap<String, std::collections::HashMap<VPath, String>>;
 
-/// El rótulo que su MANIFIESTO le da a cada columna de plugin, por id
-/// Display, ya saneado: lo que `ColumnsSettings::apply_plugin_headers`
-/// instala para que la cabecera no enseñe el id.
+/// The label its MANIFEST gives each plugin column, by Display id, already
+/// sanitized: what `ColumnsSettings::apply_plugin_headers` installs so the
+/// header does not show the id.
 pub type PluginColumnHeaders = std::collections::BTreeMap<String, String>;
 
-/// Un fetch de decoraciones y columnas de plugin en vuelo, por HUECO.
+/// A plugin decorations and columns fetch in flight, per SLOT.
 pub struct DecorateFetch {
-    /// El HUECO al que va, no la posición: una respuesta tardía tiene que
-    /// aterrizar en el listado que la pidió, no en quien ocupe su sitio.
+    /// The SLOT it goes to, not the position: a late response has to land in
+    /// the listing that requested it, not in whoever now occupies its spot.
     pub slot: SlotId,
-    /// El dir bajo el que se pidió: si el hueco ya está en otro, se tira.
+    /// The dir it was requested under: if the slot is already on another
+    /// one, it is dropped.
     pub dir: VPath,
-    /// Decoraciones por path, y valores de columna por id de plugin.
+    /// Decorations by path, and column values by plugin id.
     pub rx: tokio::sync::oneshot::Receiver<(
         std::collections::HashMap<VPath, norte_frontend::Decoration>,
         PluginColumnValues,
@@ -168,34 +171,35 @@ pub struct DecorateFetch {
     )>,
 }
 
-/// Cada cuánto se le tira del registro al daemon (#328).
+/// How often the log gets pulled from the daemon (#328).
 ///
-/// La terminal repinta por frame y su bucle despierta diez veces por segundo,
-/// así que sin este freno el panel abierto serían diez RPC por segundo para
-/// enseñar lo mismo. Medio segundo: un registro se lee, no se cronometra —y es
-/// el mismo ritmo que la ventana, que sí necesita temporizador propio porque
-/// solo repinta cuando alguien hace algo.
+/// The terminal repaints per frame and its loop wakes ten times a second, so
+/// without this brake the open panel would be ten RPCs a second to show the
+/// same thing. Half a second: a log is read, not timed to the second — and
+/// it is the same cadence as the window, which does need its own timer
+/// because it only repaints when someone does something.
 pub const LOG_TAIL_PERIODO: std::time::Duration = std::time::Duration::from_millis(500);
 
-/// Una vuelta de `log.tail` en vuelo (#328).
+/// One round of `log.tail` in flight (#328).
 ///
-/// La ÉPOCA viaja con la petición: entre pedir y contestar caben un cierre y
-/// una apertura del panel, y la respuesta de la sesión anterior tiene que morir
-/// en vez de aterrizar —con su cursor— en el panel nuevo.
+/// The EPOCH travels with the request: between asking and answering there is
+/// room for the panel to close and reopen, and the previous session's
+/// response has to die instead of landing — with its cursor — in the new
+/// panel.
 pub struct LogTailProbe {
-    /// La apertura del panel bajo la que se pidió.
+    /// The panel opening it was requested under.
     pub epoca: u64,
-    /// Lo que el daemon contestó, entero: el error también, porque
-    /// [`Error::Unsupported`] es el hecho de que ese daemon no tiene registro
-    /// que servir y hay que dejar de preguntar.
+    /// Whatever the daemon answered, whole: the error too, because
+    /// [`Error::Unsupported`] is the fact that this daemon has no log to
+    /// serve and asking should stop.
     pub rx: tokio::sync::oneshot::Receiver<Result<norte_proto::methods::LogTailResult, Error>>,
 }
 
-/// Lanza una vuelta de `log.tail` desde donde se quedó el cursor.
+/// Launches a round of `log.tail` from where the cursor was left.
 ///
-/// `cursor: None` la primera vez —«dame lo que haya»— y el `next` que llegó
-/// después; nunca un cero, que contra un anillo que ya dio la vuelta
-/// reportaría un `lost` falso.
+/// `cursor: None` the first time — "give me whatever there is" — and the
+/// `next` that arrived afterward; never a zero, which against a ring that
+/// already wrapped around would report a false `lost`.
 pub fn spawn_log_tail(backend: &Backend, cursor: Option<u64>, epoca: u64) -> LogTailProbe {
     let (tx, rx) = tokio::sync::oneshot::channel();
     let b = backend.clone();
@@ -205,32 +209,34 @@ pub fn spawn_log_tail(backend: &Backend, cursor: Option<u64>, epoca: u64) -> Log
     LogTailProbe { epoca, rx }
 }
 
-/// Lo que se espera al catálogo de plugins, igual que la ventana.
+/// What is waited for the plugin catalogue, same as the window.
 pub const PLAZO_PANELES: std::time::Duration = std::time::Duration::from_secs(5);
 
-/// Un repintado de panel de plugin en vuelo (fase 3).
+/// A plugin panel repaint in flight (phase 3).
 ///
-/// Lleva el HUECO y la FIRMA de lo que pidió: cuando llega, si ese hueco ya
-/// quiere otra cosa —el cursor se movió, el panel cambió de tamaño— la
-/// respuesta se tira. Misma regla que el preview, y por el mismo motivo.
+/// Carries the SLOT and the SIGNATURE of what it requested: when it arrives,
+/// if that slot already wants something else — the cursor moved, the panel
+/// was resized — the response is dropped. Same rule as the preview, for the
+/// same reason.
 pub struct PanelRenderProbe {
-    /// El hueco al que va el marco.
+    /// The slot the frame goes to.
     pub slot: SlotId,
-    /// Lo que se pidió: si el hueco ya quiere otra cosa, no se aplica.
+    /// What was requested: if the slot already wants something else, it is
+    /// not applied.
     pub firma: crate::panelplugin::Firma,
-    /// El marco, o `None` si ningún plugin consentido pinta ese panel.
+    /// The frame, or `None` if no consented plugin paints that panel.
     pub rx: tokio::sync::oneshot::Receiver<Result<Option<norte_proto::methods::PanelFrame>, Error>>,
 }
 
-/// Le pide al core el marco de un panel de plugin.
+/// Asks the core for a plugin panel's frame.
 ///
-/// Fail-soft como todo lo cosmético: si la llamada falla, el hueco se queda con
-/// el marco anterior —o vacío, si no había— y el lector no ve un error por algo
-/// que solo decora.
+/// Fail-soft like everything cosmetic: if the call fails, the slot keeps its
+/// previous frame — or empty, if there was none — and the reader sees no
+/// error over something that only decorates.
 ///
-/// Sin plazo, al contrario que el catálogo: el guest corre con la época del
-/// runtime, que es quien lo corta si se pasa. Un plazo aquí sería un segundo
-/// reloj sobre el mismo guest.
+/// No deadline, unlike the catalogue: the guest runs on the runtime's epoch,
+/// which is what cuts it off if it overruns. A deadline here would be a
+/// second clock over the same guest.
 #[must_use]
 pub fn spawn_panel_render(
     backend: &Backend,
@@ -246,31 +252,33 @@ pub fn spawn_panel_render(
     PanelRenderProbe { slot, firma, rx }
 }
 
-/// El catálogo de plugins en vuelo, para saber qué PANELES aportan (fase 3).
+/// The plugin catalogue in flight, to know which PANELS they contribute
+/// (phase 3).
 ///
-/// Una por sesión y sin época: no hay panel abierto al que pertenezca —lo que
-/// trae es la declaración de qué huecos existen, que es previa a abrir
-/// ninguno— y se pide una vez al arrancar. Si un día hace falta repetirla
-/// (aprobar un plugin sin reiniciar), el sitio es el mismo.
+/// One per session and no epoch: there is no open panel it belongs to — what
+/// it brings is the declaration of which slots exist, which comes before
+/// opening any of them — and it is requested once at startup. If it ever
+/// needs repeating (approving a plugin without restarting), this is the
+/// place.
 pub struct PanelsProbe {
-    /// El catálogo entero: los paneles salen de `PluginInfo.panels`, y el
-    /// filtro de aprobado/activado lo aplica `KindRegistry::insert_panels`,
-    /// que es donde vive esa regla para los dos frontends.
+    /// The whole catalogue: panels come out of `PluginInfo.panels`, and the
+    /// approved/enabled filter is applied by `KindRegistry::insert_panels`,
+    /// which is where that rule lives for both frontends.
     pub rx: tokio::sync::oneshot::Receiver<Result<norte_proto::methods::PluginListResult, Error>>,
 }
 
-/// Pide el catálogo para declarar los paneles que aportan los plugins.
+/// Requests the catalogue to declare the panels plugins contribute.
 ///
-/// Fail-soft como el resto de lo cosmético: si la RPC falla, no hay paneles
-/// de plugin y la pantalla es la de siempre.
+/// Fail-soft like the rest of the cosmetic stuff: if the RPC fails, there
+/// are no plugin panels and the screen is the usual one.
 #[must_use]
 pub fn spawn_panels(backend: &Backend) -> PanelsProbe {
     let (tx, rx) = tokio::sync::oneshot::channel();
     let b = backend.clone();
     tokio::spawn(async move {
-        // Con el MISMO plazo que la ventana (`PLAZO_PLUGINS`): un daemon que
-        // no contesta deja la sesión sin paneles de plugin, no una sonda
-        // colgada para siempre. La misma decisión tenía dos respuestas.
+        // With the SAME deadline as the window (`PLAZO_PLUGINS`): a daemon
+        // that does not answer leaves the session without plugin panels, not
+        // a probe hung forever. The same decision had two answers.
         let res = match tokio::time::timeout(PLAZO_PANELES, b.plugins_list()).await {
             Ok(r) => r,
             Err(_) => Err(Error::ProviderUnavailable { retryable: true }),
@@ -280,57 +288,61 @@ pub fn spawn_panels(backend: &Backend) -> PanelsProbe {
     PanelsProbe { rx }
 }
 
-/// Una petición `log.level` al daemon en vuelo (#328). Mismo molde y misma
-/// época que [`LogTailProbe`].
+/// A `log.level` request to the daemon in flight (#328). Same mold and same
+/// epoch as [`LogTailProbe`].
 pub struct LogLevelProbe {
-    /// La apertura del panel bajo la que se pidió.
+    /// The panel opening it was requested under.
     pub epoca: u64,
-    /// El nivel que de verdad quedó puesto, que puede no ser el que se pidió:
-    /// el anillo del daemon es global a sus clientes y solo sube.
+    /// The level that actually ended up set, which may not be the one
+    /// requested: the daemon's ring is global to its clients and only goes
+    /// up.
     pub rx: tokio::sync::oneshot::Receiver<Result<String, Error>>,
 }
 
-/// Le pide al daemon que capture al menos `nivel`.
+/// Asks the daemon to capture at least `level`.
 pub fn spawn_log_level(
     backend: &Backend,
-    nivel: norte_config::logline::LogLevel,
+    level: norte_config::logline::LogLevel,
     epoca: u64,
 ) -> LogLevelProbe {
     let (tx, rx) = tokio::sync::oneshot::channel();
     let b = backend.clone();
-    let pedido = nivel.wire().to_owned();
+    let requested = level.wire().to_owned();
     tokio::spawn(async move {
-        let _ = tx.send(b.log_level(&pedido).await);
+        let _ = tx.send(b.log_level(&requested).await);
     });
     LogLevelProbe { epoca, rx }
 }
 
-/// Una lectura de preview en vuelo, por HUECO.
+/// A preview read in flight, per SLOT.
 ///
-/// Guarda la ruta que pidió: cuando llega, si el hueco ya quiere otra cosa
-/// —el cursor se movió mientras volaba— la respuesta se TIRA. Es la regla 3
-/// del spec y la lección de la fase C de P6, que es la misma cosa.
+/// Keeps the path it requested: when it arrives, if the slot already wants
+/// something else — the cursor moved while it was in flight — the response
+/// is DROPPED. This is spec rule 3 and the lesson from P6's phase C, which
+/// is the same thing.
 pub struct PreviewFetch {
-    /// La ruta que se pidió: si el hueco ya quiere otra, la respuesta se tira.
+    /// The path that was requested: if the slot already wants another, the
+    /// response is dropped.
     pub path: VPath,
-    /// El visor construido, o el error de lectura sin traducir.
+    /// The built viewer, or the untranslated read error.
     pub rx: tokio::sync::oneshot::Receiver<Result<Viewer, Error>>,
 }
 
-/// Lee `path` en segundo plano para el hueco `slot`.
+/// Reads `path` in the background for slot `slot`.
 ///
-/// Sin `select!` sobre el teclado, a diferencia de [`crate::viewer_open::open_viewer`]: nadie está
-/// esperando delante del preview, así que no hay nada que cancelar con `Esc`.
-/// Lo que sí hay es supersesión: mover el cursor deja caer este `Receiver` y
-/// la respuesta se pierde sin aplicarse.
+/// No `select!` over the keyboard, unlike
+/// [`crate::viewer_open::open_viewer`]: nobody is waiting in front of the
+/// preview, so there is nothing to cancel with `Esc`. What there is is
+/// supersession: moving the cursor drops this `Receiver` and the response is
+/// lost without being applied.
 ///
-/// `columns` es el ancho del hueco en celdas, para el previewer (0.66.0):
-/// `None` cuando no se sabe, y el guest elige.
+/// `columns` is the slot's width in cells, for the previewer (0.66.0): `None`
+/// when unknown, and the guest chooses.
 ///
-/// Pide `Modo::Nada` a [`viewer_for_width`] sin mirar `[ui] images`: el
-/// visor ACOPLADO de un hueco todavía no sabe colocar píxeles —eso es del
-/// visor a pantalla completa, T3/T4 de la fase 5 WOW—, así que pedir la
-/// miniatura aquí sería una llamada al plugin-host que nadie usa.
+/// Requests `Modo::Nada` from [`viewer_for_width`] without looking at
+/// `[ui] images`: a slot's DOCKED viewer does not yet know how to place
+/// pixels — that belongs to the full-screen viewer, T3/T4 of phase 5 WOW —
+/// so requesting the thumbnail here would be a plugin-host call nobody uses.
 pub fn spawn_preview_fetch(backend: &Backend, path: VPath, columns: Option<u32>) -> PreviewFetch {
     let (tx, rx) = tokio::sync::oneshot::channel();
     let b = backend.clone();
@@ -342,27 +354,28 @@ pub fn spawn_preview_fetch(backend: &Backend, path: VPath, columns: Option<u32>)
     PreviewFetch { path, rx }
 }
 
-/// Lanza el fetch de decoraciones (G3b) para TODAS las entradas actualmente
-/// listadas de `pane` (la "página visible" — el listado YA cargado, sea la
-/// primera página de un dir grande paginándose o el dir entero; el resto de
-/// un dir aún rellenándose queda sin decorar hasta la próxima visita, mismo
-/// alcance MVP documentado en el ADR/plan). Sin guardia especial de "algún
-/// decorator activado": `Backend::plugin_decorate` resuelve el catálogo en
-/// cada llamada (barato embebido, una RPC remota) — intentar cada listado y
-/// descartar en silencio si no hay decoradores consentidos es más simple y
-/// honesto que cachear un flag que podría quedar obsoleto tras un F12.
-/// `None` si el pane no tiene entradas (nada que decorar).
-/// #117-follow-up: el MISMO viaje trae también los valores de las columnas
-/// `plugin:` CONFIGURADAS del scheme (`plugin_cols` = pares
-/// (plugin, columna) de `ColumnsSettings::plugin_ids_for`) — un solo slot
-/// en vuelo, un solo guard anti-stale.
+/// Launches the decorations fetch (G3b) for ALL of `pane`'s currently listed
+/// entries (the "visible page" — the listing ALREADY loaded, whether that is
+/// a large dir's first page while it paginates or the whole dir; the rest of
+/// a dir still filling in stays undecorated until the next visit, same
+/// documented MVP scope as in the ADR/plan). No special "some decorator
+/// enabled" guard: `Backend::plugin_decorate` resolves the catalogue on
+/// every call (cheap when embedded, one remote RPC) — trying it on every
+/// listing and silently dropping it when there are no consented decorators
+/// is simpler and more honest than caching a flag that could go stale after
+/// an F12.
+/// `None` if the pane has no entries (nothing to decorate).
+/// #117-follow-up: the SAME trip also brings the scheme's CONFIGURED
+/// `plugin:` column values (`plugin_cols` = (plugin, column) pairs from
+/// `ColumnsSettings::plugin_ids_for`) — a single slot in flight, a single
+/// anti-stale guard.
 pub fn spawn_decorate_fetch(
     backend: &Backend,
     slot: SlotId,
     dir: VPath,
     paths: Vec<VPath>,
-    // La clase de cada path, posicional (ADR 0105): un decorador de iconos
-    // la necesita para la carpeta.
+    // Each path's class, positional (ADR 0105): an icon decorator needs it
+    // for the folder.
     kinds: Vec<norte_proto::EntryKind>,
     plugin_cols: Vec<(String, String)>,
 ) -> Option<DecorateFetch> {
@@ -374,10 +387,10 @@ pub fn spawn_decorate_fetch(
     tokio::spawn(async move {
         let plugins = b.plugin_decorate(&paths, &kinds).await.unwrap_or_default();
         let merged = norte_frontend::merge_decorations(&paths, &plugins);
-        // Review MINOR-1 (regla 3 en espíritu): un fetch SUPERADO (el run
-        // loop pisó el slot → rx dropeado) corta antes de cada RPC restante
-        // en vez de gastar hasta 12 llamadas (8 columnas pintadas y 4 de la
-        // barra de estado, ADR 0137) cuyo send fallará igual.
+        // Review MINOR-1 (rule 3 in spirit): a SUPERSEDED fetch (the run loop
+        // stomped the slot → rx dropped) cuts short before each remaining
+        // RPC instead of spending up to 12 calls (8 painted columns and 4
+        // for the status bar, ADR 0137) whose send would fail anyway.
         let (cols, headers) =
             fetch_plugin_columns(&b, &plugin_cols, &paths, || tx.is_closed()).await;
         let _ = tx.send((merged, cols, headers));
@@ -385,14 +398,14 @@ pub fn spawn_decorate_fetch(
     Some(DecorateFetch { slot, dir, rx })
 }
 
-/// Valores de las columnas `plugin:` configuradas (#117-follow-up): la
-/// validación de pertenencia + dedupe de colisiones vive en el modelo
-/// COMPARTIDO (`norte_frontend::columns::validated_plugin_requests` —
-/// review MAJOR-1: una sola definición para ambos frontends; colisión de
-/// id bare = blanco antes que atribución falsa, desambiguación real =
-/// issue #120). Fail-soft por columna: catálogo caído o RPC fallida =
-/// celdas en blanco, jamás un error de listado. `superseded` corta entre
-/// RPCs cuando el fetch ya fue pisado (review MINOR-1).
+/// Values of the configured `plugin:` columns (#117-follow-up): membership
+/// validation + collision dedupe lives in the SHARED model
+/// (`norte_frontend::columns::validated_plugin_requests` — review MAJOR-1: a
+/// single definition for both frontends; a bare-id collision = blank before
+/// false attribution, real disambiguation = issue #120). Fail-soft per
+/// column: a down catalogue or a failed RPC = blank cells, never a listing
+/// error. `superseded` cuts short between RPCs when the fetch has already
+/// been stomped (review MINOR-1).
 async fn fetch_plugin_columns(
     backend: &Backend,
     requested: &[(String, String)],
@@ -410,9 +423,8 @@ async fn fetch_plugin_columns(
     for (plugin, column) in
         norte_frontend::columns::validated_plugin_requests(requested, &list.plugins)
     {
-        // El rótulo que su manifiesto le puso, para que la cabecera no diga
-        // el id. Texto de un plugin: enmascarado y acotado como cualquier
-        // cabecera.
+        // The label its manifest gave it, so the header does not show the
+        // id. Text from a plugin: masked and bounded like any header.
         if let Some(h) = list
             .plugins
             .iter()

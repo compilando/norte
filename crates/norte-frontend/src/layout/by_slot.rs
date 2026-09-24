@@ -1,17 +1,18 @@
-//! Estado indexado por hueco, con la ergonomía del array que sustituye.
+//! State indexed by slot, with the ergonomics of the array it replaces.
 
 use std::collections::BTreeMap;
 
 use super::{Node, SlotId};
 
-/// Estado por hueco.
+/// State per slot.
 ///
-/// Existe porque el bucle de un frontend guarda cosas POR PANE —el relleno
-/// paginado en vuelo, la decoración pedida, la deduplicación de la sonda de
-/// stat, la búsqueda viva— y guardarlas por POSICIÓN es dos problemas: un tope
-/// de dos paneles, y un fallo silencioso. Una respuesta en vuelo para la
-/// posición 1 se aplica a quien esté en la posición 1 cuando llegue, que tras
-/// cerrar un panel es otro. Por eso la clave es el hueco, que no se mueve.
+/// Exists because a frontend's loop keeps things PER PANE — in-flight
+/// paginated fill, the requested decoration, the stat probe's dedup, the
+/// live search — and keeping them by POSITION is two problems: a ceiling of
+/// two panes, and a silent failure. An in-flight response for position 1
+/// applies to whoever is at position 1 when it arrives, which after closing
+/// a pane is someone else. That is why the key is the slot, which does not
+/// move.
 #[derive(Debug, Clone)]
 pub struct BySlot<T> {
     inner: BTreeMap<SlotId, T>,
@@ -26,37 +27,38 @@ impl<T> Default for BySlot<T> {
 }
 
 impl<T> BySlot<T> {
-    /// Vacío.
+    /// Empty.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// El valor del hueco, si lo hay.
+    /// The slot's value, if there is one.
     #[must_use]
     pub fn get(&self, id: SlotId) -> Option<&T> {
         self.inner.get(&id)
     }
 
-    /// El valor del hueco, para mutarlo.
+    /// The slot's value, to mutate it.
     pub fn get_mut(&mut self, id: SlotId) -> Option<&mut T> {
         self.inner.get_mut(&id)
     }
 
-    /// Pone el valor de un hueco y devuelve el anterior.
+    /// Sets a slot's value and returns the previous one.
     pub fn insert(&mut self, id: SlotId, v: T) -> Option<T> {
         self.inner.insert(id, v)
     }
 
-    /// Quita el valor de un hueco.
+    /// Removes a slot's value.
     pub fn remove(&mut self, id: SlotId) -> Option<T> {
         self.inner.remove(&id)
     }
 
-    /// Pone o quita el valor de un hueco, según venga `Some` o `None`.
+    /// Sets or removes a slot's value, depending on whether `Some` or `None`
+    /// comes in.
     ///
-    /// Es la forma que tenía el array (`x[i] = ...`) sin la parte que hacía
-    /// daño: la clave es el hueco.
+    /// It is the shape the array had (`x[i] = ...`) without the part that
+    /// hurt: the key is the slot.
     pub fn set(&mut self, id: SlotId, v: Option<T>) {
         match v {
             Some(v) => {
@@ -68,40 +70,40 @@ impl<T> BySlot<T> {
         }
     }
 
-    /// ¿Hay algo para ese hueco?
+    /// Is there anything for that slot?
     #[must_use]
     pub fn contains(&self, id: SlotId) -> bool {
         self.inner.contains_key(&id)
     }
 
-    /// Cuántos huecos tienen valor.
+    /// How many slots have a value.
     #[must_use]
     pub fn len(&self) -> usize {
         self.inner.len()
     }
 
-    /// ¿Ninguno?
+    /// None at all?
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.inner.is_empty()
     }
 
-    /// Los pares, en orden de [`SlotId`].
+    /// The pairs, in [`SlotId`] order.
     pub fn iter(&self) -> impl Iterator<Item = (SlotId, &T)> {
         self.inner.iter().map(|(id, v)| (*id, v))
     }
 
-    /// Los pares, para mutarlos.
+    /// The pairs, to mutate them.
     pub fn iter_mut(&mut self) -> impl Iterator<Item = (SlotId, &mut T)> {
         self.inner.iter_mut().map(|(id, v)| (*id, v))
     }
 
-    /// Intercambia lo que hay en dos huecos.
+    /// Swaps what is in two slots.
     ///
-    /// Hace falta porque intercambiar paneles mueve el CONTENIDO entre huecos
-    /// (los ids se quedan donde estaban), así que el trabajo en vuelo tiene que
-    /// viajar con su listado. Intercambiar los ids EN EL ÁRBOL en vez del
-    /// contenido haría esto innecesario, y es la mejora que anota el plan.
+    /// Needed because swapping panes moves the CONTENT between slots (the
+    /// ids stay where they were), so in-flight work has to travel with its
+    /// listing. Swapping the ids IN THE TREE instead of the content would
+    /// make this unnecessary, and it is the improvement the plan notes.
     pub fn swap(&mut self, a: SlotId, b: SlotId) {
         if a == b {
             return;
@@ -115,22 +117,22 @@ impl<T> BySlot<T> {
         }
     }
 
-    /// Tira lo que `tree` ya no menciona.
+    /// Drops what `tree` no longer mentions.
     ///
-    /// Se llama tras cada cambio de layout. A diferencia de
-    /// [`super::SlotStore`], aquí NO se conserva lo huérfano: el estado del
-    /// store es del usuario —su cursor, sus marcas— y merece sobrevivir a un
-    /// cierre por error; esto de aquí es trabajo EN VUELO, y aplicar el
-    /// resultado de una petición a un panel que ya no existe no es recuperar
-    /// nada, es actuar sobre un fantasma.
+    /// Called after every layout change. Unlike [`super::SlotStore`],
+    /// nothing orphaned is kept HERE: the store's state is the reader's —
+    /// their cursor, their marks — and deserves to survive an accidental
+    /// close; this here is work IN FLIGHT, and applying a request's result
+    /// to a pane that no longer exists is not recovering anything, it is
+    /// acting on a ghost.
     pub fn retain_tree(&mut self, tree: &Node) {
-        let vivos = tree.slot_ids();
-        self.inner.retain(|id, _| vivos.contains(id));
+        let alive = tree.slot_ids();
+        self.inner.retain(|id, _| alive.contains(id));
     }
 }
 
 impl<T: Default> BySlot<T> {
-    /// El valor del hueco, creándolo por defecto si no estaba.
+    /// The slot's value, creating it by default if it was not there.
     pub fn entry(&mut self, id: SlotId) -> &mut T {
         self.inner.entry(id).or_default()
     }
@@ -145,9 +147,9 @@ mod tests {
         Node::slot(SlotId(id), KindId::browser())
     }
 
-    /// Lo que el árbol ya no menciona se TIRA. Aplicar el resultado de una
-    /// petición a un panel que se cerró no es recuperar nada: es actuar sobre
-    /// un fantasma, y en la posición de al lado.
+    /// What the tree no longer mentions is DROPPED. Applying a request's
+    /// result to a pane that closed is not recovering anything: it is
+    /// acting on a ghost, and in the neighboring position.
     #[test]
     fn lo_que_el_arbol_no_menciona_se_tira() {
         let mut m: BySlot<u32> = BySlot::new();
@@ -158,17 +160,17 @@ mod tests {
         assert_eq!(m.get(SlotId(2)), None);
     }
 
-    /// Una pestaña OCULTA sigue en el árbol, así que su trabajo en vuelo no se
-    /// tira: sigue siendo suyo y sigue teniendo dónde aterrizar.
+    /// A HIDDEN tab is still in the tree, so its in-flight work is not
+    /// dropped: it is still theirs and still has somewhere to land.
     #[test]
     fn una_pestana_oculta_conserva_lo_suyo() {
         let mut m: BySlot<u32> = BySlot::new();
         m.insert(SlotId(2), 20);
-        let arbol = Node::Tabs {
+        let tree = Node::Tabs {
             children: vec![b(1), b(2)],
             active: 0,
         };
-        m.retain_tree(&arbol);
+        m.retain_tree(&tree);
         assert_eq!(m.get(SlotId(2)), Some(&20));
     }
 
@@ -183,8 +185,8 @@ mod tests {
         );
     }
 
-    /// Un `Split` no cambia nada: lo que decide es qué huecos hay, no cómo se
-    /// reparten.
+    /// A `Split` changes nothing: what decides is which slots there are, not
+    /// how they are laid out.
     #[test]
     fn la_forma_del_arbol_no_decide_nada_aqui() {
         let mut m: BySlot<u32> = BySlot::new();

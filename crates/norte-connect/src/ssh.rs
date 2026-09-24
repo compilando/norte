@@ -1,12 +1,12 @@
-//! Establecimiento de conexión SSH/SFTP (ADR 0015 A/D/E): verificación de
-//! host key TOFU contra el [`KnownHostsStore`], auth por password / clave
-//! ed25519 (RSA con `allow_rsa`, ADR 0150) / agente, y apertura del
-//! subsistema sftp. Devuelve la
-//! [`SftpSession`] que `SftpProvider::new` acepta (inyección de sesión,
-//! ADR 0013): el provider jamás ve un secreto.
+//! SSH/SFTP connection establishment (ADR 0015 A/D/E): TOFU host key
+//! verification against the [`KnownHostsStore`], auth by password / ed25519
+//! key (RSA with `allow_rsa`, ADR 0150) / agent, and opening the sftp
+//! subsystem. Returns the
+//! [`SftpSession`] that `SftpProvider::new` accepts (session injection,
+//! ADR 0013): the provider never sees a secret.
 //!
-//! Los tipos de auth de russh NO cruzan la frontera de este crate: el core
-//! consume [`SshConnector`] con tipos propios (`ConnectionSpec`, `Secret`,
+//! russh's auth types do NOT cross this crate's boundary: the core consumes
+//! [`SshConnector`] with its own types (`ConnectionSpec`, `Secret`,
 //! `ConnectError`).
 
 use std::path::{Path, PathBuf};
@@ -24,33 +24,33 @@ use crate::known_hosts::{HostKeyStatus, KnownHostsStore, algo, fingerprint};
 use crate::secret::Secret;
 use crate::spec::{AuthMethod, ConnectionSpec};
 
-/// Puerto SSH por defecto cuando la URL no lo lleva.
+/// Default SSH port when the URL does not carry one.
 const SSH_PORT: u16 = 22;
 
-/// Conector SSH: encapsula el store TOFU y el socket del agente.
+/// SSH connector: wraps the TOFU store and the agent socket.
 ///
-/// Los campos son públicos para que el core (o un test) inyecte rutas
-/// explícitas; [`SshConnector::new`] resuelve los defaults del entorno.
+/// The fields are public so the core (or a test) can inject explicit paths;
+/// [`SshConnector::new`] resolves the environment's defaults.
 #[derive(Debug, Clone)]
 pub struct SshConnector {
-    /// Store de host keys (TOFU, ADR 0015 D).
+    /// Host key store (TOFU, ADR 0015 D).
     pub known_hosts: KnownHostsStore,
-    /// Socket del agente SSH (`SSH_AUTH_SOCK`); `None` = sin agente.
+    /// SSH agent socket (`SSH_AUTH_SOCK`); `None` = no agent.
     pub agent_socket: Option<PathBuf>,
 }
 
-/// Material de auth ya validado, ANTES de tocar la red: el rechazo de una
-/// clave RSA (ADR 0015 E) es local y claro, no un error de conexión.
+/// Auth material already validated, BEFORE touching the network: rejecting
+/// an RSA key (ADR 0015 E) is local and clear, not a connection error.
 enum PreparedAuth {
     Password,
-    // Box: una PrivateKey pesa >400 bytes y acabará en un Arc igualmente.
+    // Box: a PrivateKey weighs >400 bytes and will end up in an Arc anyway.
     Key(Box<PrivateKey>),
     Agent,
 }
 
 impl SshConnector {
-    /// Conector con defaults del entorno: `known_hosts` en el dir de config
-    /// (u override `NORTE_KNOWN_HOSTS`) y agente de `SSH_AUTH_SOCK`.
+    /// Connector with environment defaults: `known_hosts` in the config dir
+    /// (or override `NORTE_KNOWN_HOSTS`) and the agent from `SSH_AUTH_SOCK`.
     #[must_use]
     pub fn new(config_dir: &Path) -> Self {
         Self {
@@ -59,24 +59,24 @@ impl SshConnector {
         }
     }
 
-    /// Conecta por SSH según `spec`, verifica la host key contra el store
-    /// (TOFU estricto) y abre el subsistema sftp.
+    /// Connects over SSH per `spec`, verifies the host key against the store
+    /// (strict TOFU) and opens the sftp subsystem.
     ///
-    /// `secret` es la password (`auth = "password"`) o la passphrase de la
-    /// clave (`auth = "key"`, `None` si la clave no está cifrada); lo resuelve
-    /// el `SecretResolver` aguas arriba. Jamás se loguea (regla 10).
+    /// `secret` is the password (`auth = "password"`) or the key's
+    /// passphrase (`auth = "key"`, `None` if the key is not encrypted);
+    /// resolved upstream by the `SecretResolver`. Never logged (rule 10).
     ///
     /// # Errors
-    /// - [`ConnectError::HostKeyUnknown`]: primer contacto; confirmar con
-    ///   [`SshConnector::trust_host_key`] y reintentar.
-    /// - [`ConnectError::HostKeyMismatch`]: la clave registrada cambió
-    ///   (posible MITM); jamás se conecta.
-    /// - [`ConnectError::KeyUnsupported`]: clave de cliente no-ed25519
-    ///   (ADR 0015 E), rechazada ANTES de tocar la red.
-    /// - [`ConnectError::AuthFailed`]: el servidor rechazó las credenciales.
-    // Sin campos de la URL cruda: el span se abre ANTES de que el parser
-    // pueda rechazar un `user:pass@host` inline (regla 10). El endpoint
-    // redactado (host:port) se registra tras parsear.
+    /// - [`ConnectError::HostKeyUnknown`]: first contact; confirm with
+    ///   [`SshConnector::trust_host_key`] and retry.
+    /// - [`ConnectError::HostKeyMismatch`]: the registered key changed
+    ///   (possible MITM); never connects.
+    /// - [`ConnectError::KeyUnsupported`]: non-ed25519 client key
+    ///   (ADR 0015 E), rejected BEFORE touching the network.
+    /// - [`ConnectError::AuthFailed`]: the server rejected the credentials.
+    // No raw URL fields: the span opens BEFORE the parser can reject an
+    // inline `user:pass@host` (rule 10). The redacted endpoint (host:port)
+    // is recorded after parsing.
     #[tracing::instrument(level = "debug", skip_all)]
     pub async fn connect(
         &self,
@@ -85,39 +85,37 @@ impl SshConnector {
     ) -> Result<SftpSession, ConnectError> {
         let ep = spec.endpoint()?;
         if ep.scheme != "sftp" {
-            // Solo el scheme: no se ecoa la URL entera en un error.
+            // Scheme only: the whole URL is not echoed in an error.
             return Err(ConnectError::InvalidUrl(format!(
-                "scheme {}:// (el conector SSH solo acepta sftp://)",
+                "scheme {}:// (the SSH connector only accepts sftp://)",
                 ep.scheme
             )));
         }
         let user = resolve_user(ep.user.as_deref())?;
         let port = ep.port.unwrap_or(SSH_PORT);
-        tracing::debug!(host = %ep.host, port, "estableciendo conexión sftp");
+        tracing::debug!(host = %ep.host, port, "establishing sftp connection");
 
-        // Prerrequisitos de auth ANTES de dial: el rechazo de una clave RSA
-        // (ADR 0015 E) o la falta de agente son errores locales y claros,
-        // no errores de red.
+        // Auth prerequisites BEFORE dialing: rejecting an RSA key
+        // (ADR 0015 E) or a missing agent are local, clear errors, not
+        // network errors.
         let prepared = match spec.auth {
             AuthMethod::AccessKey => {
                 return Err(ConnectError::Config(
-                    "auth = \"access-key\" es de s3, no de SSH; usa \"key\", \"password\" o \"agent\""
+                    "auth = \"access-key\" is from s3, not SSH; use \"key\", \"password\" or \"agent\""
                         .to_string(),
                 ));
             }
             AuthMethod::Password => PreparedAuth::Password,
             AuthMethod::Agent => {
                 if self.agent_socket.is_none() {
-                    return Err(ConnectError::Agent(
-                        "no disponible (SSH_AUTH_SOCK sin definir)",
-                    ));
+                    return Err(ConnectError::Agent("unavailable (SSH_AUTH_SOCK not set)"));
                 }
                 PreparedAuth::Agent
             }
             AuthMethod::Key => {
                 let path = spec.key.as_deref().ok_or_else(|| {
                     ConnectError::Config(format!(
-                        "la conexión a {} lleva auth = \"key\" sin `key = ...`",
+                        "the connection to {} has auth = \"key\" without `key = ...`",
                         ep.host
                     ))
                 })?;
@@ -137,25 +135,27 @@ impl SshConnector {
 
         let authed = match prepared {
             PreparedAuth::Password => {
-                // Identificador redactado (host, no la URL) por regla 10.
+                // Redacted identifier (host, not the URL) per rule 10.
                 let s = secret.ok_or_else(|| ConnectError::Secret {
                     conn: ep.host.clone(),
                 })?;
-                // russh copia la password a su propio String; se libera con la
-                // sesión (límite de la API de russh, no queda en logs).
+                // russh copies the password into its own String; freed with
+                // the session (russh API limitation, does not end up in
+                // logs).
                 handle
                     .authenticate_password(user.clone(), s.expose())
                     .await?
             }
             PreparedAuth::Key(key) => {
-                // Fuera de RSA el hash no aplica (None). Con RSA —que solo
-                // llega aquí con `allow_rsa`, ADR 0150— se negocia rsa-sha2.
+                // Outside RSA the hash does not apply (None). With RSA —
+                // which only reaches here with `allow_rsa`, ADR 0150— rsa-sha2
+                // is negotiated.
                 let hash_alg = if key.algorithm().is_rsa() {
                     let hash = rsa_hash(&handle, &ep.host).await?;
                     tracing::warn!(
                         host = %ep.host,
-                        "autenticando con clave RSA (allow_rsa, ADR 0150): \
-                         firma por el camino de RUSTSEC-2023-0071"
+                        "authenticating with an RSA key (allow_rsa, ADR 0150): \
+                         signing through the RUSTSEC-2023-0071 path"
                     );
                     Some(hash)
                 } else {
@@ -181,17 +181,18 @@ impl SshConnector {
         channel.request_subsystem(true, "sftp").await?;
         SftpSession::new(channel.into_stream())
             .await
-            .map_err(|e| ConnectError::Ssh(format!("handshake sftp: {e}")))
+            .map_err(|e| ConnectError::Ssh(format!("sftp handshake: {e}")))
     }
 
-    /// Registra la host key de `host:port` en el store TRAS verificar que su
-    /// fingerprint real coincide con `expected_fingerprint` (el que mostró
-    /// `HostKeyUnknown` y confirmó el usuario). Re-verificación anti-TOCTOU:
-    /// si el host presenta ahora OTRA clave, es
-    /// [`ConnectError::HostKeyMismatch`] y no se registra nada.
+    /// Registers `host:port`'s host key in the store AFTER verifying that
+    /// its real fingerprint matches `expected_fingerprint` (the one
+    /// `HostKeyUnknown` showed and the user confirmed). Anti-TOCTOU
+    /// re-verification: if the host now presents ANOTHER key, it is a
+    /// [`ConnectError::HostKeyMismatch`] and nothing gets registered.
     ///
     /// # Errors
-    /// Si el host no responde, o el fingerprint presentado no coincide.
+    /// If the host does not respond, or the presented fingerprint does not
+    /// match.
     #[tracing::instrument(level = "debug", skip_all, fields(host = %host, port))]
     pub async fn trust_host_key(
         &self,
@@ -203,46 +204,48 @@ impl SshConnector {
         let config = Arc::new(russh::client::Config::default());
         let dial = russh::client::connect(config, (host, port), CaptureHandler { tx }).await;
         let key = match (rx.try_recv(), dial) {
-            // El handler captura la clave y RECHAZA el handshake: el dial
-            // termina en error "esperado" que aquí ya no informa de nada.
+            // The handler captures the key and REJECTS the handshake: the
+            // dial ends in an "expected" error that carries no information
+            // here anymore.
             (Ok(key), _) => key,
-            // Sin clave presentada: el error real es el de red/handshake.
+            // No key presented: the real error is the network/handshake one.
             (Err(_), Err(e)) => return Err(e),
             (Err(_), Ok(_)) => {
                 return Err(ConnectError::Ssh(format!(
-                    "{host}:{port} no presentó host key"
+                    "{host}:{port} did not present a host key"
                 )));
             }
         };
-        let presentada = fingerprint(&key);
-        if presentada != expected_fingerprint {
+        let presented = fingerprint(&key);
+        if presented != expected_fingerprint {
             return Err(ConnectError::HostKeyMismatch {
                 host: host.to_string(),
                 port,
                 algo: algo(&key),
-                fingerprint: presentada,
+                fingerprint: presented,
             });
         }
         let store = self.known_hosts.clone();
         let host = host.to_string();
         tokio::task::spawn_blocking(move || {
-            // El learn de russh solo APPENDEA: si el host ya tiene OTRA clave
-            // registrada, "confiar por encima" dejaría dos entradas en
-            // conflicto y el check en Mismatch perpetuo pese a un trust con
-            // éxito. Fail-closed: que el usuario retire la entrada antigua.
+            // russh's learn only APPENDS: if the host already has ANOTHER
+            // key on record, "trusting on top" would leave two conflicting
+            // entries and the check stuck in a perpetual Mismatch despite a
+            // successful trust. Fail-closed: let the user remove the old
+            // entry.
             match store.check(&host, port, &key)? {
-                HostKeyStatus::Known => Ok(()), // idempotente
+                HostKeyStatus::Known => Ok(()), // idempotent
                 HostKeyStatus::Unknown { .. } => store.learn(&host, port, &key),
-                // La categoría VIAJA como HostKeyMismatch (es el escenario
-                // rotación/MITM para el que existe en la taxonomía); la guía
-                // accionable queda en el log del core.
+                // The category TRAVELS as HostKeyMismatch (it is the
+                // rotation/MITM scenario the taxonomy has it for); the
+                // actionable guidance stays in the core's log.
                 HostKeyStatus::Mismatch { algo, fingerprint } => {
                     tracing::warn!(
                         host = %host,
                         port,
-                        "trust rechazado: {host}:{port} ya tiene otra clave registrada \
-                         (¿rotación?); elimina la entrada antigua del known_hosts antes \
-                         de confiar la nueva"
+                        "trust rejected: {host}:{port} already has another key on record \
+                         (rotation?); remove the old entry from known_hosts before trusting \
+                         the new one"
                     );
                     Err(ConnectError::HostKeyMismatch {
                         host: host.clone(),
@@ -254,37 +257,34 @@ impl SshConnector {
             }
         })
         .await
-        .map_err(|_| ConnectError::KnownHosts("registro interrumpido".into()))?
+        .map_err(|_| ConnectError::KnownHosts("registration interrupted".into()))?
     }
 
-    /// Autentica probando las identidades ed25519 del agente (ADR 0015 E:
-    /// también vía agente, solo ed25519).
+    /// Authenticates by trying the agent's ed25519 identities (ADR 0015 E:
+    /// also via agent, only ed25519).
     async fn authenticate_via_agent(
         &self,
         handle: &mut russh::client::Handle<TofuHandler>,
         user: &str,
     ) -> Result<AuthResult, ConnectError> {
         let Some(sock) = self.agent_socket.as_deref() else {
-            return Err(ConnectError::Agent(
-                "no disponible (SSH_AUTH_SOCK sin definir)",
-            ));
+            return Err(ConnectError::Agent("unavailable (SSH_AUTH_SOCK not set)"));
         };
         #[cfg(not(unix))]
         {
             let _ = (sock, handle, user);
             Err(ConnectError::Agent(
-                "solo se soporta agente por socket unix por ahora",
+                "only a unix-socket agent is supported for now",
             ))
         }
         #[cfg(unix)]
         {
             let mut agent = russh::keys::agent::client::AgentClient::connect_uds(sock)
                 .await
-                .map_err(|_| ConnectError::Agent("no se pudo conectar al socket del agente"))?;
-            let identities = agent
-                .request_identities()
-                .await
-                .map_err(|_| ConnectError::Agent("el agente no respondió al listar identidades"))?;
+                .map_err(|_| ConnectError::Agent("could not connect to the agent's socket"))?;
+            let identities = agent.request_identities().await.map_err(|_| {
+                ConnectError::Agent("the agent did not respond when listing identities")
+            })?;
             let mut last = None;
             for id in identities {
                 let AgentIdentity::PublicKey { key, .. } = id else {
@@ -302,17 +302,15 @@ impl SshConnector {
                 }
                 last = Some(res);
             }
-            // El caller convierte un AuthResult fallido en AuthFailed.
-            last.ok_or(ConnectError::Agent(
-                "el agente no tiene identidades ed25519",
-            ))
+            // The caller turns a failed AuthResult into AuthFailed.
+            last.ok_or(ConnectError::Agent("the agent has no ed25519 identities"))
         }
     }
 }
 
-/// Handler TOFU real (sustituye al `Ok(true)` de los tests de fase 5): la
-/// clave del servidor se verifica ESTRICTA contra el store; desconocida o
-/// cambiada abortan el handshake con el error tipado correspondiente.
+/// Real TOFU handler (replaces the phase-5 tests' `Ok(true)`): the server's
+/// key is STRICTLY verified against the store; unknown or changed aborts
+/// the handshake with the corresponding typed error.
 struct TofuHandler {
     host: String,
     port: u16,
@@ -330,10 +328,10 @@ impl russh::client::Handler for TofuHandler {
         let host = self.host.clone();
         let port = self.port;
         let key = server_public_key.clone();
-        // I/O de fichero fuera del reactor (regla 2).
+        // File I/O off the reactor (rule 2).
         let status = tokio::task::spawn_blocking(move || store.check(&host, port, &key))
             .await
-            .map_err(|_| ConnectError::KnownHosts("verificación interrumpida".into()))??;
+            .map_err(|_| ConnectError::KnownHosts("verification interrupted".into()))??;
         match status {
             HostKeyStatus::Known => Ok(true),
             HostKeyStatus::Unknown { algo, fingerprint } => Err(ConnectError::HostKeyUnknown {
@@ -352,8 +350,9 @@ impl russh::client::Handler for TofuHandler {
     }
 }
 
-/// Handler de `trust_host_key`: captura la clave presentada y RECHAZA el
-/// handshake (solo queríamos verla; jamás se auténtica ni se envía nada).
+/// `trust_host_key`'s handler: captures the presented key and REJECTS the
+/// handshake (we only wanted to see it; nothing is ever authenticated or
+/// sent).
 struct CaptureHandler {
     tx: mpsc::Sender<PublicKey>,
 }
@@ -365,23 +364,26 @@ impl russh::client::Handler for CaptureHandler {
         &mut self,
         server_public_key: &PublicKey,
     ) -> Result<bool, Self::Error> {
-        // Si el receptor murió, el connect ya se abandonó: nada que hacer.
+        // If the receiver died, the connect was already abandoned: nothing
+        // to do.
         let _ = self.tx.send(server_public_key.clone());
         Ok(false)
     }
 }
 
-/// El hash de firma RSA, de lo que el servidor anuncia en `server-sig-algs`.
+/// The RSA signature hash, from what the server announces in
+/// `server-sig-algs`.
 ///
-/// rsa-sha2-512 o -256 si los anuncia. Si solo anuncia `ssh-rsa` (SHA-1), es
-/// un error: el opt-in de la ADR 0150 abre RSA, nunca SHA-1.
+/// rsa-sha2-512 or -256 if announced. If it only announces `ssh-rsa`
+/// (SHA-1), it is an error: ADR 0150's opt-in opens up RSA, never SHA-1.
 ///
-/// El `None` de russh junta tres casos: el servidor no manda la extensión
-/// (RFC 8308 es opcional), la manda sin ningún algoritmo RSA, o llega después
-/// del segundo que russh espera. En los tres se intenta rsa-sha2-256 —lo que
-/// acepta cualquier servidor de la última década— y, si no lo acepta, falla
-/// cerrado como `AuthFailed`. Nunca cae a SHA-1: con `Some(hash)` russh firma
-/// y anuncia exactamente ese hash.
+/// russh's `None` merges three cases: the server does not send the
+/// extension (RFC 8308 is optional), sends it with no RSA algorithm at all,
+/// or it arrives after the second one russh waits for. In all three,
+/// rsa-sha2-256 is tried —what any server from the last decade accepts—
+/// and, if it does not accept it, fails closed as `AuthFailed`. It never
+/// falls back to SHA-1: with `Some(hash)` russh signs and announces exactly
+/// that hash.
 async fn rsa_hash(
     handle: &russh::client::Handle<TofuHandler>,
     host: &str,
@@ -394,37 +396,38 @@ async fn rsa_hash(
         None => {
             tracing::debug!(
                 host,
-                "server-sig-algs sin rsa-sha2 (o sin extensión): se intenta rsa-sha2-256"
+                "server-sig-algs without rsa-sha2 (or no extension): trying rsa-sha2-256"
             );
             Ok(HashAlg::Sha256)
         }
     }
 }
 
-/// Carga la clave privada de cliente (con `~` expandido) y aplica la política
-/// de algoritmos: ed25519 siempre (ADR 0015 E); RSA solo con `allow_rsa`
-/// (ADR 0150), porque firmar con él es el camino de RUSTSEC-2023-0071.
-/// El módulo RSA más pequeño que norte firma, aun con `allow_rsa` (#370).
+/// Loads the client's private key (with `~` expanded) and applies the
+/// algorithm policy: ed25519 always (ADR 0015 E); RSA only with `allow_rsa`
+/// (ADR 0150), because signing with it is the RUSTSEC-2023-0071 path. The
+/// smallest RSA modulus norte will sign with, even with `allow_rsa` (#370).
 ///
-/// 2048 porque es el suelo de RFC 8332 §3 para `rsa-sha2-*`, el que NIST SP
-/// 800-57 dejó cuando retiró 1024 en 2013, y el que OpenSSH impone desde 2017
-/// al generar. Por debajo no es «más débil»: es una clave que nadie debería
-/// seguir usando para autenticarse contra nada.
+/// 2048 because it is RFC 8332 §3's floor for `rsa-sha2-*`, the one NIST SP
+/// 800-57 left after retiring 1024 in 2013, and the one OpenSSH has enforced
+/// when generating since 2017. Below that it is not "weaker": it is a key
+/// nobody should keep using to authenticate against anything.
 ///
-/// **Es un límite aparte del que compra `allow_rsa`, y por eso el opt-in no lo
-/// levanta.** ADR 0150 acepta un riesgo nombrado —el canal lateral de tiempos
-/// de RUSTSEC-2023-0071— que es idéntico con 1024 bits y con 4096. Un módulo
-/// corto es otra cosa, la ADR no la menciona, y quien firmó el opt-in no la
-/// aceptó: se la llevaba en silencio.
+/// **It is a separate limit from what `allow_rsa` buys, and that is why the
+/// opt-in does not lift it.** ADR 0150 accepts one named risk —the
+/// RUSTSEC-2023-0071 timing side channel— which is identical at 1024 bits
+/// and at 4096. A short modulus is a different thing, the ADR does not
+/// mention it, and whoever signed off on the opt-in did not accept it: it
+/// was riding along silently.
 const RSA_MINIMO_BITS: usize = 2048;
 
-/// Los bits del módulo de una clave RSA. `None` si no es RSA o no se puede
-/// mirar.
+/// The bit length of an RSA key's modulus. `None` if it is not RSA or cannot
+/// be read.
 ///
-/// Sale de la longitud en BYTES del módulo, así que redondea hacia arriba
-/// hasta siete bits. Para lo que se usa —comparar contra 2048, que es múltiplo
-/// de 8— eso no cambia ningún veredicto: una clave de 2048 da exactamente 2048
-/// y una de 1024 da exactamente 1024.
+/// Comes from the modulus's length in BYTES, so it rounds up to seven bits.
+/// For what it is used for —comparing against 2048, which is a multiple of
+/// 8— that changes no verdict: a 2048-bit key gives exactly 2048 and a
+/// 1024-bit one gives exactly 1024.
 fn bits_del_modulo(key: &PrivateKey) -> Option<usize> {
     let rsa = key.public_key().key_data().rsa()?;
     Some(rsa.n().as_positive_bytes()?.len() * 8)
@@ -435,11 +438,12 @@ async fn load_client_key(
     passphrase: Option<&Secret>,
     allow_rsa: bool,
 ) -> Result<PrivateKey, ConnectError> {
-    // La passphrase viaja zeroizada hasta el descifrado de russh.
+    // The passphrase travels zeroized up to russh's decryption.
     let pass = passphrase.map(|s| Zeroizing::new(s.expose().to_string()));
     let for_task = path.to_path_buf();
-    // expand_tilde también dentro: sin $HOME, home_dir() cae a getpwuid_r
-    // (NSS puede tocar disco/red) — bloqueante, fuera del reactor (regla 2).
+    // expand_tilde also inside: without $HOME, home_dir() falls back to
+    // getpwuid_r (NSS can touch disk/network) — blocking, off the reactor
+    // (rule 2).
     let (expanded, loaded) = tokio::task::spawn_blocking(move || {
         let expanded = expand_tilde(&for_task);
         let loaded = russh::keys::load_secret_key(&expanded, pass.as_deref().map(String::as_str));
@@ -448,28 +452,29 @@ async fn load_client_key(
     .await
     .map_err(|_| ConnectError::KeyLoad {
         path: path.to_path_buf(),
-        cause: "carga interrumpida".into(),
+        cause: "loading interrupted".into(),
     })?;
     let key = loaded.map_err(|e| ConnectError::KeyLoad {
-        // El error de russh (formato/passphrase) no contiene la passphrase.
+        // russh's error (format/passphrase) does not contain the passphrase.
         path: expanded.clone(),
         cause: e.to_string(),
     })?;
     match key.algorithm() {
         Algorithm::Ed25519 => Ok(key),
         Algorithm::Rsa { .. } if allow_rsa => {
-            // El opt-in abre RSA, no abre CUALQUIER RSA (#370). Ver
-            // `RSA_MINIMO_BITS`: es el límite que la ADR 0150 quiso poner y se
-            // le olvidó escribir.
+            // The opt-in opens up RSA, not ANY RSA (#370). See
+            // `RSA_MINIMO_BITS`: it is the limit ADR 0150 meant to set and
+            // forgot to write down.
             match bits_del_modulo(&key) {
                 Some(bits) if bits < RSA_MINIMO_BITS => Err(ConnectError::RsaTooSmall {
                     path: expanded,
                     bits,
                     minimo: RSA_MINIMO_BITS,
                 }),
-                // Sin poder mirar el módulo no se afirma nada y se deja pasar:
-                // el riesgo que `allow_rsa` ya compró sigue siendo el mismo, y
-                // negarse aquí rompería una clave buena por no saber leerla.
+                // Without being able to read the modulus nothing is
+                // asserted and it is let through: the risk `allow_rsa`
+                // already bought stays the same, and refusing here would
+                // break a good key just for not knowing how to read it.
                 _ => Ok(key),
             }
         }
@@ -480,9 +485,9 @@ async fn load_client_key(
     }
 }
 
-/// Expande un `~` inicial al home del usuario (`key = "~/.ssh/id_ed25519"`
-/// en `connections.toml`). Opera a nivel de componentes de `Path`, sin asumir
-/// UTF-8 en el resto de la ruta (regla 1).
+/// Expands a leading `~` to the user's home (`key = "~/.ssh/id_ed25519"` in
+/// `connections.toml`). Operates at the `Path` component level, without
+/// assuming UTF-8 in the rest of the path (rule 1).
 fn expand_tilde(path: &Path) -> PathBuf {
     match (std::env::home_dir(), path.strip_prefix("~")) {
         (Some(home), Ok(rest)) => home.join(rest),
@@ -490,7 +495,7 @@ fn expand_tilde(path: &Path) -> PathBuf {
     }
 }
 
-/// Usuario efectivo: el de la URL, o el del entorno (como OpenSSH).
+/// Effective user: the URL's, or the environment's (like OpenSSH).
 fn resolve_user(explicit: Option<&str>) -> Result<String, ConnectError> {
     if let Some(u) = explicit {
         return Ok(u.to_string());
@@ -506,12 +511,12 @@ mod tests {
 
     #[test]
     fn expand_tilde_solo_prefijo() {
-        let home = std::env::home_dir().expect("home en el entorno de test");
+        let home = std::env::home_dir().expect("home in the test environment");
         assert_eq!(
             expand_tilde(Path::new("~/.ssh/id_ed25519")),
             home.join(".ssh/id_ed25519")
         );
-        // Sin `~` inicial: intacta (un `~` interior NO se expande).
+        // No leading `~`: unchanged (an interior `~` is NOT expanded).
         assert_eq!(
             expand_tilde(Path::new("/abs/~/x")),
             PathBuf::from("/abs/~/x")

@@ -80,9 +80,10 @@ impl Kind {
             (Kind::Link, Style::Emoji) => "🔗",
             (Kind::Link, Style::Ascii) => "@",
             (Kind::Sheet, Style::Emoji) => "📊",
-            // Los tres con VS16 (U+FE0F): sin él son de presentación de
-            // TEXTO, `unicode-width` los mide a UNA celda y el terminal los
-            // pinta a dos, y la columna se rompe justo en esas filas.
+            // The three with VS16 (U+FE0F): without it they are TEXT
+            // presentation, `unicode-width` measures them at ONE cell and
+            // the terminal paints them at two, and the column breaks
+            // exactly on those rows.
             (Kind::Slides, Style::Emoji) => "📽\u{FE0F}",
             (Kind::Sheet | Kind::Slides, Style::Ascii) => "''",
             (Kind::Rust, Style::Emoji) => "🦀",

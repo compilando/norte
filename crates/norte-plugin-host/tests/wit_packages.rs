@@ -1,21 +1,21 @@
-//! El WIT son TRES paquetes (ADR 0041 decisión 4), y esto vigila que sigan
-//! siéndolo.
+//! The WIT is THREE packages (ADR 0041 decision 4), and this watches that
+//! they stay that way.
 //!
-//! Lo que compra la partición no se ve en ningún test de comportamiento: los
-//! guests de `examples-wasm/` se recompilan siempre contra el WIT actual, así
-//! que la suite entera pasa igual de verde con un paquete que con tres. Lo que
-//! se rompe al volver a juntarlos le pasa a un artefacto `.wasm` que YA está
-//! compilado, fuera de este repo, en la máquina de otra persona: la versión del
-//! paquete viaja dentro del nombre de cada interfaz, así que un bump de
-//! `provider` renombraría `norte:plugin/previewer` y ese previewer dejaría de
-//! instanciar.
+//! What the split buys is not visible in any behavior test: the
+//! `examples-wasm/` guests are always recompiled against the current WIT,
+//! so the whole suite passes just as green with one package as with
+//! three. What breaks by putting them back together happens to a `.wasm`
+//! artifact that is ALREADY compiled, outside this repo, on someone
+//! else's machine: a package's version travels inside the name of each
+//! interface, so a `provider` bump would rename `norte:plugin/previewer`
+//! and that previewer would stop instantiating.
 //!
-//! Y `provider` se va a mover: ADR 0041 decisión 3 dice que sus huecos —copia
-//! en servidor, papelera, atributos, reanudación, cancelación— se tapan cuando
-//! un plugin real los pida. Cada uno de esos es un bump.
+//! And `provider` is going to move: ADR 0041 decision 3 says its gaps —
+//! server-side copy, trash, attributes, resume, cancellation — get filled
+//! in when a real plugin asks for them. Each one of those is a bump.
 //!
-//! Por eso esto mira la ESTRUCTURA y no el comportamiento. Es el único sitio
-//! donde el daño se puede detectar antes de causarlo.
+//! That is why this looks at the STRUCTURE and not the behavior. It is the
+//! only place where the damage can be detected before it is caused.
 
 use std::path::{Path, PathBuf};
 
@@ -27,68 +27,70 @@ fn wit_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("wit")
 }
 
-fn leer(rel: &str) -> String {
+fn read_wit(rel: &str) -> String {
     let p = wit_dir().join(rel);
-    std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("leyendo {}: {e}", p.display()))
+    std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("reading {}: {e}", p.display()))
 }
 
-/// Cada paquete declara su nombre, y son tres distintos.
+/// Every package declares its name, and they are three different ones.
 #[test]
-fn son_tres_paquetes_con_nombres_distintos() {
-    for (fichero, paquete) in [
+fn they_are_three_packages_with_different_names() {
+    for (file, package) in [
         ("norte-plugin.wit", "package norte:plugin@"),
         ("deps/host/host.wit", "package norte:host@"),
         ("deps/provider/provider.wit", "package norte:provider@"),
     ] {
-        let src = leer(fichero);
+        let src = read_wit(file);
         assert!(
-            src.contains(paquete),
-            "{fichero} debe declarar `{paquete}…`; si se fusionó con otro paquete, \
-             un bump de uno vuelve a invalidar los .wasm del otro (ADR 0041 d4)"
+            src.contains(package),
+            "{file} must declare `{package}…`; if it merged with another package, \
+             bumping one invalidates the other's .wasm files again (ADR 0041 d4)"
         );
     }
 }
 
-/// `provider` NO puede volver al paquete compartido. Es la regresión concreta.
+/// `provider` must NOT go back to the shared package. This is the concrete
+/// regression.
 #[test]
-fn provider_no_vuelve_al_paquete_compartido() {
-    let compartido = leer("norte-plugin.wit");
+fn provider_does_not_go_back_to_the_shared_package() {
+    let shared = read_wit("norte-plugin.wit");
     assert!(
-        !compartido.contains("interface provider"),
-        "`interface provider` reapareció en norte:plugin. Cada cambio suyo \
-         renombraría norte:plugin/previewer y tumbaría los previewers ya \
-         compilados de terceros (ADR 0041 d4)"
+        !shared.contains("interface provider"),
+        "`interface provider` reappeared in norte:plugin. Any change to it \
+         would rename norte:plugin/previewer and bring down already-compiled \
+         third-party previewers (ADR 0041 d4)"
     );
     assert!(
-        !compartido.contains("world norte-provider"),
-        "el world `norte-provider` reapareció en norte:plugin"
+        !shared.contains("world norte-provider"),
+        "the `norte-provider` world reappeared in norte:plugin"
     );
 }
 
-/// Las dos puertas del host viven en su propio paquete y NO en el compartido:
-/// las importan los cuatro worlds, así que compartir paquete con cualquiera de
-/// las categorías ata su versión a la de esa categoría.
+/// The host's two gates live in their own package and NOT in the shared
+/// one: all four worlds import them, so sharing a package with any
+/// category ties its version to that category's.
 #[test]
-fn las_puertas_del_host_estan_en_su_paquete() {
-    let host = leer("deps/host/host.wit");
+fn the_host_gates_are_in_their_own_package() {
+    let host = read_wit("deps/host/host.wit");
     for iface in ["interface host-log", "interface host-config"] {
-        assert!(host.contains(iface), "`{iface}` debe vivir en norte:host");
+        assert!(host.contains(iface), "`{iface}` must live in norte:host");
     }
-    let compartido = leer("norte-plugin.wit");
+    let shared = read_wit("norte-plugin.wit");
     for iface in ["interface host-log", "interface host-config"] {
         assert!(
-            !compartido.contains(iface),
-            "`{iface}` reapareció en norte:plugin"
+            !shared.contains(iface),
+            "`{iface}` reappeared in norte:plugin"
         );
     }
 }
 
-/// Toda referencia cruzada entre paquetes va VERSIONADA. Sin la versión, el
-/// resolver no encuentra el paquete —el error real que dio la partición— y el
-/// fallo aparece como un `bindgen!` roto, lejos del WIT que lo causó.
+/// Every cross-package reference is VERSIONED. Without the version, the
+/// resolver does not find the package — the real error the split
+/// produced — and the failure shows up as a broken `bindgen!`, far from
+/// the WIT that caused it.
 #[test]
-fn las_referencias_cruzadas_llevan_version() {
-    for fichero in [
+fn cross_references_carry_a_version() {
+    for file in [
         "norte-plugin.wit",
         "deps/provider/provider.wit",
         "deps/renamer/renamer.wit",
@@ -96,29 +98,29 @@ fn las_referencias_cruzadas_llevan_version() {
         "deps/thumbnail/thumbnail.wit",
         "deps/panel/panel.wit",
     ] {
-        let src = leer(fichero);
-        for (i, linea) in src.lines().enumerate() {
-            let l = linea.trim();
+        let src = read_wit(file);
+        for (i, line) in src.lines().enumerate() {
+            let l = line.trim();
             if !l.starts_with("import norte:") && !l.starts_with("use norte:") {
                 continue;
             }
             assert!(
                 l.contains('@'),
-                "{fichero}:{} referencia otro paquete sin versión: `{l}`",
+                "{file}:{} references another package with no version: `{l}`",
                 i + 1
             );
         }
     }
 }
 
-/// Lo que el host DICE servir es lo que los ficheros `.wit` declaran. Si
-/// alguien sube `norte:plugin` a 0.9.0 y no toca la tabla, el catálogo
-/// listaría como rotos los guests recién compilados — o peor, cargaría los
-/// viejos sin avisar.
+/// What the host SAYS it serves is what the `.wit` files declare. If
+/// someone bumps `norte:plugin` to 0.9.0 and does not touch the table,
+/// the catalog would list freshly compiled guests as broken — or worse,
+/// load the old ones without warning.
 #[test]
 fn served_wit_matches_the_package_files() {
     let mut declared: Vec<(String, String)> = Vec::new();
-    for fichero in [
+    for file in [
         "norte-plugin.wit",
         "deps/host/host.wit",
         "deps/provider/provider.wit",
@@ -128,15 +130,15 @@ fn served_wit_matches_the_package_files() {
         "deps/thumbnail/thumbnail.wit",
         "deps/panel/panel.wit",
     ] {
-        let src = leer(fichero);
-        let linea = src
+        let src = read_wit(file);
+        let line = src
             .lines()
             .map(str::trim)
             .find(|l| l.starts_with("package norte:"))
-            .unwrap_or_else(|| panic!("{fichero} no declara `package norte:…`"));
-        let cuerpo = linea.trim_start_matches("package ").trim_end_matches(';');
-        let (paquete, version) = cuerpo.split_once('@').expect("versión");
-        declared.push((paquete.to_owned(), version.to_owned()));
+            .unwrap_or_else(|| panic!("{file} does not declare `package norte:…`"));
+        let body = line.trim_start_matches("package ").trim_end_matches(';');
+        let (package, version) = body.split_once('@').expect("version");
+        declared.push((package.to_owned(), version.to_owned()));
     }
     declared.sort();
     let mut served: Vec<(String, String)> = SERVED_WIT
@@ -146,18 +148,18 @@ fn served_wit_matches_the_package_files() {
     served.sort();
     assert_eq!(
         served, declared,
-        "SERVED_WIT no es lo que los .wit declaran"
+        "SERVED_WIT is not what the .wit files declare"
     );
 }
 
-/// Los imports de un guest REAL nombran los paquetes servidos, y un guest
-/// recién compilado no es un mismatch.
+/// A REAL guest's imports name the served packages, and a freshly
+/// compiled guest is not a mismatch.
 #[test]
 fn wit_imports_of_a_real_guest_name_the_served_versions() {
     let Some(wasm) = support::build_guest("previewer-demo") else {
         return;
     };
-    let bytes = std::fs::read(wasm).expect("lee el guest");
+    let bytes = std::fs::read(wasm).expect("reads the guest");
     let imports = wit_packages(&bytes);
     assert!(
         imports.contains(&("norte:plugin".to_owned(), "0.10.0".to_owned())),
@@ -170,39 +172,38 @@ fn wit_imports_of_a_real_guest_name_the_served_versions() {
     assert!(wit_mismatch(&imports).is_none());
 }
 
-/// Un guest compilado contra otra versión del paquete es un mismatch con las
-/// DOS versiones en la mano: la suya y la servida. Se fabrica reescribiendo
-/// `@0.10.0` por `@0.70.0` en los bytes del guest real — misma longitud, así
-/// que las secciones siguen siendo válidas y el lector las recorre.
+/// A guest compiled against another version of the package is a mismatch
+/// with BOTH versions in hand: its own and the served one. Built by
+/// rewriting `@0.10.0` to `@0.70.0` in the real guest's bytes — same
+/// length, so the sections stay valid and the reader walks them.
 #[test]
 fn a_guest_built_against_another_version_is_a_mismatch() {
     let Some(wasm) = support::build_guest("previewer-demo") else {
         return;
     };
-    let bytes = std::fs::read(wasm).expect("lee el guest");
-    // El lado de los EXPORTS (`norte:plugin`). `0.70.0`: una versión que el
-    // host no sirve para ningún paquete, para que confundir paquete y
-    // versión no pase por casualidad.
-    let viejo = support::rewrite_bytes(&bytes, b"@0.10.0", b"@0.70.0");
-    let imports = wit_packages(&viejo);
+    let bytes = std::fs::read(wasm).expect("reads the guest");
+    // The EXPORTS side (`norte:plugin`). `0.70.0`: a version the host does
+    // not serve for any package, so confusing package and version does
+    // not happen by chance.
+    let old = support::rewrite_bytes(&bytes, b"@0.10.0", b"@0.70.0");
+    let imports = wit_packages(&old);
     let m = wit_mismatch(&imports).expect("mismatch");
     assert_eq!(m.package, "norte:plugin");
     assert_eq!(m.built_against, "0.70.0");
     assert_eq!(m.served, "0.10.0");
 
-    // Y el lado de los IMPORTS (`norte:host`): cualquiera de los dos puede
-    // estar desfasado.
-    let viejo = support::rewrite_bytes(&bytes, b"@0.1.0", b"@0.0.9");
-    let imports = wit_packages(&viejo);
-    let m = wit_mismatch(&imports).expect("mismatch en imports");
+    // And the IMPORTS side (`norte:host`): either one can be mismatched.
+    let old = support::rewrite_bytes(&bytes, b"@0.1.0", b"@0.0.9");
+    let imports = wit_packages(&old);
+    let m = wit_mismatch(&imports).expect("mismatch in imports");
     assert_eq!(m.package, "norte:host");
     assert_eq!(m.built_against, "0.0.9");
     assert_eq!(m.served, "0.1.0");
 }
 
-/// Bytes que no son un componente no tienen imports: ni error ni pánico, que
-/// es lo que el catálogo necesita para que un `plugin.wasm` basura siga
-/// siendo «sin binario» y no «catálogo caído».
+/// Bytes that are not a component have no imports: neither an error nor a
+/// panic, which is what the catalog needs so that a garbage `plugin.wasm`
+/// stays "without a binary" and not "catalog down".
 #[test]
 fn bytes_that_are_not_a_component_have_no_imports() {
     assert!(wit_packages(b"\0asm\x01\0\0\0").is_empty());
@@ -211,17 +212,18 @@ fn bytes_that_are_not_a_component_have_no_imports() {
     assert!(wit_mismatch(&[]).is_none());
 }
 
-/// El paquete compartido importa del de host, nunca al revés: `norte:host` es
-/// la hoja del grafo. Un ciclo aquí no lo detecta nadie hasta que el resolver
-/// se queja, y su mensaje no dice cuál de los dos lados sobra.
+/// The shared package imports from the host one, never the other way
+/// around: `norte:host` is the graph's leaf. A cycle here goes undetected
+/// by anyone until the resolver complains, and its message does not say
+/// which of the two sides is the extra one.
 #[test]
-fn host_no_depende_de_nadie() {
-    let host = leer("deps/host/host.wit");
-    for linea in host.lines() {
-        let l = linea.trim();
+fn host_depends_on_nobody() {
+    let host = read_wit("deps/host/host.wit");
+    for line in host.lines() {
+        let l = line.trim();
         assert!(
             !(l.starts_with("import norte:") || l.starts_with("use norte:")),
-            "norte:host debe ser la hoja del grafo, y depende de algo: `{l}`"
+            "norte:host must be the graph's leaf, and it depends on something: `{l}`"
         );
     }
 }

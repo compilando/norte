@@ -1,7 +1,7 @@
-//! Render ratatui del estado (`app`): cero lógica de negocio — pinta lo que
-//! hay. El marcado de nombres hostiles sigue la spec §6 (lossy y MARCADO). Los
-//! colores salen del tema resuelto (`app.theme`, ADR 0020): un frontend sin
-//! tema ve el fallback monocromo de M1.
+//! Ratatui render of the state (`app`): zero business logic — it paints what
+//! is there. Marking hostile names follows spec §6 (lossy and MARKED).
+//! Colors come from the resolved theme (`app.theme`, ADR 0020): a frontend
+//! with no theme sees M1's monochrome fallback.
 
 use norte_theme::Role;
 use ratatui::Frame;
@@ -26,8 +26,8 @@ mod status;
 mod sync;
 mod text;
 
-// `tests/`, `mouse.rs` y `event_loop.rs` nombran todo esto por `ui::..`, asi
-// que es la API de este modulo y no baja a `pub(crate)`.
+// `tests/`, `mouse.rs` and `event_loop.rs` name all of this via `ui::..`, so
+// it is this module's API and does not drop to `pub(crate)`.
 pub use chrome::{
     KeyZone, MenuHit, MenuZone, PanelZone, TabAction, TabZone, key_zones, menu_zones, panel_zones,
     tab_zones,
@@ -53,11 +53,11 @@ pub use status::{SessionZone, StatusItemZone, session_zone, status_item_zones};
 pub use text::fit_hint_groups;
 
 pub(crate) use chrome::{TARGET_BADGE, TabStrip, draw_tab_strip};
-// Solo para los tests, y por eso va con su `cfg`: fuera de ellos la barra la
-// pinta este módulo y nadie más necesita derivar sus botones. Sale desde #329
-// porque los tests de `app::layout` comprueban que el BOTÓN dice lo mismo que
-// la pantalla, y esa pareja —el estado del árbol y lo que la barra deriva de
-// él— es exactamente lo que se desincronizaba.
+// Only for tests, which is why it carries its own `cfg`: outside them this
+// module paints the bar and nobody else needs to derive its buttons. It
+// comes out since #329 because `app::layout`'s tests check that the BUTTON
+// says the same thing the screen does, and that pair — the tree's state and
+// what the bar derives from it — is exactly what used to drift out of sync.
 #[cfg(test)]
 pub(crate) use chrome::panel_buttons;
 use chrome::{draw_key_bar, draw_menu, draw_panel_bar};
@@ -84,25 +84,26 @@ use pickers::{
 use status::draw_status;
 use sync::draw_sync;
 
-/// Badge de nombre hostil: PREFIJO en columna fija (al final moriría en el
-/// truncado por ancho de ratatui y el nombre se pintaría "limpio") y en
-/// ASCII (`⚠` es ambiguous-width: 2 celdas en muchos terminales). Va
-/// estilado (rol `hostile-badge`) — fuera de banda: un archivo llamado "! x"
-/// no lo imita. EXCEPCIÓN documentada: los popups de navegación llevan el
-/// badge in-band dentro del display del item (como los títulos de modal);
-/// un favorito llamado "! x" puede imitarlo — superficie de solo-lectura
-/// propia del usuario, riesgo aceptado.
-/// `pub` desde S4 (#135): el binario (`main.rs`, otra crate) compone la línea
-/// `msg-shell-remote` con la ruta ya saneada, y un literal `"!"` copiado allí
-/// sería un segundo badge que puede desincronizarse de este.
+/// Hostile-name badge: a PREFIX in a fixed column (at the end it would die
+/// in ratatui's width truncation and the name would paint "clean") and in
+/// ASCII (`⚠` is ambiguous-width: 2 cells in many terminals). Styled (role
+/// `hostile-badge`) — out of band: a file called "! x" cannot imitate it.
+/// DOCUMENTED EXCEPTION: the navigation popups carry the badge in-band
+/// inside the item's display (like modal titles); a favorite called "! x"
+/// can imitate it — a read-only surface the user owns, accepted risk.
+/// `pub` since S4 (#135): the binary (`main.rs`, another crate) composes the
+/// `msg-shell-remote` line with the already-sanitized path, and a copied `"!"`
+/// literal there would be a second badge that can drift out of sync with
+/// this one.
 pub const HOSTILE_BADGE: &str = "!";
 
-/// Estilo BASE del tema: fondo de [`Role::Background`] más el frente de
-/// [`Role::Regular`]. Es lo que hace que un span SIN `fg` propio
-/// (`Span::raw`/`Line::raw`, o un `Modifier::DIM` a secas) herede el frente
-/// del TEMA y no el del TERMINAL — con un tema claro en un terminal oscuro
-/// eso último pinta texto casi del color del fondo. Un tema sin `background`
-/// no fija frente base: se queda con el del terminal, que es el que le pega.
+/// The theme's BASE style: [`Role::Background`]'s background plus
+/// [`Role::Regular`]'s foreground. This is what makes a span with NO
+/// foreground of its own (`Span::raw`/`Line::raw`, or a bare
+/// `Modifier::DIM`) inherit the THEME's foreground and not the TERMINAL's —
+/// with a light theme on a dark terminal the latter paints text nearly the
+/// color of the background. A theme with no `background` sets no base
+/// foreground: it keeps the terminal's, which is the one that clashes.
 fn base_style(theme: &TuiTheme) -> ratatui::style::Style {
     let base = theme.role(Role::Background);
     if base.bg.is_some() {
@@ -112,30 +113,32 @@ fn base_style(theme: &TuiTheme) -> ratatui::style::Style {
     }
 }
 
-/// `Clear` + repintado de la base del tema sobre `area`: el widget `Clear` de
-/// ratatui deja las celdas en el estilo POR DEFECTO (frente y fondo del
-/// terminal), así que un overlay que solo hace `Clear` pierde el fondo Y el
-/// frente del tema, y su texto sin `fg` vuelve a caer al del terminal.
+/// `Clear` + repaint the theme's base over `area`: ratatui's `Clear` widget
+/// leaves the cells in the DEFAULT style (the terminal's foreground and
+/// background), so an overlay that only does `Clear` loses the theme's
+/// background AND foreground, and its text with no `fg` falls back to the
+/// terminal's.
 fn clear_themed(frame: &mut Frame<'_>, area: Rect, theme: &TuiTheme) {
     frame.render_widget(ratatui::widgets::Clear, area);
     frame.render_widget(Block::default().style(base_style(theme)), area);
 }
 
-/// Si el panel `i` lleva la marca de DESTINO.
+/// Whether panel `i` carries the DESTINATION mark.
 ///
-/// Dos preguntas: quién tiene el rol, y si con estos paneles la marca dice
-/// algo. La segunda la contesta el crate compartido, que es donde la ventana
-/// la contestaba por su cuenta y con otra respuesta (ADR 0077): con dos
-/// paneles el destino es «el otro» y una marca que sale siempre deja de
-/// leerse; a partir de tres, una copia hacia el que el motor desempate solo
-/// es pérdida de datos silenciosa (ADR 0058 D7).
-fn marca_destino(app: &App, i: usize) -> bool {
+/// Two questions: who has the role, and whether with these panels the mark
+/// says anything. The second is answered by the shared crate, which is
+/// where the window used to answer it on its own and with a different
+/// answer (ADR 0077): with two panels the destination is "the other one"
+/// and a mark that always shows stops being read; from three on, a copy
+/// toward whichever one the engine tiebreaks is silent data loss (ADR 0058
+/// D7).
+fn destination_mark(app: &App, i: usize) -> bool {
     norte_frontend::layout::target_worth_marking(app.panes.len()) && app.target_index() == Some(i)
 }
 
-/// El pie de un listado (spec 2026-09-10), o `None` con `[ui] pane_footer`
-/// apagado. Lo redacta el crate compartido; aquí solo se juntan las cuentas
-/// del pane con el espacio libre de su volumen (de la cache de `App`).
+/// A listing's footer (spec 2026-09-10), or `None` with `[ui] pane_footer`
+/// off. It is drafted by the shared crate; here only the pane's counts are
+/// joined with its volume's free space (from `App`'s cache).
 fn pane_footer(app: &App, pane: &crate::app::Pane, width: u16) -> Option<String> {
     if !app.chrome.pane_footer() {
         return None;
@@ -147,8 +150,8 @@ fn pane_footer(app: &App, pane: &crate::app::Pane, width: u16) -> Option<String>
         dirs: pane.marked_dirs(),
     };
     let free = norte_frontend::space::free_for(pane.dir(), &app.volumes);
-    // Lo que el borde deja: las dos esquinas y un espacio a cada lado. Los
-    // tramos que no caben se caen por prioridad, no por el medio.
+    // What the border leaves: the two corners and one space on each side.
+    // Segments that do not fit drop by priority, not from the middle.
     let room = usize::from(width.saturating_sub(4));
     Some(norte_frontend::footer::fit(
         norte_frontend::footer::segments(counts, marked, free, norte_i18n::active()),
@@ -156,15 +159,15 @@ fn pane_footer(app: &App, pane: &crate::app::Pane, width: u16) -> Option<String>
     ))
 }
 
-/// El cuerpo del frame: los dos panes —o el panel que los sustituye—, la
-/// franja de tareas y la barra de estado.
+/// The frame's body: the two panes — or the panel that replaces them —, the
+/// task strip and the status bar.
 ///
-/// Aparte de [`draw`] porque un reparto, dos ramas de sustitución y tres
-/// pintados no caben en una función que además monta todos los overlays.
-/// Las dos franjas de abajo del cuerpo —tareas y estado— del reparto, con su
-/// respaldo cuando el árbol no las coloca. El respaldo del estado va al
-/// final del CUERPO, no del frame: la barra de teclas se reserva la última
-/// fila (spec 2026-09-10).
+/// Separate from [`draw`] because a layout pass, two replacement branches
+/// and three paint calls do not fit in a function that also assembles every
+/// overlay. The body's two bottom strips — tasks and status — come from the
+/// layout pass, with their fallback for when the tree does not place them.
+/// The status fallback goes at the end of the BODY, not the frame: the key
+/// bar reserves the last row (spec 2026-09-10).
 fn bottom_strips(res: &norte_frontend::layout::Resolved, body: Rect) -> (Rect, Rect) {
     let tasks_area = slot_rect(res, crate::panel::SLOT_TASKS).unwrap_or(Rect {
         x: body.x,
@@ -182,34 +185,33 @@ fn bottom_strips(res: &norte_frontend::layout::Resolved, body: Rect) -> (Rect, R
 }
 
 fn draw_body(frame: &mut Frame<'_>, app: &App) {
-    // UN reparto por frame: de él salen el cuerpo, los dos panes, la
-    // franja de tareas y la barra de estado.
+    // ONE layout pass per frame: the body, the two panes, the task strip and
+    // the status bar all come out of it.
     let res = resolved_frame(app, frame.area());
     let body = body_rect(&res, &app.layout).unwrap_or_else(|| chrome_body(app, frame.area()));
     let (tasks_area, status_area) = bottom_strips(&res, body);
     let cols = pane_cols(&res, &app.layout);
-    // #108 L5: `now` de las celdas de tiempo relativo — UNA lectura por
-    // frame; los tests lo fijan (`App::render_now_ms`) para snapshots
-    // estables.
+    // #108 L5: relative-time cells' `now` — ONE read per frame; tests pin it
+    // (`App::render_now_ms`) for stable snapshots.
     let now_ms = app.now_ms();
 
-    // El panel de diferencias ocupa el sitio de los DOS panes: una fila
-    // tiene dos caras y un veredicto en medio, así que no cabe en media
-    // pantalla. La franja de tasks y la barra se quedan debajo, aunque la
-    // comparación no entre en el `TaskBoard` (igual que la búsqueda viva:
-    // su progreso lo pinta el pie del propio panel) — lo que se ve ahí
-    // debajo son las OTRAS tasks, que siguen corriendo.
+    // The differences panel takes the spot of BOTH panes: a row has two
+    // sides and a verdict in between, so it does not fit in half the
+    // screen. The tasks strip and the bar stay below, even though the
+    // comparison does not go into the `TaskBoard` (same as a live search:
+    // its progress is painted by the panel's own footer) — what is seen
+    // below there are the OTHER tasks, still running.
     if let Some(view) = &app.sync {
-        // Encima del de diferencias, que sigue vivo detrás con sus marcas:
-        // el plan es lo que hay que mirar mientras se decide, y volver a
-        // las filas es cerrar el plan.
+        // Over the differences one, which stays alive behind it with its
+        // marks: the plan is what has to be looked at while it is decided,
+        // and going back to the rows closes the plan.
         draw_sync(frame, body, view, &app.theme);
     } else if let Some(view) = &app.compare {
         draw_compare(frame, body, view, &app.theme, &app.compare_size_hints);
     } else {
         for (i, pane) in app.panes.iter().enumerate() {
-            // Un pane que el reparto no colocó no se pinta: el `Split`
-            // colapsó y su sitio lo ocupa entero el otro.
+            // A pane the layout pass did not place is not painted: the
+            // `Split` collapsed and the other one takes its whole spot.
             let Some(rect) = cols.get(i).copied() else {
                 continue;
             };
@@ -221,15 +223,16 @@ fn draw_body(frame: &mut Frame<'_>, app: &App) {
                 &app.theme,
                 now_ms,
                 &app.columns,
-                // #117 tarea 2: el catálogo cacheado del scheme del pane (hints
-                // y cabeceras); sin él se pinta con defaults, jamás se espera.
+                // #117 task 2: the pane's scheme's cached catalogue (hints
+                // and headers); without it it paints with defaults, never
+                // waits.
                 app.attr_catalog(pane.dir().scheme()),
                 tab_strip_for(app, i).as_ref(),
-                // La cuenta la decide el crate compartido (ADR 0077).
-                marca_destino(app, i),
-                // La espera, solo si es de ESTE panel y ya pasa del umbral: un
-                // trabajo de sesión no puede poner a girar una cabecera a la
-                // que no le está pasando nada.
+                // The count is decided by the shared crate (ADR 0077).
+                destination_mark(app, i),
+                // The wait, only if it is THIS panel's and already past the
+                // threshold: a session job must not set a header spinning
+                // over something that is not happening to it.
                 app.busy.as_ref().filter(|b| b.visible() && b.affects(i)),
                 pane_footer(app, pane, rect.width).as_deref(),
                 app.chrome.dir_indicator(),
@@ -237,12 +240,12 @@ fn draw_body(frame: &mut Frame<'_>, app: &App) {
             );
         }
     }
-    draw_laterales(frame, &res, app, tasks_area, status_area);
-    // Las tiras de los grupos de paneles (ADR 0134), encima de la fila que
-    // `placed_of_kind` les reservó.
+    draw_side_panels(frame, &res, app, tasks_area, status_area);
+    // The panel-group strips (ADR 0134), over the row `placed_of_kind`
+    // reserved for them.
     chrome::draw_tiras_de_paneles(frame, app);
-    // Mover un panel (ADR 0138): la parte donde caería, marcada con el
-    // borde del foco, como el velo de la ventana.
+    // Moving a panel (ADR 0138): the spot it would land on, marked with the
+    // focus border, like the window's veil.
     if let Some(r) = app.mouse.move_target() {
         frame.render_widget(
             Block::default()
@@ -254,21 +257,22 @@ fn draw_body(frame: &mut Frame<'_>, app: &App) {
     }
 }
 
-/// Los paneles LATERALES, que salen del mismo reparto que los listados.
+/// The SIDE panels, which come out of the same layout pass as the listings.
 ///
-/// Extraídos de [`draw_body`] cuando el mapa de disco la pasó de cien líneas.
-/// Son un grupo homogéneo —cada uno pregunta al reparto si su kind se colocó y
-/// se pinta si sí—, así que salen juntos y el orden se conserva: van DESPUÉS de
-/// los listados y antes del cromo de abajo.
-fn draw_laterales(
+/// Pulled out of [`draw_body`] once the disk map pushed it past a hundred
+/// lines. They are a homogeneous group — each one asks the layout pass
+/// whether its kind was placed and paints if so — so they come out together
+/// and the order is kept: they go AFTER the listings and before the chrome
+/// below.
+fn draw_side_panels(
     frame: &mut Frame<'_>,
     res: &norte_frontend::layout::Resolved,
     app: &App,
     tasks_area: Rect,
     status_area: Rect,
 ) {
-    // Si el hueco no se colocó —cerrado, o colapsado por falta de sitio— aquí
-    // no hay nada que hacer.
+    // If the slot was not placed — closed, or collapsed for lack of room —
+    // there is nothing to do here.
     if let Some((id, rect)) = placed_of_kind(res, &app.layout, "places")
         && let Some(state) = app.panes.places(id)
     {
@@ -302,8 +306,9 @@ fn draw_laterales(
             app.key_owner() == crate::app::KeyOwner::Processes,
         );
     }
-    // El registro no lleva estado POR HUECO —hay uno, y su nivel y su filtro
-    // son de la sesión— así que basta el rectángulo donde cayó.
+    // The log carries no state PER SLOT — there is one, and its level and
+    // its filter belong to the session — so the rectangle it landed in is
+    // enough.
     if let Some((_, rect)) = placed_of_kind(res, &app.layout, crate::logview::KIND) {
         draw_log(
             frame,
@@ -312,8 +317,8 @@ fn draw_laterales(
             app.key_owner() == crate::app::KeyOwner::Log,
         );
     }
-    // El terminal (#362): hay uno y su estado es de la sesión, así que basta
-    // el rectángulo donde cayó, igual que el registro.
+    // The terminal (#362): there is one and its state belongs to the
+    // session, so the rectangle it landed in is enough, same as the log.
     if let Some((_, rect)) = placed_of_kind(res, &app.layout, crate::termpanel::KIND) {
         draw_terminal(
             frame,
@@ -358,39 +363,39 @@ fn draw_laterales(
     if let Some((id, rect)) = placed_of_kind(res, &app.layout, crate::metadata::KIND)
         && let Some(e) = app.panes.metadata(id)
     {
-        // Sin borde de foco NUNCA: la hoja no toma el teclado, y un borde
-        // resaltado sobre un panel que no lee ninguna tecla era la mitad
-        // visible del control que no hacía lo que decía (#243).
+        // NEVER a focus border: the sheet does not take the keyboard, and a
+        // highlighted border over a panel that reads no key was the visible
+        // half of the control that did not do what it said (#243).
         //
-        // El título dice A QUÉ LISTADO sigue: con dos abiertos, «Detalles» a
-        // secas no dice de qué son los detalles.
-        let sigue = crate::metadata::follows(app, res);
-        draw_metadata(frame, rect, e.as_ref(), sigue.as_ref(), app, false);
+        // The title says WHICH LISTING it follows: with two open, a bare
+        // "Details" does not say whose details they are.
+        let follows = crate::metadata::follows(app, res);
+        draw_metadata(frame, rect, e.as_ref(), follows.as_ref(), app, false);
     }
-    // El panel de un PLUGIN (fase 3) se resuelve por PREFIJO: su kind no se
-    // conoce al compilar, así que no pasa por `placed_of_kind`.
+    // A PLUGIN's panel (phase 3) is resolved by PREFIX: its kind is not
+    // known at compile time, so it does not go through `placed_of_kind`.
     if let Some(id) = app.panel_slot()
         && let Some(rect) = geometry::slot_rect(res, id)
     {
         let rect = geometry::contenido_de_hueco(&app.layout, id, rect);
-        let con_teclado = app.key_owner() == crate::app::KeyOwner::Panel;
-        draw_plugin_panel(frame, rect, app, id, con_teclado);
+        let has_keyboard = app.key_owner() == crate::app::KeyOwner::Panel;
+        draw_plugin_panel(frame, rect, app, id, has_keyboard);
     }
     draw_tasks(frame, tasks_area, app);
     draw_status(frame, status_area, app);
 }
 
-/// El pie con el que se pinta el GESTOR de extensiones, o `None` cuando lo
-/// que se ve es la caja de ajustes estrecha.
+/// The footer the extension MANAGER paints with, or `None` when what is
+/// seen is the narrow settings box.
 ///
-/// Con ficha (ADR 0104) los ajustes van DENTRO del gestor, con el pie del
-/// panel de ajustes; en un terminal estrecho la ficha no cabe y los ajustes
-/// tienen su caja, como antes. La ficha hospeda los ajustes solo de la
-/// extensión ELEGIDA: un panel de otra —o de una que ya no está en la
-/// lista— tiene su caja.
+/// With a tab (ADR 0104) the settings go INSIDE the manager, with the
+/// settings panel's footer; on a narrow terminal the tab does not fit and
+/// the settings have their own box, as before. The tab hosts the settings
+/// only for the CHOSEN extension: a panel from another one — or from one no
+/// longer in the list — has its own box.
 ///
-/// Una función porque la decisión la toman DOS: el pintor y el ratón, que
-/// mide sus zonas contra lo que se pintó.
+/// One function because the decision is made by TWO: the painter and the
+/// mouse, which measures its zones against what was painted.
 pub(crate) fn extensions_footer<'a>(
     app: &'a App,
     mgr: &crate::app::ExtensionManager,
@@ -399,56 +404,58 @@ pub(crate) fn extensions_footer<'a>(
     let Some(panel) = &mgr.config else {
         return Some(&app.dialog_hints.extensions);
     };
-    let ancho_util = frame_width
+    let usable_width = frame_width
         .saturating_sub(6)
         .clamp(24, 120)
         .saturating_sub(2);
-    let en_ficha = ancho_util >= EXTENSIONS_WIDE_MIN
+    let in_tab = usable_width >= EXTENSIONS_WIDE_MIN
         && mgr
             .plugins
             .get(mgr.cursor)
             .is_some_and(|p| panel.plugin_id == p.id);
-    en_ficha.then_some(app.dialog_hints.plugin_config.as_str())
+    in_tab.then_some(app.dialog_hints.plugin_config.as_str())
 }
 
-/// Pinta el frame completo: panes (o viewer) + panel de tasks + barra de
-/// estado + modal por encima.
+/// Paints the whole frame: panes (or viewer) + tasks panel + status bar +
+/// modal on top.
 pub fn draw(frame: &mut Frame<'_>, app: &App) {
-    // Fondo BASE del tema (ADR 0020): se pinta primero; los estilos de texto
-    // (solo fg) lo conservan. Sin `background` en el tema = fondo del terminal.
+    // The theme's BASE background (ADR 0020): painted first; text styles
+    // (fg only) keep it. No `background` in the theme = the terminal's
+    // background.
     //
-    // El FRENTE de `Regular` va en la misma base: un span sin `fg` propio
-    // (`Span::raw`/`Line::raw`, o un `Modifier::DIM` a secas como el de las
-    // celdas de columna y la cabecera) hereda el frente por defecto del
-    // TERMINAL, que no tiene por qué pegar con el fondo del TEMA — con un
-    // tema claro en un terminal oscuro salía texto casi del color del fondo
-    // (Tamaño/Fecha/Tipo, la cabecera de columnas y los cuerpos de los
-    // overlays, invisibles). Pintarlo aquí lo arregla para TODO el frame de
-    // una vez, sin tocar cada span: quien quiera otro color sigue fijando el
-    // suyo. Un tema sin `background` tampoco pinta frente base (se queda con
-    // el del terminal, que es el que hace juego).
+    // `Regular`'s FOREGROUND goes on the same base: a span with no
+    // foreground of its own (`Span::raw`/`Line::raw`, or a bare
+    // `Modifier::DIM` like the column cells' and the header's) inherits the
+    // TERMINAL's default foreground, which need not match the THEME's
+    // background — with a light theme on a dark terminal that produced text
+    // nearly the color of the background (Size/Date/Type, the column header
+    // and the overlays' bodies, invisible). Painting it here fixes it for
+    // the WHOLE frame at once, with no need to touch every span: whoever
+    // wants a different color still sets their own. A theme with no
+    // `background` also paints no base foreground (it keeps the terminal's,
+    // which is the one that matches).
     frame.render_widget(Block::default().style(base_style(&app.theme)), frame.area());
-    // El viewer sustituye a los panes, NUNCA a los overlays: antes este
-    // brazo hacía `return` y CUALQUIER overlay abierto con el viewer
-    // encima quedaba invisible aunque el run loop ya le hubiera dado la
-    // tecla (su brazo va ANTES del viewer en la cadena) — la ayuda (F1),
-    // el selector de tema, los ajustes, la palette y hasta un modal
-    // asíncrono de aprobación se comían el teclado sin pintar un píxel:
-    // el viewer parecía colgado y F1 "dejaba de funcionar". Los píxeles
-    // deben decir quién manda (mismo criterio que el modal pintado el
-    // último, más abajo).
+    // The viewer replaces the panes, NEVER the overlays: this arm used to
+    // `return` and ANY overlay open with the viewer over it became
+    // invisible even though the run loop had already given it the key (its
+    // arm goes BEFORE the viewer in the chain) — help (F1), the theme
+    // selector, settings, the palette and even an async approval modal ate
+    // the keyboard without painting a single pixel: the viewer looked hung
+    // and F1 "stopped working". The pixels must say who is in charge (same
+    // criterion as the modal painted last, further below).
     if let Some(viewer) = &app.viewer {
         draw_viewer(frame, viewer, app);
     } else {
         draw_body(frame, app);
     }
-    // La barra se pinta si está FIJADA (aunque el menú esté cerrado: para eso
-    // está, para que se vea que hay un menú) o si el menú está abierto.
+    // The bar is painted if it is PINNED (even with the menu closed: that is
+    // what it is for, so it shows there is a menu) or if the menu is open.
     if app.menu_bar || app.menu.is_some() {
         draw_menu(frame, app);
     }
-    // #324: y la fila de paneles debajo. Después del cuerpo por lo mismo que
-    // el menú: es cromo, y el cuerpo ya se repartió el sitio que le queda.
+    // #324: and the panel row below it. After the body for the same reason
+    // as the menu: it is chrome, and the body has already been given the
+    // spot left for it.
     draw_panel_bar(frame, app);
     if let Some(help) = &app.help {
         draw_help(
@@ -465,16 +472,16 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
     if let Some(p) = &app.columns_picker {
         draw_columns_picker(frame, p, &app.theme, &app.dialog_hints.columns);
     }
-    // Fase A: el selector de disposiciones, con el mismo allowlist de teclas
-    // que el de temas (`ALLOW_PICKER`) y por eso el mismo hint.
+    // Phase A: the layouts selector, with the same key allowlist as the
+    // theme one (`ALLOW_PICKER`) and hence the same hint.
     if let Some(p) = &app.profile_picker {
         draw_profile_picker(frame, p, &app.theme, &app.dialog_hints.picker);
     }
     if let Some(p) = &app.layout_picker {
         draw_layout_picker(frame, p, &app.theme, &app.dialog_hints.picker, &app.kinds);
     }
-    // #140: el selector de conexiones, mismo allowlist y mismo hint que los
-    // otros dos — es una lista con cursor que no muta nada.
+    // #140: the connections selector, same allowlist and same hint as the
+    // other two — it is a list with a cursor that mutates nothing.
     if let Some(p) = &app.connections_picker {
         draw_connections_picker(frame, p, &app.theme, &app.dialog_hints.picker);
     }
@@ -502,18 +509,19 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
     if let Some(palette) = &app.palette {
         draw_palette(frame, palette, &app.theme);
     }
-    // «Ir a cualquier sitio» (fase 6) va con la paleta, que es su hermana:
-    // encima del listado, debajo del asistente y de un modal.
+    // "Go anywhere" (phase 6) goes with the palette, which is its sibling:
+    // over the listing, under the wizard and a modal.
     if let Some(goto) = &app.goto {
         draw_goto(frame, goto, &app.theme);
     }
-    // El asistente de primer arranque (spec 2026-09-10): encima de la
-    // paleta y de los ajustes, debajo de un modal, como el resto de overlays
-    // que no son una pregunta de seguridad.
-    // La pantalla de arranque va DEBAJO del asistente y encima de todo lo
-    // demás: si los dos estuvieran puestos, el que pregunta algo manda. En la
-    // práctica no coinciden —la puerta del splash cede ante el asistente—,
-    // pero el orden lo dice aquí y no en una invariante que haya que recordar.
+    // The first-run wizard (spec 2026-09-10): over the palette and the
+    // settings, under a modal, like the rest of the overlays that are not a
+    // security question.
+    // The splash screen goes UNDER the wizard and over everything else: if
+    // both were up, whichever one asks something rules. In practice they do
+    // not coincide — the splash's gate yields to the wizard — but the order
+    // is stated here rather than in an invariant somebody would have to
+    // remember.
     if let Some(splash) = &app.splash {
         draw_splash(frame, splash, &app.theme);
     }
@@ -523,52 +531,52 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
     if let Some(settings) = &app.settings {
         draw_settings(frame, settings, &app.theme);
     }
-    // K3c: el editor de atajos se abre DESDE ajustes y se pinta encima, con
-    // el overlay de ajustes abierto detrás — es una pantalla suya, no un
-    // reemplazo, y al cerrarla el lector vuelve donde estaba. También se queda
-    // las teclas antes que él (`main`), así que los píxeles y el enrutado
-    // dicen lo mismo.
+    // K3c: the shortcuts editor opens FROM settings and paints over it, with
+    // the settings overlay open behind it — it is a screen of its own, not
+    // a replacement, and closing it returns the reader where they were. It
+    // also claims the keys before it does (`main`), so the pixels and the
+    // routing say the same thing.
     if let Some(sc) = &app.shortcuts {
         draw_shortcuts(frame, sc, &app.theme);
     }
-    // K3a: el panel which-key va tras los overlays y ANTES del modal. Es el
-    // único que no se queda ninguna tecla —el resolver del pane las conserva
-    // mientras está arriba—, así que no compite por el teclado con nada de lo
-    // de arriba; se pinta encima porque describe la secuencia que el lector
-    // está tecleando AHORA, y taparla con un overlay abierto antes sería
-    // esconder la respuesta a la pregunta que acaba de hacer.
+    // K3a: the which-key panel goes after the overlays and BEFORE the modal.
+    // It is the only one that claims no key — the pane's resolver keeps them
+    // while it is up — so it does not compete for the keyboard with anything
+    // above; it is painted on top because it describes the sequence the
+    // reader is typing RIGHT NOW, and covering it with an overlay opened
+    // earlier would hide the answer to the question they just asked.
     //
-    // CON UN MODAL ABIERTO NO se pinta, y esta es la excepción que confirma lo
-    // anterior: un modal puede abrirse SOLO (una aprobación de policy que
-    // llega por el bus, una colisión al terminar una copia) sin que nadie haya
-    // tocado una tecla, y a partir de ahí las teclas van al `dialog_resolver`.
-    // Un panel que siguiera diciendo «g → ir arriba» junto a un diálogo que se
-    // queda la `g` es exactamente la mentira de píxeles que documenta el
-    // comentario del modal, más abajo. La secuencia sigue viva en el resolver
-    // del pane (el modal no la cancela, como no cancela el `[g …]` de la
-    // barra): se vuelve a ver al cerrarse el diálogo.
+    // WITH A MODAL OPEN it is NOT painted, and this is the exception that
+    // proves the previous rule: a modal can open ALONE (a policy approval
+    // arriving over the bus, a collision when a copy finishes) with nobody
+    // having touched a key, and from then on keys go to the
+    // `dialog_resolver`. A panel that kept saying "g → go to top" next to a
+    // dialog that claims `g` is exactly the pixel lie the modal's comment
+    // documents, further below. The sequence stays alive in the pane's
+    // resolver (the modal does not cancel it, same as it does not cancel
+    // the bar's `[g …]`): it is seen again once the dialog closes.
     if let Some(wk) = &app.which_key
         && app.modal.is_none()
     {
         draw_which_key(frame, wk, &app.theme);
     }
-    // Revisión S, M3: el modal se pinta ÚLTIMO, por encima de CUALQUIER otro
-    // overlay — el enrutado de teclas ya lo trata como AUTORITATIVO en
-    // presencia de la palette o el overlay de ajustes (`modal_preempts_
-    // palette`/`modal_preempts_settings`, `main.rs`: un modal en vuelo p.ej.
-    // una aprobación de policy async SIEMPRE gana la tecla). Antes se
-    // pintaba justo tras la barra de estado, así que cualquier overlay
-    // posterior en esta lista lo TAPABA visualmente — los píxeles mentían
-    // sobre quién manda. Cierra la clase de H1 MINOR-4 (aceptada entonces
-    // solo para la palette) para AMBOS overlays.
+    // Review S, M3: the modal is painted LAST, over ANY other overlay — key
+    // routing already treats it as AUTHORITATIVE in the presence of the
+    // palette or the settings overlay (`modal_preempts_
+    // palette`/`modal_preempts_settings`, `main.rs`: a modal in flight,
+    // e.g. an async policy approval, ALWAYS wins the key). It used to be
+    // painted right after the status bar, so any overlay later in this list
+    // visually COVERED it — the pixels lied about who was in charge. This
+    // closes the H1 MINOR-4 class (accepted back then only for the palette)
+    // for BOTH overlays.
     if let Some(modal) = &app.modal {
-        // H3c: con una página de ayuda ABIERTA ENCIMA (`over_modal`), la ayuda
-        // se queda las teclas y los verbos del modal son INERTES. El pie deja
-        // de ofrecerlos y dice lo que es verdad (`with_modals_inert`): un
-        // `[y] aprobar [n] denegar` que no hace nada es la misma mentira que
-        // `hints.rs` existe para que un rebind no pueda contar. La caja y la
-        // pregunta NO se tocan — se siguen pintando aquí, las últimas, encima
-        // de la página.
+        // H3c: with a help page OPEN OVER IT (`over_modal`), the help claims
+        // the keys and the modal's verbs are INERT. The footer stops
+        // offering them and says what is true (`with_modals_inert`): a
+        // `[y] approve [n] deny` that does nothing is the same lie
+        // `hints.rs` exists to keep a rebind from telling. The box and the
+        // question are NOT touched — they keep being painted here, last,
+        // over the page.
         let inert = app
             .help
             .as_ref()
@@ -582,36 +590,35 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
             inert.as_ref().unwrap_or(&app.dialog_hints),
         );
     }
-    // La barra de teclas (spec 2026-09-10) va la ÚLTIMA: su fila está fuera
-    // del cuerpo, así que ningún overlay la tapa. Con un modal delante va en
-    // blanco (`App::key_bar_cells`): ningún preset ata una `F` en `[dialog]`.
+    // The key bar (spec 2026-09-10) goes LAST: its row is outside the body,
+    // so no overlay covers it. With a modal in front it goes blank
+    // (`App::key_bar_cells`): no preset binds an `F` in `[dialog]`.
     draw_key_bar(frame, app);
 }
 
-/// ¿Hay algo pintado ENCIMA del visor en este frame?
+/// Is there anything painted OVER the viewer this frame?
 ///
-/// Revisión, IMPORTANTE 5: los píxeles de kitty se pintan por FUERA de
-/// ratatui y con `z=0` (por delante del texto), así que sobreviven a
-/// cualquier repintado de celdas que `draw` haga DESPUÉS del visor — abrir
-/// F1 o la paleta sobre un visor con imagen la dejaba tapada por la
-/// miniatura, justo la clase de bug que el comentario de [`draw`] (arriba)
-/// dice haber arreglado para el propio visor. El run loop (T4) la consulta
-/// antes de colocar píxeles: con algo encima, no coloca (y borra si algo
-/// estaba puesto).
+/// Review, IMPORTANT 5: kitty's pixels are painted OUTSIDE ratatui and at
+/// `z=0` (in front of the text), so they survive any cell repaint `draw`
+/// does AFTER the viewer — opening F1 or the palette over a viewer with an
+/// image left it covered by the thumbnail, exactly the bug class the
+/// comment on [`draw`] (above) says was fixed for the viewer itself. The run
+/// loop (T4) consults it before placing pixels: with something over it, it
+/// does not place them (and erases them if something was placed).
 ///
-/// Repite, A PROPÓSITO, la lista de overlays que [`draw`] pinta DESPUÉS del
-/// visor — ES la misma pregunta, «qué hay por encima», mirada desde el run
-/// loop en vez de desde el pintor. No hay una fuente única de la que las dos
-/// puedan salir sin construir un registro de overlays que esta fase no pide;
-/// si tocas la cadena de `if let Some(x) = &app.x` de arriba, toca esta lista
-/// también.
+/// Repeats, ON PURPOSE, the list of overlays [`draw`] paints AFTER the
+/// viewer — it IS the same question, "what is over it", looked at from the
+/// run loop instead of from the painter. There is no single source the two
+/// can come from without building an overlay registry this phase does not
+/// ask for; if you touch the chain of `if let Some(x) = &app.x` above, touch
+/// this list too.
 ///
-/// Revisión, ronda 2: `app.menu` faltaba. El desplegable se pinta dentro del
-/// CUERPO (`chrome::draw_menu`, `y = area.y + 1`, sobre el interior del
-/// visor cuando está abierto), y `f9`/`alt+m` están en `[global]` — se
-/// fusiona en TODAS las pantallas, así que abrir el menú con el visor
-/// delante es alcanzable. `app.menu_bar` (la barra FIJA) no hace falta:
-/// vive fuera de `body_area`, nunca compite por el hueco del visor.
+/// Review, round 2: `app.menu` was missing. The dropdown is painted inside
+/// the BODY (`chrome::draw_menu`, `y = area.y + 1`, over the viewer's
+/// interior when it is open), and `f9`/`alt+m` are in `[global]` — merged
+/// into EVERY screen, so opening the menu with the viewer in front is
+/// reachable. `app.menu_bar` (the PINNED bar) is not needed: it lives
+/// outside `body_area`, never competing for the viewer's spot.
 #[must_use]
 pub fn algo_encima_del_visor(app: &App) -> bool {
     app.menu.is_some()
@@ -634,49 +641,50 @@ pub fn algo_encima_del_visor(app: &App) -> bool {
         || app.modal.is_some()
 }
 
-/// El hueco (interior, SIN bordes) donde debe colocarse la miniatura de
-/// [`App::viewer_imagen`] este frame, o `None` si no debe verse — ni sus
-/// píxeles ni el hueco en blanco que les deja sitio.
+/// The slot (interior, WITHOUT borders) where [`App::viewer_imagen`]'s
+/// thumbnail must be placed this frame, or `None` if it must not be seen —
+/// neither its pixels nor the blank slot that makes room for them.
 ///
-/// Revisión de rama, hallazgo 2: `panels::draw_viewer` (el pintor, que
-/// blanquea el hueco) y el run loop (T4, que coloca los píxeles de verdad,
-/// `event_loop.rs`) hacían esta cuenta cada uno por su lado — el pintor
-/// sólo miraba el `path`, el run loop añadía [`algo_encima_del_visor`] y que
-/// el rect no estuviera vacío. Con un overlay que NO tapa la pantalla
-/// entera (el menú, which-key, un modal pequeño, el popup de navegación) el
-/// pintor blanqueaba el hueco IGUAL que siempre mientras el run loop se
-/// negaba a colocar píxeles: ni imagen ni hexview, un visor vacío. Con las
-/// dos preguntas resueltas por la MISMA función, divergir así deja de ser
-/// posible (memoria `funcion-compartida-no-basta`).
+/// Branch review, finding 2: `panels::draw_viewer` (the painter, which
+/// blanks the slot) and the run loop (T4, which places the real pixels,
+/// `event_loop.rs`) each did this count on their own side — the painter
+/// only looked at `path`, the run loop added [`algo_encima_del_visor`] and
+/// that the rect was not empty. With an overlay that does NOT cover the
+/// whole screen (the menu, which-key, a small modal, the nav popup) the
+/// painter blanked the slot JUST AS ALWAYS while the run loop refused to
+/// place pixels: neither image nor hexview, an empty viewer. With both
+/// questions resolved by the SAME function, diverging like that stops being
+/// possible (memory `funcion-compartida-no-basta`).
 #[must_use]
 pub fn imagen_a_colocar(app: &App, area: Rect) -> Option<crate::viewer_open::Colocacion> {
     let viewer = app.viewer.as_ref()?;
-    let imagen = app.viewer_imagen.as_ref()?;
-    if imagen.path != viewer.path || algo_encima_del_visor(app) {
+    let image = app.viewer_imagen.as_ref()?;
+    if image.path != viewer.path || algo_encima_del_visor(app) {
         return None;
     }
     let rect = rect_del_visor(app, area);
     if rect.is_empty() {
         return None;
     }
-    // El zoom (spec 2026-09-20). El paseo son las teclas de mover el visor,
-    // que con una imagen no tienen otra cosa que mover: `scroll` baja por
-    // ella y `hscroll` la recorre.
+    // Zoom (spec 2026-09-20). The pan is the keys that move the viewer,
+    // which with an image have nothing else to move: `scroll` goes down it
+    // and `hscroll` travels across it.
     Some(crate::viewer_open::colocacion(
         viewer.zoom_pct(),
         rect,
-        imagen.width,
-        imagen.height,
+        image.width,
+        image.height,
         viewer.hscroll(),
         viewer.scroll,
     ))
 }
 
-/// Diálogo de búsqueda viva (`Alt+F7`, liveSearch T6): dos campos de texto
-/// (nombre/contenido) con un `_` en el activo, los dos toggles regex/case y la
-/// raíz del walk (el `cwd` del pane, no editable) — todo saneado, jamás
-/// bidi/controles crudos (los campos pasan por [`display_name`], la raíz por
-/// [`path_display`]; un paste hostil no pinta invisibles en el borde).
+/// Live search dialog (`Alt+F7`, liveSearch T6): two text fields
+/// (name/content) with a `_` on the active one, the two regex/case toggles
+/// and the walk's root (the pane's `cwd`, not editable) — all sanitized,
+/// never raw bidi/controls (the fields go through [`display_name`], the root
+/// through [`path_display`]; a hostile paste does not paint invisibles on
+/// the border).
 fn draw_search_dialog(
     frame: &mut Frame<'_>,
     dialog: &crate::app::SearchDialog,
@@ -691,43 +699,42 @@ fn draw_search_dialog(
         let cursor = if active { "_" } else { "" };
         format!("{label} {masked}{cursor}")
     };
-    // #98/F4: la raíz del walk es superficie de decisión — sigue la
-    // reinterpretación del pane (la barra de abajo pinta el mismo dir así).
+    // #98/F4: the walk's root is a decision surface — it follows the pane's
+    // reinterpretation (the bar below paints the same dir this way).
     let (root_txt, root_hostile) = norte_frontend::path_display_with(root, enc);
     let root_line = if root_hostile {
         format!("{HOSTILE_BADGE} {root_txt}")
     } else {
         root_txt
     };
-    // Los siete campos en el orden en que los recorre Tab, y luego los cuatro
-    // interruptores. Se generan del MISMO `ORDEN` que el Tab: dos listas
-    // escritas a mano se separan en cuanto entra un campo, y entonces el
-    // cursor salta a una línea que no está pintada.
-    let mut lineas: Vec<String> = SearchField::ORDEN
+    // The seven fields in the order Tab walks them, then the four toggles.
+    // They are generated from the SAME `ORDEN` as Tab: two hand-written
+    // lists drift apart the moment a field is added, and then the cursor
+    // jumps to a line that is not painted.
+    let mut lines: Vec<String> = SearchField::ORDEN
         .iter()
         .map(|f| field(&t(f.clave()), dialog.texto(*f), dialog.field == *f))
         .collect();
-    lineas.push(ta("search-regex", &[("on", &on_txt(dialog.regex))]));
-    lineas.push(ta("search-case", &[("on", &on_txt(dialog.case))]));
-    lineas.push(ta(
+    lines.push(ta("search-regex", &[("on", &on_txt(dialog.regex))]));
+    lines.push(ta("search-case", &[("on", &on_txt(dialog.case))]));
+    lines.push(ta(
         "search-whole-word",
         &[("on", &on_txt(dialog.whole_word))],
     ));
-    lineas.push(ta("search-recursive", &[("on", &on_txt(dialog.recursive))]));
-    lineas.push(ta("search-kinds", &[("what", &t(dialog.kinds.clave()))]));
-    lineas.push(middle_ellipsis(&root_line, 56));
-    lineas.push(t("search-hint"));
-    let body = lineas.join("\n");
-    // Alto = las líneas más el marco, pero SIN pasar de la pantalla: con
-    // once campos e interruptores el diálogo mide 18 filas, y en un terminal
-    // de 24 eso se comía la barra de menús por arriba y la de estado por
-    // abajo. Recortado, se pierden las últimas líneas —la ruta y la
-    // chuleta— antes que el marco, que es lo que deja el diálogo siendo un
-    // diálogo.
-    let alto = u16::try_from(lineas.len().saturating_add(2))
+    lines.push(ta("search-recursive", &[("on", &on_txt(dialog.recursive))]));
+    lines.push(ta("search-kinds", &[("what", &t(dialog.kinds.clave()))]));
+    lines.push(middle_ellipsis(&root_line, 56));
+    lines.push(t("search-hint"));
+    let body = lines.join("\n");
+    // Height = the lines plus the frame, but WITHOUT going past the screen:
+    // with eleven fields and toggles the dialog measures 18 rows, and on a
+    // 24-row terminal that ate the menu bar above and the status bar below.
+    // When trimmed, the last lines — the path and the cheat sheet — are lost
+    // before the frame, which is what keeps the dialog a dialog.
+    let height = u16::try_from(lines.len().saturating_add(2))
         .unwrap_or(u16::MAX)
         .min(frame.area().height);
-    let area = centered(frame.area(), 60, alto);
+    let area = centered(frame.area(), 60, height);
     clear_themed(frame, area, theme);
     frame.render_widget(
         Paragraph::new(body).block(
@@ -741,17 +748,17 @@ fn draw_search_dialog(
     );
 }
 
-/// Popup de navegación (spec 2026-07-18): historial `Alt+↓` / hotlist
-/// `Ctrl+D` / volúmenes `Alt+F1`/`Alt+F2` (design 2026-08-10 §D), calcando
-/// [`draw_theme_picker`]. Los items llegan YA saneados de
+/// Navigation popup (spec 2026-07-18): history `Alt+↓` / hotlist `Ctrl+D` /
+/// volumes `Alt+F1`/`Alt+F2` (design 2026-08-10 §D), tracing
+/// [`draw_theme_picker`]. Items arrive ALREADY sanitized from
 /// [`crate::app::App::open_nav_popup`]/[`crate::app::App::open_volumes_popup`]
-/// — aquí solo se pintan. El footer de teclas solo aplica a hotlist (`a`/`d`)
-/// y volúmenes (el toggle "mostrar todo", más el modo actual); con el input
-/// de nombre activo lo sustituye la línea `nombre: …` (el input pasa por el
-/// MISMO mask que la query del quick search: un paste hostil no pinta bidi
-/// crudo). `hints` trae el hint GENERADO de cada kind
-/// (`app.dialog_hints.nav_list`/`.nav_volumes`, H1 T3/#24 y design §D) — el
-/// historial no pinta footer, igual que antes de H1.
+/// — here they are only painted. The key footer only applies to hotlist
+/// (`a`/`d`) and volumes (the "show all" toggle, plus the current mode);
+/// with the name input active it is replaced by the `name: …` line (the
+/// input goes through the SAME mask as the quick search query: a hostile
+/// paste does not paint raw bidi). `hints` carries each kind's GENERATED
+/// hint (`app.dialog_hints.nav_list`/`.nav_volumes`, H1 T3/#24 and design
+/// §D) — history paints no footer, same as before H1.
 fn draw_nav_popup(
     frame: &mut Frame<'_>,
     popup: &crate::app::NavPopup,
@@ -769,11 +776,11 @@ fn draw_nav_popup(
         NavPopupKind::Hotlist => t("hotlist-title"),
         NavPopupKind::Volumes => t("volumes-title"),
     };
-    // El footer se construye ANTES para dimensionar el popup con su ancho
-    // REAL (celdas unicode vía `Line::width`, no bytes): 64 de mínimo — el
-    // footer de teclas de hotlist en ES son 60 celdas y a 60 el borde lo
-    // truncaría («cerra…») — y crece si el footer (p.ej. un nombre largo en
-    // el input) lo necesita.
+    // The footer is built FIRST to size the popup with its REAL width
+    // (unicode cells via `Line::width`, not bytes): 64 at minimum — the
+    // hotlist key footer in ES is 60 cells and at 60 the border would
+    // truncate it ("cerra…") — and it grows if the footer (e.g. a long name
+    // in the input) needs it to.
     let footer: Option<Line<'_>> = if let Some(input) = &popup.name_input {
         let (masked, _) = display_name(input.as_bytes());
         Some(Line::raw(format!(
@@ -781,20 +788,20 @@ fn draw_nav_popup(
             t("hotlist-name-prompt")
         )))
     } else if let Some(filter) = &popup.filter {
-        // Lo que se está filtrando se VE, con el mismo mask que el nombre de
-        // un favorito: un pegado hostil no pinta bidi crudo.
+        // What is being filtered IS seen, with the same mask as a
+        // favorite's name: a hostile paste does not paint raw bidi.
         let (masked, _) = display_name(filter.as_bytes());
         Some(Line::raw(format!(" /{masked}_ ")))
     } else if popup.kind == NavPopupKind::Hotlist {
         Some(Line::raw(format!(" {} ", hints.nav_list)))
     } else if matches!(popup.kind, NavPopupKind::History | NavPopupKind::Popular) {
-        // Spec 2026-09-15 D2: la historia ya se edita (quitar, vaciar, abrir en
-        // el otro panel), y una lista que se edita dice cómo.
+        // Spec 2026-09-15 D2: history is already editable (remove, clear,
+        // open in the other panel), and a list that is edited says how.
         Some(Line::raw(format!(" {} ", hints.nav_history)))
     } else if popup.kind == NavPopupKind::Volumes {
-        // design §D: el footer dice en qué MODO está la lista, no solo qué
-        // teclas hay — un toggle sin indicador deja al lector adivinando si
-        // ya lo pulsó.
+        // design §D: the footer says what MODE the list is in, not just
+        // which keys there are — a toggle with no indicator leaves the
+        // reader guessing whether they already pressed it.
         let mode = if popup.include_pseudo() {
             t("volumes-mode-all")
         } else {
@@ -811,9 +818,9 @@ fn draw_nav_popup(
     let rows = u16::try_from(popup.items().len().max(1)).unwrap_or(8) + 2;
     let area = centered(frame.area(), width, rows.min(frame.area().height.max(3)));
     clear_themed(frame, area, theme);
-    // Items largos: elipsis MEDIA (cabeza + cola, como los modales de
-    // rutas) al ancho interior — el truncado derecho de ratatui haría
-    // indistinguibles dos rutas con prefijo común (BAJA-3).
+    // Long items: MIDDLE ellipsis (head + tail, like the path modals) at the
+    // inner width — ratatui's right truncation would make two paths with a
+    // common prefix indistinguishable (BAJA-3).
     let inner = usize::from(area.width.saturating_sub(3));
     let (items, selected): (Vec<ListItem<'_>>, Option<usize>) = if popup.items().is_empty() {
         let empty = match popup.kind {
@@ -829,9 +836,10 @@ fn draw_nav_popup(
                 .items()
                 .iter()
                 .map(|it| {
-                    // La marca de una fila de historia va en su PROPIO span y
-                    // con otro estilo: pegada al texto la imitaba un directorio
-                    // con ese nombre. El recorte es de la ruta, no de la marca.
+                    // A history row's mark goes in its OWN span and with a
+                    // different style: stuck to the text a directory with
+                    // that name could imitate it. The trim is the path's,
+                    // not the mark's.
                     let mark = it.mark.as_deref().map(|m| {
                         ratatui::text::Span::styled(format!(" · {m}"), theme.role(Role::Info))
                     });
@@ -864,9 +872,9 @@ fn draw_nav_popup(
     frame.render_stateful_widget(list, area, &mut state);
 }
 
-/// Elipsis MEDIA por ancho de celda: AHORA vive en `norte-frontend`
-/// (encoding audit M4-IA-2 H1) — el invariante «un path kilométrico jamás
-/// expulsa el campo que va detrás» no es propio de un terminal, la GUI lo
-/// necesitaba igual. Re-import local para que todo el módulo (y sus tests)
-/// la llame por su nombre corto, sin cambiar una sola salida de render.
+/// MIDDLE ellipsis by cell width: NOW lives in `norte-frontend` (encoding
+/// audit M4-IA-2 H1) — the invariant "a mile-long path never expels the
+/// field that follows it" is not particular to a terminal, the GUI needed it
+/// just the same. Local re-import so the whole module (and its tests) call
+/// it by its short name, with no change to a single render output.
 use norte_frontend::middle_ellipsis;

@@ -1,130 +1,133 @@
-//! El SUBSHELL persistente: el pty y el hijo de larga vida (#142).
+//! The persistent SUBSHELL: the pty and the long-lived child (#142).
 //!
-//! La otra mitad —el marcador del prompt, el parseo del cwd y el `cd` en
-//! bytes— vive en [`norte_frontend::subshell`], sin I/O y con sus tests.
+//! The other half —the prompt marker, cwd parsing and the `cd` in bytes—
+//! lives in [`norte_frontend::subshell`], with no I/O and with its tests.
 //!
-//! # Qué cambia respecto a lo que había
+//! # What changes from what there was
 //!
-//! `app.toggle-panels` cedía la terminal y enseñaba el SCROLLBACK de donde
-//! arrancó norte, hasta que se pulsara una tecla. Eso no es un shell: no
-//! recuerda nada, no se le puede escribir, y el directorio del panel le da
-//! igual. Lo que hace Midnight Commander —y lo que se nota a la primera— es
-//! tener un shell VIVO detrás de los paneles.
+//! `app.toggle-panels` used to hand over the terminal and show the
+//! SCROLLBACK from wherever norte started, until a key was pressed. That is
+//! not a shell: it remembers nothing, nothing can be typed into it, and the
+//! panel's directory does not matter to it. What Midnight Commander does —
+//! and what shows immediately— is having a LIVE shell behind the panels.
 //!
-//! # Las cuatro decisiones que esto encierra
+//! # The four decisions this holds
 //!
-//! **Se arranca PEREZOSO**, en el primer `Ctrl+O`. Un shell por sesión de
-//! norte que nadie va a usar es un proceso, un pty y el `.bashrc` de alguien
-//! ejecutándose por si acaso.
+//! **It starts LAZILY**, on the first `Ctrl+O`. A shell per norte session
+//! that nobody is going to use is a process, a pty and someone's
+//! `.bashrc` running just in case.
 //!
-//! **El hijo hereda el pty y NO la terminal de norte.** Por eso puede seguir
-//! vivo mientras los paneles se pintan: nadie comparte el tty. Mientras está
-//! adjunto, este módulo copia bytes en las dos direcciones.
+//! **The child inherits the pty and NOT norte's terminal.** That is why it
+//! can stay alive while the panels are painted: nobody shares the tty.
+//! While it is attached, this module copies bytes in both directions.
 //!
-//! **El cwd lo DICE el shell**, con un marcador que norte le mete en el prompt
-//! al arrancarlo (nunca tocando su configuración). Al adjuntar, el shell sigue
-//! al panel con un `cd`; al soltarlo, el panel puede seguir al shell.
+//! **The shell STATES the cwd**, with a marker norte puts in its prompt on
+//! starting it (never touching its configuration). On attaching, the shell
+//! follows the panel with a `cd`; on detaching, the panel can follow the
+//! shell.
 //!
-//! **Al salir norte, el shell se va con él** (`SIGHUP` por el drop de
-//! `portable-pty`): dejar un shell huérfano hablándole a un pty que ya no lee
-//! nadie es un proceso que nadie sabe que existe.
+//! **When norte exits, the shell goes with it** (`SIGHUP` from
+//! `portable-pty`'s drop): leaving an orphaned shell talking to a pty
+//! nobody reads anymore is a process nobody knows exists.
 
 use std::io::{Read as _, Write as _};
 use std::sync::{Arc, Mutex};
 
 use norte_frontend::subshell::{Nonce, install, scan_cwd};
 
-/// El subshell vivo de esta sesión.
+/// This session's live subshell.
 pub struct Subshell {
-    /// Por dónde se le escribe.
+    /// Where it is written to.
     ///
-    /// COMPARTIDA con el hilo lector, que también escribe: es quien contesta
-    /// las consultas de terminal del shell ([`Escritor`]).
+    /// SHARED with the reader thread, which also writes: it is the one that
+    /// answers the shell's terminal queries ([`Escritor`]).
     escritura: Escritor,
-    /// El pty, que además es quien redimensiona.
+    /// The pty, which is also the one that resizes.
     maestro: Box<dyn portable_pty::MasterPty + Send>,
-    /// El hijo. Se conserva para poder matarlo y para saber si sigue vivo.
+    /// The child. Kept so it can be killed and so we know whether it is
+    /// still alive.
     hijo: Box<dyn portable_pty::Child + Send + Sync>,
-    /// Lo que el shell ha escrito y todavía no se ha pintado, más el ÚLTIMO
-    /// cwd que anunció. Lo llena un hilo lector.
+    /// What the shell has written and has not been painted yet, plus the
+    /// LAST cwd it announced. Filled by a reader thread.
     buzon: Arc<Mutex<Buzon>>,
-    /// Cuál de los tres es, si es uno de los tres. `None` = norte no le
-    /// instaló nada y no le teclea nada.
+    /// Which of the three it is, if it is one of the three. `None` = norte
+    /// installed nothing in it and does not type anything into it.
     cual: Option<norte_frontend::shell::Shell>,
-    /// El BUZÓN de esta sesión: por dónde se le dice al shell que cambie de
-    /// directorio, en vez de teclearle un `cd` (#363).
+    /// This session's MAILBOX: how the shell is told to change directory,
+    /// instead of typing a `cd` into it (#363).
     ///
-    /// Un fichero 0600 con un nonce en el nombre, bajo el directorio de
-    /// ejecución del usuario (`$XDG_RUNTIME_DIR`, que ya es 0700 suyo) o bajo
-    /// `/tmp/norte-<uid>` si no lo hay — el mismo sitio y el mismo criterio
-    /// que el socket del daemon. `None` = no se pudo crear, y entonces el
-    /// panel simplemente no arrastra al shell: degradar así es correcto, y
-    /// caerse o volver a teclear el `cd` no lo serían.
+    /// A 0600 file with a nonce in its name, under the user's runtime
+    /// directory (`$XDG_RUNTIME_DIR`, which is already 0700 of its own) or
+    /// under `/tmp/norte-<uid>` if there is none — the same place and the
+    /// same criterion as the daemon's socket. `None` = it could not be
+    /// created, and then the panel simply does not drag the shell along:
+    /// degrading this way is correct, and crashing or typing the `cd` again
+    /// would not be.
     ///
-    /// Se borra al soltar el subshell. Si norte muere de golpe queda un
-    /// fichero de unas decenas de bytes en un directorio que el sistema
-    /// limpia al cerrar sesión.
+    /// Deleted on releasing the subshell. If norte dies abruptly, a file of
+    /// a few dozen bytes is left in a directory the system cleans up on
+    /// logout.
     buzon_fichero: Option<std::path::PathBuf>,
 }
 
-/// La entrada del pty, compartida entre quien adjunta y el hilo lector.
+/// The pty's input, shared between whoever attaches and the reader thread.
 ///
-/// Dos escritores, y los dos legítimos: las teclas del lector entran por
-/// [`Subshell::escribir`], y las RESPUESTAS a las consultas de terminal del
-/// shell las manda el hilo que las ve pasar. Un shell moderno pregunta qué
-/// terminal tiene delante y se PARA hasta que le contestan (fish 4 lo hace
-/// antes de su primer prompt), así que la respuesta no puede esperar a que
-/// alguien adjunte.
+/// Two writers, and both legitimate: the reader's keys come in through
+/// [`Subshell::escribir`], and the RESPONSES to the shell's terminal queries
+/// are sent by the thread that sees them go by. A modern shell asks what
+/// terminal it has in front of it and STOPS until it is answered (fish 4
+/// does it before its first prompt), so the response cannot wait for
+/// someone to attach.
 type Escritor = Arc<Mutex<Box<dyn std::io::Write + Send>>>;
 
-/// Lo que el hilo lector deja para quien adjunte.
+/// What the reader thread leaves for whoever attaches.
 #[derive(Default)]
 struct Buzon {
-    /// Bytes pendientes de pintar, ya SIN los marcadores.
+    /// Bytes pending painting, already WITHOUT the markers.
     pendiente: Vec<u8>,
-    /// El último cwd anunciado, en bytes (regla 1).
+    /// The last cwd announced, in bytes (rule 1).
     cwd: Option<Vec<u8>>,
-    /// Un marcador partido entre dos lecturas, esperando su final.
+    /// A marker split between two reads, waiting for its end.
     cola: Vec<u8>,
-    /// El pty se cerró: el shell se fue.
+    /// The pty closed: the shell is gone.
     cerrado: bool,
 }
 
-/// Cuánto se guarda de lo que el shell escribió mientras nadie mira.
+/// How much of what the shell wrote is kept while nobody is looking.
 ///
-/// Un `find /` lanzado y dejado corriendo escribe sin fin, y esto vive en
-/// memoria: se conserva la COLA, que es lo que un lector querría ver al
-/// volver, y lo de más atrás se tira.
+/// A `find /` launched and left running writes without end, and this lives
+/// in memory: the TAIL is kept, which is what a reader would want to see on
+/// returning, and what is further back is dropped.
 const BUFFER_MAX: usize = 256 * 1024;
 
 impl Subshell {
-    /// Arranca un shell en su propio pty.
+    /// Starts a shell in its own pty.
     ///
-    /// `dir` es dónde empieza; `size` el tamaño de la terminal, que el hijo
-    /// necesita saber para pintar.
+    /// `dir` is where it starts; `size` the terminal's size, which the
+    /// child needs to know in order to paint.
     ///
     /// # Errors
-    /// Lo que falle al abrir el pty o al lanzar el shell.
+    /// Whatever fails when opening the pty or launching the shell.
     pub fn arrancar(dir: &std::path::Path, size: (u16, u16)) -> std::io::Result<Self> {
         Self::arrancar_con(&norte_frontend::shell::login_shell(), &[], dir, size)
     }
 
-    /// [`Self::arrancar`] con el programa y los argumentos DADOS.
+    /// [`Self::arrancar`] with the GIVEN program and arguments.
     ///
-    /// Existe por los tests, y no es una comodidad: `arrancar` usa `$SHELL`, o
-    /// sea el shell de quien corre la suite, con su configuración entera
-    /// detrás. En esta máquina eso es un zsh cuyo primer arranque interactivo
-    /// lanza el asistente de powerlevel10k y jamás llega a un prompt — un test
-    /// rojo que no dice nada del código. Un test que necesita un shell
-    /// necesita UN shell, no el de quien lo corre.
+    /// Exists for the tests, and it is not a convenience: `arrancar` uses
+    /// `$SHELL`, i.e. the shell of whoever runs the suite, with its whole
+    /// configuration behind it. On this machine that is a zsh whose first
+    /// interactive start launches the powerlevel10k wizard and never reaches
+    /// a prompt — a red test that says nothing about the code. A test that
+    /// needs a shell needs A shell, not the one of whoever runs it.
     fn arrancar_con(
         programa: &std::path::Path,
         args: &[&str],
         dir: &std::path::Path,
         size: (u16, u16),
     ) -> std::io::Result<Self> {
-        let sistema = portable_pty::native_pty_system();
-        let par = sistema
+        let system = portable_pty::native_pty_system();
+        let pair = system
             .openpty(portable_pty::PtySize {
                 rows: size.1,
                 cols: size.0,
@@ -138,132 +141,138 @@ impl Subshell {
             cmd.arg(a);
         }
         cmd.cwd(dir);
-        // El hijo sabe que está DENTRO de norte, como el de una suspensión: es
-        // el mismo contrato de `NORTE_LEVEL` y lo lee el prompt del lector.
+        // The child knows it is INSIDE norte, like a suspension's does: it
+        // is the same `NORTE_LEVEL` contract and the reader's prompt reads
+        // it.
         cmd.env(
             norte_frontend::shell::LEVEL_VAR,
             norte_frontend::shell::next_norte_level(),
         );
-        let hijo = par
+        let hijo = pair
             .slave
             .spawn_command(cmd)
             .map_err(std::io::Error::other)?;
-        // El esclavo se SUELTA aquí: mientras norte lo tenga abierto, cerrar
-        // el shell no cierra el pty y el lector nunca vería EOF.
-        drop(par.slave);
+        // The slave is RELEASED here: while norte keeps it open, closing the
+        // shell would not close the pty and the reader would never see EOF.
+        drop(pair.slave);
         let escritura: Escritor = Arc::new(Mutex::new(
-            par.master.take_writer().map_err(std::io::Error::other)?,
+            pair.master.take_writer().map_err(std::io::Error::other)?,
         ));
-        let lector = par
+        let reader = pair
             .master
             .try_clone_reader()
             .map_err(std::io::Error::other)?;
         let buzon = Arc::new(Mutex::new(Buzon::default()));
-        // El nonce de ESTA sesión: lo que separa un marcador que imprimió el
-        // gancho de uno que venía dentro de un fichero. Ver `Nonce`.
+        // THIS session's nonce: what separates a marker the hook printed
+        // from one that came from inside a file. See `Nonce`.
         let nonce = Nonce::new();
         lanzar_lector(
-            lector,
+            reader,
             Arc::clone(&buzon),
             Arc::clone(&escritura),
             nonce.clone(),
         );
 
         let cual = shell_conocido(&shell);
-        // El buzón se crea ANTES del gancho: el gancho lleva su ruta dentro.
+        // The mailbox is created BEFORE the hook: the hook carries its path
+        // inside.
         let buzon_fichero = cual.and_then(|_| crear_buzon(&nonce));
-        let mut yo = Self {
+        let mut me = Self {
             escritura,
-            maestro: par.master,
+            maestro: pair.master,
             hijo,
             buzon,
             cual,
             buzon_fichero,
         };
-        // El gancho del prompt se manda como si el lector lo tecleara: NO se
-        // toca ningún fichero suyo. Un `.bashrc` que norte editara sería una
-        // modificación permanente por una función que se apaga al salir — y
-        // sobreviviría a un norte que ya no está.
+        // The prompt hook is sent as if the reader typed it: NONE of their
+        // files is touched. A `.bashrc` norte edited would be a permanent
+        // modification for a function that turns off on exit — and it would
+        // survive a norte that is no longer there.
         //
-        // Sin buzón no se instala nada: el gancho lleva su ruta dentro, y uno
-        // apuntando a un fichero que no existe sería fontanería tecleada en la
-        // cara del lector a cambio de nada.
-        if let (Some(cual), Some(buzon)) = (cual, yo.buzon_fichero.clone()) {
-            let _ = yo.escribir(install(cual, &nonce, &buzon).as_bytes());
-            // Ctrl+L: la orden de `readline`/ZLE/fish que limpia la pantalla y
-            // repinta el prompt. Sin esto, lo primero que el lector ve en su
-            // primer Ctrl+O es la pared de fontanería que acabamos de teclear.
-            let _ = yo.escribir_tecla(b"\x0c");
+        // With no mailbox, nothing is installed: the hook carries its path
+        // inside, and one pointing at a file that does not exist would be
+        // plumbing typed into the reader's face for nothing in return.
+        if let (Some(cual), Some(buzon)) = (cual, me.buzon_fichero.clone()) {
+            let _ = me.escribir(install(cual, &nonce, &buzon).as_bytes());
+            // Ctrl+L: the `readline`/ZLE/fish command that clears the
+            // screen and repaints the prompt. Without this, the first thing
+            // the reader sees on their first Ctrl+O is the wall of plumbing
+            // we just typed.
+            let _ = me.escribir_tecla(b"\x0c");
         }
-        Ok(yo)
+        Ok(me)
     }
 
-    /// Le escribe al shell.
+    /// Writes to the shell.
     ///
-    /// **norte ya no le teclea ÓRDENES** (#363): por aquí salen las teclas del
-    /// lector y la fontanería del arranque, nada más. Mover el shell de
-    /// directorio se hace por el buzón y no por el editor de línea — ver
-    /// [`Self::ir_a`].
+    /// **norte no longer types COMMANDS into it** (#363): what goes out
+    /// through here is the reader's keys and the startup plumbing, nothing
+    /// else. Moving the shell to another directory is done through the
+    /// mailbox and not through the line editor — see [`Self::ir_a`].
     ///
     /// # Errors
-    /// Lo que falle el pty.
+    /// Whatever the pty fails at.
     pub fn escribir(&mut self, bytes: &[u8]) -> std::io::Result<()> {
         escribir_crudo(&self.escritura, bytes)
     }
 
-    /// Le escribe al shell UNA TECLA del lector.
+    /// Writes ONE key from the reader to the shell.
     ///
-    /// Hoy es [`Self::escribir`] y nada más. Se queda como puerta aparte
-    /// porque lo que entra por aquí lo TECLEÓ alguien y lo que entra por la
-    /// otra lo manda norte, y eso conviene que se vea en la llamada. Lo que
-    /// hubo aquí —una exención para el Ctrl+L, que repinta el prompt sin
-    /// tocar la línea— existía para no bajar un permiso que ya no existe:
-    /// desde #363 norte no teclea órdenes, así que no hay permiso que cuidar.
+    /// Today it is [`Self::escribir`] and nothing more. It stays as a
+    /// separate door because what comes in through here was TYPED by
+    /// someone and what comes in through the other one is sent by norte,
+    /// and it is worth that showing at the call site. What used to be here
+    /// —an exemption for Ctrl+L, which repaints the prompt without touching
+    /// the line— existed to avoid lowering a permission that no longer
+    /// exists: since #363 norte does not type commands, so there is no
+    /// permission to look after.
     ///
     /// # Errors
-    /// Lo que falle el pty.
+    /// Whatever the pty fails at.
     pub fn escribir_tecla(&mut self, bytes: &[u8]) -> std::io::Result<()> {
         self.escribir(bytes)
     }
 
-    /// Manda al shell al directorio `dir` (bytes nativos), SI se le puede.
+    /// Sends the shell to directory `dir` (native bytes), IF it can be done.
     ///
-    /// **No le teclea nada** (#363). Deja la ruta en el BUZÓN de esta sesión
-    /// —un fichero 0600 bajo el directorio de ejecución— y el gancho del
-    /// prompt la recoge y hace el `cd` la próxima vez que el shell esté entre
-    /// dos órdenes. Devuelve si se dejó anotada.
+    /// **Types nothing into it** (#363). Leaves the path in THIS session's
+    /// MAILBOX —a 0600 file under the runtime directory— and the prompt hook
+    /// picks it up and does the `cd` the next time the shell is between two
+    /// commands. Returns whether it was left noted down.
     ///
-    /// # Por qué no se teclea
+    /// # Why it is not typed
     ///
-    /// Teclear un `cd` exige saber que el editor de línea está en un prompt
-    /// VACÍO, y eso no se puede saber desde fuera. norte lo aproximaba con
-    /// «llegó un marcador de prompt y nadie ha escrito desde entonces», que es
-    /// otra frase, y había al menos dos maneras de cumplir la segunda sin la
-    /// primera:
+    /// Typing a `cd` requires knowing the line editor is at an EMPTY prompt,
+    /// and that cannot be known from outside. norte approximated it with "a
+    /// prompt marker arrived and nobody has typed since then", which is a
+    /// different statement, and there were at least two ways to satisfy the
+    /// second without the first:
     ///
-    /// - la **pila de buffers de zsh**. `push-line` (Ctrl+Q por defecto)
-    ///   aparta la línea, el shell pinta un prompt nuevo —marcador, permiso— y
-    ///   acto seguido la devuelve al buffer. Un `print -z` de una función del
-    ///   lector llega al mismo sitio sin tocar una tecla;
-    /// - el **type-ahead**, en los tres. Lo que el lector teclea mientras el
-    ///   shell está ocupado espera en la cola del pty. El marcador llega con
-    ///   esos bytes todavía sin consumir, y el `cd` se concatenaba a ellos.
+    /// - zsh's **buffer stack**. `push-line` (Ctrl+Q by default) sets the
+    ///   line aside, the shell paints a new prompt —marker, permission— and
+    ///   immediately returns it to the buffer. A `print -z` from a reader
+    ///   function reaches the same place without touching a key;
+    /// - **type-ahead**, in all three. What the reader types while the
+    ///   shell is busy waits in the pty's queue. The marker arrives with
+    ///   those bytes still unconsumed, and the `cd` got concatenated to
+    ///   them.
     ///
-    /// En los dos casos el shell EJECUTABA una orden que nadie dio:
-    /// `rm -rf tmpdir __norte_cd '...'`. Con el buzón no hay nada a lo que
-    /// concatenarse —el canal de inyección al editor de línea desaparece— y el
-    /// movimiento ocurre exactamente cuando el shell está demostrablemente
-    /// entre órdenes, que es lo que había que demostrar.
+    /// In both cases the shell EXECUTED a command nobody gave:
+    /// `rm -rf tmpdir __norte_cd '...'`. With the mailbox there is nothing
+    /// to concatenate onto —the injection channel into the line editor
+    /// disappears— and the move happens exactly when the shell is
+    /// demonstrably between commands, which is what had to be demonstrated.
     ///
-    /// Lo que cambia para el lector: el `cd` se aplica en el prompt siguiente
-    /// y no al instante. Es la semántica honesta, y es lo que ya pasaba cada
-    /// vez que esto se negaba.
+    /// What changes for the reader: the `cd` applies at the next prompt and
+    /// not instantly. It is the honest semantics, and it is what already
+    /// happened every time this was refused.
     ///
-    /// Se niega si el shell no es uno de los tres que norte prepara: sin
-    /// gancho no hay quien lea el buzón.
+    /// It is refused if the shell is not one of the three norte prepares:
+    /// with no hook there is nobody to read the mailbox.
     ///
     /// # Errors
-    /// Lo que falle al escribir el buzón.
+    /// Whatever fails when writing the mailbox.
     pub fn ir_a(&mut self, dir: &std::path::Path) -> std::io::Result<bool> {
         use std::os::unix::ffi::OsStrExt as _;
         if self.cual.is_none() {
@@ -272,32 +281,32 @@ impl Subshell {
         let Some(buzon) = self.buzon_fichero.as_deref() else {
             return Ok(false);
         };
-        // El `_` final es un centinela y no un adorno: el shell lee el fichero
-        // con `$(<f)`, que se come los saltos de línea del final, y un
-        // directorio PUEDE acabar en uno.
+        // The trailing `_` is a sentinel and not decoration: the shell
+        // reads the file with `$(<f)`, which eats trailing newlines, and a
+        // directory CAN end in one.
         let mut bytes = dir.as_os_str().as_bytes().to_vec();
         bytes.push(b'_');
         escribir_buzon(buzon, &bytes)?;
         Ok(true)
     }
 
-    /// Lo que el shell escribió desde la última vez, y se lo lleva.
+    /// What the shell has written since last time, taking it with it.
     ///
     /// # Panics
-    /// Si el hilo lector entró en pánico con el buzón cogido. No se recupera a
-    /// propósito: el buzón envenenado significa que el lector murió a mitad de
-    /// una escritura, así que lo que hubiera dentro ya no describe la pantalla
-    /// del shell — y pintarlo igual es peor que caerse (regla 6).
+    /// If the reader thread panicked with the mailbox held. It deliberately
+    /// does not recover: a poisoned mailbox means the reader died mid-write,
+    /// so whatever was inside no longer describes the shell's screen — and
+    /// painting it anyway is worse than crashing (rule 6).
     #[must_use]
     pub fn drenar(&self) -> Vec<u8> {
         let mut b = buzon_de(&self.buzon);
         std::mem::take(&mut b.pendiente)
     }
 
-    /// El último directorio que el shell anunció, si anunció alguno.
+    /// The last directory the shell announced, if it announced any.
     ///
     /// # Panics
-    /// Igual que [`Self::drenar`]: buzón envenenado.
+    /// Same as [`Self::drenar`]: poisoned mailbox.
     #[must_use]
     pub fn cwd(&self) -> Option<std::path::PathBuf> {
         use std::os::unix::ffi::OsStrExt as _;
@@ -306,17 +315,17 @@ impl Subshell {
         Some(std::path::PathBuf::from(std::ffi::OsStr::from_bytes(bytes)))
     }
 
-    /// ¿Se fue el shell? (el lector vio EOF, o el hijo murió).
+    /// Is the shell gone? (the reader saw EOF, or the child died).
     ///
     /// # Panics
-    /// Igual que [`Self::drenar`]: buzón envenenado.
+    /// Same as [`Self::drenar`]: poisoned mailbox.
     #[must_use]
     pub fn muerto(&mut self) -> bool {
         let cerrado = buzon_de(&self.buzon).cerrado;
         cerrado || matches!(self.hijo.try_wait(), Ok(Some(_)))
     }
 
-    /// Dice al shell de qué tamaño es la terminal ahora.
+    /// Tells the shell what size the terminal is now.
     pub fn redimensionar(&self, size: (u16, u16)) {
         let _ = self.maestro.resize(portable_pty::PtySize {
             rows: size.1,
@@ -326,28 +335,29 @@ impl Subshell {
         });
     }
 
-    /// Lo mata. Lo llama el cierre de norte: un shell huérfano hablándole a un
-    /// pty que ya no lee nadie es un proceso que nadie sabe que existe.
+    /// Kills it. Called by norte's shutdown: an orphaned shell talking to a
+    /// pty nobody reads anymore is a process nobody knows exists.
     pub fn matar(&mut self) {
         let _ = self.hijo.kill();
         let _ = self.hijo.wait();
     }
 }
 
-/// El shell muere CON norte, salga norte por donde salga.
+/// The shell dies WITH norte, however norte exits.
 ///
-/// En `Drop` y no solo en el brazo de `app.quit`: el bucle también sale por
-/// [`crate::event_loop::RunError`] —la terminal o el stream de eventos
-/// rompiéndose—, y por ahí no pasa ningún cierre ordenado. Un shell que
-/// sobrevive a su norte se queda hablándole a un pty que ya no lee nadie, con
-/// el terminal del lector detrás.
+/// In `Drop` and not only in the `app.quit` arm: the loop can also exit
+/// through [`crate::event_loop::RunError`] —the terminal or the event
+/// stream breaking—, and no orderly shutdown goes through there. A shell
+/// that outlives its norte is left talking to a pty nobody reads anymore,
+/// with the reader's terminal behind it.
 impl Drop for Subshell {
     fn drop(&mut self) {
         self.matar();
-        // Y se lleva su buzón: es de esta sesión y no le sirve a nadie más.
-        // Un error aquí no se cuenta — el shell ya se fue y no hay a quién
-        // decírselo—, y lo que queda si norte muere de golpe son unas decenas
-        // de bytes en un directorio que el sistema limpia al cerrar sesión.
+        // And it takes its mailbox with it: it belongs to this session and
+        // is of no use to anyone else. An error here does not count — the
+        // shell is already gone and there is nobody to tell—, and what is
+        // left if norte dies abruptly is a few dozen bytes in a directory
+        // the system cleans up on logout.
         if let Some(p) = &self.buzon_fichero {
             let _ = std::fs::remove_file(p);
             let _ = std::fs::remove_file(p.with_extension("cd.tmp"));
@@ -355,60 +365,62 @@ impl Drop for Subshell {
     }
 }
 
-/// El nombre del ejecutable de una ruta de shell, para elegir el gancho.
+/// The executable name from a shell path, to choose the hook.
 ///
-/// Por BYTES (regla 1) y no por `to_string_lossy`: un `$SHELL` con un
-/// componente que no es UTF-8 se convertía en `\u{FFFD}`, `Shell::parse`
-/// fallaba, y el lector se quedaba con un subshell que nunca decía dónde
-/// estaba — sin gancho, sin `cd` y sin un solo mensaje explicándolo. Ahora un
-/// nombre no-UTF-8 sencillamente no es ninguno de los tres que conocemos, que
-/// es la verdad.
+/// By BYTES (rule 1) and not by `to_string_lossy`: a `$SHELL` with a
+/// component that is not UTF-8 turned into `\u{FFFD}`, `Shell::parse`
+/// failed, and the reader was left with a subshell that never said where it
+/// was — no hook, no `cd` and not a single message explaining it. Now a
+/// non-UTF-8 name simply is not one of the three we know, which is the
+/// truth.
 fn shell_conocido(shell: &std::path::Path) -> Option<norte_frontend::shell::Shell> {
     use std::os::unix::ffi::OsStrExt as _;
-    let nombre = shell.file_name()?;
-    let texto = std::str::from_utf8(nombre.as_bytes()).ok()?;
-    norte_frontend::shell::Shell::parse(texto)
+    let name = shell.file_name()?;
+    let text = std::str::from_utf8(name.as_bytes()).ok()?;
+    norte_frontend::shell::Shell::parse(text)
 }
 
-/// El hilo que lee del pty sin parar y deja lo leído en el buzón.
+/// The thread that reads from the pty non-stop and leaves what it read in
+/// the mailbox.
 ///
-/// Un hilo y no una task: `portable_pty` da un lector BLOQUEANTE, y meter una
-/// lectura bloqueante en el executor es la regla 2. El hilo muere solo cuando
-/// el pty se cierra.
-/// El buzón, aunque el hilo lector haya muerto con él cogido.
+/// A thread and not a task: `portable_pty` gives a BLOCKING reader, and
+/// putting a blocking read into the executor is rule 2. The thread only
+/// dies when the pty closes.
+/// The mailbox, even if the reader thread died holding it.
 ///
-/// `PoisonError::into_inner` y no un `expect` (regla 6): el veneno significa
-/// que el lector cayó a mitad de una escritura, y lo peor que hay dentro es un
-/// trozo de salida a medio añadir. Caerse por eso sería un pánico en el hilo
-/// principal CON LA TERMINAL EN RAW MODE y los paneles sin pintar — un precio
-/// desproporcionado por unos bytes de pantalla. Y no hay invariante que
-/// sostenga un `expect`: nadie puede prometer que un hilo no entre en pánico.
+/// `PoisonError::into_inner` and not an `expect` (rule 6): the poison means
+/// the reader fell over mid-write, and the worst thing inside is a chunk of
+/// output half-added. Crashing over that would be a panic in the main
+/// thread WITH THE TERMINAL IN RAW MODE and the panels unpainted — a
+/// disproportionate price for a few bytes of screen. And there is no
+/// invariant that supports an `expect`: nobody can promise a thread will
+/// not panic.
 fn buzon_de(buzon: &Mutex<Buzon>) -> std::sync::MutexGuard<'_, Buzon> {
     buzon
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
-/// Crea el buzón de esta sesión: un fichero VACÍO y 0600 con el nonce en el
-/// nombre (#363).
+/// Creates this session's mailbox: an EMPTY, 0600 file with the nonce in
+/// its name (#363).
 ///
-/// Vive donde vive el socket del daemon y por el mismo criterio:
-/// `$XDG_RUNTIME_DIR` si lo hay —ya es 0700 del usuario— y si no
-/// `/tmp/norte-<uid>`. El modo se pone al CREARLO y no después: un fichero que
-/// nace 0644 y se arregla luego tiene una ventana en la que otro usuario puede
-/// abrirlo, y lo que se escribe aquí manda a un shell a un directorio.
+/// It lives where the daemon's socket lives and by the same criterion:
+/// `$XDG_RUNTIME_DIR` if there is one —already 0700 of the user's— and if
+/// not `/tmp/norte-<uid>`. The mode is set on CREATION and not afterward: a
+/// file born 0644 and fixed up later has a window where another user can
+/// open it, and what is written here sends a shell to a directory.
 ///
-/// `None` si no se puede. El llamante degrada: el panel no arrastra al shell y
-/// no se instala el gancho. Es preferible a las dos alternativas —caerse, o
-/// volver a teclear el `cd`—.
+/// `None` if it cannot be done. The caller degrades: the panel does not
+/// drag the shell along and the hook is not installed. That is preferable
+/// to the two alternatives —crashing, or typing the `cd` again—.
 fn crear_buzon(nonce: &Nonce) -> Option<std::path::PathBuf> {
     use std::os::unix::fs::OpenOptionsExt as _;
     let dir = match std::env::var_os("XDG_RUNTIME_DIR").filter(|v| !v.is_empty()) {
         Some(r) => std::path::PathBuf::from(r).join("norte"),
-        // Sin `XDG_RUNTIME_DIR`, el mismo sitio que el socket del daemon:
-        // `/tmp/norte-<uid>`. El uid sale del dueño de un fichero que acabamos
-        // de crear, que es nuestro euid sin `unsafe` (regla 5) — la misma
-        // vuelta que da `norte-client` para nombrar ese directorio.
+        // With no `XDG_RUNTIME_DIR`, the same place as the daemon's socket:
+        // `/tmp/norte-<uid>`. The uid comes from the owner of a file we just
+        // created, which is our euid with no `unsafe` (rule 5) — the same
+        // trick `norte-client` uses to name that directory.
         None => std::path::PathBuf::from(format!("/tmp/norte-{}", uid_propio()?)),
     };
     std::fs::create_dir_all(&dir).ok()?;
@@ -423,27 +435,28 @@ fn crear_buzon(nonce: &Nonce) -> Option<std::path::PathBuf> {
     Some(path)
 }
 
-/// El uid de este proceso SIN `unsafe` (regla 5): el dueño de un fichero que
-/// acabamos de crear es nuestro euid.
+/// This process's uid WITHOUT `unsafe` (rule 5): the owner of a file we
+/// just created is our euid.
 ///
-/// Solo se usa para NOMBRAR el directorio de `/tmp`, como en `norte-client`.
-/// Lo que protege de verdad es el modo 0700 de ese directorio y el 0600 del
-/// buzón, no el número del nombre.
+/// Only used to NAME the `/tmp` directory, as in `norte-client`. What
+/// truly protects it is that directory's 0700 mode and the mailbox's 0600,
+/// not the number in the name.
 fn uid_propio() -> Option<u32> {
     use std::os::unix::fs::MetadataExt as _;
-    let sonda = std::env::temp_dir().join(format!(".norte-uid-{}", std::process::id()));
-    std::fs::File::create(&sonda).ok()?;
-    let uid = std::fs::metadata(&sonda).ok().map(|m| m.uid());
-    let _ = std::fs::remove_file(&sonda);
+    let probe = std::env::temp_dir().join(format!(".norte-uid-{}", std::process::id()));
+    std::fs::File::create(&probe).ok()?;
+    let uid = std::fs::metadata(&probe).ok().map(|m| m.uid());
+    let _ = std::fs::remove_file(&probe);
     uid
 }
 
-/// Deja `bytes` en el buzón, de una pieza.
+/// Leaves `bytes` in the mailbox, in one piece.
 ///
-/// Por temporal y `rename` y no escribiendo encima: el gancho puede leerlo en
-/// cualquier momento —corre en CADA prompt— y media ruta es un `cd` a un sitio
-/// que no es. El `rename` dentro del mismo directorio es atómico, así que el
-/// shell ve la ruta entera o la de antes, nunca un trozo.
+/// Via a temp file and `rename` and not by writing over it: the hook can
+/// read it at any moment —it runs on EVERY prompt— and half a path is a
+/// `cd` to somewhere it should not be. The `rename` within the same
+/// directory is atomic, so the shell sees the whole path or the previous
+/// one, never a fragment.
 fn escribir_buzon(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
     use std::io::Write as _;
     use std::os::unix::fs::OpenOptionsExt as _;
@@ -461,11 +474,11 @@ fn escribir_buzon(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
     std::fs::rename(&tmp, path)
 }
 
-/// Escribe al pty.
+/// Writes to the pty.
 ///
-/// Lo usan los dos escritores. La distinción importa: teclear una orden pone
-/// algo en la línea, y contestar una consulta de terminal no — el programa que
-/// preguntó está esperando esos bytes, no `readline`.
+/// Used by both writers. The distinction matters: typing a command puts
+/// something on the line, and answering a terminal query does not — the
+/// program that asked is waiting for those bytes, not `readline`.
 fn escribir_crudo(escritura: &Escritor, bytes: &[u8]) -> std::io::Result<()> {
     let mut e = escritura
         .lock()
@@ -475,7 +488,7 @@ fn escribir_crudo(escritura: &Escritor, bytes: &[u8]) -> std::io::Result<()> {
 }
 
 fn lanzar_lector(
-    mut lector: LectorDelPty,
+    mut reader: LectorDelPty,
     buzon: Arc<Mutex<Buzon>>,
     escritura: Escritor,
     nonce: norte_frontend::subshell::Nonce,
@@ -483,51 +496,56 @@ fn lanzar_lector(
     std::thread::spawn(move || {
         let mut buf = [0u8; 8192];
         loop {
-            match lector.read(&mut buf) {
+            match reader.read(&mut buf) {
                 Ok(0) | Err(_) => {
                     buzon_de(&buzon).cerrado = true;
                     return;
                 }
                 Ok(n) => {
-                    // Contestar va ANTES de nada: el shell está PARADO
-                    // esperándolo. Fuera del lock del buzón, que no pinta
-                    // nada aquí y `escribir_crudo` coge el suyo.
+                    // Answering comes BEFORE anything else: the shell is
+                    // STOPPED waiting for it. Outside the mailbox's lock,
+                    // which does not matter here, and `escribir_crudo`
+                    // takes its own.
                     if let Some(r) = norte_frontend::subshell::terminal_reply(&buf[..n]) {
                         let _ = escribir_crudo(&escritura, &r);
                     }
                     let mut b = buzon_de(&buzon);
-                    // La cola del trozo anterior va DELANTE: un marcador
-                    // partido entre dos lecturas se reconstruye aquí, y sin
-                    // esto el cwd se perdería y el escape saldría por pantalla.
-                    let mut trozo = std::mem::take(&mut b.cola);
-                    trozo.extend_from_slice(&buf[..n]);
-                    let s = scan_cwd(&trozo, &nonce);
+                    // The previous chunk's tail goes FIRST: a marker split
+                    // between two reads is reconstructed here, and without
+                    // this the cwd would be lost and the escape sequence
+                    // would show up on screen.
+                    let mut chunk = std::mem::take(&mut b.cola);
+                    chunk.extend_from_slice(&buf[..n]);
+                    let s = scan_cwd(&chunk, &nonce);
                     b.cola = s.tail;
                     if let Some(c) = s.cwd {
-                        // El gancho del prompt habló: el shell acaba de
-                        // terminar lo que tuviera y va a pintar su `PS1`. Y ya
-                        // recogió el buzón si había algo, porque el `cd` va
-                        // DENTRO del gancho y antes del anuncio: esto es dónde
-                        // se ha quedado, no dónde estaba.
+                        // The prompt hook spoke: the shell has just
+                        // finished whatever it had and is about to paint
+                        // its `PS1`. And it has already picked up the
+                        // mailbox if there was anything, because the `cd`
+                        // goes INSIDE the hook and before the
+                        // announcement: this is where it has ended up, not
+                        // where it was.
                         b.cwd = Some(c);
                     }
                     b.pendiente.extend_from_slice(&s.visible);
-                    // Se conserva la COLA de lo escrito: un proceso que
-                    // escribe sin fin mientras nadie mira no puede comerse la
-                    // memoria de norte.
+                    // The TAIL of what was written is kept: a process
+                    // writing without end while nobody is looking must not
+                    // eat up norte's memory.
                     //
-                    // El corte se busca en el siguiente `\n` (regla 1 del
-                    // terminal, no la de los nombres): el punto de corte lo
-                    // elige norte, así que cortar a mitad de un CSI dejaría al
-                    // terminal comiéndose los bytes de detrás como parámetros
-                    // — la primera línea del volcado saldría rota.
+                    // The cut point is looked for at the next `\n`
+                    // (terminal rule 1, not the names one): norte chooses
+                    // the cut point, so cutting in the middle of a CSI
+                    // would leave the terminal eating the bytes behind it
+                    // as parameters — the dump's first line would come out
+                    // broken.
                     if b.pendiente.len() > BUFFER_MAX {
-                        let sobra = b.pendiente.len() - BUFFER_MAX;
-                        let corte = b.pendiente[sobra..]
+                        let overflow = b.pendiente.len() - BUFFER_MAX;
+                        let cut = b.pendiente[overflow..]
                             .iter()
                             .position(|c| *c == b'\n')
-                            .map_or(b.pendiente.len(), |p| sobra + p + 1);
-                        b.pendiente.drain(..corte);
+                            .map_or(b.pendiente.len(), |p| overflow + p + 1);
+                        b.pendiente.drain(..cut);
                     }
                 }
             }
@@ -535,22 +553,23 @@ fn lanzar_lector(
     });
 }
 
-/// El lector BLOQUEANTE que devuelve `portable_pty`, con nombre propio para
-/// que la firma del hilo se lea.
+/// The BLOCKING reader `portable_pty` returns, given its own name so the
+/// thread's signature reads well.
 type LectorDelPty = Box<dyn std::io::Read + Send>;
 
-/// Los bytes que una tecla le manda a un shell, o `None` si esta tecla no
-/// significa nada ahí.
+/// The bytes a key sends to a shell, or `None` if this key means nothing
+/// there.
 ///
-/// Se traduce en vez de copiar el flujo crudo del tty, y esa es la decisión
-/// que evita el fallo clásico: con un hilo leyendo `/dev/tty` en crudo, al
-/// soltar el subshell ese hilo se queda bloqueado dentro de un `read` y se
-/// come la SIGUIENTE tecla del lector — la que ya era para los paneles. Con un
-/// solo lector (el de crossterm, el que la TUI ya usa) eso no puede pasar.
+/// It is translated instead of copying the tty's raw stream, and that is
+/// the decision that avoids the classic bug: with a thread reading
+/// `/dev/tty` raw, on releasing the subshell that thread stays blocked
+/// inside a `read` and eats the reader's NEXT key — the one that was
+/// already meant for the panels. With a single reader (crossterm's, the one
+/// the TUI already uses) that cannot happen.
 ///
-/// El precio es lo que no está en la tabla: ratón y pegado con corchetes no
-/// llegan al shell. Un shell no los pide, y la alternativa era la tecla
-/// robada.
+/// The price is what is not in the table: mouse and bracketed paste do not
+/// reach the shell. A shell does not ask for them, and the alternative was
+/// the stolen key.
 ///
 /// ```
 /// use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -558,20 +577,20 @@ type LectorDelPty = Box<dyn std::io::Read + Send>;
 ///
 /// assert_eq!(tecla_a_bytes(&KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE)), Some(b"a".to_vec()));
 /// assert_eq!(tecla_a_bytes(&KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)), Some(b"\r".to_vec()));
-/// // Ctrl+C viaja como el byte 3, que es lo que hace que interrumpa.
+/// // Ctrl+C travels as byte 3, which is what makes it interrupt.
 /// assert_eq!(tecla_a_bytes(&KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)), Some(vec![3]));
 /// ```
 #[must_use]
 pub fn tecla_a_bytes(k: &crossterm::event::KeyEvent) -> Option<Vec<u8>> {
     use norte_frontend::keymap::{Chord, KeyCode, Mods};
-    // **La TABLA es compartida** (`norte_frontend::subshell::chord_a_bytes`), y
-    // aquí solo queda traducir el evento de crossterm al acorde canónico que
-    // ella entiende. Estuvo escrita dos veces desde que el panel de terminal
-    // (#362) la necesitó también en la ventana, y dos tablas son dos sitios
-    // donde `F10` deja de salir de un `htop`.
+    // **The TABLE is shared** (`norte_frontend::subshell::chord_a_bytes`),
+    // and all that is left here is translating the crossterm event into
+    // the canonical chord it understands. It was written twice since the
+    // terminal panel (#362) also needed it in the window, and two tables
+    // are two places where `F10` stops getting you out of an `htop`.
     //
-    // `BackTab` es lo único que el acorde canónico no nombra: para el keymap
-    // es shift+tab, que es exactamente lo que se construye aquí.
+    // `BackTab` is the one thing the canonical chord does not name: for
+    // the keymap it is shift+tab, which is exactly what is built here.
     let (mods, code) = if k.code == crossterm::event::KeyCode::BackTab {
         (
             Mods {
@@ -590,12 +609,12 @@ pub fn tecla_a_bytes(k: &crossterm::event::KeyEvent) -> Option<Vec<u8>> {
 mod tests {
     use super::*;
 
-    /// Un bash SIN la configuración de nadie, interactivo.
+    /// A bash with NOBODY's configuration, interactive.
     ///
-    /// `--norc --noprofile` porque lo que se prueba es lo que norte instala,
-    /// no lo que el `.bashrc` de quien corre el test haga; `-i` porque un
-    /// shell no interactivo no tiene prompt, y el gancho del prompt es
-    /// justamente lo que hay que ver funcionar.
+    /// `--norc --noprofile` because what is tested is what norte installs,
+    /// not whatever the test runner's `.bashrc` does; `-i` because a
+    /// non-interactive shell has no prompt, and the prompt hook is exactly
+    /// what needs to be seen working.
     fn bash(dir: &std::path::Path) -> Subshell {
         Subshell::arrancar_con(
             std::path::Path::new("/bin/bash"),
@@ -606,298 +625,305 @@ mod tests {
         .expect("arranca bash")
     }
 
-    /// **Un shell de verdad, vivo, que recuerda** (#142).
+    /// **A real, live shell that remembers** (#142).
     ///
-    /// Se afirma sobre lo que SOLO el shell puede producir (`echo $((6*7))`),
-    /// no sobre el texto de la orden: el eco de la disciplina de línea devuelve
-    /// lo tecleado tal cual, así que buscar la propia orden en la salida no
-    /// demuestra que se haya ejecutado nada.
+    /// Asserts on what ONLY the shell can produce (`echo $((6*7))`), not on
+    /// the command's text: line discipline echo returns what was typed
+    /// as-is, so looking for the command itself in the output does not
+    /// prove anything was executed.
     #[test]
     fn un_subshell_vive_entre_dos_ordenes() {
         let dir = tempfile::tempdir().expect("tempdir");
-        // `arrancar` usa `$SHELL` (`login_shell`), o sea el de quien corre el
-        // test: solo se comprueba lo que todo shell POSIX hace igual.
+        // `arrancar` uses `$SHELL` (`login_shell`), i.e. the test runner's:
+        // only what every POSIX shell does the same way is checked.
         let mut sh = bash(dir.path());
 
         sh.escribir(b"echo uno-$((6*7))\n").expect("escribe");
         assert!(
             espera_hasta(&sh, b"uno-42").is_some(),
-            "el shell EJECUTA lo primero"
+            "the shell EXECUTES the first one"
         );
         sh.escribir(b"echo dos-$((6*7))\n").expect("escribe");
         assert!(
             espera_hasta(&sh, b"dos-42").is_some(),
-            "y sigue vivo para lo segundo: eso es lo que lo hace un subshell"
+            "and stays alive for the second: that is what makes it a subshell"
         );
         sh.matar();
     }
 
-    /// **El shell DICE dónde está, y norte lo entiende.**
+    /// **The shell STATES where it is, and norte understands it.**
     ///
-    /// Es el test que faltaba, y su ausencia dejó pasar que el gancho llevaba
-    /// el `ESC` y el `BEL` CRUDOS: el editor de línea se comía el `ESC ]` como
-    /// prefijo meta, así que lo que quedaba instalado imprimía
-    /// `777;norte-cwd;/casa` sin marco OSC. `scan_cwd` no reconocía nada, el
-    /// panel no seguía al shell JAMÁS —la promesa entera de #142— y el lector
-    /// veía ese texto en cada prompt. Con el shell arrancado en `dir`, el
-    /// primer prompt ya tiene que anunciarlo.
-    /// Corre para LOS TRES shells que norte prepara, cada uno con su propia
-    /// sintaxis de gancho: son tres textos distintos y un solo test los
-    /// cubría a uno. Se salta el que no esté instalado — es un test de
-    /// integración, no una razón para poner roja la máquina de alguien.
+    /// This is the test that was missing, and its absence let through a bug
+    /// where the hook carried the `ESC` and the `BEL` RAW: the line editor
+    /// ate the `ESC ]` as a meta prefix, so what ended up installed printed
+    /// `777;norte-cwd;/casa` with no OSC frame. `scan_cwd` recognized
+    /// nothing, the panel NEVER followed the shell —#142's whole promise—
+    /// and the reader saw that text on every prompt. With the shell started
+    /// in `dir`, the first prompt already has to announce it.
+    /// Runs for ALL THREE shells norte prepares, each with its own hook
+    /// syntax: they are three different texts and a single test covered
+    /// one. It skips whichever is not installed — it is an integration
+    /// test, not a reason to redden someone's machine.
     #[test]
     fn el_shell_anuncia_donde_esta() {
-        let mut probados = 0;
+        let mut tested = 0;
         for (bin, args) in [
             ("/bin/bash", &["--norc", "--noprofile", "-i"][..]),
             ("/usr/bin/zsh", &["-f", "-i"][..]),
             ("/usr/bin/fish", &["--no-config", "-i"][..]),
         ] {
-            let ruta = std::path::Path::new(bin);
-            if !ruta.exists() {
+            let path = std::path::Path::new(bin);
+            if !path.exists() {
                 continue;
             }
-            probados += 1;
+            tested += 1;
             let dir = tempfile::tempdir().expect("tempdir");
             let real = dir.path().canonicalize().expect("canonicalize");
-            let sh = Subshell::arrancar_con(ruta, args, &real, (80, 24)).expect("arranca");
-            let hasta = std::time::Instant::now() + std::time::Duration::from_secs(10);
-            let mut dicho = None;
-            while std::time::Instant::now() < hasta && dicho.is_none() {
-                dicho = sh.cwd();
+            let sh = Subshell::arrancar_con(path, args, &real, (80, 24)).expect("arranca");
+            let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            let mut announced = None;
+            while std::time::Instant::now() < until && announced.is_none() {
+                announced = sh.cwd();
                 let _ = sh.drenar();
                 std::thread::sleep(std::time::Duration::from_millis(20));
             }
             assert_eq!(
-                dicho.as_deref(),
+                announced.as_deref(),
                 Some(real.as_path()),
-                "{bin}: el gancho no llegó entero, o dijo otro sitio"
+                "{bin}: the hook did not arrive whole, or said a different place"
             );
         }
-        assert!(probados > 0, "ningún shell conocido en esta máquina");
+        assert!(tested > 0, "no known shell on this machine");
     }
 
-    /// Y SIGUE al panel: un `cd` sobre un directorio con un nombre hostil no
-    /// se convierte en una orden.
+    /// And FOLLOWS the panel: a `cd` over a directory with a hostile name
+    /// does not turn into a command.
     ///
-    /// El nombre lleva los bytes que readline EJECUTA (`0x15` borra la línea
-    /// entera), que es lo que el entrecomillado no paraba: la comilla protege
-    /// un byte que entra en el buffer, y ése no entra. `/tmp/…\x15id #`
-    /// ejecutaba `id`.
+    /// The name carries bytes readline EXECUTES (`0x15` erases the whole
+    /// line), which quoting did not stop: the quote protects a byte that
+    /// enters the buffer, and that one does not enter it. `/tmp/…\x15id #`
+    /// executed `id`.
     #[test]
     fn el_subshell_sigue_al_panel_con_un_nombre_hostil() {
         use std::os::unix::ffi::OsStrExt as _;
-        let raiz = tempfile::tempdir().expect("tempdir");
-        let raiz = raiz.path().canonicalize().expect("canonicalize");
-        let hostil = raiz.join(std::ffi::OsStr::from_bytes(
+        let root = tempfile::tempdir().expect("tempdir");
+        let root = root.path().canonicalize().expect("canonicalize");
+        let hostile = root.join(std::ffi::OsStr::from_bytes(
             b"a b; echo pwned\x15echo pwned #",
         ));
-        std::fs::create_dir(&hostil).expect("mkdir");
+        std::fs::create_dir(&hostile).expect("mkdir");
 
-        let sh = bash(&raiz);
-        // El `cd` solo se manda con el shell PARADO en su prompt, que es lo
-        // que este bucle espera (y lo que impide que se concatene con lo que
-        // el lector hubiera dejado a medias).
+        let sh = bash(&root);
+        // The `cd` is only sent with the shell STOPPED at its prompt, which
+        // is what this loop waits for (and what keeps it from being
+        // concatenated with whatever the reader had left half-typed).
         let mut sh = sh;
-        let hasta = std::time::Instant::now() + std::time::Duration::from_secs(10);
-        let mut mandado = false;
-        // Lo drenado se GUARDA: cuando este bucle se agotó una vez bajo carga
-        // (#360) el rojo no dijo qué había escrito el shell hasta entonces, y
-        // sin eso no se podía distinguir «no llegó el prompt» de «llegó y el
-        // permiso se había perdido». Es la diferencia que costó el diagnóstico.
-        let mut visto = Vec::new();
-        while std::time::Instant::now() < hasta && !mandado {
-            visto.extend_from_slice(&sh.drenar());
-            mandado = sh.ir_a(&hostil).expect("cd");
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let mut sent = false;
+        // What is drained is KEPT: when this loop once ran out under load
+        // (#360) the failure did not say what the shell had written up to
+        // then, and without that it was impossible to tell "the prompt
+        // never arrived" apart from "it arrived and the permission was
+        // lost". That is the difference that cost the diagnosis.
+        let mut seen = Vec::new();
+        while std::time::Instant::now() < until && !sent {
+            seen.extend_from_slice(&sh.drenar());
+            sent = sh.ir_a(&hostile).expect("cd");
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
         assert!(
-            mandado,
-            "nunca hubo un prompt al que mandarle el cd; el shell escribió: {}",
-            String::from_utf8_lossy(&visto)
+            sent,
+            "there was never a prompt to send the cd to; the shell wrote: {}",
+            String::from_utf8_lossy(&seen)
         );
 
-        // Se comprueba por el MARCADOR, no por el eco: el shell dice dónde
-        // está, y ahí es donde tiene que estar.
-        let hasta = std::time::Instant::now() + std::time::Duration::from_secs(10);
-        let mut llego = false;
-        while std::time::Instant::now() < hasta {
-            visto.extend_from_slice(&sh.drenar());
-            if sh.cwd().as_deref() == Some(hostil.as_path()) {
-                llego = true;
+        // Checked by the MARKER, not by the echo: the shell says where it
+        // is, and that is where it has to be.
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let mut arrived = false;
+        while std::time::Instant::now() < until {
+            seen.extend_from_slice(&sh.drenar());
+            if sh.cwd().as_deref() == Some(hostile.as_path()) {
+                arrived = true;
                 break;
             }
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
-        assert!(llego, "el shell no acabó dentro del directorio hostil");
-        // Y nada se ejecutó. `pwned` aparece en el nombre del directorio —y por
-        // tanto en el prompt de muchos shells—, así que lo que se busca es la
-        // SALIDA de un `echo`: la palabra sola en su línea.
-        let texto = String::from_utf8_lossy(&visto);
         assert!(
-            !texto.lines().any(|l| l.trim() == "pwned"),
-            "algo del nombre se ejecutó: {texto}"
+            arrived,
+            "the shell did not end up inside the hostile directory"
+        );
+        // And nothing was executed. `pwned` appears in the directory's
+        // name —and therefore in many shells' prompts—, so what is looked
+        // for is an `echo`'s OUTPUT: the word alone on its own line.
+        let text = String::from_utf8_lossy(&seen);
+        assert!(
+            !text.lines().any(|l| l.trim() == "pwned"),
+            "something from the name was executed: {text}"
         );
         sh.matar();
     }
 
-    /// **Un Ctrl+L no apaga el seguimiento del panel** (#360).
+    /// **A Ctrl+L does not turn off the panel's following** (#360).
     ///
-    /// Ctrl+L no es una orden: `readline`/ZLE lo ejecutan como una función que
-    /// limpia la pantalla y REPINTA el prompt, dejando la línea exactamente
-    /// como estaba. No pone nada en ella.
+    /// Ctrl+L is not a command: `readline`/ZLE run it as a function that
+    /// clears the screen and REPAINTS the prompt, leaving the line exactly
+    /// as it was. It puts nothing into it.
     ///
-    /// Lo apagaba igual. Cuando norte tecleaba el `cd`, hacía falta un permiso
-    /// —«llegó un marcador y nadie ha escrito desde entonces»— y `escribir` lo
-    /// bajaba para TODO lo que se mandara. El repintado no corre
-    /// `PROMPT_COMMAND` —lo corre bash antes de leer una orden NUEVA—, así que
-    /// detrás del Ctrl+L no venía ningún marcador y el permiso se quedaba
-    /// abajo hasta el Intro siguiente. Entre medias el panel no seguía al
-    /// shell: la promesa entera de #142, apagada por la tecla de limpiar la
-    /// pantalla.
+    /// It used to turn it off all the same. When norte typed the `cd`, a
+    /// permission was needed —"a marker arrived and nobody has typed since
+    /// then"— and `escribir` lowered it for EVERYTHING that was sent. The
+    /// repaint does not run `PROMPT_COMMAND` —bash runs that before reading
+    /// a NEW command—, so no marker came after the Ctrl+L and the
+    /// permission stayed down until the next Enter. In between, the panel
+    /// did not follow the shell: #142's whole promise, turned off by the
+    /// clear-screen key.
     ///
-    /// Desde #363 no hay permiso que bajar: el destino se anota en el buzón
-    /// pase lo que pase, y el gancho lo recoge en el prompt siguiente. El test
-    /// se queda porque la propiedad sigue siendo la misma —un Ctrl+L no puede
-    /// dejar al panel sin poder arrastrar al shell— y porque es la carrera que
-    /// la suite vio una vez bajo carga.
+    /// Since #363 there is no permission to lower: the destination is
+    /// noted in the mailbox no matter what, and the hook picks it up at
+    /// the next prompt. The test stays because the property is still the
+    /// same —a Ctrl+L must not leave the panel unable to drag the shell
+    /// along— and because it is the race the suite once saw under load.
     ///
-    /// El Intro de en medio es del LECTOR y no de norte: el gancho corre entre
-    /// dos órdenes, así que hace falta que el shell llegue a una. Ése es el
-    /// precio del cambio, y es el que #363 aceptó a cambio de cerrar la
-    /// inyección: el movimiento se aplica en el prompt siguiente y no al
-    /// instante.
+    /// The Enter in the middle is the READER's and not norte's: the hook
+    /// runs between two commands, so the shell needs to reach one. That is
+    /// the price of the change, and it is the one #363 accepted in
+    /// exchange for closing the injection: the move applies at the next
+    /// prompt and not instantly.
     #[test]
     fn un_ctrl_l_no_apaga_el_seguimiento() {
         let dir = tempfile::tempdir().expect("tempdir");
         let dir = dir.path().canonicalize().expect("canonicalize");
-        let otro = dir.join("otro");
-        std::fs::create_dir(&otro).expect("mkdir");
+        let other = dir.join("otro");
+        std::fs::create_dir(&other).expect("mkdir");
         let mut sh = bash(&dir);
         espera_quieto(&sh);
         sh.escribir_tecla(b"\x0c").expect("ctrl+l");
         let _ = sh.drenar();
 
         assert!(
-            sh.ir_a(&otro).expect("cd"),
-            "un Ctrl+L dejó al panel sin poder seguir al shell"
+            sh.ir_a(&other).expect("cd"),
+            "a Ctrl+L left the panel unable to follow the shell"
         );
-        // La línea está vacía, así que el Intro del lector no ejecuta nada:
-        // solo lleva al shell a su prompt siguiente, que es donde el gancho
-        // recoge el buzón.
+        // The line is empty, so the reader's Enter executes nothing: it
+        // only takes the shell to its next prompt, which is where the
+        // hook picks up the mailbox.
         sh.escribir_tecla(b"\n").expect("intro");
-        let hasta = std::time::Instant::now() + std::time::Duration::from_secs(10);
-        let mut llego = false;
-        while std::time::Instant::now() < hasta {
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let mut arrived = false;
+        while std::time::Instant::now() < until {
             let _ = sh.drenar();
-            if sh.cwd().as_deref() == Some(otro.as_path()) {
-                llego = true;
+            if sh.cwd().as_deref() == Some(other.as_path()) {
+                arrived = true;
                 break;
             }
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
-        assert!(llego, "el `cd` de después del Ctrl+L no llegó a ejecutarse");
+        assert!(arrived, "the `cd` after the Ctrl+L never got executed");
         sh.matar();
     }
 
-    /// **Una línea a medio escribir no se convierte en una orden.**
+    /// **A half-typed line does not turn into a command.**
     ///
-    /// Es el peor de los fallos que tuvo esto: el `cd` se tecleaba al entrar,
-    /// así que un `rm -rf tmpdir` que el lector había escrito y no ejecutado
-    /// se convertía en `rm -rf tmpdircd -- \'/otro\'` en cuanto volvía. Y lo
-    /// que hace el caso normal y no raro es que este subshell PROMETE
-    /// conservar la línea a medias.
+    /// This is the worst bug this had: the `cd` was typed in on entering,
+    /// so an `rm -rf tmpdir` the reader had typed and not executed turned
+    /// into `rm -rf tmpdircd -- \'/otro\'` as soon as they came back. And
+    /// what the normal, not the rare, case does is that this subshell
+    /// PROMISES to keep the half-typed line intact.
     ///
-    /// Desde #363 no se teclea nada: el destino se deja en el buzón y el
-    /// gancho lo recoge en el prompt siguiente. Así que `ir_a` SÍ acepta —hay
-    /// dónde anotarlo— y lo que se comprueba es que la línea del lector siga
-    /// intacta y que no se ejecute.
+    /// Since #363 nothing is typed: the destination is left in the mailbox
+    /// and the hook picks it up at the next prompt. So `ir_a` DOES accept —
+    /// there is somewhere to note it down— and what is checked is that the
+    /// reader's line stays intact and is not executed.
     #[test]
     fn una_linea_a_medias_no_se_ejecuta() {
         let dir = tempfile::tempdir().expect("tempdir");
         let dir = dir.path().canonicalize().expect("canonicalize");
-        let otro = dir.join("otro");
-        std::fs::create_dir(&otro).expect("mkdir");
+        let other = dir.join("otro");
+        std::fs::create_dir(&other).expect("mkdir");
         let mut sh = bash(&dir);
-        // Esperar a que el shell se QUEDE quieto, y entonces dejar algo a
-        // medias: las órdenes de instalación producen un prompt cada una, y
-        // teclear encima de una que aún no llegó sería una carrera del test.
+        // Wait for the shell to SETTLE, and only then leave something
+        // half-typed: the install commands each produce a prompt, and
+        // typing over one that has not arrived yet would be a test race.
         espera_quieto(&sh);
-        // `pwn''ed` y no `pwned`: lo que el pty ECOA es la línea tal cual, así
-        // que buscar «pwned» encontraría el eco y no la ejecución. Con las
-        // comillas en medio, la cadena entera solo aparece si bash la ejecutó.
-        sh.escribir(b"echo pwn''ed").expect("media línea");
+        // `pwn''ed` and not `pwned`: what the pty ECHOES is the line
+        // as-is, so looking for "pwned" would find the echo and not the
+        // execution. With the quotes in the middle, the whole string only
+        // appears if bash executed it.
+        sh.escribir(b"echo pwn''ed").expect("media linea");
         std::thread::sleep(std::time::Duration::from_millis(300));
         let _ = sh.drenar();
 
         assert!(
-            sh.ir_a(&otro).expect("cd"),
-            "hay buzón donde anotarlo, así que se anota"
+            sh.ir_a(&other).expect("cd"),
+            "there is a mailbox to note it in, so it is noted"
         );
         std::thread::sleep(std::time::Duration::from_millis(300));
-        let texto = String::from_utf8_lossy(&sh.drenar()).into_owned();
+        let text = String::from_utf8_lossy(&sh.drenar()).into_owned();
         assert!(
-            !texto.contains("pwned"),
-            "se ejecutó lo que el lector no ejecutó: {texto}"
+            !text.contains("pwned"),
+            "what the reader did not execute got executed: {text}"
         );
-        // Y la línea sigue ahí: el Intro la ejecuta ENTERA y sola.
+        // And the line is still there: Enter executes it WHOLE and alone.
         sh.escribir(b"\n").expect("intro");
         std::thread::sleep(std::time::Duration::from_millis(400));
-        let texto = String::from_utf8_lossy(&sh.drenar()).into_owned();
+        let text = String::from_utf8_lossy(&sh.drenar()).into_owned();
         assert!(
-            texto.contains("pwned"),
-            "la línea del lector no sobrevivió al movimiento: {texto}"
+            text.contains("pwned"),
+            "the reader's line did not survive the move: {text}"
         );
         sh.matar();
     }
 
-    /// **El type-ahead no se concatena con nada** (#363).
+    /// **Type-ahead does not concatenate with anything** (#363).
     ///
-    /// El caso que el flag `en_prompt` no podía ver, y que no necesita ningún
-    /// shell en particular: lo que el lector teclea mientras el shell está
-    /// OCUPADO espera en la cola del pty. El marcador del prompt llegaba con
-    /// esos bytes todavía sin consumir —«nadie escribió desde el marcador» era
-    /// cierto y «la línea está vacía» era falso— y el `cd` se pegaba detrás:
+    /// The case the `en_prompt` flag could not see, and that needs no
+    /// particular shell: what the reader types while the shell is BUSY
+    /// waits in the pty's queue. The prompt marker arrived with those bytes
+    /// still unconsumed —"nobody typed since the marker" was true and "the
+    /// line is empty" was false— and the `cd` got stuck onto it:
     /// `rm -rf tmpdir __norte_cd \'...\'`.
     ///
-    /// Con el buzón no hay nada que concatenar. Aquí se reproduce con un
-    /// `sleep` por delante, que es lo que mantiene a readline sin leer.
+    /// With the mailbox there is nothing to concatenate onto. Reproduced
+    /// here with a `sleep` in front, which is what keeps readline from
+    /// reading.
     #[test]
     fn lo_tecleado_mientras_el_shell_esta_ocupado_no_arrastra_un_cd() {
         let dir = tempfile::tempdir().expect("tempdir");
         let dir = dir.path().canonicalize().expect("canonicalize");
-        let otro = dir.join("otro");
-        std::fs::create_dir(&otro).expect("mkdir");
+        let other = dir.join("otro");
+        std::fs::create_dir(&other).expect("mkdir");
         let mut sh = bash(&dir);
         espera_quieto(&sh);
 
-        // El shell se pone a dormir, y el lector teclea encima sin Intro: esos
-        // bytes se quedan en la cola del pty hasta que `sleep` acabe.
+        // The shell goes to sleep, and the reader types over it with no
+        // Enter: those bytes stay in the pty's queue until `sleep` ends.
         sh.escribir(b"sleep 1\n").expect("sleep");
         std::thread::sleep(std::time::Duration::from_millis(150));
-        // Mismo truco que en el test de al lado: el eco no puede confundirse
-        // con la ejecución.
+        // Same trick as the test next door: the echo cannot be confused
+        // with the execution.
         sh.escribir(b"echo pwn''ed").expect("type-ahead");
-        // Y norte mueve el panel justo cuando el prompt vuelve.
-        assert!(sh.ir_a(&otro).expect("cd"), "se anota en el buzón");
+        // And norte moves the panel exactly when the prompt comes back.
+        assert!(sh.ir_a(&other).expect("cd"), "noted in the mailbox");
         std::thread::sleep(std::time::Duration::from_millis(1800));
 
-        let texto = String::from_utf8_lossy(&sh.drenar()).into_owned();
+        let text = String::from_utf8_lossy(&sh.drenar()).into_owned();
         assert!(
-            !texto.contains("pwned"),
-            "el type-ahead del lector acabó ejecutándose: {texto}"
+            !text.contains("pwned"),
+            "the reader's type-ahead ended up being executed: {text}"
         );
-        // Y el shell SÍ se movió: el gancho recogió el buzón en su prompt.
+        // And the shell DID move: the hook picked up the mailbox at its
+        // prompt.
         assert_eq!(
             sh.cwd().as_deref(),
-            Some(otro.as_path()),
-            "el gancho no recogió el buzón"
+            Some(other.as_path()),
+            "the hook did not pick up the mailbox"
         );
         sh.matar();
     }
 
-    /// Las teclas que un shell necesita llegan como los bytes que espera, y lo
-    /// que no significa nada ahí no llega.
+    /// The keys a shell needs arrive as the bytes it expects, and whatever
+    /// means nothing there does not arrive.
     #[test]
     fn las_teclas_llegan_como_bytes_de_terminal() {
         use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -905,13 +931,13 @@ mod tests {
         assert_eq!(t(KeyCode::Up, KeyModifiers::NONE), Some(b"\x1b[A".to_vec()));
         assert_eq!(t(KeyCode::Backspace, KeyModifiers::NONE), Some(vec![0x7f]));
         assert_eq!(t(KeyCode::Char('d'), KeyModifiers::CONTROL), Some(vec![4]));
-        // Alt es ESC delante: es lo que hace que `alt+f` mueva una palabra.
+        // Alt is ESC in front: that is what makes `alt+f` move a word.
         assert_eq!(
             t(KeyCode::Char('f'), KeyModifiers::ALT),
             Some(vec![0x1b, b'f'])
         );
-        // Las de función llegan: un `htop` dentro del subshell las usa, y F10
-        // es lo que lo cierra.
+        // The function ones arrive: an `htop` inside the subshell uses
+        // them, and F10 is what closes it.
         assert_eq!(
             t(KeyCode::F(1), KeyModifiers::NONE),
             Some(b"\x1bOP".to_vec())
@@ -920,20 +946,20 @@ mod tests {
             t(KeyCode::F(10), KeyModifiers::NONE),
             Some(b"\x1b[21~".to_vec())
         );
-        // Los acordes de control que no son letras también son bytes:
-        // Ctrl+\ es SIGQUIT, no una barra invertida.
+        // Control chords that are not letters are also bytes: Ctrl+\ is
+        // SIGQUIT, not a backslash.
         assert_eq!(
             t(KeyCode::Char('\\'), KeyModifiers::CONTROL),
             Some(vec![28])
         );
         assert_eq!(t(KeyCode::Char(' '), KeyModifiers::CONTROL), Some(vec![0]));
-        // Y una tecla que un shell no usa no se inventa.
+        // And a key a shell does not use is not made up.
         assert_eq!(t(KeyCode::F(20), KeyModifiers::NONE), None);
         assert_eq!(t(KeyCode::CapsLock, KeyModifiers::NONE), None);
     }
 
-    /// Un carácter no-ASCII viaja en UTF-8 entero: escribir `ñ` en el subshell
-    /// no puede mandar medio carácter.
+    /// A non-ASCII character travels as whole UTF-8: typing `ñ` into the
+    /// subshell must not send half a character.
     #[test]
     fn un_caracter_multibyte_viaja_entero() {
         use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -943,44 +969,45 @@ mod tests {
         );
     }
 
-    /// Espera a que lo escrito por el shell contenga `aguja`, sin colgarse.
+    /// Waits for what the shell wrote to contain `needle`, without hanging.
     ///
-    /// Sondea en vez de dormir un rato fijo: un shell tarda lo que tarda en
-    /// arrancar el `.bashrc` de quien corre el test, y un `sleep` elegido a
-    /// ojo es un test que se pone rojo en la máquina cargada de otro.
-    /// Devuelve TODO lo acumulado, no un `bool`: el que llama suele querer
-    /// afirmar algo sobre lo que llegó, y con un `bool` esos bytes se quedaban
-    /// dentro de esta función y se tiraban — la comprobación de después miraba
-    /// un buzón ya vacío y no podía fallar dijera lo que dijera.
-    /// Espera a que el shell deje de escribir y haya anunciado un prompt.
+    /// Polls instead of sleeping a fixed while: a shell takes as long as it
+    /// takes to start the test runner's `.bashrc`, and a `sleep` picked by
+    /// eye is a test that goes red on someone else's loaded machine.
+    /// Returns ALL that accumulated, not a `bool`: the caller usually wants
+    /// to assert something about what arrived, and with a `bool` those
+    /// bytes stayed inside this function and were dropped — the check
+    /// afterward looked at an already-empty mailbox and could not fail no
+    /// matter what it said.
+    /// Waits for the shell to stop writing and to have announced a prompt.
     ///
-    /// Las órdenes de instalación producen un prompt —y un marcador— CADA UNA,
-    /// y llegan cuando llegan: un test que teclee encima de una que aún no ha
-    /// llegado se pone rojo por la carrera y no por el código.
+    /// The install commands each produce a prompt —and a marker— ONE AT A
+    /// TIME, and they arrive when they arrive: a test that types over one
+    /// that has not arrived yet goes red from the race, not from the code.
     fn espera_quieto(sh: &Subshell) {
-        let hasta = std::time::Instant::now() + std::time::Duration::from_secs(10);
-        let mut quietos = 0;
-        while std::time::Instant::now() < hasta {
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let mut still = 0;
+        while std::time::Instant::now() < until {
             std::thread::sleep(std::time::Duration::from_millis(100));
             if sh.drenar().is_empty() && sh.cwd().is_some() {
-                quietos += 1;
-                if quietos >= 3 {
+                still += 1;
+                if still >= 3 {
                     return;
                 }
             } else {
-                quietos = 0;
+                still = 0;
             }
         }
-        panic!("el shell no se quedó quieto");
+        panic!("the shell never settled");
     }
 
-    fn espera_hasta(sh: &Subshell, aguja: &[u8]) -> Option<Vec<u8>> {
-        let hasta = std::time::Instant::now() + std::time::Duration::from_secs(10);
-        let mut visto: Vec<u8> = Vec::new();
-        while std::time::Instant::now() < hasta {
-            visto.extend_from_slice(&sh.drenar());
-            if visto.windows(aguja.len()).any(|w| w == aguja) {
-                return Some(visto);
+    fn espera_hasta(sh: &Subshell, needle: &[u8]) -> Option<Vec<u8>> {
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let mut seen: Vec<u8> = Vec::new();
+        while std::time::Instant::now() < until {
+            seen.extend_from_slice(&sh.drenar());
+            if seen.windows(needle.len()).any(|w| w == needle) {
+                return Some(seen);
             }
             std::thread::sleep(std::time::Duration::from_millis(20));
         }

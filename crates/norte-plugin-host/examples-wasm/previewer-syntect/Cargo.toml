@@ -1,11 +1,12 @@
-# Guest WASM (#29): un previewer REAL con syntect — resalta la sintaxis DENTRO
-# del pane. NO es miembro del workspace (ver `exclude` en el Cargo.toml raíz):
-# compila a wasm32-wasip2 con su propio lockfile y perfil.
+# WASM guest (#29): a REAL previewer with syntect — highlights syntax
+# INSIDE the pane. NOT a workspace member (see `exclude` in the root
+# Cargo.toml): compiles to wasm32-wasip2 with its own lockfile and profile.
 #
-# syntect con fancy-regex (regex PURO Rust — sin `onig`/C, que no compila a
-# WASM) y los conjuntos por defecto embebidos (dump-load). La salida es ANSI de
-# 24 bits (`as_24_bit_terminal_escaped`); el host la sanea (frontend `ansi`).
-# Manifiesto AUTÓNOMO: empty `[workspace]` para no heredar el del host.
+# syntect with fancy-regex (PURE Rust regex — no `onig`/C, which does not
+# compile to WASM) and the embedded default sets (dump-load). The output is
+# 24-bit ANSI (`as_24_bit_terminal_escaped`); the host sanitizes it
+# (`ansi` frontend).
+# STANDALONE manifest: empty `[workspace]` so as not to inherit the host's.
 [workspace]
 
 [package]
@@ -18,9 +19,9 @@ publish = false
 crate-type = ["cdylib"]
 
 [dependencies]
-# wit-bindgen GUEST-side: mismo WIT que el host (symlink wit -> ../../wit).
+# wit-bindgen GUEST-side: same WIT as the host (symlink wit -> ../../wit).
 wit-bindgen = "0.46"
-# syntect sin onig (C, no-WASM): fancy-regex puro + defaults embebidos.
+# syntect without onig (C, non-WASM): pure fancy-regex + embedded defaults.
 syntect = { version = "5", default-features = false, features = [
     "default-syntaxes",
     "default-themes",

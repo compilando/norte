@@ -1,37 +1,37 @@
-//! Las cinco disposiciones de fábrica.
+//! The five factory layouts.
 //!
-//! Viven en TOML —el MISMO formato que `layouts/<nombre>.toml` y que el cuerpo
-//! de la sesión de L2 (ADR 0058)— y no en Rust, para que lo que norte trae de
-//! serie y lo que un usuario guarda sean la misma cosa: se puede copiar un
-//! preset, cambiarle dos números y quedárselo.
+//! They live in TOML — the SAME format as `layouts/<name>.toml` and as
+//! L2's session body (ADR 0058) — and not in Rust, so what norte ships and
+//! what a user saves are the same thing: a preset can be copied, two
+//! numbers changed, and kept.
 //!
-//! `NAMES` y [`source`] son items SEPARADOS y se prueban uno contra otro, como
-//! en [`crate::keymap::presets`]: un preset añadido a uno y no al otro rompe
-//! CI en vez de desaparecer en silencio.
+//! `NAMES` and [`source`] are SEPARATE items and are tested against each
+//! other, as in [`crate::keymap::presets`]: a preset added to one and not
+//! the other breaks CI instead of silently disappearing.
 //!
-//! Los ficheros no se escriben a mano. El test de este módulo construye los
-//! cinco árboles con los constructores de [`Node`] y compara; con
-//! `NORTE_UPDATE_GOLDEN=1` los reescribe. Anidar cuatro niveles de TOML a mano
-//! es como un `sizes` acaba con una entrada menos que sus `children`.
+//! The files are not hand-written. This module's test builds the five
+//! trees with [`Node`]'s constructors and compares; with
+//! `NORTE_UPDATE_GOLDEN=1` it rewrites them. Nesting four levels of TOML by
+//! hand is how a `sizes` ends up with one fewer entry than its `children`.
 
 use super::{LayoutError, Node};
 
-/// La de siempre: dos listados, la franja de tareas y la barra de estado.
+/// The usual one: two listings, the tasks strip and the status bar.
 pub const ORTHODOX: &str = include_str!("../../presets/layout/orthodox.toml");
-/// Un solo listado. Un terminal estrecho, una sesión ssh, una pantalla
-/// compartida en una llamada.
+/// A single listing. A narrow terminal, an ssh session, a shared screen on
+/// a call.
 pub const SIMPLE: &str = include_str!("../../presets/layout/simple.toml");
-/// Dos listados con el sidebar de sitios.
+/// Two listings with the places sidebar.
 pub const KRUSADER: &str = include_str!("../../presets/layout/krusader.toml");
-/// Un listado con sitios, visor acoplado y el panel de procesos.
+/// One listing with places, a docked viewer and the processes panel.
 pub const EXPLORER: &str = include_str!("../../presets/layout/explorer.toml");
-/// Todo encendido: sitios, dos listados, visor, atributos y procesos.
+/// Everything on: places, two listings, viewer, attributes and processes.
 pub const FULL: &str = include_str!("../../presets/layout/full.toml");
 
-/// Los nombres de las cinco, en el orden en que las enseña el selector.
+/// The five names, in the order the picker shows them.
 pub const NAMES: &[&str] = &["orthodox", "simple", "krusader", "explorer", "full"];
 
-/// El TOML de un preset de fábrica, o `None` si ese nombre no es uno.
+/// A factory preset's TOML, or `None` if that name is not one.
 #[must_use]
 pub fn source(name: &str) -> Option<&'static str> {
     match name {
@@ -44,27 +44,27 @@ pub fn source(name: &str) -> Option<&'static str> {
     }
 }
 
-/// El árbol de un preset de fábrica, parseado y validado.
+/// A factory preset's tree, parsed and validated.
 ///
 /// # Errors
 ///
-/// [`LayoutError::NotFound`] si el nombre no es de fábrica, y lo que devuelvan
-/// el parseo o [`super::validate`] — que en la práctica no ocurre, porque los
-/// tests de este módulo parsean los cinco en cada CI.
+/// [`LayoutError::NotFound`] if the name is not a factory one, and whatever
+/// parsing or [`super::validate`] return — which in practice never
+/// happens, because this module's tests parse all five on every CI run.
 ///
 /// ```
 /// use norte_frontend::layout::presets;
 ///
-/// let arbol = presets::tree("simple").expect("de fábrica");
-/// // Un listado, la franja de tareas y la barra de estado.
-/// assert_eq!(arbol.slot_ids().len(), 3);
+/// let tree = presets::tree("simple").expect("factory one");
+/// // A listing, the tasks strip and the status bar.
+/// assert_eq!(tree.slot_ids().len(), 3);
 /// assert!(presets::tree("no-existe").is_err());
 /// ```
 pub fn tree(name: &str) -> Result<Node, LayoutError> {
-    let texto = source(name).ok_or_else(|| LayoutError::NotFound(name.to_owned()))?;
-    let arbol: Node = toml::from_str(texto).map_err(|e| LayoutError::Parse(e.to_string()))?;
-    super::validate(&arbol)?;
-    Ok(arbol)
+    let text = source(name).ok_or_else(|| LayoutError::NotFound(name.to_owned()))?;
+    let tree: Node = toml::from_str(text).map_err(|e| LayoutError::Parse(e.to_string()))?;
+    super::validate(&tree)?;
+    Ok(tree)
 }
 
 #[cfg(test)]
@@ -73,9 +73,9 @@ mod tests {
     use crate::layout::config::to_toml;
     use crate::layout::{Bindings, Dir, Edge, Follow, KindId, KindRegistry, RoleId, Size, SlotId};
 
-    /// Los huecos bien conocidos. Los cuatro primeros son los que el TUI ya
-    /// tiene nombrados desde L1a, así que cambiar de preset no renumera los
-    /// paneles por debajo.
+    /// The well-known slots. The first four are the ones the TUI has
+    /// already named since L1a, so switching preset does not renumber the
+    /// panels underneath.
     const LEFT: SlotId = SlotId(1);
     const RIGHT: SlotId = SlotId(2);
     const TASKS: SlotId = SlotId(3);
@@ -89,8 +89,8 @@ mod tests {
         Node::slot(id, KindId::browser())
     }
 
-    /// Un panel que MIRA al listado activo: el visor acoplado y la hoja de
-    /// atributos. Sin el vínculo son cajas vacías.
+    /// A panel that LOOKS at the active listing: the docked viewer and the
+    /// attribute sheet. Without the binding they are empty boxes.
     fn siguiendo(id: SlotId, kind: &str) -> Node {
         Node::slot_bound(
             id,
@@ -101,13 +101,13 @@ mod tests {
         )
     }
 
-    /// El cuerpo con lo de abajo y la barra de estado. Los cinco terminan
-    /// igual: cuerpo ponderado, franja o panel, y una fila de estado.
-    fn con_cromo(cuerpo: Node, abajo: Node, alto_abajo: Size) -> Node {
+    /// The body with what is below and the status bar. All five end the
+    /// same way: weighted body, strip or panel, and a status row.
+    fn con_cromo(body: Node, below: Node, below_height: Size) -> Node {
         Node::Split {
             dir: Dir::Vertical,
-            children: vec![cuerpo, abajo, Node::slot(STATUS, KindId::new("status"))],
-            sizes: vec![Size::Weight(1), alto_abajo, Size::Fixed(1)],
+            children: vec![body, below, Node::slot(STATUS, KindId::new("status"))],
+            sizes: vec![Size::Weight(1), below_height, Size::Fixed(1)],
         }
     }
 
@@ -127,8 +127,9 @@ mod tests {
                 Size::Auto,
             ),
             "simple" => con_cromo(browser(LEFT), tasks(), Size::Auto),
-            // El sidebar va al lado de los LISTADOS, no al lado del cromo: es
-            // exactamente lo que produce `dock`, y el último test lo fija.
+            // The sidebar goes next to the LISTINGS, not next to the
+            // chrome: that is exactly what `dock` produces, and the last
+            // test pins it.
             "krusader" => con_cromo(
                 Node::Split {
                     dir: Dir::Horizontal,
@@ -180,7 +181,7 @@ mod tests {
                 processes(),
                 Size::Fixed(8),
             ),
-            otro => panic!("preset desconocido: {otro}"),
+            other => panic!("unknown preset: {other}"),
         }
     }
 
@@ -190,22 +191,25 @@ mod tests {
             .join(format!("{name}.toml"))
     }
 
-    /// El fichero que se envía ES el árbol de arriba. Con `NORTE_UPDATE_GOLDEN`
-    /// se reescribe; sin él, se compara.
+    /// The shipped file IS the tree above. With `NORTE_UPDATE_GOLDEN` it is
+    /// rewritten; without it, it is compared.
     #[test]
     fn los_cinco_ficheros_son_los_cinco_arboles() {
         for name in NAMES {
-            let quiero = to_toml(&esperado(name)).expect("serializa");
+            let want = to_toml(&esperado(name)).expect("serializes");
             if std::env::var_os("NORTE_UPDATE_GOLDEN").is_some() {
-                std::fs::write(ruta(name), &quiero).expect("escribe");
+                std::fs::write(ruta(name), &want).expect("writes");
             }
-            let hay = std::fs::read_to_string(ruta(name))
-                .expect("el preset — regenéralo con NORTE_UPDATE_GOLDEN=1");
-            assert_eq!(hay, quiero, "{name}: regenéralo con NORTE_UPDATE_GOLDEN=1");
+            let have = std::fs::read_to_string(ruta(name))
+                .expect("the preset — regenerate it with NORTE_UPDATE_GOLDEN=1");
+            assert_eq!(
+                have, want,
+                "{name}: regenerate it with NORTE_UPDATE_GOLDEN=1"
+            );
         }
     }
 
-    /// Lo que de verdad importa: lo que `tree` devuelve es lo que se esperaba.
+    /// What really matters: what `tree` returns is what was expected.
     #[test]
     fn los_cinco_parsean_a_lo_que_dicen_ser() {
         for name in NAMES {
@@ -213,26 +217,26 @@ mod tests {
         }
     }
 
-    /// Un kind que este binario no declara se pinta como una caja con su
-    /// nombre. En un preset DE FÁBRICA eso sería un preset roto de serie.
+    /// A kind this binary does not declare is painted as a box with its
+    /// name. In a FACTORY preset that would be a broken built-in preset.
     #[test]
     fn ningun_preset_nombra_un_kind_que_no_existe() {
         let reg = KindRegistry::builtin();
         for name in NAMES {
-            let arbol = tree(name).expect(name);
-            for id in arbol.slot_ids() {
-                let kind = arbol.kind_of(id).expect("kind");
+            let tree = tree(name).expect(name);
+            for id in tree.slot_ids() {
+                let kind = tree.kind_of(id).expect("kind");
                 assert!(
                     reg.get(kind).is_some(),
-                    "{name}: el kind {} no existe",
+                    "{name}: kind {} does not exist",
                     kind.as_str()
                 );
             }
         }
     }
 
-    /// Ids repetidos: `validate` ya los rechaza, así que esto comprueba que
-    /// ninguno de los cinco llega a producir el error.
+    /// Repeated ids: `validate` already rejects them, so this checks that
+    /// none of the five ever produces the error.
     #[test]
     fn ningun_preset_repite_un_hueco() {
         for name in NAMES {
@@ -243,80 +247,82 @@ mod tests {
         }
     }
 
-    /// TODO preset, en TODA pantalla razonable, deja un listado que se puede
-    /// usar.
+    /// EVERY preset, on EVERY reasonable screen, leaves a usable listing.
     ///
-    /// `full` se envió con una pantalla de 40×10 sin ningún listado —los fijos
-    /// cobran primero, 16 del sidebar más 30 de la columna derecha sobre 40
-    /// columnas dejaban los dos browsers a cero— y el snapshot que la
-    /// aprobó era la única puerta que había: pintaba lo que pintaba, así que
-    /// bendijo el vacío (#244 M4). Lo que faltaba era la PROPIEDAD, y es
-    /// esto. El remedio (#229, apartar el cromo) vive en `resolve`; este test
-    /// es lo que dice si sigue haciendo su trabajo.
+    /// `full` shipped with a 40x10 screen with no listing at all — the
+    /// fixed ones charge first, 16 for the sidebar plus 30 for the right
+    /// column out of 40 columns left both browsers at zero — and the
+    /// snapshot that approved it was the only gate there was: it painted
+    /// whatever it painted, so it blessed the emptiness (#244 M4). What was
+    /// missing was the PROPERTY, and this is it. The fix (#229, setting the
+    /// chrome aside) lives in `resolve`; this test is what says whether it
+    /// is still doing its job.
     #[test]
     fn ningun_preset_deja_una_pantalla_sin_listado_usable() {
         use crate::layout::{Rect, resolve};
 
-        // El suelo que el rescate de #229 promete: `resolve::CONTENIDO`, el
-        // tope con el que se acota el mínimo de cada kind. En pantallas
-        // holgadas se exige además el mínimo PROPIO del listado, que es lo
-        // que se ve cuando no hay que apretar nada.
+        // The floor #229's rescue promises: `resolve::CONTENIDO`, the
+        // ceiling each kind's minimum is clamped to. On roomy screens the
+        // listing's OWN minimum is also required, which is what is seen
+        // when nothing has to be squeezed.
         const USABLE: (u16, u16) = (12, 4);
 
         let reg = KindRegistry::builtin();
         let (mw, mh) = reg.min_of(&crate::layout::KindId::browser());
         for name in NAMES {
-            let arbol = tree(name).expect(name);
+            let tree = tree(name).expect(name);
             for (w, h) in [(40_u16, 10_u16), (60, 15), (80, 24), (120, 40)] {
-                // A 120 columnas no hay nada que apretar y se exige el
-                // mínimo PROPIO del listado; por debajo manda el suelo del
-                // rescate, que es lo que #229 promete — `full` a 80 deja 17
-                // columnas por listado (16 de sidebar + 30 de hoja de
-                // atributos son fijos) y eso es apretado, no roto.
+                // At 120 columns there is nothing to squeeze and the
+                // listing's OWN minimum is required; below that the
+                // rescue's floor rules, which is what #229 promises —
+                // `full` at 80 leaves 17 columns per listing (16 for the
+                // sidebar + 30 for the attribute sheet are fixed) and that
+                // is tight, not broken.
                 let (pw, ph) = if w >= 120 { (mw, mh) } else { USABLE };
-                let res = resolve(Rect::new(0, 0, w, h), &arbol, &reg);
-                let mejor = res
+                let res = resolve(Rect::new(0, 0, w, h), &tree, &reg);
+                let best = res
                     .placements
                     .iter()
                     .filter(|(id, _)| {
-                        arbol
-                            .kind_of(*id)
+                        tree.kind_of(*id)
                             .is_some_and(|k| *k == crate::layout::KindId::browser())
                     })
                     .map(|(_, r)| (r.width, r.height))
                     .max();
-                let Some((bw, bh)) = mejor else {
-                    panic!("{name} a {w}x{h}: ningún listado colocado");
+                let Some((bw, bh)) = best else {
+                    panic!("{name} at {w}x{h}: no listing placed");
                 };
                 assert!(
                     bw >= pw && bh >= ph,
-                    "{name} a {w}x{h}: el mejor listado mide {bw}x{bh}, por debajo de {pw}x{ph}"
+                    "{name} at {w}x{h}: the best listing measures {bw}x{bh}, below {pw}x{ph}"
                 );
             }
         }
     }
 
-    /// `NAMES` y `source` son dos items y se pueden desincronizar. No aquí.
+    /// `NAMES` and `source` are two items and can fall out of sync. Not
+    /// here.
     #[test]
     fn el_catalogo_y_la_busqueda_dicen_lo_mismo() {
         for name in NAMES {
-            assert!(source(name).is_some(), "{name} en NAMES y no en source");
+            assert!(source(name).is_some(), "{name} in NAMES and not in source");
         }
         assert!(source("no-existe").is_none());
         assert!(matches!(tree("no-existe"), Err(LayoutError::NotFound(_))));
     }
 
-    /// `krusader` es `orthodox` con el sidebar acoplado. Si esto se rompe, o
-    /// el preset dejó de ser alcanzable con el teclado, o `dock` cambió de
-    /// opinión sobre dónde va un sidebar; las dos cosas hay que mirarlas.
+    /// `krusader` is `orthodox` with the sidebar docked. If this breaks,
+    /// either the preset stopped being reachable from the keyboard, or
+    /// `dock` changed its mind about where a sidebar goes; both need
+    /// looking at.
     #[test]
     fn krusader_es_orthodox_con_el_sidebar_puesto() {
-        let acoplado = tree("orthodox").expect("orthodox").dock(
+        let docked = tree("orthodox").expect("orthodox").dock(
             LEFT,
             Edge::Left,
             Size::Fixed(16),
             &Node::slot(PLACES, KindId::new("places")),
         );
-        assert_eq!(acoplado, tree("krusader").expect("krusader"));
+        assert_eq!(docked, tree("krusader").expect("krusader"));
     }
 }

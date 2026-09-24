@@ -1,33 +1,33 @@
-//! El árbol: tres tipos de nodo y los tipos que los identifican.
+//! The tree: three node types and the types that identify them.
 //!
-//! Es el formato ÚNICO — el fichero de layout, el blob de sesión de L2 y lo
-//! que escupirá el editor de layouts son esto mismo. Dos formatos obligarían a
-//! migrar entre ellos, que es justo lo que la ADR 0058 evita.
+//! It is the ONE format — the layout file, L2's session blob and whatever
+//! the layout editor will spit out are this same thing. Two formats would
+//! force migrating between them, which is exactly what ADR 0058 avoids.
 
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-/// Un rectángulo en CELDAS.
+/// A rectangle in CELLS.
 ///
-/// Propio y no el de ratatui: este crate no depende de ningún toolkit, y la
-/// GUI escala estas celdas por su métrica de fuente. Los campos se llaman
-/// igual que los de `ratatui::layout::Rect` a propósito, para que la
-/// conversión en el TUI sea campo a campo y sin interpretación que hacer.
+/// Its own and not ratatui's: this crate depends on no toolkit, and the GUI
+/// scales these cells by its font metric. The fields are named the same as
+/// `ratatui::layout::Rect`'s on purpose, so the conversion in the TUI is
+/// field for field with no interpreting to do.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Rect {
-    /// Columna de la esquina superior izquierda.
+    /// Column of the top-left corner.
     pub x: u16,
-    /// Fila de la esquina superior izquierda.
+    /// Row of the top-left corner.
     pub y: u16,
-    /// Ancho en celdas.
+    /// Width in cells.
     pub width: u16,
-    /// Alto en celdas.
+    /// Height in cells.
     pub height: u16,
 }
 
 impl Rect {
-    /// Atajo de construcción, muy usado por los tests y por el reparto.
+    /// Construction shorthand, heavily used by the tests and by layout.
     #[must_use]
     pub const fn new(x: u16, y: u16, width: u16, height: u16) -> Self {
         Self {
@@ -39,94 +39,94 @@ impl Rect {
     }
 }
 
-/// Identidad de un hueco.
+/// A slot's identity.
 ///
-/// Se acuña por layout y NO se reutiliza dentro de una sesión: cerrar un hueco
-/// deja su estado huérfano en el [`crate::layout::SlotStore`], para que
-/// reabrir la misma disposición recupere el historial en vez de arrancar en
-/// blanco.
+/// Minted per layout and NOT reused within a session: closing a slot leaves
+/// its state orphaned in [`crate::layout::SlotStore`], so reopening the
+/// same layout recovers the history instead of starting blank.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct SlotId(pub u32);
 
-/// Qué hay dentro de un hueco.
+/// What is inside a slot.
 ///
-/// STRING y no enum: un enum cierra el registro, y con él la puerta a que un
-/// plugin aporte un kind (ADR 0058 D2). Un kind que este binario no conoce no
-/// es un error — se pinta como una caja con su nombre y sus `params` se
-/// conservan al reserializar.
+/// A STRING and not an enum: an enum closes the registry, and with it the
+/// door to a plugin contributing a kind (ADR 0058 D2). A kind this binary
+/// does not know is not an error — it is painted as a box with its name and
+/// its `params` are kept when reserialized.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct KindId(String);
 
 impl KindId {
-    /// Un kind cualquiera, por nombre.
+    /// Any kind, by name.
     pub fn new(s: impl Into<String>) -> Self {
         Self(s.into())
     }
 
-    /// El kind del listado de ficheros.
+    /// The file listing's kind.
     #[must_use]
     pub fn browser() -> Self {
         Self::new("browser")
     }
 
-    /// El nombre, para la tabla de renderers de cada frontend.
+    /// The name, for each frontend's renderer table.
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
     }
 }
 
-/// Dirección de un [`Node::Split`].
+/// A [`Node::Split`]'s direction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Dir {
-    /// Los hijos se reparten el ANCHO, uno al lado del otro.
+    /// The children split the WIDTH, one next to the other.
     Horizontal,
-    /// Los hijos se reparten el ALTO, uno encima del otro.
+    /// The children split the HEIGHT, one above the other.
     Vertical,
 }
 
-/// Cuánto sitio pide un hijo de un [`Node::Split`].
+/// How much room a [`Node::Split`]'s child asks for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Size {
-    /// Tantas celdas, pase lo que pase. La barra de estado es `Fixed(1)`.
+    /// This many cells, no matter what. The status bar is `Fixed(1)`.
     ///
-    /// **Gana al mínimo del kind**: si pides tres celdas para algo cuyo mínimo
-    /// son cinco, te dan tres. El mínimo decide cuándo colapsa un reparto
-    /// PROPORCIONAL; no desautoriza una orden explícita.
+    /// **Beats the kind's minimum**: if you ask for three cells for
+    /// something whose minimum is five, you get three. The minimum decides
+    /// when a PROPORTIONAL layout collapses; it does not override an
+    /// explicit order.
     Fixed(u16),
-    /// Reparto proporcional de lo que sobre tras los fijos. Los panes.
+    /// Proportional layout of what is left after the fixed ones. The panes.
     Weight(u16),
-    /// Lo que pida su contenido.
+    /// Whatever its content asks for.
     ///
-    /// La franja de tareas mide `min(tareas, 6)` filas y vale CERO en reposo,
-    /// y eso solo lo sabe quien tiene el `TaskBoard` delante. Se sustituye por
-    /// un [`Size::Fixed`] con [`Node::substitute_auto`] ANTES de repartir, así
-    /// que `resolve` nunca lo ve y sigue siendo pura.
+    /// The tasks strip measures `min(tasks, 6)` rows and is worth ZERO at
+    /// rest, and only whoever has the `TaskBoard` in front knows that. It
+    /// is replaced by a [`Size::Fixed`] with [`Node::substitute_auto`]
+    /// BEFORE laying out, so `resolve` never sees it and stays pure.
     Auto,
 }
 
-/// Un borde contra el que se acopla un panel.
+/// A border a panel docks against.
 ///
-/// Existe para [`Node::dock`]: un sidebar no se «parte» de un hueco (eso es
-/// [`Node::split_slot`], que reparte el sitio de UNO), se pega al costado de
-/// lo que ya hay.
+/// Exists for [`Node::dock`]: a sidebar is not "split" from a slot (that is
+/// [`Node::split_slot`], which shares ONE's room), it sticks to the side of
+/// what is already there.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Edge {
-    /// Izquierda: primer hijo de un `Split` horizontal.
+    /// Left: first child of a horizontal `Split`.
     Left,
-    /// Derecha: último hijo de un `Split` horizontal.
+    /// Right: last child of a horizontal `Split`.
     Right,
-    /// Arriba: primer hijo de un `Split` vertical.
+    /// Top: first child of a vertical `Split`.
     Top,
-    /// Abajo: último hijo de un `Split` vertical.
+    /// Bottom: last child of a vertical `Split`.
     Bottom,
 }
 
 impl Edge {
-    /// El eje en el que corta este borde.
+    /// The axis this border cuts on.
     #[must_use]
     pub const fn axis(self) -> Dir {
         match self {
@@ -135,204 +135,208 @@ impl Edge {
         }
     }
 
-    /// ¿Va DELANTE de los que ya están?
+    /// Does it go BEFORE the ones already there?
     #[must_use]
     pub const fn is_front(self) -> bool {
         matches!(self, Self::Left | Self::Top)
     }
 }
 
-/// Parámetros de un hueco: bolsa OPACA que solo interpreta su kind.
+/// A slot's parameters: an OPAQUE bag only its kind interprets.
 ///
-/// El motor no la lee nunca — es la mitad cliente de la misma decisión que
-/// impide al core leerla (ADR 0058 D4). Para un `browser` lleva el directorio
-/// de arranque; para un futuro `preview`, el modo de ajuste de línea.
+/// The engine never reads it — it is the client half of the same decision
+/// that stops the core from reading it (ADR 0058 D4). For a `browser` it
+/// carries the starting directory; for a future `preview`, the line-wrap
+/// mode.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Params(serde_json::Map<String, serde_json::Value>);
 
 impl Params {
-    /// Una bolsa vacía.
+    /// An empty bag.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// El valor de una clave, si está.
+    /// A key's value, if it is there.
     #[must_use]
     pub fn get(&self, key: &str) -> Option<&serde_json::Value> {
         self.0.get(key)
     }
 
-    /// Pone una clave. La usa cada kind con las suyas; el motor jamás.
+    /// Sets a key. Each kind uses it with its own; the engine never does.
     pub fn set(&mut self, key: impl Into<String>, value: serde_json::Value) {
         self.0.insert(key.into(), value);
     }
 
-    /// ¿Sin ningún parámetro?
+    /// No parameters at all?
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
 }
 
-/// Un puntero con nombre dentro del árbol, resuelto en cada frame.
+/// A named pointer inside the tree, resolved on every frame.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RoleId {
-    /// El hueco con el foco.
+    /// The slot with the focus.
     Active,
-    /// A dónde va una operación que necesita un segundo sitio.
+    /// Where an operation that needs a second place goes.
     Target,
 }
 
-/// A quién sigue un hueco.
+/// Who a slot follows.
 ///
-/// Sin esto, un panel auxiliar es una caja sin nada dentro: un `metadata` que
-/// no sabe de quién enseñar el cursor no enseña nada.
+/// Without this, a side panel is a box with nothing inside: a `metadata`
+/// that does not know whose cursor to show shows nothing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Follow {
-    /// Sigue a quien tenga ese rol AHORA. `Role(Active)` es el default útil.
+    /// Follows whoever holds that role NOW. `Role(Active)` is the useful
+    /// default.
     Role(RoleId),
-    /// Sigue a un hueco concreto, pase lo que pase con el foco.
+    /// Follows a specific slot, whatever happens to the focus.
     Slot(SlotId),
 }
 
-/// Los vínculos de un hueco.
+/// A slot's bindings.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Bindings {
-    /// A quién mira este hueco. `None` = a nadie (un `browser` no mira a
-    /// nadie: es él quien es mirado).
+    /// Who this slot looks at. `None` = nobody (a `browser` looks at
+    /// nobody: it is the one being looked at).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub follows: Option<Follow>,
 }
 
 impl Bindings {
-    /// ¿No vincula nada? Lo usa la serialización para no escribir una tabla
-    /// vacía por cada hueco: la mayoría de los huecos no miran a nadie, y un
-    /// `[...slot.bindings]` sin contenido es ruido en el fichero que un
-    /// usuario copia y bytes en el cuerpo de la sesión.
+    /// Binds nothing at all? Used by serialization to avoid writing an
+    /// empty table for every slot: most slots look at nobody, and an empty
+    /// `[...slot.bindings]` is noise in the file a user copies and bytes in
+    /// the session body.
     #[must_use]
     pub const fn is_empty(&self) -> bool {
         self.follows.is_none()
     }
 }
 
-/// Cómo queda una [`Node::Tabs`] tras una operación: sus hijos nuevos y cuál
-/// queda activa. Recibe los hijos de ahora y la posición del que se opera.
+/// How a [`Node::Tabs`] ends up after an operation: its new children and
+/// which one stays active. Receives the current children and the position
+/// of the one being operated on.
 type ReTab<'a> = dyn Fn(&[Node], usize) -> (Vec<Node>, usize) + 'a;
 
-/// Un nodo del árbol.
+/// A tree node.
 ///
-/// Tres variantes y ni una más: **las pestañas son un TIPO DE NODO, no una
-/// feature**, así que dónde caen decide si son espacios de trabajo, pestañas
-/// de panel o media pantalla alternando vistas (ADR 0058 D1).
+/// Three variants and not one more: **tabs are a NODE TYPE, not a
+/// feature**, so where they fall decides whether they are workspaces, pane
+/// tabs or half a screen alternating views (ADR 0058 D1).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Node {
-    /// Los hijos se reparten el área a lo largo de `dir`, según `sizes`.
+    /// The children split the area along `dir`, according to `sizes`.
     Split {
-        /// Por dónde se corta.
+        /// Where it is cut.
         dir: Dir,
-        /// Los hijos, en orden de pintado.
+        /// The children, in paint order.
         children: Vec<Node>,
-        /// Cuánto pide cada hijo. Índice-paralelo a `children`.
+        /// How much each child asks for. Index-parallel to `children`.
         sizes: Vec<Size>,
     },
-    /// Los hijos ocupan el mismo área y solo uno se ve.
+    /// The children occupy the same area and only one is shown.
     Tabs {
-        /// Las pestañas, en orden.
+        /// The tabs, in order.
         children: Vec<Node>,
-        /// Cuál se ve. Fuera de rango se clampa con diagnóstico.
+        /// Which one is shown. Out of range is clamped with a diagnostic.
         active: usize,
     },
-    /// Una hoja: un panel.
+    /// A leaf: a panel.
     Slot {
-        /// Su identidad, estable mientras el layout no la borre.
+        /// Its identity, stable while the layout does not delete it.
         id: SlotId,
-        /// Qué panel es.
+        /// Which panel it is.
         kind: KindId,
-        /// Lo que ese panel necesite. El motor no lo lee.
+        /// Whatever that panel needs. The engine does not read it.
         #[serde(default, skip_serializing_if = "Params::is_empty")]
         params: Params,
-        /// A quién mira.
+        /// Who it looks at.
         #[serde(default, skip_serializing_if = "Bindings::is_empty")]
         bindings: Bindings,
     },
 }
 
-/// Una hoja que es un PANEL: ni un listado ni una fila de cromo.
+/// A leaf that is a PANEL: neither a listing nor a chrome row.
 fn es_panel(n: &Node) -> bool {
     matches!(n, Node::Slot { kind, .. }
         if !matches!(kind.as_str(), "browser" | "status" | "tasks"))
 }
 
-/// Una fila de CROMO: la barra de estado o la franja de tareas. No se
-/// mueven ni reciben, y un reparto que las contiene no se gira: la barra de
-/// estado de lado dejaría de ser una barra (ADR 0138).
+/// A CHROME row: the status bar or the tasks strip. They do not move or
+/// receive, and a layout that contains them is not flipped: the status bar
+/// sideways would stop being a bar (ADR 0138).
 fn es_cromo(n: &Node) -> bool {
     matches!(n, Node::Slot { kind, .. } if matches!(kind.as_str(), "status" | "tasks"))
 }
 
-/// Los tamaños de un reparto con el borde entre `pos` y `pos + 1` en la
-/// fracción `frac` de los `celdas` que ocupan los dos (ver
-/// [`Node::drag_border`]).
+/// A layout's sizes with the border between `pos` and `pos + 1` at fraction
+/// `frac` of the `celdas` the two occupy (see [`Node::drag_border`]).
 ///
-/// Dos PONDERADOS conservan su suma: lo que uno gana lo pierde el otro, y
-/// el resto del reparto no se entera. Renormalizar la pareja a cien sin más
-/// —lo que hacía— dejaba a un tercer hermano de peso uno contra una pareja
-/// de cien: agarrar el borde entre dos listados aplastaba al de al lado.
-/// Si la pareja suma poco para tener grano, se multiplica el reparto ENTERO
-/// por el mismo factor, que no cambia ninguna proporción.
+/// Two WEIGHTED ones keep their sum: what one gains the other loses, and
+/// the rest of the layout never knows. Simply renormalizing the pair to a
+/// hundred — what it used to do — left a third sibling of weight one
+/// against a pair of a hundred: grabbing the border between two listings
+/// crushed the one next to it. If the pair's sum is too small to have
+/// granularity, the WHOLE layout is multiplied by the same factor, which
+/// changes no proportion.
 fn arrastrar_pareja(sizes: &[Size], pos: usize, frac: f32, celdas_del_par: u16) -> Vec<Size> {
-    /// Peso mínimo de la pareja para que el arrastre tenga grano.
+    /// The pair's minimum weight for the drag to have granularity.
     const PESO_FINO: u32 = 100;
-    /// Lo mínimo que le queda a cada lado, en tanto por uno.
+    /// The minimum left to each side, as a fraction.
     const MARGEN: f32 = 0.05;
     let frac = frac.clamp(MARGEN, 1.0 - MARGEN);
     let mut ns = sizes.to_vec();
-    let Some(siguiente) = ns.get(pos + 1).copied() else {
-        // El último no tiene borde a su derecha: el que se arrastra es el
-        // suyo con el anterior, y quien llama nombra el hueco de la
-        // IZQUIERDA del borde.
+    let Some(next) = ns.get(pos + 1).copied() else {
+        // The last one has no border to its right: what gets dragged is
+        // its border with the previous one, and the caller names the
+        // border's LEFT slot.
         return ns;
     };
-    // En celdas, y acotado a que a cada lado le quede una: el reparto ya
-    // sabe colapsar lo que no cabe, pero un cero escrito en el árbol se
-    // queda escrito.
+    // In cells, and capped so each side keeps at least one: layout already
+    // knows how to collapse what does not fit, but a zero written into the
+    // tree stays written.
     let celdas = f32::from(celdas_del_par);
-    // El redondeo y el corte, en UN sitio: `f32` a `u16` trunca y no tiene
-    // signo, así que el clamp va antes de convertir y no después — un `as`
-    // sobre un negativo o sobre 70000 no avisa.
+    // Rounding and clipping, in ONE place: `f32` to `u16` truncates and has
+    // no sign, so the clamp goes before converting and not after — an `as`
+    // on a negative or on 70000 gives no warning.
     let entero = |v: f32| -> u16 {
         let v = v.round().clamp(1.0, f32::from(u16::MAX));
-        // Ya está entre 1 y `u16::MAX` y sin parte fraccionaria: la
-        // conversión no puede perder nada.
+        // Already between 1 and `u16::MAX` with no fractional part: the
+        // conversion cannot lose anything.
         #[allow(
             clippy::cast_possible_truncation,
             clippy::cast_sign_loss,
-            reason = "el clamp de la línea de arriba deja el valor dentro de u16 y entero"
+            reason = "the clamp on the line above leaves the value inside u16 and whole"
         )]
         let v = v as u16;
         v
     };
-    let izq_celdas = (celdas * frac).round().clamp(1.0, (celdas - 1.0).max(1.0));
-    match (ns[pos], siguiente) {
+    let left_cells = (celdas * frac).round().clamp(1.0, (celdas - 1.0).max(1.0));
+    match (ns[pos], next) {
         (Size::Fixed(_), Size::Fixed(_)) => {
-            ns[pos] = Size::Fixed(entero(izq_celdas));
-            ns[pos + 1] = Size::Fixed(entero(celdas - izq_celdas));
+            ns[pos] = Size::Fixed(entero(left_cells));
+            ns[pos + 1] = Size::Fixed(entero(celdas - left_cells));
         }
-        // Un fijo contra un ponderado: se escribe el FIJO y el otro se queda
-        // con lo que sobre, que es lo que el reparto ya hacía. Escribir los
-        // dos convertiría un ponderado en fijo por arrastrar su borde, y con
-        // eso dejaría de estirarse al cambiar el tamaño de la ventana.
-        (Size::Fixed(_), _) => ns[pos] = Size::Fixed(entero(izq_celdas)),
+        // A fixed one against a weighted one: the FIXED one is written and
+        // the other keeps whatever is left, which is what layout already
+        // did. Writing both would turn a weighted one into a fixed one by
+        // dragging its border, and with that it would stop stretching when
+        // the window resizes.
+        (Size::Fixed(_), _) => ns[pos] = Size::Fixed(entero(left_cells)),
         (_, Size::Fixed(_)) => {
-            ns[pos + 1] = Size::Fixed(entero(celdas - izq_celdas));
+            ns[pos + 1] = Size::Fixed(entero(celdas - left_cells));
         }
         (Size::Weight(wa), Size::Weight(wb)) => {
-            let suma = u32::from(wa) + u32::from(wb);
-            let factor = PESO_FINO.div_ceil(suma.max(1)).max(1);
+            let sum = u32::from(wa) + u32::from(wb);
+            let factor = PESO_FINO.div_ceil(sum.max(1)).max(1);
             if factor > 1 {
                 for s in &mut ns {
                     if let Size::Weight(w) = s {
@@ -340,50 +344,50 @@ fn arrastrar_pareja(sizes: &[Size], pos: usize, frac: f32, celdas_del_par: u16) 
                     }
                 }
             }
-            let suma = f32::from(u16::try_from(suma * factor).unwrap_or(u16::MAX));
-            let izq = (suma * frac).round().clamp(1.0, (suma - 1.0).max(1.0));
-            ns[pos] = Size::Weight(entero(izq));
-            ns[pos + 1] = Size::Weight(entero(suma - izq));
+            let sum = f32::from(u16::try_from(sum * factor).unwrap_or(u16::MAX));
+            let left = (sum * frac).round().clamp(1.0, (sum - 1.0).max(1.0));
+            ns[pos] = Size::Weight(entero(left));
+            ns[pos + 1] = Size::Weight(entero(sum - left));
         }
         _ => {}
     }
     ns
 }
 
-/// Lo que devuelve buscar qué girar (ADR 0138): tres casos y no un
-/// `Option`, porque «aquí no se gira» tiene que PARAR la búsqueda y «aquí
-/// no está» tiene que dejarla seguir. Con un `Option` la negativa subía y
-/// se giraba el reparto de fuera.
+/// What searching for what to flip returns (ADR 0138): three cases and not
+/// an `Option`, because "not flipped here" has to STOP the search and "not
+/// here" has to let it continue. With an `Option` the negative propagated
+/// up and the outer layout got flipped.
 enum Giro {
-    /// Girado: el árbol nuevo.
+    /// Flipped: the new tree.
     Hecho(Node),
-    /// Encontrado, y no se gira.
+    /// Found, and not flipped.
     Rehusado,
-    /// El hueco no está en este subárbol, o no hay reparto que girar.
+    /// The slot is not in this subtree, or there is no layout to flip.
     NoEsta,
 }
 
-/// Dónde cae un hueco que se suelta sobre otro (ADR 0138): a uno de sus
-/// cuatro lados, o en el CENTRO, que es unirse a él como pestaña.
+/// Where a slot dropped onto another falls (ADR 0138): on one of its four
+/// sides, or in the CENTER, which is joining it as a tab.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DropZone {
-    /// A la izquierda del destino.
+    /// To the target's left.
     Left,
-    /// A la derecha.
+    /// To the right.
     Right,
-    /// Encima.
+    /// Above.
     Top,
-    /// Debajo.
+    /// Below.
     Bottom,
-    /// Como pestaña del destino.
+    /// As the target's tab.
     Center,
 }
 
 impl DropZone {
-    /// La zona de un rectángulo bajo el punto `(x, y)`: el lado más cercano
-    /// si está a menos de un CUARTO de él, y si no el centro. La misma regla
-    /// que `zonaDe` en la ventana (`render/mover.ts`).
+    /// The zone of a rectangle under point `(x, y)`: the nearest side if it
+    /// is less than a QUARTER of it away, and the center otherwise. The
+    /// same rule as `zonaDe` in the window (`render/mover.ts`).
     #[must_use]
     pub fn at(x: u16, y: u16, rect: Rect) -> Self {
         let frac = |p: u16, o: u16, largo: u16| {
@@ -395,22 +399,22 @@ impl DropZone {
         };
         let fx = frac(x, rect.x, rect.width);
         let fy = frac(y, rect.y, rect.height);
-        let lados = [
+        let sides = [
             (Self::Left, fx),
             (Self::Right, 1.0 - fx),
             (Self::Top, fy),
             (Self::Bottom, 1.0 - fy),
         ];
-        let (lado, d) =
-            lados.into_iter().fold(
+        let (side, d) =
+            sides.into_iter().fold(
                 (Self::Center, f32::INFINITY),
                 |m, l| if l.1 < m.1 { l } else { m },
             );
-        if d < 0.25 { lado } else { Self::Center }
+        if d < 0.25 { side } else { Self::Center }
     }
 
-    /// La parte de `rect` que ocupa la zona: una mitad, o el rectángulo
-    /// entero para el centro. Es lo que se resalta mientras se arrastra.
+    /// The part of `rect` the zone occupies: one half, or the whole
+    /// rectangle for the center. It is what is highlighted while dragging.
     #[must_use]
     pub fn part_of(self, rect: Rect) -> Rect {
         let (w2, h2) = (rect.width / 2, rect.height / 2);
@@ -431,7 +435,7 @@ impl DropZone {
         }
     }
 
-    /// El borde de la zona; `None` para el centro.
+    /// The zone's border; `None` for the center.
     #[must_use]
     pub const fn edge(self) -> Option<Edge> {
         match self {
@@ -444,10 +448,9 @@ impl DropZone {
     }
 }
 
-/// Un panel suelto, o un grupo de pestañas hecho SOLO de paneles: lo que un
-/// panel nuevo del mismo borde puede unirse (fase F). Un grupo con un
-/// listado dentro es el de las pestañas de un listado, y ahí no se mete un
-/// panel.
+/// A lone panel, or a tab group made ONLY of panels: what a new panel of
+/// the same border can join (phase F). A group with a listing inside is a
+/// listing's tab group, and a panel does not go in there.
 fn es_grupo_de_paneles(n: &Node) -> bool {
     match n {
         Node::Tabs { children, .. } => !children.is_empty() && children.iter().all(es_panel),
@@ -455,35 +458,36 @@ fn es_grupo_de_paneles(n: &Node) -> bool {
     }
 }
 
-/// El tamaño con que entra un hijo nuevo en un reparto que ya tiene
+/// The size a new child gets when it enters a layout that already has
 /// `hermanos`.
 ///
-/// Un [`Size::Weight`] es una PROPORCIÓN, así que solo significa algo al
-/// lado de los otros pesos: `Weight(1)` quiere decir «como uno de ellos» en
-/// un reparto de unos, pero arrastrar un borde deja a los listados en 49/51 y
-/// entonces el mismo `Weight(1)` es un píxel. Se escala por la MEDIA de los
-/// pesos hermanos. Un [`Size::Fixed`] o un reparto sin pesos no cambian.
+/// A [`Size::Weight`] is a PROPORTION, so it only means something next to
+/// the other weights: `Weight(1)` means "like one of them" in a layout of
+/// ones, but dragging a border leaves the listings at 49/51 and then that
+/// same `Weight(1)` is one pixel. It is scaled by the AVERAGE of the
+/// sibling weights. A [`Size::Fixed`] or a layout with no weights does not
+/// change.
 fn peso_entre_hermanos(size: Size, hermanos: &[Size]) -> Size {
     let Size::Weight(w) = size else {
         return size;
     };
-    let pesos: Vec<u32> = hermanos
+    let weights: Vec<u32> = hermanos
         .iter()
         .filter_map(|s| match s {
             Size::Weight(p) => Some(u32::from(*p)),
             _ => None,
         })
         .collect();
-    if pesos.is_empty() {
+    if weights.is_empty() {
         return size;
     }
-    let n = u32::try_from(pesos.len()).unwrap_or(u32::MAX);
-    let media = (pesos.iter().sum::<u32>() + n / 2) / n;
-    Size::Weight(u16::try_from(media.saturating_mul(u32::from(w)).max(1)).unwrap_or(u16::MAX))
+    let n = u32::try_from(weights.len()).unwrap_or(u32::MAX);
+    let average = (weights.iter().sum::<u32>() + n / 2) / n;
+    Size::Weight(u16::try_from(average.saturating_mul(u32::from(w)).max(1)).unwrap_or(u16::MAX))
 }
 
 impl Node {
-    /// Un hueco sin params ni vínculos.
+    /// A slot with no params or bindings.
     #[must_use]
     pub fn slot(id: SlotId, kind: KindId) -> Self {
         Self::Slot {
@@ -494,11 +498,11 @@ impl Node {
         }
     }
 
-    /// Un hueco con vínculos: de quién es vista.
+    /// A slot with bindings: whose view it is.
     ///
-    /// Lo pide el preview acoplado, que es el kind `viewer` de siempre con un
-    /// `follows` puesto — el kind dice QUÉ hay dentro y el vínculo dice de
-    /// quién es vista, que es justo la separación del ADR 0058.
+    /// Requested by the docked preview, which is the usual `viewer` kind
+    /// with a `follows` set — the kind says WHAT is inside and the binding
+    /// says WHOSE view it is, which is exactly ADR 0058's separation.
     #[must_use]
     pub fn slot_bound(id: SlotId, kind: KindId, bindings: Bindings) -> Self {
         Self::Slot {
@@ -509,8 +513,8 @@ impl Node {
         }
     }
 
-    /// Todos los ids del árbol en orden de lectura, INCLUIDOS los de pestañas
-    /// no activas: un hueco oculto sigue existiendo y sigue teniendo estado.
+    /// All the tree's ids in reading order, INCLUDING inactive tabs': a
+    /// hidden slot still exists and still has state.
     #[must_use]
     pub fn slot_ids(&self) -> Vec<SlotId> {
         let mut out = Vec::new();
@@ -529,7 +533,7 @@ impl Node {
         }
     }
 
-    /// Un `Split` de hijos con el mismo peso. El caso corriente.
+    /// A `Split` of equally weighted children. The common case.
     #[must_use]
     pub fn split(dir: Dir, children: Vec<Node>) -> Self {
         let sizes = vec![Size::Weight(1); children.len()];
@@ -540,11 +544,11 @@ impl Node {
         }
     }
 
-    /// El primer hueco del subárbol en orden de lectura.
+    /// The subtree's first slot in reading order.
     ///
-    /// Es a quien se le pregunta su tamaño natural: un `Auto` sobre un
-    /// subárbol entero no tiene más remedio que apoyarse en alguien, y el
-    /// primero es el único que no depende de cómo se reparta después.
+    /// It is the one asked for its natural size: an `Auto` over a whole
+    /// subtree has no choice but to lean on someone, and the first one is
+    /// the only one that does not depend on how it is laid out afterward.
     #[must_use]
     pub fn first_slot_id(&self) -> Option<SlotId> {
         match self {
@@ -555,12 +559,13 @@ impl Node {
         }
     }
 
-    /// El mismo árbol con cada [`Size::Auto`] sustituido por el [`Size::Fixed`]
-    /// que diga `natural` para el primer hueco de ese hijo.
+    /// The same tree with every [`Size::Auto`] replaced by the
+    /// [`Size::Fixed`] `natural` says for that child's first slot.
     ///
-    /// El árbol GUARDADO conserva sus `Auto`; el árbol del FRAME no los tiene.
-    /// Así `resolve` no necesita una closure en su firma —que todos sus tests
-    /// tendrían que pasar— y esta función se prueba sola.
+    /// The SAVED tree keeps its `Auto`s; the FRAME's tree does not have
+    /// any. This way `resolve` needs no closure in its signature — which
+    /// all its tests would have to pass — and this function is tested on
+    /// its own.
     #[must_use]
     pub fn substitute_auto(&self, natural: &dyn Fn(SlotId) -> (u16, u16)) -> Self {
         match self {
@@ -611,21 +616,21 @@ impl Node {
     /// corte va DENTRO de esa pestaña y no alrededor del grupo: partir una
     /// pestaña es partir lo que estás mirando, no reorganizar sus hermanas.
     ///
-    /// # Partir otra vez en el mismo eje APLANA
+    /// # Splitting again on the same axis FLATTENS
     ///
-    /// Si el hueco ya vive en un `Split` que corre en `dir`, el nuevo entra
-    /// como hermano suyo en vez de envolverlo en otro `Split`. Anidando, cada
-    /// partición se llevaba la mitad de la mitad: tres paneles quedaban en
-    /// 1/2, 1/4 y 1/4 en vez de tercios, y a la siguiente el hijo más profundo
-    /// bajaba del mínimo de su kind y el reparto lo degradaba a pestañas — el
-    /// panel recién pedido desaparecía de la pantalla sin decir nada, con el
-    /// árbol guardándolo igualmente.
+    /// If the slot already lives in a `Split` that runs on `dir`, the new
+    /// one enters as its sibling instead of wrapping it in another `Split`.
+    /// Nesting, each split took half of the half: three panels ended up at
+    /// 1/2, 1/4 and 1/4 instead of thirds, and on the next one the deepest
+    /// child fell below its kind's minimum and layout degraded it to tabs —
+    /// the just-requested panel vanished from the screen with no word,
+    /// with the tree saving it just the same.
     ///
-    /// Solo si el hueco es PONDERADO. Uno de tamaño fijo es cromo acoplado:
-    /// meter otro hijo en su fila le robaría el sitio a lo que tiene al lado,
-    /// así que ese se parte por dentro, como siempre. El nuevo nace con el
-    /// mismo peso que aquel del que sale, que sobre el reparto por defecto
-    /// —todos a uno— es exactamente repartir a partes iguales.
+    /// Only if the slot is WEIGHTED. A fixed-size one is docked chrome:
+    /// putting another child in its row would steal room from what is next
+    /// to it, so that one is split from inside, as always. The new one is
+    /// born with the same weight as the one it comes from, which over the
+    /// default layout — all at one — is exactly splitting evenly.
     #[must_use]
     pub fn split_slot(&self, id: SlotId, dir: Dir, nuevo: &Self) -> Self {
         match self {
@@ -674,41 +679,45 @@ impl Node {
         }
     }
 
-    /// Acopla `nuevo` contra el borde `edge` del reparto donde vive `anchor`.
+    /// Docks `nuevo` against `edge` of the layout `anchor` lives in.
     ///
-    /// El sitio exacto es el `Split` MÁS PROFUNDO que contiene a `anchor` y
-    /// corre en el eje de `edge`; ahí entra como primer hijo (`Left`/`Top`) o
-    /// como último (`Right`/`Bottom`), con el tamaño `size`.
+    /// The exact spot is the DEEPEST `Split` that contains `anchor` and
+    /// runs on `edge`'s axis; it enters there as the first child
+    /// (`Left`/`Top`) or the last (`Right`/`Bottom`), with size `size`.
     ///
-    /// Buscar ese split y no la raíz es la diferencia entre un sidebar al lado
-    /// de los listados y un sidebar al lado de TODO: en el preset `orthodox`
-    /// la raíz es vertical (cuerpo, tareas, barra de estado), así que envolver
-    /// la raíz dejaría la barra de estado y la franja de tareas a la derecha
-    /// del sidebar en vez de debajo de los listados.
+    /// Looking for that split and not the root is the difference between a
+    /// sidebar next to the listings and a sidebar next to EVERYTHING: in
+    /// the `orthodox` preset the root is vertical (body, tasks, status
+    /// bar), so wrapping the root would leave the status bar and the tasks
+    /// strip to the sidebar's right instead of below the listings.
     ///
-    /// Si ningún ancestro corre en ese eje —un solo panel, o una pila
-    /// vertical— se envuelve el árbol entero en un `Split` nuevo, con lo que
-    /// había ponderado. Un `anchor` que no está devuelve el árbol intacto.
+    /// If no ancestor runs on that axis — a single panel, or a vertical
+    /// stack — the whole tree is wrapped in a new `Split`, with what was
+    /// there weighted. An `anchor` that is not there returns the tree
+    /// intact.
     ///
-    /// Lo contrario es [`Self::close_slot`], que ya disuelve el `Split` que se
-    /// queda con un hijo: acoplar y desacoplar devuelve el árbol de partida.
+    /// The opposite is [`Self::close_slot`], which already dissolves the
+    /// `Split` left with one child: docking and undocking returns the
+    /// starting tree.
     #[must_use]
     pub fn dock(&self, anchor: SlotId, edge: Edge, size: Size, nuevo: &Self) -> Self {
         self.dock_con(anchor, edge, size, nuevo, false)
     }
 
-    /// Como [`Self::dock`], pero un PANEL que llega a un borde donde ya hay
-    /// un panel —o un grupo de paneles— se une a él como pestaña, delante, en
-    /// vez de abrir otra columna o fila (spec 2026-09-21, fase F).
+    /// Like [`Self::dock`], but a PANEL arriving at a border where there is
+    /// already a panel — or a group of panels — joins it as a tab, up
+    /// front, instead of opening another column or row (spec 2026-09-21,
+    /// phase F).
     ///
-    /// Es lo que hace VS Code: las vistas de un mismo borde comparten sitio
-    /// y la barra de actividad elige cuál se ve. Con `dock` a secas, cuatro
-    /// paneles a la derecha eran cuatro columnas de treinta celdas y los
-    /// listados se quedaban con lo que sobrase. El grupo conserva su tamaño;
-    /// cerrar una pestaña de un grupo de dos lo deshace ([`Self::close_slot`]).
+    /// It is what VS Code does: views on the same border share room and
+    /// the activity bar picks which one is shown. With plain `dock`, four
+    /// panels on the right used to be four thirty-cell columns and the
+    /// listings were left with whatever was left over. The group keeps its
+    /// size; closing a tab of a group of two undoes it
+    /// ([`Self::close_slot`]).
     ///
-    /// Un listado nunca se agrupa, ni hace de grupo: dos listados lado a lado
-    /// son el gestor ortodoxo.
+    /// A listing never groups, nor acts as a group: two listings side by
+    /// side are the orthodox file manager.
     #[must_use]
     pub fn dock_grouped(&self, anchor: SlotId, edge: Edge, size: Size, nuevo: &Self) -> Self {
         self.dock_con(anchor, edge, size, nuevo, true)
@@ -746,8 +755,9 @@ impl Node {
             })
     }
 
-    /// `Some` si algún `Split` del camino a `anchor` corría en el eje pedido y
-    /// se quedó con `nuevo`; `None` si ninguno, y entonces decide [`Self::dock`].
+    /// `Some` if some `Split` on the path to `anchor` ran on the requested
+    /// axis and took `nuevo`; `None` if none did, and then [`Self::dock`]
+    /// decides.
     fn dock_inner(
         &self,
         anchor: SlotId,
@@ -761,14 +771,14 @@ impl Node {
             Self::Slot { .. } => return None,
         };
         let pos = hijos.iter().position(|c| c.contains(anchor))?;
-        // Primero hacia dentro: el reparto que manda es el más PROFUNDO que
-        // corre en el eje, no el primero que se encuentra bajando.
+        // Inward first: the layout that rules is the DEEPEST one that runs
+        // on the axis, not the first one found going down.
         if let Some(dentro) = hijos[pos].dock_inner(anchor, edge, size, nuevo, agrupar) {
             return Some(self.with_child(pos, dentro));
         }
-        // Una `Tabs` no acepta el acople: meterlo dentro de una pestaña haría
-        // que el sidebar desapareciera al cambiar de pestaña, que es justo lo
-        // que un sidebar no hace. Sube al padre.
+        // A `Tabs` does not accept the dock: putting it inside a tab would
+        // make the sidebar disappear when switching tabs, which is exactly
+        // what a sidebar does not do. Goes up to the parent.
         let Self::Split {
             dir,
             children,
@@ -782,10 +792,10 @@ impl Node {
         }
         let mut nc = children.clone();
         let mut ns = sizes.clone();
-        // Por detrás, pero por DELANTE de las filas de cromo del final (la
-        // franja de tareas y la barra de estado): un panel acoplado abajo
-        // va encima de la barra de estado, como en VS Code, y en el
-        // terminal la barra tiene que seguir siendo la última fila.
+        // At the back, but IN FRONT of the trailing chrome rows (the tasks
+        // strip and the status bar): a panel docked at the bottom goes
+        // above the status bar, as in VS Code, and in the terminal the bar
+        // has to stay the last row.
         let at = if edge.is_front() {
             0
         } else {
@@ -798,8 +808,8 @@ impl Node {
                     })
                     .count()
         };
-        // Fase F: si en ese borde ya hay un PANEL (o un grupo de paneles),
-        // el nuevo se une a él como pestaña, delante.
+        // Phase F: if that border already has a PANEL (or a group of
+        // panels), the new one joins it as a tab, up front.
         let vecino = if edge.is_front() {
             Some(0)
         } else {
@@ -823,10 +833,11 @@ impl Node {
                 children: grupo,
                 active,
             };
-            // El sitio del grupo es el MAYOR de los que piden sus paneles:
-            // los detalles fijos a treinta y el visor detrás no pueden dejar
-            // al visor en treinta columnas. Un peso gana a un fijo (el que
-            // pide sitio proporcional es el que más necesita).
+            // The group's room is the LARGEST its panels ask for: fixed
+            // details at thirty and the viewer behind cannot leave the
+            // viewer at thirty columns. A weight beats a fixed one (the
+            // one asking for proportional room is the one that needs it
+            // most).
             if let Some(actual) = ns.get(v).copied() {
                 ns[v] = match (actual, size) {
                     (Size::Fixed(a), Size::Fixed(b)) => Size::Fixed(a.max(b)),
@@ -849,11 +860,11 @@ impl Node {
         })
     }
 
-    /// Cierra el hueco `id`: lo saca de su padre.
+    /// Closes slot `id`: removes it from its parent.
     ///
-    /// Un `Split` o una `Tabs` que se queda con UN hijo se disuelve en él.
-    /// Devuelve `None` si `id` es la raíz o no está: cerrar el último panel
-    /// dejaría una pantalla sin nada, y eso lo decide el llamante.
+    /// A `Split` or a `Tabs` left with ONE child dissolves into it. Returns
+    /// `None` if `id` is the root or is not there: closing the last panel
+    /// would leave a screen with nothing, and the caller decides that.
     #[must_use]
     pub fn close_slot(&self, id: SlotId) -> Option<Self> {
         let hijos = match self {
@@ -895,22 +906,22 @@ impl Node {
         }
     }
 
-    /// Mueve el hueco `id` junto a `target`: a su lado `zona`, o como
-    /// pestaña suya si la zona es el centro (ADR 0138). Es arrastrar un
-    /// panel por su título y soltarlo sobre otro, como en VS Code.
+    /// Moves slot `id` next to `target`: on its `zona` side, or as its tab
+    /// if the zone is the center (ADR 0138). It is dragging a panel by its
+    /// title and dropping it onto another, as in VS Code.
     ///
-    /// La UNIDAD de destino es el hueco, o el grupo de pestañas donde vive:
-    /// soltar a la derecha de una pestaña parte el grupo entero, no la mete
-    /// dentro de él. Si el padre de esa unidad ya reparte en el eje de la
-    /// zona y la unidad es ponderada, el hueco entra como hermano con el
-    /// mismo peso —tres listados quedan en tercios, no en 1/2, 1/4, 1/4—; si
-    /// no, la unidad se envuelve en un reparto nuevo a partes iguales, y un
-    /// panel de ancho fijo conserva su ancho por fuera.
+    /// The target UNIT is the slot, or the tab group it lives in: dropping
+    /// to the right of a tab splits the whole group, it does not put it
+    /// inside it. If that unit's parent already lays out on the zone's
+    /// axis and the unit is weighted, the slot enters as a sibling with the
+    /// same weight — three listings end up in thirds, not in 1/2, 1/4,
+    /// 1/4; if not, the unit is wrapped in a new, evenly split layout, and
+    /// a fixed-width panel keeps its width from outside.
     ///
-    /// No hace nada —devuelve el árbol tal cual— si `id` y `target` son el
-    /// mismo, si alguno falta o es cromo (estado, tareas), o si `id` es el
-    /// único hueco. Nada se crea ni se pierde: el hueco movido conserva su
-    /// id, su kind, sus parámetros y sus vínculos.
+    /// Does nothing — returns the tree as is — if `id` and `target` are the
+    /// same, if either is missing or is chrome (status, tasks), or if `id`
+    /// is the only slot. Nothing is created or lost: the moved slot keeps
+    /// its id, its kind, its params and its bindings.
     #[must_use]
     pub fn move_slot(&self, id: SlotId, target: SlotId, zona: DropZone) -> Self {
         let movible = |s: SlotId| self.find_slot(s).is_some_and(|n| !es_cromo(n));
@@ -942,7 +953,7 @@ impl Node {
         }
     }
 
-    /// El nodo HOJA del hueco `id`.
+    /// The LEAF node of slot `id`.
     fn find_slot(&self, id: SlotId) -> Option<&Self> {
         match self {
             Self::Slot { id: i, .. } if *i == id => Some(self),
@@ -953,8 +964,8 @@ impl Node {
         }
     }
 
-    /// ¿Es este nodo la unidad que representa a `target` en su padre: el
-    /// propio hueco, o el grupo de pestañas del que es hijo directo?
+    /// Is this node the unit that represents `target` in its parent: the
+    /// slot itself, or the tab group it is a direct child of?
     fn es_unidad_de(&self, target: SlotId) -> bool {
         match self {
             Self::Slot { id, .. } => *id == target,
@@ -965,7 +976,7 @@ impl Node {
         }
     }
 
-    /// `nodo` al lado `edge` de la unidad de `target`; `None` si no está.
+    /// `nodo` beside `edge` of `target`'s unit; `None` if it is not there.
     fn place_beside(&self, target: SlotId, edge: Edge, nodo: &Self) -> Option<Self> {
         if self.es_unidad_de(target) {
             let (children, sizes) = if edge.is_front() {
@@ -1020,19 +1031,21 @@ impl Node {
         Some(self.with_child(pos, dentro))
     }
 
-    /// Gira el reparto más interior que contiene `id`: lado a lado pasa a
-    /// uno encima del otro, y al revés (ADR 0138, `layout.flip`).
+    /// Flips the innermost layout that contains `id`: side by side becomes
+    /// one above the other, and back (ADR 0138, `layout.flip`).
     ///
-    /// Lo que se gira es la RACHA de hermanos ponderados que rodea al hueco:
-    /// en `H[sitios Fijo(16), a, b]` se apilan `a` y `b` y los sitios siguen
-    /// siendo una columna de dieciséis — girar la fila entera los habría
-    /// convertido en una banda y el ancho no volvería al girar de nuevo. Si
-    /// la racha es el reparto entero, se gira el reparto; si es solo una
-    /// parte, esa parte pasa a un reparto propio, con el peso que sumaba.
+    /// What gets flipped is the RUN of weighted siblings around the slot:
+    /// in `H[places Fixed(16), a, b]`, `a` and `b` get stacked and places
+    /// stays a sixteen-wide column — flipping the whole row would have
+    /// turned it into a band and the width would not come back on flipping
+    /// again. If the run is the whole layout, the layout is flipped; if it
+    /// is only part of it, that part becomes its own layout, with the
+    /// weight it summed to.
     ///
-    /// Un reparto con cromo dentro (barra de estado, tareas) no se gira —la
-    /// barra de lado dejaría de ser una barra—, ni una racha de uno. Entonces
-    /// no pasa NADA: la negativa no sube a probar con el reparto de fuera.
+    /// A layout with chrome inside (status bar, tasks) is not flipped —
+    /// the bar sideways would stop being a bar — nor is a run of one. Then
+    /// NOTHING happens: the refusal does not propagate up to try the outer
+    /// layout.
     #[must_use]
     pub fn flip(&self, id: SlotId) -> Self {
         match self.flip_inner(id) {
@@ -1120,18 +1133,18 @@ impl Node {
         })
     }
 
-    /// Cambia el tamaño del hijo que contiene `id` en `delta`.
+    /// Changes the size of the child that contains `id` by `delta`.
     ///
-    /// Un hijo PONDERADO se mueve de peso, entre 1 y 10. Un hijo FIJO se mueve
-    /// en CELDAS, dos por pulsación, entre 2 y 100: un sidebar pidió un ancho
-    /// concreto, y hasta #227 eso quería decir que el teclado no podía
-    /// cambiarlo — que es un ancho impuesto, no un ancho elegido. El tope de
-    /// abajo no es cosmético: a cero el panel desaparece y con él la forma de
-    /// devolverlo.
+    /// A WEIGHTED child moves in weight, between 1 and 10. A FIXED child
+    /// moves in CELLS, two per keystroke, between 2 and 100: a sidebar
+    /// asked for a specific width, and until #227 that meant the keyboard
+    /// could not change it — which is an imposed width, not a chosen one.
+    /// The lower cap is not cosmetic: at zero the panel disappears and with
+    /// it the way to bring it back.
     ///
-    /// [`Size::Auto`] no se toca: se sustituye por un fijo ANTES de repartir,
-    /// así que un número guardado aquí lo pisaría el siguiente frame y la
-    /// tecla parecería rota.
+    /// [`Size::Auto`] is not touched: it is replaced by a fixed one BEFORE
+    /// laying out, so a number saved here would be overwritten by the next
+    /// frame and the key would look broken.
     #[must_use]
     pub fn resize(&self, id: SlotId, delta: i16) -> Self {
         /// Celdas por pulsación en un hijo fijo.
@@ -1155,32 +1168,33 @@ impl Node {
         })
     }
 
-    /// Pone el borde ENTRE `id` y su hermano de la derecha (o de abajo) en la
-    /// fracción `frac` del espacio que ocupan los dos juntos.
+    /// Sets the border BETWEEN `id` and its right (or bottom) sibling at
+    /// fraction `frac` of the space the two occupy together.
     ///
-    /// Es la primitiva del ARRASTRE, y por eso es absoluta y no un paso:
-    /// [`Self::resize`] mueve dos celdas por pulsación, que es lo que quiere
-    /// una tecla; un ratón dice DÓNDE va el borde, y convertir eso en una
-    /// ristra de pasos daría un borde que no llega a donde está el puntero.
+    /// It is the DRAG primitive, and that is why it is absolute and not a
+    /// step: [`Self::resize`] moves two cells per keystroke, which is what
+    /// a key wants; a mouse says WHERE the border goes, and turning that
+    /// into a string of steps would give a border that never reaches where
+    /// the pointer is.
     ///
-    /// La suma de los dos tamaños se CONSERVA: lo que uno gana lo pierde el
-    /// otro, y el resto de la fila no se entera. Un `Split` de cinco huecos
-    /// donde arrastrar un borde recolocara los cinco sería un gesto que toca
-    /// lo que nadie ha agarrado.
+    /// The sum of the two sizes is KEPT: what one gains the other loses,
+    /// and the rest of the row never knows. A five-slot `Split` where
+    /// dragging a border repositioned all five would be a gesture that
+    /// touches what nobody grabbed.
     ///
-    /// Con pesos se renormaliza la pareja a cien (`PESO_FINO`) para que el
-    /// arrastre tenga grano: dos huecos por defecto son `Weight(1)` y
-    /// `Weight(1)`, y sobre esa pareja solo existiría la mitad exacta.
+    /// With weights the pair is renormalized to a hundred (`PESO_FINO`) so
+    /// the drag has granularity: two slots by default are `Weight(1)` and
+    /// `Weight(1)`, and over that pair only the exact half would exist.
     ///
-    /// `frac` se acota para que ninguno de los dos desaparezca: un hueco a
-    /// cero se lleva con él la forma de devolverlo.
+    /// `frac` is clamped so neither of the two disappears: a slot at zero
+    /// takes with it the way to bring it back.
     ///
-    /// [`Size::Auto`] no se toca, por lo mismo que en [`Self::resize`]: lo
-    /// sustituye el reparto y un número guardado aquí lo pisaría el siguiente
-    /// frame.
-    /// `celdas_del_par` es lo que los dos ocupan juntos, en celdas de reparto.
-    /// Lo sabe quien pinta, no el árbol: un [`Size::Fixed`] se mide en celdas
-    /// y una fracción sola no basta para escribirlo.
+    /// [`Size::Auto`] is not touched, for the same reason as in
+    /// [`Self::resize`]: layout replaces it and a number saved here would
+    /// be overwritten by the next frame.
+    /// `celdas_del_par` is what the two occupy together, in layout cells.
+    /// Whoever paints knows it, not the tree: a [`Size::Fixed`] is measured
+    /// in cells and a fraction alone is not enough to write it.
     #[must_use]
     pub fn drag_border(&self, id: SlotId, frac: f32, celdas_del_par: u16) -> Self {
         self.map_split_of(id, &|sizes, pos| {
@@ -1188,15 +1202,16 @@ impl Node {
         })
     }
 
-    /// Los dos lados del borde entre `a` y `b`: los huecos del hijo que
-    /// contiene a `a` y los del hijo SIGUIENTE, que contiene a `b`, en el
-    /// reparto donde los dos son hermanos consecutivos.
+    /// The two sides of the border between `a` and `b`: the slots of the
+    /// child that contains `a` and those of the NEXT child, which contains
+    /// `b`, in the layout where the two are consecutive siblings.
     ///
-    /// Es lo que quien arrastra tiene que MEDIR: el borde entre un listado y
-    /// el panel de detalles no separa a ese listado de los detalles, separa
-    /// el CUERPO entero (los dos listados) de los detalles, y medir solo el
-    /// listado daba una fracción de otra pareja — el borde saltaba o no
-    /// seguía al puntero. `None` si no son vecinos en ningún reparto.
+    /// It is what whoever drags has to MEASURE: the border between a
+    /// listing and the details panel does not separate that listing from
+    /// the details, it separates the WHOLE body (both listings) from the
+    /// details, and measuring only the listing gave another pair's
+    /// fraction — the border jumped or did not follow the pointer. `None`
+    /// if they are not neighbors in any layout.
     #[must_use]
     pub fn border_pair(&self, a: SlotId, b: SlotId) -> Option<(Vec<SlotId>, Vec<SlotId>)> {
         let hijos = match self {
@@ -1216,10 +1231,11 @@ impl Node {
         None
     }
 
-    /// Como [`Self::drag_border`], pero sobre el borde entre `a` y `b` en el
-    /// reparto donde son vecinos ([`Self::border_pair`]), con `frac` y
-    /// `celdas_del_par` medidos sobre los DOS hijos enteros. Así se mueve el
-    /// borde que se agarró, aunque `a` sea el último de su propio reparto.
+    /// Like [`Self::drag_border`], but on the border between `a` and `b` in
+    /// the layout where they are neighbors ([`Self::border_pair`]), with
+    /// `frac` and `celdas_del_par` measured over the whole TWO children.
+    /// This way the border that was grabbed moves, even if `a` is the last
+    /// one of its own layout.
     #[must_use]
     pub fn drag_border_between(
         &self,
@@ -1255,7 +1271,7 @@ impl Node {
         self.clone()
     }
 
-    /// Deja a todos los hermanos ponderados del hueco `id` con el mismo peso.
+    /// Leaves all of slot `id`'s weighted siblings with the same weight.
     #[must_use]
     pub fn equalize(&self, id: SlotId) -> Self {
         self.map_split_of(id, &|sizes, _| {
@@ -1269,13 +1285,13 @@ impl Node {
         })
     }
 
-    /// El tamaño con el que reparte el `Split` que contiene `id`, y en qué
-    /// posición está su hijo.
+    /// The sizes the `Split` that contains `id` lays out with, and its
+    /// child's position.
     ///
-    /// Es lo que [`Self::resize`] cambia, para poder MIRARLO: sin esto, un
-    /// test del ancho de un panel acaba comparando árboles enteros o llamando
-    /// a `resize` con un id que el llamante de verdad no produce — que es
-    /// exactamente cómo #244 M1 pasó desapercibida.
+    /// It is what [`Self::resize`] changes, to be able to LOOK AT IT:
+    /// without this, a panel-width test ends up comparing whole trees or
+    /// calling `resize` with an id the caller does not really produce —
+    /// which is exactly how #244 M1 went unnoticed.
     ///
     /// ```
     /// use norte_frontend::layout::{Dir, KindId, Node, Size, SlotId};
@@ -1287,7 +1303,7 @@ impl Node {
     ///         Node::slot(SlotId(2), KindId::browser()),
     ///     ],
     /// );
-    /// let (sizes, pos) = arbol.sizes_of(SlotId(2)).expect("está en un split");
+    /// let (sizes, pos) = arbol.sizes_of(SlotId(2)).expect("is in a split");
     /// assert_eq!((sizes[pos], pos), (Size::Weight(1), 1));
     /// assert!(Node::slot(SlotId(1), KindId::browser()).sizes_of(SlotId(1)).is_none());
     /// ```
@@ -1315,8 +1331,8 @@ impl Node {
         None
     }
 
-    /// Aplica `f` a los tamaños del `Split` que contiene `id`, dándole la
-    /// posición del hijo que lo contiene.
+    /// Applies `f` to the sizes of the `Split` that contains `id`, giving
+    /// it the position of the child that contains it.
     fn map_split_of(&self, id: SlotId, f: &dyn Fn(&[Size], usize) -> Vec<Size>) -> Self {
         let hijos = match self {
             Self::Split { children, .. } | Self::Tabs { children, .. } => children,
@@ -1346,12 +1362,13 @@ impl Node {
         self.clone()
     }
 
-    /// Los huecos que se VERÍAN: como [`Self::slot_ids`], pero de cada
-    /// [`Node::Tabs`] solo la pestaña activa.
+    /// The slots that WOULD BE SEEN: like [`Self::slot_ids`], but only the
+    /// active tab of each [`Node::Tabs`].
     ///
-    /// No es lo mismo que las colocaciones de un reparto —esto no sabe si algo
-    /// cabe— y por eso existe: hay que saber quién queda visible justo DESPUÉS
-    /// de tocar el árbol, antes de que haya un frame que repartir.
+    /// Not the same as a layout's placements — this does not know whether
+    /// anything fits — and that is why it exists: it is needed to know who
+    /// stays visible right AFTER touching the tree, before there is a
+    /// frame to lay out.
     #[must_use]
     pub fn visible_slot_ids(&self) -> Vec<SlotId> {
         let mut out = Vec::new();
@@ -1375,7 +1392,7 @@ impl Node {
         }
     }
 
-    /// El kind del hueco `id`, si el árbol lo contiene.
+    /// Slot `id`'s kind, if the tree contains it.
     #[must_use]
     pub fn kind_of(&self, id: SlotId) -> Option<&KindId> {
         match self {
@@ -1387,7 +1404,7 @@ impl Node {
         }
     }
 
-    /// Los vínculos del hueco `id`, si el árbol lo contiene.
+    /// Slot `id`'s bindings, if the tree contains it.
     #[must_use]
     pub fn bindings_of(&self, id: SlotId) -> Option<&Bindings> {
         match self {
@@ -1401,14 +1418,14 @@ impl Node {
         }
     }
 
-    /// ¿Está el hueco `id` en este subárbol?
+    /// Is slot `id` in this subtree?
     #[must_use]
     pub fn contains(&self, id: SlotId) -> bool {
         self.slot_ids().contains(&id)
     }
 
-    /// El mismo árbol con el hueco `id` metido en una [`Node::Tabs`] de una
-    /// sola pestaña. Si ya es hijo directo de una `Tabs`, no cambia nada.
+    /// The same tree with slot `id` put into a single-tab [`Node::Tabs`].
+    /// If it is already a direct child of a `Tabs`, nothing changes.
     #[must_use]
     pub fn wrap_in_tabs(&self, id: SlotId) -> Self {
         match self {
@@ -1441,11 +1458,11 @@ impl Node {
         }
     }
 
-    /// Abre `nuevo` como pestaña al lado de `id`, y la deja activa.
+    /// Opens `nuevo` as a tab next to `id`, and leaves it active.
     ///
-    /// Si `id` no estaba en pestañas, lo envuelve primero: abrir una pestaña
-    /// desde un panel suelto es lo que convierte ese panel en el primero de un
-    /// grupo, y pedirle al usuario dos pasos para eso no tendría sentido.
+    /// If `id` was not in tabs, it wraps it first: opening a tab from a
+    /// lone panel is what turns that panel into the first of a group, and
+    /// asking the user for two steps for that would make no sense.
     #[must_use]
     pub fn add_tab(&self, id: SlotId, nuevo: &Self) -> Self {
         let envuelto = self.wrap_in_tabs(id);
@@ -1457,8 +1474,8 @@ impl Node {
             Self::Split { children, .. } | Self::Tabs { children, .. } => children,
             Self::Slot { .. } => return None,
         };
-        // Más adentro primero: la `Tabs` que manda es la INTERIOR, no la que
-        // envuelve media pantalla.
+        // Deeper inside first: the `Tabs` that rules is the INNER one, not
+        // the one wrapping half the screen.
         for (i, c) in hijos.iter().enumerate() {
             if let Some(cambiado) = c.insert_tab_near(id, nuevo) {
                 return Some(self.with_child(i, cambiado));
@@ -1477,14 +1494,14 @@ impl Node {
         None
     }
 
-    /// Cierra la pestaña que contiene `id`.
+    /// Closes the tab that contains `id`.
     ///
-    /// Una `Tabs` que se queda con UN hijo se DISUELVE en él: un grupo de una
-    /// pestaña no es un grupo, y dejarlo pintaría una barra de pestañas con una
-    /// sola entrada para siempre.
+    /// A `Tabs` left with ONE child DISSOLVES into it: a one-tab group is
+    /// not a group, and leaving it would paint a tab bar with a single
+    /// entry forever.
     ///
-    /// Devuelve `None` si `id` no está dentro de ninguna `Tabs` — cerrar un
-    /// panel suelto es `layout.close-slot`, no `pane.tab-close`.
+    /// Returns `None` if `id` is not inside any `Tabs` — closing a lone
+    /// panel is `layout.close-slot`, not `pane.tab-close`.
     #[must_use]
     pub fn close_tab(&self, id: SlotId) -> Option<Self> {
         let hijos = match self {
@@ -1505,10 +1522,10 @@ impl Node {
             if nuevos.len() == 1 {
                 return nuevos.into_iter().next();
             }
-            // Cerrar una pestaña ANTERIOR a la activa arrastra el índice; si
-            // no, el activo pasaría a nombrar a la de al lado. El clamp va
-            // DESPUÉS del arrastre: al revés se comen los dos y el activo cae
-            // una posición de más.
+            // Closing a tab BEFORE the active one shifts the index; if not,
+            // active would end up naming the one next to it. The clamp
+            // goes AFTER the shift: the other way round both apply and
+            // active falls one position too far.
             let act = if pos < *active {
                 active.saturating_sub(1)
             } else {

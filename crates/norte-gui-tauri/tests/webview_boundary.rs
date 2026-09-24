@@ -1,9 +1,9 @@
-//! La frontera de la webview, clavada (ADR 0066, decisión D11).
+//! The webview's boundary, pinned (ADR 0066, decision D11).
 //!
-//! Estas comprobaciones leen la CONFIGURACIÓN y los assets empaquetados, no el
-//! runtime, y ese es justo el punto: una CSP relajada, una capacidad de más o
-//! un `<script src="https://…">` colado en el bundle no se ven en ninguna
-//! prueba de comportamiento — se ven aquí, en el diff, o no se ven nunca.
+//! These checks read the CONFIGURATION and the packaged assets, not the
+//! runtime, and that is exactly the point: a relaxed CSP, one capability too
+//! many, or a `<script src="https://…">` slipped into the bundle are not
+//! seen in any behavior test — they are seen here, in the diff, or never.
 
 use std::path::{Path, PathBuf};
 
@@ -14,21 +14,21 @@ fn raiz() -> PathBuf {
 fn json(rel: &str) -> serde_json::Value {
     let p = raiz().join(rel);
     let raw = std::fs::read_to_string(&p)
-        .unwrap_or_else(|e| panic!("no se pudo leer {}: {e}", p.display()));
-    serde_json::from_str(&raw).expect("JSON válido")
+        .unwrap_or_else(|e| panic!("could not read {}: {e}", p.display()));
+    serde_json::from_str(&raw).expect("valid JSON")
 }
 
-/// La CSP no deja hueco: ni scripts remotos, ni `eval`, ni estilos en línea.
+/// The CSP leaves no gap: no remote scripts, no `eval`, no inline styles.
 #[test]
 fn la_csp_no_deja_puertas() {
     let cfg = json("tauri.conf.json");
     let csp = cfg["app"]["security"]["csp"]
         .as_str()
-        .expect("la CSP está puesta");
-    // El ÚNICO origen con esquema que se admite es el del propio IPC de
-    // Tauri, que no es remoto: es como la webview le habla a este proceso.
-    // Todo lo demás —un CDN, un websocket de desarrollo, un comodín— es una
-    // puerta al exterior y no puede estar.
+        .expect("the CSP is set");
+    // The ONLY origin with a scheme that is allowed is Tauri's own IPC,
+    // which is not remote: it is how the webview talks to this process.
+    // Everything else — a CDN, a dev websocket, a wildcard — is a door to
+    // the outside and cannot be there.
     let sin_ipc = csp.replace("http://ipc.localhost", "");
     for prohibido in [
         "'unsafe-inline'",
@@ -41,12 +41,12 @@ fn la_csp_no_deja_puertas() {
     ] {
         assert!(
             !sin_ipc.contains(prohibido),
-            "la CSP no puede contener {prohibido}: {csp}"
+            "the CSP cannot contain {prohibido}: {csp}"
         );
     }
     assert!(
         csp.starts_with("default-src 'none'"),
-        "cerrada por defecto: {csp}"
+        "closed by default: {csp}"
     );
     for directiva in [
         "script-src 'self'",
@@ -54,99 +54,99 @@ fn la_csp_no_deja_puertas() {
         "base-uri 'none'",
         "frame-ancestors 'none'",
     ] {
-        assert!(csp.contains(directiva), "falta `{directiva}`: {csp}");
+        assert!(csp.contains(directiva), "missing `{directiva}`: {csp}");
     }
-    // Las imágenes: `blob:` SÍ, `data:` NO (ADR 0069).
+    // Images: `blob:` YES, `data:` NO (ADR 0069).
     //
-    // `blob:` no se puede fabricar desde el contenido —un blob URL existe
-    // solo porque este documento lo creó— así que es una concesión más
-    // estrecha que `data:`, que es una URL que cualquier cadena puede
-    // formar. La diferencia importa aunque hoy este documento no pinte
-    // markup ajeno: la CSP es del DOCUMENTO entero, no del elemento que
-    // teníamos en mente.
+    // `blob:` cannot be manufactured from content — a blob URL exists only
+    // because this document created it — so it is a narrower concession
+    // than `data:`, which is a URL any string can form. The difference
+    // matters even though this document does not paint foreign markup
+    // today: the CSP belongs to the WHOLE DOCUMENT, not the element we had
+    // in mind.
     assert!(
         csp.contains("img-src 'self' blob:"),
-        "las imágenes cruzan como blob (ADR 0069): {csp}"
+        "images cross as a blob (ADR 0069): {csp}"
     );
     assert!(
         !csp.contains("data:"),
-        "`data:` no entra en la CSP sin cambiar el ADR 0069, que explica por \
-         qué se eligió `blob:`: {csp}"
+        "`data:` does not enter the CSP without changing ADR 0069, which \
+         explains why `blob:` was chosen: {csp}"
     );
 }
 
-/// La webview no tiene ni el objeto global de Tauri, ni protocolo de assets,
-/// ni un servidor de desarrollo al que ir en producción.
+/// The webview has neither Tauri's global object, nor an asset protocol, nor
+/// a dev server to reach in production.
 #[test]
 fn la_ventana_no_trae_nada_de_serie() {
     let cfg = json("tauri.conf.json");
     assert_eq!(
         cfg["app"]["withGlobalTauri"],
         serde_json::Value::Bool(false),
-        "sin `window.__TAURI__`: lo que se puede llamar se importa, y está en la lista"
+        "no `window.__TAURI__`: what can be called is imported, and it is on the list"
     );
     assert_eq!(
         cfg["app"]["security"]["assetProtocol"]["enable"],
         serde_json::Value::Bool(false),
-        "sin protocolo de assets no hay forma de pedirle un fichero del disco"
+        "with no asset protocol there is no way to ask it for a file from disk"
     );
     assert!(
         cfg["build"]["devUrl"].is_null(),
-        "un binario de producción no apunta a un servidor de desarrollo"
+        "a production binary does not point at a dev server"
     );
-    // Soltar SÍ significa algo desde #283 (ADR 0074), y lo que significa es
-    // una pregunta: el drop llega al proceso —nunca a la webview, que no ve
-    // las rutas— y abre la confirmación de copia. La afirmación se queda
-    // porque el valor es una decisión, no un descuido: si alguien lo vuelve a
-    // poner en `false` habrá borrado el gesto entero sin tocar una línea de
-    // Rust.
+    // Dropping DOES mean something since #283 (ADR 0074), and what it means
+    // is a question: the drop reaches the process — never the webview, which
+    // does not see the paths — and opens the copy confirmation. The
+    // assertion stays because the value is a decision, not an oversight: if
+    // someone sets it back to `false` they will have erased the whole
+    // gesture without touching a line of Rust.
     assert_eq!(
         cfg["app"]["windows"][0]["dragDropEnabled"],
         serde_json::Value::Bool(true),
-        "soltar entra por el proceso y abre una confirmación (#283)"
+        "dropping enters through the process and opens a confirmation (#283)"
     );
 }
 
-/// El fichero de capacidades concede LO MÍNIMO: escuchar eventos. Nada de
-/// filesystem, shell, http, diálogo nativo ni control de ventana.
+/// The capabilities file grants the BARE MINIMUM: listening for events.
+/// Nothing about filesystem, shell, http, native dialog or window control.
 #[test]
 fn las_capacidades_son_las_minimas() {
     let cap = json("capabilities/main.json");
     let permisos: Vec<&str> = cap["permissions"]
         .as_array()
-        .expect("hay lista de permisos")
+        .expect("there is a permission list")
         .iter()
-        .map(|p| p.as_str().expect("cada permiso es una cadena"))
+        .map(|p| p.as_str().expect("each permission is a string"))
         .collect();
     assert_eq!(
         permisos,
         vec!["core:event:allow-listen", "core:event:allow-unlisten"],
-        "cualquier permiso de más es una decisión, y se ve aquí"
+        "any extra permission is a decision, and it shows up here"
     );
     assert_eq!(
         cap["windows"].as_array().map(Vec::len),
         Some(1),
-        "una ventana, la principal"
+        "one window, the main one"
     );
 }
 
-/// Los comandos que el binario registra son EXACTAMENTE los declarados.
+/// The commands the binary registers are EXACTLY the declared ones.
 ///
-/// Se lee el `main.rs` a propósito: `generate_handler!` es un macro, así que
-/// un comando nuevo no aparece en ninguna lista que se pueda comparar en
-/// tiempo de compilación. Esto lo convierte en algo que rompe el test.
+/// `main.rs` is read on purpose: `generate_handler!` is a macro, so a new
+/// command does not show up in any list that can be compared at compile
+/// time. This turns it into something that breaks the test.
 #[test]
 fn la_superficie_de_comandos_es_la_declarada() {
     let src = std::fs::read_to_string(raiz().join("src/main.rs")).expect("main.rs");
-    // El bloque de PRODUCCIÓN, que es el de `not(feature = "metrics")`: la
-    // instrumentación de la 3.6 añade un comando más y no puede colarse aquí.
+    // The PRODUCTION block, which is `not(feature = "metrics")`'s: 3.6's
+    // instrumentation adds one more command and cannot sneak in here.
     let (_, tras_cfg) = src
         .split_once("#[cfg(not(feature = \"metrics\"))]")
-        .expect("el handler de producción está marcado");
+        .expect("the production handler is marked");
     let (_, resto) = tras_cfg
         .split_once("generate_handler![")
-        .expect("el binario registra comandos");
-    let (bloque, _) = resto.split_once(']').expect("el macro cierra");
+        .expect("the binary registers commands");
+    let (bloque, _) = resto.split_once(']').expect("the macro closes");
     let registrados: Vec<String> = bloque
         .split(',')
         .map(|s| s.trim().to_owned())
@@ -155,24 +155,24 @@ fn la_superficie_de_comandos_es_la_declarada() {
     assert_eq!(
         registrados,
         norte_gui_tauri::commands::COMANDOS,
-        "la lista declarada y la registrada tienen que ser la misma"
+        "the declared list and the registered one have to be the same"
     );
 }
 
-/// El bundle de producción no trae nada remoto, ni `eval`, ni el cliente del
-/// servidor de desarrollo.
+/// The production bundle brings in nothing remote, no `eval`, no dev-server
+/// client.
 ///
-/// Si no hay bundle todavía, el test lo DICE y no pasa por alto: un
-/// «no había nada que mirar» que se lee como verde es peor que un rojo.
+/// If there is no bundle yet, the test SAYS SO and does not look past it: a
+/// "there was nothing to look at" that reads as green is worse than a red.
 #[test]
 fn el_bundle_no_llama_a_casa() {
     let dist = raiz().join("ui/dist");
     let index = dist.join("index.html");
     assert!(
         index.exists(),
-        "no hay bundle en {}: córrelo con `just gui-build` antes. Un «no había \
-         nada que mirar» que se lee como verde es peor que un rojo — y esto lo \
-         decía su propio comentario mientras hacía lo contrario.",
+        "no bundle at {}: run `just gui-build` first. A \"there was nothing \
+         to look at\" that reads as green is worse than a red — and this is \
+         what its own comment used to say while doing the opposite.",
         dist.display()
     );
     let mut mirados = 0usize;
@@ -184,11 +184,11 @@ fn el_bundle_no_llama_a_casa() {
             continue;
         }
         let texto = std::fs::read_to_string(&entrada).unwrap_or_default();
-        // La ÚNICA excepción, y exacta: el espacio de nombres de SVG que
-        // `createElementNS` necesita para los iconos de la barra de
-        // actividad (ADR 0131). Es un identificador XML, no una dirección:
-        // el navegador no la pide nunca. Se quita la cadena entera antes de
-        // mirar, así que `http://www.w3.org/otra-cosa` sigue siendo rojo.
+        // The ONLY exception, and an exact one: the SVG namespace
+        // `createElementNS` needs for the activity bar's icons (ADR 0131).
+        // It is an XML identifier, not an address: the browser never
+        // requests it. The whole string is removed before looking, so
+        // `http://www.w3.org/something-else` is still red.
         let texto = texto.replace("http://www.w3.org/2000/svg", "");
         mirados += 1;
         for prohibido in [
@@ -201,12 +201,12 @@ fn el_bundle_no_llama_a_casa() {
         ] {
             assert!(
                 !texto.contains(prohibido),
-                "{} contiene `{prohibido}`",
+                "{} contains `{prohibido}`",
                 entrada.display()
             );
         }
     }
-    assert!(mirados >= 2, "se miraron el HTML y su script");
+    assert!(mirados >= 2, "the HTML and its script were both looked at");
 }
 
 fn walk(dir: &Path) -> Vec<PathBuf> {
@@ -225,31 +225,31 @@ fn walk(dir: &Path) -> Vec<PathBuf> {
     out
 }
 
-/// La webview no navega fuera de sus propios assets.
+/// The webview does not navigate outside its own assets.
 ///
-/// Dos de los puntos de aceptación de la tarea 3.3 («navegar a
-/// `https://example.invalid` se rechaza», «`window.open` no crea una webview
-/// sin restricciones») no tenían implementación NI prueba: la CSP no cubre la
-/// navegación de primer nivel. Esto clava la guardia que sí lo hace.
+/// Two of task 3.3's acceptance points ("navigating to
+/// `https://example.invalid` is rejected", "`window.open` does not create an
+/// unrestricted webview") had NEITHER an implementation NOR a test: the CSP
+/// does not cover top-level navigation. This pins the guard that does.
 #[test]
 fn la_webview_no_navega_a_ninguna_parte() {
     let src = std::fs::read_to_string(raiz().join("src/main.rs")).expect("main.rs");
     assert!(
         src.contains("guardia_de_navegacion"),
-        "el binario tiene que instalar la guardia de navegación"
+        "the binary has to install the navigation guard"
     );
     assert!(
         src.contains(r#"const ESQUEMAS_DE_PAGINA: &[&str] = &["tauri", "ipc"];"#),
-        "y la lista de esquemas es EXACTAMENTE esa: cualquier añadido es una \
-         decisión que se ve en el diff"
+        "and the scheme list is EXACTLY that: any addition is a decision \
+         that shows up in the diff"
     );
 }
 
-/// `window_control` (ADR 0136) es la ÚNICA puerta de la webview a su
-/// ventana, y su forma es la decisión: cuatro verbos, rechazo con la barra
-/// nativa antes de tocar nada, y cerrar con `close()` —que pasa por
-/// `CloseRequested` y por tanto por `[ui] confirm_quit`— y nunca con
-/// `destroy()`, que se saltaría la pregunta y el guardado de la sesión.
+/// `window_control` (ADR 0136) is the webview's ONLY door to its window, and
+/// its shape is the decision: four verbs, rejection with the native bar
+/// before touching anything, and closing with `close()` — which goes through
+/// `CloseRequested` and therefore through `[ui] confirm_quit` — and never
+/// with `destroy()`, which would skip the question and the session save.
 #[test]
 fn la_puerta_de_la_ventana_es_estrecha() {
     use norte_gui_tauri::commands::WindowVerb;
@@ -269,34 +269,34 @@ fn la_puerta_de_la_ventana_es_estrecha() {
     ] {
         assert!(
             serde_json::from_str::<WindowVerb>(ajeno).is_err(),
-            "{ajeno} no es un verbo de la barra de título"
+            "{ajeno} is not a title-bar verb"
         );
     }
     let src = std::fs::read_to_string(raiz().join("src/main.rs")).expect("main.rs");
     let (_, cuerpo) = src
         .split_once("fn window_control(")
-        .expect("el binario declara `window_control`");
-    let (cuerpo, _) = cuerpo.split_once("\n}\n").expect("la función cierra");
+        .expect("the binary declares `window_control`");
+    let (cuerpo, _) = cuerpo.split_once("\n}\n").expect("the function closes");
     let rechazo = cuerpo
         .find("custom_titlebar")
-        .expect("mira si la barra es la propia");
-    let primer_verbo = cuerpo.find("match verb").expect("despacha por verbo");
+        .expect("checks whether the bar is the custom one");
+    let primer_verbo = cuerpo.find("match verb").expect("dispatches by verb");
     assert!(
         rechazo < primer_verbo,
-        "rechaza con la barra nativa ANTES de tocar la ventana"
+        "rejects with the native bar BEFORE touching the window"
     );
-    assert!(cuerpo.contains("window.close()"), "cierra con `close()`");
+    assert!(cuerpo.contains("window.close()"), "closes with `close()`");
     assert!(
         !cuerpo.contains("destroy"),
-        "`destroy()` se salta `confirm_quit` y el guardado de la sesión"
+        "`destroy()` skips `confirm_quit` and the session save"
     );
 }
 
-/// La instrumentación de la 3.6 no viaja en el binario por defecto.
+/// 3.6's instrumentation does not travel in the binary by default.
 ///
-/// El test que clava la lista de comandos lee el `main.rs`, así que pasaría
-/// igual con `default = ["metrics"]` en el manifiesto: el quinto comando
-/// entraría por la puerta de las features y ninguna prueba lo vería.
+/// The test that pins the command list reads `main.rs`, so it would pass
+/// just the same with `default = ["metrics"]` in the manifest: the fifth
+/// command would enter through the features door and no test would see it.
 #[test]
 fn la_feature_de_medida_no_es_la_de_por_defecto() {
     let toml = std::fs::read_to_string(raiz().join("Cargo.toml")).expect("Cargo.toml");
@@ -306,28 +306,28 @@ fn la_feature_de_medida_no_es_la_de_por_defecto() {
         .unwrap_or_default();
     assert!(
         features.contains("metrics"),
-        "la feature existe y se declara aquí"
+        "the feature exists and is declared here"
     );
     assert!(
         !features.contains("default"),
-        "y NO hay `default`: la medida se pide a mano o no está"
+        "and there is NO `default`: measuring is asked for by hand or it is not there"
     );
 }
 
-/// El renderer no llama a un comando que el binario no expone.
+/// The renderer does not call a command the binary does not expose.
 ///
-/// Se mira la FUENTE y no el bundle: el bundler minifica la llamada
-/// (`t(`dispatch`)`), así que en `dist` el nombre ya no está pegado a
-/// `invoke(` y cualquier barrido allí es adivinar. En `ui/src` sí está, y es
-/// donde alguien añadiría un comando nuevo.
+/// The SOURCE is checked, not the bundle: the bundler minifies the call
+/// (`t(`dispatch`)`), so in `dist` the name is no longer glued to `invoke(`
+/// and any sweep there is guessing. In `ui/src` it is, and that is where
+/// someone would add a new command.
 #[test]
 fn el_renderer_solo_invoca_comandos_conocidos() {
     let src = raiz().join("ui/src");
     let conocidos: Vec<&str> = norte_gui_tauri::commands::COMANDOS
         .iter()
         .copied()
-        // `metrics` solo existe con su feature; el renderer lo llama sin
-        // condición y el binario de producción lo rechaza.
+        // `metrics` only exists with its feature; the renderer calls it
+        // unconditionally and the production binary rejects it.
         .chain(std::iter::once("metrics"))
         .collect();
     let mut vistos = Vec::new();
@@ -337,7 +337,7 @@ fn el_renderer_solo_invoca_comandos_conocidos() {
         }
         let texto = std::fs::read_to_string(&entrada).unwrap_or_default();
         for trozo in texto.split("invoke").skip(1) {
-            // `invoke<T>("nombre"` o `invoke("nombre"`.
+            // `invoke<T>("name"` or `invoke("name"`.
             let Some(abre) = trozo.find('(') else {
                 continue;
             };
@@ -352,72 +352,71 @@ fn el_renderer_solo_invoca_comandos_conocidos() {
             vistos.push(nombre.to_owned());
         }
     }
-    assert!(!vistos.is_empty(), "el renderer invoca algo");
+    assert!(!vistos.is_empty(), "the renderer calls something");
     for n in &vistos {
         assert!(
             conocidos.contains(&n.as_str()),
-            "el renderer invoca `{n}`, que no está en la superficie declarada"
+            "the renderer calls `{n}`, which is not in the declared surface"
         );
     }
-    // Y los cuatro de producción se usan: una superficie declarada que nadie
-    // llama es una superficie que nadie mantiene.
+    // And all four production ones are used: a declared surface nobody
+    // calls is a surface nobody maintains.
     for c in norte_gui_tauri::commands::COMANDOS {
         assert!(
             vistos.iter().any(|v| v == c),
-            "nadie invoca `{c}`: ¿sobra en la lista?"
+            "nobody calls `{c}`: is it extra in the list?"
         );
     }
 }
 
-/// El ORDEN de los anclajes del documento decide quién tapa a quién.
+/// The ORDER of the document's anchors decides who covers whom.
 ///
-/// Esta pantalla no usa `z-index` en ninguna parte: entre elementos
-/// posicionados manda el orden del documento. Así que el orden ES la
-/// decisión, y hasta ahora solo estaba escrita en comentarios de la hoja de
-/// estilos y del propio HTML.
+/// This screen does not use `z-index` anywhere: among positioned elements the
+/// document order rules. So the order IS the decision, and until now it was
+/// only written in comments in the stylesheet and in the HTML itself.
 ///
-/// El menú lo destapó: declarado ANTES que `#screen`, su desplegable quedaba
-/// por debajo de los paneles —que son absolutos y vienen después— y se abría
-/// invisible. Se ve al pulsarlo y no se ve en ningún test de comportamiento,
-/// porque `jsdom` no reparte pantalla.
+/// The menu uncovered it: declared BEFORE `#screen`, its dropdown ended up
+/// underneath the panes — which are absolute and come after — and opened
+/// invisible. It shows when clicked and shows in no behavior test, because
+/// `jsdom` does not lay out a screen.
 #[test]
 fn el_orden_de_los_anclajes_es_el_de_quien_tapa_a_quien() {
-    let html = std::fs::read_to_string(raiz().join("ui/index.html")).expect("el index está");
+    let html = std::fs::read_to_string(raiz().join("ui/index.html")).expect("the index is there");
     let pos = |id: &str| {
         html.find(&format!("id=\"{id}\""))
-            .unwrap_or_else(|| panic!("falta el anclaje #{id}"))
+            .unwrap_or_else(|| panic!("missing anchor #{id}"))
     };
     assert!(
         pos("screen") < pos("menu"),
-        "el menú va DESPUÉS de la pantalla: su desplegable cuelga sobre los \
-         paneles, y quien va antes queda debajo"
+        "the menu goes AFTER the screen: its dropdown hangs over the panes, \
+         and whoever comes first ends up underneath"
     );
-    // Y las superficies que se quedan el teclado van después del menú: un
-    // diálogo o la ayuda mandan sobre una barra de menús, nunca al revés.
+    // And the surfaces that grab the keyboard go after the menu: a dialog or
+    // help rule over a menu bar, never the other way around.
     for encima in ["palette", "dialogs", "help", "profiles"] {
         assert!(
             pos("menu") < pos(encima),
-            "#{encima} tiene que taparlo al menú, así que va después"
+            "#{encima} has to cover the menu, so it goes after"
         );
     }
 }
 
-/// La ventana YA muta, y sigue siendo una barrera que se clava aquí.
+/// The window ALREADY mutates, and it is still a barrier pinned here.
 ///
-/// El interruptor lo levantó la tarea 5.4 (la revisión de seguridad de las
-/// mutaciones que exige el gate de salida de la fase 5), y este test cambió a
-/// la vez: mientras valía `SoloLectura`, toda la promesa descansaba en una
-/// constante que ninguna prueba miraba, y cambiarla por descuido dejaba la
-/// suite entera verde y la ventana borrando ficheros.
+/// The switch was flipped by task 5.4 (the mutation security review phase
+/// 5's exit gate requires), and this test changed at the same time: while it
+/// was `SoloLectura` (read-only), the whole promise rested on a constant no
+/// test looked at, and changing it by accident left the whole suite green
+/// and the window deleting files.
 ///
-/// Sigue aquí en el otro sentido: volver a `SoloLectura` también tiene que
-/// ser una decisión, no un merge. El rustdoc de la constante dice qué la
-/// sostiene.
+/// It stays here in the other direction too: going back to `SoloLectura`
+/// also has to be a decision, not a merge. The constant's rustdoc says what
+/// backs it.
 #[test]
 fn la_ventana_muta_y_es_una_decision() {
     assert_eq!(
         norte_gui_tauri::startup::EFECTOS,
         norte_ui_host::commands::Efectos::Completo,
-        "cambiar el interruptor de efectos es una decisión de la 5.4, no un descuido"
+        "changing the effects switch is a 5.4 decision, not an oversight"
     );
 }

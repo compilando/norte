@@ -494,8 +494,8 @@ impl<'a> RebindSources<'a> {
             below_end = 0;
             target = KeymapFile::default();
             above_from = 0;
-            // Y sin destino: degradar a `above` es rehusar la escritura, así
-            // que apuntar a un fichero sería contradecir el propio corte.
+            // And with no target: degrading to `above` is refusing the
+            // write, so pointing at a file would contradict the cut itself.
             target_index = None;
         }
         RebindSplit {
@@ -529,19 +529,19 @@ pub struct RebindSplit<'a> {
 }
 
 impl RebindSplit<'_> {
-    /// A qué capa apunta la escritura, por su índice en los `layers`/`kinds`
-    /// con los que se hizo el corte. `None` = la escritura CREA un fichero que
-    /// no existía.
+    /// Which layer the write targets, by its index into the `layers`/`kinds`
+    /// the cut was made with. `None` = the write CREATES a file that did not
+    /// exist.
     ///
-    /// Existe porque el destino y el directorio donde se escribe tienen que
-    /// salir del MISMO sitio. D10 movió el destino al `keymap.toml` del perfil
-    /// y el escritor del editor de atajos seguía resolviendo el directorio del
-    /// usuario por su cuenta, así que la puerta planificaba sobre un fichero y
-    /// la escritura caía en otro, donde el perfil la tapaba: «visiblemente
-    /// guardado, y sin hacer nada» (#305).
+    /// Exists because the target and the directory it is written to have to
+    /// come from the SAME place. D10 moved the target to the profile's
+    /// `keymap.toml` and the shortcut editor's writer kept resolving the
+    /// user's directory on its own, so the door planned over one file and
+    /// the write landed in another, where the profile covered it up:
+    /// "visibly saved, and doing nothing" (#305).
     ///
-    /// `None` NO es «el índice 0»: con solo una capa de sistema, apuntar al 0
-    /// mandaría la escritura del lector al fichero del sistema.
+    /// `None` is NOT "index 0": with only a system layer, pointing at 0
+    /// would send the reader's write to the system file.
     #[must_use]
     pub const fn target_index(&self) -> Option<usize> {
         self.target_index
@@ -1102,12 +1102,12 @@ keymap = [{ on = ["ctrl+w"], run = "viewer.close" }]
         assert_eq!(
             rebind_check(&with, &[c("0")]),
             Rebind::Free,
-            "el 0 sí es ligable"
+            "0 is bindable"
         );
         assert_eq!(
             rebind_check(&with, &[c("ctrl+5")]),
             Rebind::Free,
-            "un dígito con modificador jamás fue un contador"
+            "a digit with a modifier was never a count"
         );
         let without = eff(BROWSE, Screen::Browse);
         assert_eq!(rebind_check(&without, &[c("5")]), Rebind::Free);
@@ -1295,7 +1295,7 @@ keymap = [{ on = ["ctrl+w"], run = "viewer.close" }]
                 .expect("builds");
             assert!(
                 after.single_chord_runs(c(spelling), "pane.move"),
-                "{spelling}: el rebind se escribió y NO disparó"
+                "{spelling}: the rebind was written and did NOT fire"
             );
         }
     }
@@ -1350,7 +1350,7 @@ keymap = [{ on = ["ctrl+w"], run = "viewer.close" }]
         let layers = [broken];
         let kinds = [Layer::System];
         let split = RebindSources::split_at(&preset, &kinds, &layers, KNOWN, Screen::Browse);
-        assert_eq!(split.below.len(), 1, "el sistema va DEBAJO de la escritura");
+        assert_eq!(split.below.len(), 1, "the system goes BELOW the write");
         assert!(split.above.is_empty());
         assert!(!split.target.is_project());
         let err = rebind_dry_run(&split.sources(), &[c("ctrl+j")], "pane.move")
@@ -1378,21 +1378,21 @@ keymap = [{ on = ["ctrl+w"], run = "viewer.close" }]
         assert_eq!(
             w.chords,
             vec!["ctrl+j".to_owned()],
-            "la capa destino está vacía: se escribe la grafía de `Display`"
+            "the target layer is empty: `Display`'s spelling is written"
         );
     }
 
-    /// D10 movió el DESTINO del rebind al `keymap.toml` del perfil, y el
-    /// escritor seguía resolviendo el directorio del usuario por su cuenta.
+    /// D10 moved the rebind's TARGET to the profile's `keymap.toml`, and the
+    /// writer kept resolving the user's directory on its own.
     ///
-    /// Resultado: la puerta planifica sobre el fichero del perfil y la
-    /// escritura cae en el del usuario, donde el perfil la TAPA — «visiblemente
-    /// guardado, y sin hacer nada», que es la frase con la que D10 describe el
-    /// bug que existe para prevenir. Y era peor que antes del corte ensanchado:
-    /// antes, un orden inesperado se rechazaba (#305).
+    /// Result: the door plans over the profile's file and the write lands in
+    /// the user's, where the profile COVERS it up — "visibly saved, and
+    /// doing nothing", which is the phrase D10 uses to describe the bug
+    /// this exists to prevent. And it was worse than before the widened
+    /// cut: before, an unexpected order was rejected (#305).
     ///
-    /// El arreglo es que el destino salga del MISMO sitio que el corte, así que
-    /// el corte tiene que DECIR a qué capa apuntó.
+    /// The fix is that the target comes from the SAME place as the cut, so
+    /// the cut has to SAY which layer it pointed at.
     #[test]
     fn el_corte_dice_a_que_capa_apunta() {
         let preset = parse_keymap(BROWSE).expect("preset");
@@ -1405,21 +1405,21 @@ keymap = [{ on = ["ctrl+w"], run = "viewer.close" }]
         )
         .expect("profile layer");
 
-        // Con perfil: apunta al índice del PERFIL, no al del usuario.
+        // With a profile: points at the PROFILE's index, not the user's.
         let layers = [user.clone(), profile];
         let kinds = [Layer::User, Layer::Profile];
         let split = RebindSources::split_at(&preset, &kinds, &layers, KNOWN, Screen::Browse);
-        assert_eq!(split.target_index(), Some(1), "el perfil es el destino");
+        assert_eq!(split.target_index(), Some(1), "the profile is the target");
 
-        // Sin perfil: al del usuario.
+        // With no profile: the user's.
         let layers = [user];
         let kinds = [Layer::User];
         let split = RebindSources::split_at(&preset, &kinds, &layers, KNOWN, Screen::Browse);
         assert_eq!(split.target_index(), Some(0));
 
-        // Y sin ninguna capa que sea destino, la escritura CREA un fichero que
-        // no existe: no hay índice al que apuntar, y decir `Some(0)` mandaría
-        // la escritura al fichero del sistema.
+        // And with no layer that is a target, the write CREATES a file that
+        // does not exist: there is no index to point at, and saying
+        // `Some(0)` would send the write to the system file.
         let layers = [
             crate::keymap::parse_keymap_layer("[pane]\nprepend_keymap = []\n")
                 .expect("system layer"),
@@ -1449,24 +1449,21 @@ keymap = [{ on = ["ctrl+w"], run = "viewer.close" }]
         let layers = [user, profile];
         let kinds = [Layer::User, Layer::Profile];
         let split = RebindSources::split_at(&preset, &kinds, &layers, KNOWN, Screen::Browse);
-        assert_eq!(
-            split.below.len(),
-            1,
-            "la capa del usuario queda DEBAJO de la escritura"
-        );
+        assert_eq!(split.below.len(), 1, "the user layer stays BELOW the write");
         assert!(
             split.above.is_empty(),
-            "nada por encima del destino: el perfil ES el destino"
+            "nothing above the target: the profile IS the target"
         );
-        // Y el destino es el fichero DEL PERFIL, no uno vacío: rebindear su
-        // propia entrada la reemplaza en sitio, con su grafía.
+        // And the target is the PROFILE's file, not an empty one: rebinding
+        // its own entry replaces it in place, with its spelling.
         let w = rebind_dry_run(&split.sources(), &[c("ctrl+j")], "pane.move")
-            .expect("se escribe en el perfil");
+            .expect("it is written into the profile");
         assert_eq!(w.chords, vec!["ctrl+j".to_owned()]);
     }
 
-    /// Un perfil SIN `keymap.toml` propio no cambia el destino: sigue siendo la
-    /// capa del usuario, y la del perfil ni siquiera está en `kinds`.
+    /// A profile with NO `keymap.toml` of its own does not change the
+    /// target: it is still the user layer, and the profile's is not even in
+    /// `kinds`.
     #[test]
     fn sin_perfil_el_destino_sigue_siendo_el_usuario() {
         let preset = parse_keymap(BROWSE).expect("preset");
@@ -1480,14 +1477,14 @@ keymap = [{ on = ["ctrl+w"], run = "viewer.close" }]
         assert_eq!(split.below.len(), 1);
         assert!(split.above.is_empty());
         let w = rebind_dry_run(&split.sources(), &[c("ctrl+j")], "pane.move")
-            .expect("la capa del usuario sigue siendo el destino");
+            .expect("the user layer is still the target");
         assert_eq!(w.chords, vec!["ctrl+j".to_owned()]);
     }
 
-    /// Y cualquier OTRO orden sigue cayendo en `above`, que es el lado
-    /// fail-closed: la puerta rehúsa lo que no sabe modelar, nunca aprueba lo
-    /// que no aprobó. Un perfil DEBAJO del usuario no es un orden que ningún
-    /// resolutor produzca.
+    /// And any OTHER order still falls into `above`, which is the
+    /// fail-closed side: the door refuses what it cannot model, never
+    /// approves what it did not approve. A profile BELOW the user is not an
+    /// order any resolver produces.
     #[test]
     fn un_orden_inesperado_sigue_siendo_fail_closed() {
         let preset = parse_keymap(BROWSE).expect("preset");
@@ -1523,10 +1520,10 @@ keymap = [{ on = ["ctrl+w"], run = "viewer.close" }]
         let kinds = [Layer::User, Layer::Project];
         let split = RebindSources::split_at(&preset, &kinds, &layers, KNOWN, Screen::Browse);
         assert!(split.below.is_empty());
-        assert_eq!(split.above.len(), 1, "el proyecto manda ENCIMA");
+        assert_eq!(split.above.len(), 1, "the project rules ABOVE");
         assert!(
             !split.target.is_project(),
-            "el destino jamás es la capa de proyecto"
+            "the target is never the project layer"
         );
         let err = rebind_dry_run(&split.sources(), &[c("ctrl+j")], "pane.move")
             .expect_err("the project layer keeps that key whatever the user writes");
@@ -1538,7 +1535,7 @@ keymap = [{ on = ["ctrl+w"], run = "viewer.close" }]
         assert_eq!(
             w.chords,
             vec!["mod+k".to_owned()],
-            "la grafía YA EN EL FICHERO del usuario: el destino es su capa"
+            "the spelling ALREADY IN the user's FILE: the target is its layer"
         );
     }
 
@@ -1605,7 +1602,7 @@ keymap = [{ on = ["ctrl+w"], run = "viewer.close" }]
                 assert_eq!(
                     e.single_chord_runs(c("ctrl+j"), "pane.move"),
                     other == screen,
-                    "{screen:?} escribió en {}, y {other:?} discrepa",
+                    "{screen:?} wrote to {}, and {other:?} disagrees",
                     w.section
                 );
             }
@@ -1728,11 +1725,11 @@ keymap = [{ on = ["ctrl+w"], run = "viewer.close" }]
                     );
                     // And the SAME defect, not merely some defect.
                     let want = match &verdict {
-                        Rebind::PrefixClash { .. } => Some("secuencias ambiguas"),
-                        Rebind::DigitWithCounts => Some("contador"),
+                        Rebind::PrefixClash { .. } => Some("ambiguous sequences"),
+                        Rebind::DigitWithCounts => Some("count"),
                         Rebind::EscInSequence => Some("esc"),
-                        Rebind::Empty => Some("vacía"),
-                        Rebind::Unwritable { .. } => Some("tecla inválida"),
+                        Rebind::Empty => Some("empty"),
+                        Rebind::Unwritable { .. } => Some("invalid key"),
                         Rebind::Sacred { .. } | Rebind::Free | Rebind::Replaces { .. } => None,
                     };
                     if let (Some(want), Err(e)) = (want, &door) {
@@ -1820,7 +1817,7 @@ keymap = [{ on = ["ctrl+w"], run = "viewer.close" }]
                     .bindings_all_seq()
                     .into_iter()
                     .any(|(s, _, _)| s == seq.as_slice()),
-                "{spelling}: el gemelo debía desaparecer"
+                "{spelling}: the twin should have disappeared"
             );
         }
     }

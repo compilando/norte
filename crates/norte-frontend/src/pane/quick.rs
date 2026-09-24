@@ -1,20 +1,21 @@
-//! El quick search de un pane: filtrar o saltar mientras se teclea.
+//! A pane's quick search: filter or jump while typing.
 //!
-//! Aparte porque tiene su propio ciclo de vida —se abre, come teclas, se
-//! confirma o se cancela— y porque un listado nuevo lo cierra: mezclado con
-//! el resto del pane, cada método de listado tenía que acordarse de él.
+//! Kept apart because it has its own lifecycle —it opens, eats keys, gets
+//! confirmed or cancelled— and because a new listing closes it: mixed into
+//! the rest of the pane, every listing method had to remember it.
 
 use super::{Mode, PaneState, QuickSearch, VPath};
 
 impl PaneState {
-    /// Arranca el quick search en `mode` sobre las entries actuales, plegando
-    /// con la reinterpretación de nombres vigente (#98/F1).
+    /// Starts the quick search in `mode` over the current entries, folding
+    /// with the currently active name reinterpretation (#98/F1).
     pub fn quick_start(&mut self, mode: Mode) {
         self.quick = Some(QuickSearch::new(mode, &self.entries, self.name_encoding));
     }
 
-    /// En [`Mode::Jump`] el cursor REAL sigue a la selección del quick search
-    /// (el listado no cambia; saltar ES mover el cursor). En Filter, no-op.
+    /// In [`Mode::Jump`] the REAL cursor follows the quick search's selection
+    /// (the listing does not change; jumping IS moving the cursor). In
+    /// Filter, a no-op.
     pub(super) fn quick_sync_jump(&mut self) {
         if let Some(q) = &self.quick
             && q.mode() == Mode::Jump
@@ -24,7 +25,7 @@ impl PaneState {
         }
     }
 
-    /// Un carácter tecleado con el quick search activo.
+    /// A character typed while the quick search is active.
     pub fn quick_char(&mut self, c: char) {
         if let Some(q) = &mut self.quick {
             q.push_char(c);
@@ -32,7 +33,7 @@ impl PaneState {
         }
     }
 
-    /// Backspace con el quick search activo.
+    /// Backspace while the quick search is active.
     pub fn quick_backspace(&mut self) {
         if let Some(q) = &mut self.quick {
             q.backspace();
@@ -40,7 +41,7 @@ impl PaneState {
         }
     }
 
-    /// Selección del quick search una posición abajo.
+    /// Moves the quick search's selection down one position.
     pub fn quick_down(&mut self) {
         if let Some(q) = &mut self.quick {
             q.down();
@@ -48,7 +49,7 @@ impl PaneState {
         }
     }
 
-    /// Selección del quick search una posición arriba.
+    /// Moves the quick search's selection up one position.
     pub fn quick_up(&mut self) {
         if let Some(q) = &mut self.quick {
             q.up();
@@ -56,11 +57,12 @@ impl PaneState {
         }
     }
 
-    /// Cierra el quick search fijando el cursor REAL a la selección (Enter: la
-    /// op siguiente parte de ahí). Devuelve `true` si el cursor apunta a una
-    /// entrada que el usuario VEÍA: en Filter sin matches devuelve `false` (la
-    /// lista pintada estaba vacía); en Jump devuelve `true` si hay entradas (el
-    /// listado se pinta entero, el cursor real es visible por definición).
+    /// Closes the quick search, setting the REAL cursor to the selection
+    /// (Enter: the next op starts from there). Returns `true` if the cursor
+    /// points at an entry the user COULD SEE: in Filter with no matches it
+    /// returns `false` (the painted list was empty); in Jump it returns
+    /// `true` if there are entries (the whole listing is painted, the real
+    /// cursor is visible by definition).
     pub fn quick_confirm(&mut self) -> bool {
         let Some(q) = self.quick.take() else {
             return false;
@@ -72,15 +74,15 @@ impl PaneState {
         q.mode() == Mode::Jump && !self.entries.is_empty()
     }
 
-    /// Cierra el quick search SIN tocar el cursor real: en Filter el listado
-    /// completo vuelve con el cursor donde estaba; en Jump el cursor se queda
-    /// donde saltó.
+    /// Closes the quick search WITHOUT touching the real cursor: in Filter
+    /// the full listing comes back with the cursor where it was; in Jump the
+    /// cursor stays wherever it jumped to.
     pub fn quick_cancel(&mut self) {
         self.quick = None;
     }
 
-    /// Índices REALES visibles bajo el filtro; `None` = sin filtro (quick
-    /// inactivo, o modo Jump: el listado se pinta entero).
+    /// The REAL indices visible under the filter; `None` = no filter (quick
+    /// search inactive, or Jump mode: the whole listing is painted).
     #[must_use]
     pub fn quick_visible(&self) -> Option<&[usize]> {
         self.quick
@@ -89,9 +91,9 @@ impl PaneState {
             .map(QuickSearch::visible)
     }
 
-    /// Siguiente match con wrap (Tab en modo [`Mode::Jump`]): mueve la selección
-    /// del quick al match siguiente y, en Jump, arrastra el cursor real. No-op
-    /// sin quick search. (#82)
+    /// Next match with wrap (Tab in [`Mode::Jump`]): moves the quick
+    /// search's selection to the next match and, in Jump, drags the real
+    /// cursor along. No-op without a quick search. (#82)
     pub fn quick_next(&mut self) {
         if let Some(q) = &mut self.quick {
             q.next_match();
@@ -99,23 +101,25 @@ impl PaneState {
         }
     }
 
-    /// El quick search vivo (para que el render pinte la query y su contador);
-    /// `None` = navegación normal. Solo lectura. (#82)
+    /// The live quick search (so the render can paint the query and its
+    /// counter); `None` = normal navigation. Read-only. (#82)
     #[must_use]
     pub fn quick(&self) -> Option<&QuickSearch> {
         self.quick.as_ref()
     }
 
-    /// El path de la entrada seleccionada DENTRO del quick search, capturado
-    /// ANTES de mutar/re-ordenar `entries` (contrato de [`QuickSearch::refresh`]:
-    /// los índices previos al sort no identifican nada). (#82)
+    /// The path of the entry selected INSIDE the quick search, captured
+    /// BEFORE mutating/re-ordering `entries` (contract of
+    /// [`QuickSearch::refresh`]: indices from before the sort identify
+    /// nothing). (#82)
     pub(super) fn quick_selected_path(&self) -> Option<VPath> {
         let i = self.quick.as_ref()?.selected_entry_index()?;
         Some(self.entries.get(i)?.path.clone())
     }
 
-    /// RE-APLICA el quick vivo sobre las entradas ACTUALES (sin cambiarlas ni
-    /// mover el cursor real): cierra un fill cuyo cierre podría re-ordenar. (#82)
+    /// RE-APPLIES the live quick search over the CURRENT entries (without
+    /// changing them or moving the real cursor): closes a fill whose closing
+    /// might re-order them. (#82)
     pub fn refresh_quick(&mut self) {
         let quick_prev = self.quick_selected_path();
         if let Some(q) = &mut self.quick {

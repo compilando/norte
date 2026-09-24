@@ -954,9 +954,9 @@ fn golden_rename_batch_types() {
                     kind: RenameCollisionKind::Internal,
                 },
             ),
-            // El origen SOBRA en vez de faltar: el nombre pedido se pliega
-            // sobre dos entradas del directorio y no coincide exacto con
-            // ninguna. `name` es el origen tal como lo escribió quien pidió.
+            // The source is IN EXCESS instead of missing: the requested name
+            // folds onto two directory entries and matches neither exactly.
+            // `name` is the source exactly as whoever asked for it wrote it.
             (
                 "ambiguous_source",
                 RenameCollision {
@@ -1305,7 +1305,7 @@ fn check_methods_log(fixtures: &BTreeMap<String, Value>) {
             max: 500,
         },
     );
-    check_methods_log_resto(fixtures);
+    check_methods_log_rest(fixtures);
 }
 
 /// Organize (0.77.0, phase 8): the plan, its refusal, and the batch that applies it.
@@ -1497,7 +1497,7 @@ fn check_methods_journal(fixtures: &BTreeMap<String, Value>) {
 
 /// The rest of the log fixtures: `log.tail` and its empty case. Separated
 /// from [`check_methods_log`] only for length.
-fn check_methods_log_resto(fixtures: &BTreeMap<String, Value>) {
+fn check_methods_log_rest(fixtures: &BTreeMap<String, Value>) {
     use norte_proto::methods::{LogLine, LogTailParams, LogTailResult};
     // An absent `cursor` serializes as explicit `null` (ADR 0004; an
     // `Option` with no `skip`), and that shape is what a panel requests on
@@ -4066,10 +4066,10 @@ fn check_methods_sync_apply(fixtures: &BTreeMap<String, Value>) {
     check_one(
         fixtures,
         "sync_report_result",
-        // `failed` cuenta TODOS los fallos y `failures` es la lista recortada,
-        // así que `failures.len() <= failed` siempre. Con cinco filas y un
-        // `failed: 4` la golden enseñaría lo contrario a quien la lea para
-        // escribir un cliente.
+        // `failed` counts ALL the failures and `failures` is the trimmed
+        // list, so `failures.len() <= failed` always holds. With five rows
+        // and a `failed: 4` the golden would show the opposite to whoever
+        // reads it to write a client.
         &SyncReportResult {
             done: 40,
             failed: 5,
@@ -4082,12 +4082,13 @@ fn check_methods_sync_apply(fixtures: &BTreeMap<String, Value>) {
                     cause: SyncFailureCause::Conflict,
                     kind: SyncStepKind::Overwrite,
                 },
-                // La fila hostil MÁS corriente de un `Mirror`, y la que motivó
-                // `SyncFailure::kind` (0.42.0, #195): un `DeleteTree` denegado.
-                // No lleva `dest_rel` —no hay pareja que deletrear— y su `rel`
-                // cuelga del DESTINO, así que antes de este campo la única
-                // prueba en el wire (`dest_rel` presente ⟹ `rel` es del origen)
-                // no decía nada y el lector tenía que elegir una raíz a ciegas.
+                // The MOST common hostile row of a `Mirror`, and the one that
+                // motivated `SyncFailure::kind` (0.42.0, #195): a denied
+                // `DeleteTree`. It carries no `dest_rel` —there is no pair to
+                // spell— and its `rel` hangs off the DESTINATION, so before
+                // this field the only proof on the wire (`dest_rel` present
+                // ⟹ `rel` is the source's) said nothing and the reader had to
+                // pick a root blind.
                 SyncFailure {
                     rel: rel_path("b%FF.txt"),
                     dest_rel: None,
@@ -4100,31 +4101,30 @@ fn check_methods_sync_apply(fixtures: &BTreeMap<String, Value>) {
                     cause: SyncFailureCause::Io,
                     kind: SyncStepKind::Copy,
                 },
-                // La cuarta clase que el ejecutor puede anotar, y la que el
-                // barrido del esquema NO cazaría: `SyncStepKind` se pinea
-                // contra `sync_step.json`, así que una clase sin fila de FALLO
-                // aquí pasaría desapercibida. `Skip` no puede: no se ejecuta,
-                // así que no falla (`protocol-guardian`, W4b MINOR-4).
+                // The fourth class the executor can note, and the one the
+                // schema sweep would NOT catch: `SyncStepKind` is pinned
+                // against `sync_step.json`, so a class with no FAILURE row
+                // here would go unnoticed. `Skip` cannot: it does not
+                // execute, so it does not fail (`protocol-guardian`, W4b MINOR-4).
                 SyncFailure {
                     rel: rel_path("sub"),
                     dest_rel: None,
                     cause: SyncFailureCause::Denied,
                     kind: SyncStepKind::CreateDir,
                 },
-                // La legalidad del nombre bajo la raíz de DESTINO no se valida al
-                // planificar, así que aflora aquí y con nombre propio. Y con la
-                // grafía del DESTINO, que es la que falló: el caso estrella es
-                // un nombre que revienta `NAME_MAX` al recomponerse en NFD, y
-                // enseñar `rel` a secas señalaría la grafía corta y legal del
-                // origen.
+                // The legality of the name under the DESTINATION root is not
+                // validated when planning, so it surfaces here and with its
+                // own name. And with the DESTINATION's spelling, which is the
+                // one that failed: the flagship case is a name that blows
+                // `NAME_MAX` when recomposed in NFD, and showing bare `rel`
+                // would point at the source's short, legal spelling.
                 //
-                // La pareja que se CONGELA aquí es la plegada por caja y no la
-                // NFC/NFD, por lo que ya avisó la golden de `dest_rel` en
-                // `SyncStep`: las dos formas Unicode son UTF-8 válido y el códec
-                // de segmento las deja literales, así que en un fichero JSON
-                // renderizan IGUAL — el diff sería inadjudicable y una
-                // normalización del editor convertiría el test en una
-                // tautología.
+                // The pair FROZEN here is the one folded by case, not the
+                // NFC/NFD one, since `dest_rel`'s golden in `SyncStep` already
+                // warned about that: both Unicode forms are valid UTF-8 and
+                // the segment codec leaves them literal, so in a JSON file
+                // they render THE SAME — the diff would be unreadable and an
+                // editor's normalization would turn the test into a tautology.
                 SyncFailure {
                     rel: rel_path("NOTAS/informe.txt"),
                     dest_rel: Some(rel_path("notas/informe.txt")),
@@ -4133,9 +4133,10 @@ fn check_methods_sync_apply(fixtures: &BTreeMap<String, Value>) {
                 },
             ],
             batch_id: Some(12),
-            // Un `Mirror` que borra contra un destino con papelera que NOMBRA
-            // lo que entierra: con esto en el informe, «¿se puede devolver este
-            // lote?» se contesta sin haber guardado el `sync.plan_done` (#170).
+            // A `Mirror` that deletes against a destination with a trash that
+            // NAMES what it buries: with this in the report, "can this batch
+            // be given back?" is answered without having saved
+            // `sync.plan_done` (#170).
             dest_trash: DestTrash::Restorable,
         },
     );
@@ -4149,9 +4150,10 @@ fn check_methods_sync_apply(fixtures: &BTreeMap<String, Value>) {
             bytes: 4096,
             failures: vec![],
             batch_id: Some(12),
-            // El contraste que hace útil el campo: tres copias limpias, y NADA
-            // de esto vuelve. Sin `dest_trash` este informe y el de arriba son
-            // el mismo informe para quien tenga que decidir si deshacer.
+            // The contrast that makes the field useful: three clean copies,
+            // and NONE of this comes back. Without `dest_trash` this report
+            // and the one above are the same report to whoever has to decide
+            // whether to undo.
             dest_trash: DestTrash::Absent,
         },
     );
@@ -4170,22 +4172,23 @@ fn check_methods_sync_apply(fixtures: &BTreeMap<String, Value>) {
                 kind: SyncStepKind::Copy,
             }],
             batch_id: None,
-            // `Opaque`: hay papelera y no dice dónde deja las cosas. Que el
-            // `batch_id` sea `None` no lo contradice — son dos preguntas, y con
-            // lote ausente no hay nada que deshacer de todos modos.
+            // `Opaque`: there is a trash and it does not say where it leaves
+            // things. That `batch_id` is `None` does not contradict it —
+            // they are two separate questions, and with no batch there is
+            // nothing to undo anyway.
             //
-            // Esta fixture es de DECODE: `new_report` siempre abre el informe
-            // con su lote puesto y es el único constructor del core, así que un
-            // informe sin `batch_id` no lo produce este daemon. Se congela
-            // porque el campo es opcional en el wire desde 0.40.0 y un cliente
-            // tiene que saber leer la forma sin él (`protocol-guardian`, W4b
-            // MINOR-6).
+            // This fixture is DECODE-only: `new_report` always opens the
+            // report with its batch set and is the core's only constructor,
+            // so this daemon never produces a report without `batch_id`. It
+            // is frozen because the field has been optional on the wire
+            // since 0.40.0 and a client has to know how to read the shape
+            // without it (`protocol-guardian`, W4b MINOR-6).
             dest_trash: DestTrash::Opaque,
         },
     );
 }
 
-/// fs.copy/fs.move (con resume/verify de 0.6.0, ADR 0012).
+/// fs.copy/fs.move (with resume/verify from 0.6.0, ADR 0012).
 fn check_methods_transfer(fixtures: &BTreeMap<String, Value>) {
     check_one(
         fixtures,
@@ -4229,10 +4232,11 @@ fn check_methods_transfer(fixtures: &BTreeMap<String, Value>) {
             queued: false,
         },
     );
-    // 0.54.0 (#295): el ancla del listado VOLVIENDO con la petición que
-    // escribe. Las dos fixturas —copiar y mover— congelan que el campo se
-    // llama igual en las dos y que se OMITE cuando no está: sin eso, un
-    // cliente 0.53 y uno 0.54 sin ancla no producirían el mismo JSON.
+    // 0.54.0 (#295): the listing's anchor COMING BACK with the request that
+    // writes. The two fixtures —copy and move— freeze that the field is
+    // named the same in both and that it is OMITTED when absent: without
+    // that, a 0.53 client and a 0.54 one with no anchor would not produce
+    // the same JSON.
     check_one(
         fixtures,
         "fs_copy_params_anchored",
@@ -4267,7 +4271,7 @@ fn check_methods_transfer(fixtures: &BTreeMap<String, Value>) {
     );
 }
 
-/// Métodos del daemon (ADR 0011): initialize y daemon.shutdown.
+/// Daemon methods (ADR 0011): initialize and daemon.shutdown.
 fn check_methods_daemon(fixtures: &BTreeMap<String, Value>) {
     check_one(
         fixtures,
@@ -4311,7 +4315,7 @@ fn check_methods_daemon(fixtures: &BTreeMap<String, Value>) {
         },
     );
     check_one(fixtures, "daemon_shutdown_result", &DaemonShutdownResult {});
-    // 0.46.0: el relevo, y la notificación con la que se anuncia.
+    // 0.46.0: the handover, and the notification it is announced with.
     check_one(
         fixtures,
         "daemon_shutdown_params_handover",
@@ -4327,7 +4331,7 @@ fn check_methods_daemon(fixtures: &BTreeMap<String, Value>) {
     );
 }
 
-/// Métodos de 0.5.0 (fase 3): task.list, fs.read, fs.capabilities.
+/// 0.5.0 methods (phase 3): task.list, fs.read, fs.capabilities.
 fn check_methods_v05(fixtures: &BTreeMap<String, Value>) {
     check_one(fixtures, "task_list_params", &TaskListParams {});
     check_one(
@@ -4391,11 +4395,12 @@ fn check_methods_v05(fixtures: &BTreeMap<String, Value>) {
     check_methods_v05_capabilities(fixtures);
 }
 
-/// La segunda mitad de [`check_methods_v05`]: `fs.capabilities` y su catálogo
-/// de atributos.
+/// The second half of [`check_methods_v05`]: `fs.capabilities` and its
+/// attribute catalogue.
 ///
-/// Partida en dos porque la primera pasó de cien líneas al ganar `unvisited`
-/// (0.62.0), no porque sean dos familias: son la misma versión del wire.
+/// Split in two because the first one went past a hundred lines when it
+/// gained `unvisited` (0.62.0), not because they are two families: they are
+/// the same wire version.
 fn check_methods_v05_capabilities(fixtures: &BTreeMap<String, Value>) {
     check_one(
         fixtures,
@@ -4441,8 +4446,8 @@ fn check_methods_v05_capabilities(fixtures: &BTreeMap<String, Value>) {
     );
 }
 
-/// El envelope JSON-RPC congelado (ADR 0011): la forma de request/response/
-/// notification y el objeto de error con la taxonomía en `data`.
+/// The frozen JSON-RPC envelope (ADR 0011): the shape of request/response/
+/// notification and the error object with the taxonomy in `data`.
 #[test]
 fn golden_envelope() {
     use norte_proto::wire::{
@@ -4503,13 +4508,17 @@ fn golden_envelope() {
             params: Some(serde_json::json!({"path": "file:///x"})),
         },
     );
-    assert_eq!(fixtures.len(), 7, "[envelope.json] fixtures sin caso Rust");
+    assert_eq!(
+        fixtures.len(),
+        7,
+        "[envelope.json] fixtures with no Rust case"
+    );
 }
 
-/// Los CÓDIGOS JSON-RPC y el límite de frame son wire observable: un typo
-/// no puede pasar CI (hallazgo m1 del protocol-guardian).
+/// The JSON-RPC CODES and the frame limit are wire-observable: a typo
+/// cannot pass CI (protocol-guardian finding m1).
 #[test]
-fn rpc_codes_y_limites_congelados() {
+fn rpc_codes_and_limits_are_frozen() {
     use norte_proto::wire::{MAX_FRAME_BYTES, codes};
     assert_eq!(codes::PARSE_ERROR, -32700);
     assert_eq!(codes::INVALID_REQUEST, -32600);
@@ -4524,13 +4533,13 @@ fn rpc_codes_y_limites_congelados() {
 }
 
 #[test]
-// Una LISTA: un `assert_eq!` por nombre del wire, y crece con el vocabulario.
-// Partirla en dos mitades arbitrarias escondería la mitad, y lo que hace útil
-// una lista congelada es verla entera — mismo criterio que la tabla de
-// `efecto_de` en la ventana.
+// A LIST: one `assert_eq!` per wire name, and it grows with the vocabulary.
+// Splitting it into two arbitrary halves would hide half of it, and what
+// makes a frozen list useful is seeing it whole — the same criterion as the
+// `effect_of` table in the window.
 #[expect(
     clippy::too_many_lines,
-    reason = "un nombre por método, congelados de una vez"
+    reason = "one name per method, frozen all at once"
 )]
 fn method_names_frozen() {
     use norte_proto::methods;
@@ -4550,8 +4559,8 @@ fn method_names_frozen() {
         methods::CONNECTION_TRUST_HOST_KEY,
         "connection.trust_host_key"
     );
-    // Familia policy.* (0.11.0/0.12.0): gobernanza de agentes. El pin llegó
-    // con retraso (MINOR-1 del protocol-guardian en el bump 0.12).
+    // policy.* family (0.11.0/0.12.0): agent governance. The pin arrived
+    // late (protocol-guardian's MINOR-1 on the 0.12 bump).
     assert_eq!(methods::POLICY_REQUEST_SCOPE, "policy.request_scope");
     assert_eq!(methods::POLICY_GRANT_SCOPE, "policy.grant_scope");
     assert_eq!(methods::POLICY_DECIDE, "policy.decide");
@@ -4562,406 +4571,406 @@ fn method_names_frozen() {
     );
     assert_eq!(methods::POLICY_UNDO_SESSION, "policy.undo_session");
     assert_eq!(methods::POLICY_UNDO_REPORT, "policy.undo_report");
-    // Familia plugin.* (0.13.0, M4-P3): catálogo + gobernanza humana.
+    // plugin.* family (0.13.0, M4-P3): catalogue + human governance.
     assert_eq!(methods::PLUGIN_LIST, "plugin.list");
     assert_eq!(methods::PLUGIN_SET_APPROVAL, "plugin.set_approval");
     assert_eq!(methods::PLUGIN_SET_ENABLED, "plugin.set_enabled");
     assert_eq!(methods::PLUGIN_RUN_COMMAND, "plugin.run_command");
     assert_eq!(methods::PLUGIN_PREVIEW, "plugin.preview");
-    // Familia plugin.* de datos ESTRUCTURADOS v2 (0.27.0, G3, ADR 0037): el
-    // host pinta, nunca el plugin. Aditivo sobre 0.26.x.
+    // STRUCTURED-data plugin.* family v2 (0.27.0, G3, ADR 0037): the host
+    // paints, never the plugin. Additive over 0.26.x.
     assert_eq!(methods::PLUGIN_PREVIEW_STYLED, "plugin.preview_styled");
     assert_eq!(methods::PLUGIN_DECORATE, "plugin.decorate");
     assert_eq!(methods::PLUGIN_COLUMN_VALUES, "plugin.column_values");
     assert_eq!(methods::PLUGIN_RENAME_PLAN, "plugin.rename_plan");
     assert_eq!(methods::FS_READ_MAX_CHUNK, 8 * 1024 * 1024);
     assert_eq!(methods::FS_LIST_MAX_PAGE, 10_000);
-    // 0.34.0 (H3e): el tope de `PluginHelpResult::markdown`. El LITERAL, no el
-    // símbolo: el contrato invita a un receptor a dimensionar contra él, así
-    // que cambiarlo es cambiar el wire y tiene que ponerse algo rojo.
-    // `norte-core` ancla aparte que este número y el del host son el mismo.
+    // 0.34.0 (H3e): the cap on `PluginHelpResult::markdown`. The LITERAL, not
+    // the symbol: the contract invites a receiver to size against it, so
+    // changing it changes the wire and something has to turn red.
+    // `norte-core` separately anchors that this number and the host's are
+    // the same one.
     assert_eq!(methods::PLUGIN_HELP_MAX_BYTES, 64 * 1024);
     // 0.18.0 (M4 live search): fs.search + search.hits + TaskKind::Search.
-    // Aditivo sobre 0.17.x.
+    // Additive over 0.17.x.
     assert_eq!(methods::FS_SEARCH, "fs.search");
     assert_eq!(methods::SEARCH_HITS, "search.hits");
     assert_eq!(methods::SEARCH_HITS_MAX_BATCH, 256);
-    // 0.19.0 (#72): rpc.cancel { id }. Aditivo sobre 0.18.x.
+    // 0.19.0 (#72): rpc.cancel { id }. Additive over 0.18.x.
     assert_eq!(methods::RPC_CANCEL, "rpc.cancel");
-    // 0.20.0 (#44): connection.degraded (server→client). Aditivo sobre 0.19.x.
+    // 0.20.0 (#44): connection.degraded (server→client). Additive over 0.19.x.
     assert_eq!(methods::CONNECTION_DEGRADED, "connection.degraded");
-    // 0.21.0 (#55, ADR 0028): tar+gz en ARCHIVE_FORMATS (longest-match). No
-    // añade método/notificación nueva — el bump señala la capacidad de
-    // interpretar schemes `tar+gz+…`.
+    // 0.21.0 (#55, ADR 0028): tar+gz in ARCHIVE_FORMATS (longest-match). It
+    // adds no new method/notification — the bump signals the ability to
+    // parse `tar+gz+…` schemes.
     assert!(norte_proto::ARCHIVE_FORMATS.contains(&"tar+gz"));
-    // 0.22.0 (#93): campo opcional `skipped` en FsListResult. No añade
-    // método/notificación — el bump señala el metadato aditivo del listado.
-    // 0.23.0 (#95): variante Error::LimitExceeded{limit} — límite local ≠
-    // Corrupt. Vocabulario CERRADO pineado aquí: SOLO las dos constantes
-    // (cd-bytes NO existe — max_cd_bytes solo gatea el cacheo del CD).
+    // 0.22.0 (#93): optional `skipped` field in FsListResult. It adds no
+    // method/notification — the bump signals the listing's additive metadata.
+    // 0.23.0 (#95): Error::LimitExceeded{limit} variant — a local limit ≠
+    // Corrupt. CLOSED vocabulary pinned here: ONLY the two constants
+    // (cd-bytes does NOT exist — max_cd_bytes only gates caching the CD).
     assert_eq!(norte_proto::Error::LIMIT_ENTRIES, "entries");
     assert_eq!(
         norte_proto::Error::LIMIT_DECOMPRESSED_BYTES,
         "decompressed-bytes"
     );
-    // 0.24.0 (#56): direccionamiento multi-capa + tope de anidamiento en el
-    // vocabulario de LimitExceeded (tres constantes, sigue CERRADO).
+    // 0.24.0 (#56): multi-layer addressing + a nesting cap in the
+    // LimitExceeded vocabulary (three constants, still CLOSED).
     assert_eq!(norte_proto::Error::LIMIT_NESTING, "nesting");
-    // 0.25.0 (M4, ADR 0034): índice de búsqueda. index.build (Task) + index.query.
+    // 0.25.0 (M4, ADR 0034): search index. index.build (Task) + index.query.
     assert_eq!(methods::INDEX_BUILD, "index.build");
     assert_eq!(methods::INDEX_QUERY, "index.query");
-    // 0.26.0 (P1): PluginInfo gana description + commands (sin método nuevo).
+    // 0.26.0 (P1): PluginInfo gains description + commands (no new method).
     // 0.27.0 (G3, ADR 0037): plugin.preview_styled/decorate/column_values —
-    // datos estructurados de plugin, pinta el host.
+    // structured plugin data, the host paints it.
     assert_eq!(methods::PLUGIN_GET_CONFIG, "plugin.get_config");
     assert_eq!(methods::PLUGIN_SET_CONFIG, "plugin.set_config");
-    // 0.28.0 (G3c, ADR 0037): plugin.get_config/set_config — [config] de P2
-    // por el wire; PluginInfo gana columns (sin método nuevo).
-    // 0.29.0 (#101): PluginPreview/PluginPreviewStyled ganan `lossy` (sin
-    // método nuevo — solo campo aditivo).
-    // 0.30.0 (columnas bloque 1, ADR 0039): atributos de provider — Entry.attrs,
-    // FsCapabilitiesResult.attrs y los dos attrs de petición (sin método nuevo).
-    // 0.31.0 (#104): fs.mkdir (Task) + TaskKind::Mkdir. Aditivo sobre 0.30.x.
+    // 0.28.0 (G3c, ADR 0037): plugin.get_config/set_config — P2's [config]
+    // over the wire; PluginInfo gains columns (no new method).
+    // 0.29.0 (#101): PluginPreview/PluginPreviewStyled gain `lossy` (no new
+    // method — just an additive field).
+    // 0.30.0 (columns block 1, ADR 0039): provider attributes — Entry.attrs,
+    // FsCapabilitiesResult.attrs and the two request attrs (no new method).
+    // 0.31.0 (#104): fs.mkdir (Task) + TaskKind::Mkdir. Additive over 0.30.x.
     assert_eq!(methods::FS_MKDIR, "fs.mkdir");
     assert_eq!(methods::FS_CREATE, "fs.create");
-    // 0.32.0 (M4-IA, ADR 0031): ai.rename_plan — respuesta directa cancelable.
+    // 0.32.0 (M4-IA, ADR 0031): ai.rename_plan — a cancellable direct response.
     assert_eq!(methods::AI_RENAME_PLAN, "ai.rename_plan");
     // 0.33.0 (M4-IA-2, ADR 0031 A3): index.embed (Task, TaskKind::Embed) +
-    // index.search_semantic (directa cancelable, k recortado al tope).
+    // index.search_semantic (direct, cancellable, k trimmed to the cap).
     assert_eq!(methods::INDEX_EMBED, "index.embed");
     assert_eq!(methods::INDEX_SEARCH_SEMANTIC, "index.search_semantic");
     assert_eq!(methods::INDEX_SEMANTIC_MAX_K, 100);
-    // 0.34.0 (H3e): plugin.help — la página de ayuda de UN plugin bajo
-    // demanda; PluginInfo gana has_help (discovery barato, sin método nuevo).
+    // 0.34.0 (H3e): plugin.help — ONE plugin's help page on demand;
+    // PluginInfo gains has_help (cheap discovery, no new method).
     assert_eq!(methods::PLUGIN_HELP, "plugin.help");
-    // 0.35.0 (#120): PluginColumnValuesParams gana `plugin_id` — sin método
-    // nuevo, así que aquí solo se mueve la versión.
-    // 0.36.0 (batch rename): las DOS mitades del ejecutor — el plan revisable
-    // (respuesta directa) y su ejecución (Task, `TaskKind::RenameBatch`),
-    // ligadas por el `plan_hash` que el humano aprobó.
+    // 0.35.0 (#120): PluginColumnValuesParams gains `plugin_id` — no new
+    // method, so here only the version moves.
+    // 0.36.0 (batch rename): the executor's TWO halves — the reviewable plan
+    // (direct response) and its execution (Task, `TaskKind::RenameBatch`),
+    // tied together by the `plan_hash` the human approved.
     assert_eq!(methods::FS_RENAME_BATCH_PLAN, "fs.rename_batch_plan");
     assert_eq!(methods::FS_RENAME_BATCH, "fs.rename_batch");
-    // …y el informe del lote, que es lo que un `Failed` no puede contar.
+    // …and the batch's report, which is what a `Failed` cannot tell.
     assert_eq!(methods::FS_RENAME_BATCH_REPORT, "fs.rename_batch_report");
-    // Los LITERALES, no los símbolos, por el mismo motivo que
-    // `PLUGIN_HELP_MAX_BYTES` arriba: un receptor dimensiona contra ellos —
-    // rechaza el lote antes de mandarlo, reserva el buffer del hash — así que
-    // moverlos mueve el contrato y algo tiene que ponerse rojo. El tope de
-    // parejas RECHAZA (no recorta como `FS_LIST_MAX_PAGE`), y por eso importa
-    // aún más que un tercero lo conozca.
+    // The LITERALS, not the symbols, for the same reason as
+    // `PLUGIN_HELP_MAX_BYTES` above: a receiver sizes against them — it
+    // rejects the batch before sending it, it reserves the hash's buffer —
+    // so moving them moves the contract and something has to turn red. The
+    // pair cap REJECTS (it does not trim like `FS_LIST_MAX_PAGE`), and that
+    // is why it matters even more for a third party to know it.
     assert_eq!(methods::FS_RENAME_BATCH_MAX_PAIRS, 4096);
     assert_eq!(methods::PLAN_HASH_LEN, 64);
-    // 0.37.0 (#131): host.volumes — enumeración de los volúmenes del host,
-    // SOLO para una conexión User (diseño §C de `2026-08-10-volumes-design.md`).
+    // 0.37.0 (#131): host.volumes — enumerating the host's volumes, ONLY for
+    // a User connection (design §C of `2026-08-10-volumes-design.md`).
     assert_eq!(methods::HOST_VOLUMES, "host.volumes");
-    // 0.56.0 (#264): connection.list — las conexiones nombradas del daemon,
-    // para que un frontend ofrezca un selector sin leer `connections.toml` él
-    // mismo. SOLO `User`, por lo mismo que `host.volumes`.
+    // 0.56.0 (#264): connection.list — the daemon's named connections, so a
+    // frontend can offer a selector without reading `connections.toml`
+    // itself. ONLY `User`, for the same reason as `host.volumes`.
     assert_eq!(methods::CONNECTION_LIST, "connection.list");
-    // 0.38.0 (task V3.5 del plan de volúmenes): `Volume::label` pasa a
-    // `Option<Vec<u8>>` — corrección de wire dentro de la misma rama sin
-    // publicar, ventana desplazada igual que cualquier bump.
-    // 0.39.0 (ADR 0048): fs.compare — la comparación de dos árboles como Task,
-    // con sus filas por notificación.
+    // 0.38.0 (volumes plan task V3.5): `Volume::label` becomes
+    // `Option<Vec<u8>>` — a wire fix within the same unreleased branch, the
+    // window shifts the same as any bump.
+    // 0.39.0 (ADR 0048): fs.compare — comparing two trees as a Task, with
+    // its rows by notification.
     assert_eq!(methods::FS_COMPARE, "fs.compare");
     assert_eq!(methods::COMPARE_ROWS, "compare.rows");
-    // Los LITERALES, no los símbolos, por el mismo motivo que
-    // `FS_RENAME_BATCH_MAX_PAIRS` arriba: son contrato que un tercero
-    // dimensiona por su cuenta. El tope de lote es el mismo que el de
-    // `search.hits` A PROPÓSITO — un lote de filas no es más caro que uno de
-    // hits —, y el de entradas por directorio es el que convierte un
-    // directorio desmesurado en UNA fila de error en vez de un OOM.
+    // The LITERALS, not the symbols, for the same reason as
+    // `FS_RENAME_BATCH_MAX_PAIRS` above: they are contract that a third
+    // party sizes against on its own. The batch cap is the SAME as
+    // `search.hits`'s ON PURPOSE — a batch of rows is no more expensive than
+    // one of hits —, and the one on entries per directory is what turns an
+    // oversized directory into ONE error row instead of an OOM.
     assert_eq!(methods::COMPARE_ROWS_MAX_BATCH, 256);
     assert_eq!(methods::COMPARE_MAX_DIR_ENTRIES, 200_000);
-    // 0.40.0 (ADR 0049): sync.plan/apply/report — la sincronización de un
-    // sentido como plan aprobable, retenido y deshacible.
+    // 0.40.0 (ADR 0049): sync.plan/apply/report — one-way synchronization as
+    // an approvable, retained, undoable plan.
     assert_eq!(methods::SYNC_PLAN, "sync.plan");
     assert_eq!(methods::SYNC_STEPS, "sync.steps");
     assert_eq!(methods::SYNC_PLAN_DONE, "sync.plan_done");
     assert_eq!(methods::SYNC_APPLY, "sync.apply");
     assert_eq!(methods::SYNC_REPORT, "sync.report");
-    // Los LITERALES otra vez. El TTL es el único de los cuatro que no acota una
-    // colección: es la ventana entre aprobar y ejecutar, y por tanto lo que el
-    // ejecutor tiene que revalidar — un tercero que la dimensione mal deja
-    // planes que caducan bajo el ratón. El tope de `include` RECHAZA (no
-    // recorta), como el de parejas de renames.
+    // The LITERALS again. The TTL is the only one of the four that does not
+    // bound a collection: it is the window between approving and executing,
+    // and therefore what the executor has to revalidate — a third party that
+    // sizes it wrong leaves plans that expire under the mouse. The `include`
+    // cap REJECTS (it does not trim), like the rename pairs' does.
     assert_eq!(methods::SYNC_STEPS_MAX_BATCH, 256);
     assert_eq!(methods::SYNC_PLAN_TTL_MS, 600_000);
     assert_eq!(methods::SYNC_MAX_BLOCKERS_REPORTED, 256);
     assert_eq!(methods::SYNC_MAX_INCLUDE, 4096);
-    // 0.41.0 (#178): `Error::JournalUnavailable` — un journal ilegible rehúsa
-    // la mutación en vez de dejarla pasar sin registro. Categoría nueva, así
-    // que MINOR: un cliente 0.40.x la degrada a `Unknown`.
+    // 0.41.0 (#178): `Error::JournalUnavailable` — an unreadable journal
+    // refuses the mutation instead of letting it through unrecorded. A new
+    // category, so MINOR: a 0.40.x client degrades it to `Unknown`.
     //
-    // 0.42.0 (#170, #152, #195): TRES campos en tipos que ya existían, un solo
-    // bump — `SyncReportResult::dest_trash`, `SyncFailure::kind` y
-    // `CompareRow::paired_under`. Ni método ni notificación nuevos, así que no
-    // hay literal que añadir arriba; lo que cambia son las formas, y eso lo
-    // pinean `methods.json` y `compare_row.json`.
+    // 0.42.0 (#170, #152, #195): THREE fields on types that already existed,
+    // in one bump — `SyncReportResult::dest_trash`, `SyncFailure::kind` and
+    // `CompareRow::paired_under`. Neither a new method nor a new
+    // notification, so there is no literal to add above; what changes are
+    // the shapes, and `methods.json` and `compare_row.json` pin that.
     //
-    // 0.43.0 (#171): `PolicyUndoReportResult` gana `denied`/`denied_total` — la
-    // policy se pregunta unidad a unidad y DENTRO de la Task, así que una
-    // denegación es una fila del informe en vez de parar el undo entero.
-    // Campos nuevos con `#[serde(default)]`, así que un cliente 0.42.x los
-    // ignora y ve el informe de siempre.
+    // 0.43.0 (#171): `PolicyUndoReportResult` gains `denied`/`denied_total`
+    // — the policy is asked unit by unit and INSIDE the Task, so a denial is
+    // one report row instead of stopping the whole undo. New fields with
+    // `#[serde(default)]`, so a 0.42.x client ignores them and sees the
+    // report as always.
     //
-    // 0.43.0 (#207): `SyncReason::NonInjectivePairing` — un plan ya no
-    // sobrescribe una pareja que solo se sostiene sobre una transformación que
-    // puede juntar ficheros distintos (el singleton NFC). Variante nueva de un
-    // enum que degrada con `#[serde(other)]`, así que MINOR: un cliente 0.42.x
-    // la lee como `Unknown` y pinta «un motivo que esta versión no sabe
-    // nombrar» sobre un paso que YA es un `Skip` en el wire — no actúa de
-    // menos ni de más.
+    // 0.43.0 (#207): `SyncReason::NonInjectivePairing` — a plan no longer
+    // overwrites a pair that only holds up on a transformation that can
+    // merge distinct files (the NFC singleton). A new variant of an enum
+    // that degrades with `#[serde(other)]`, so MINOR: a 0.42.x client reads
+    // it as `Unknown` and paints "a reason this version cannot name" over a
+    // step that is ALREADY a `Skip` on the wire — it acts neither less nor more.
     //
-    // 0.44.0 (#182): `Error::LIMIT_RETAINED_SYNC_PLANS` — un token más del
-    // vocabulario ABIERTO de `LimitExceeded`, para que el rechazo del tope de
-    // planes retenidos viaje con taxonomía en vez de llegar como «internal
-    // error». Un cliente N-1 lo enseña tal cual, que es el contrato del campo.
-    // 0.45.0 (#145, #164, ADR 0054): `CapabilityFlags::FULL_FOLD` y
-    // `CONFINED_WRITES`, más `ConflictKind::EscapesRoot`. Los dos flags son
-    // nombres nuevos de un vocabulario que ADR 0004 obliga a IGNORAR cuando no
-    // se conoce, y el subtipo de conflicto degrada a `Unknown` por el
-    // `#[serde(other)]` de ADR 0005: un cliente 0.44.x lee «conflicto que esta
-    // versión no sabe nombrar» sobre una operación que igualmente falló, no
-    // actúa de más. MINOR, por tanto, y no MAJOR.
+    // 0.44.0 (#182): `Error::LIMIT_RETAINED_SYNC_PLANS` — one more token in
+    // `LimitExceeded`'s OPEN vocabulary, so the rejection of the retained
+    // plans cap travels with taxonomy instead of arriving as "internal
+    // error". An N-1 client shows it as is, which is the field's contract.
+    // 0.45.0 (#145, #164, ADR 0054): `CapabilityFlags::FULL_FOLD` and
+    // `CONFINED_WRITES`, plus `ConflictKind::EscapesRoot`. Both flags are
+    // new names in a vocabulary ADR 0004 requires IGNORING when unknown, and
+    // the conflict subtype degrades to `Unknown` through ADR 0005's
+    // `#[serde(other)]`: a 0.44.x client reads "a conflict this version
+    // cannot name" over an operation that failed all the same, it does not
+    // act any more than that. MINOR, therefore, and not MAJOR.
     assert_eq!(methods::DAEMON_GOING_AWAY, "daemon.going_away");
-    // 0.46.0 (roadmap ítem 10): `daemon.going_away` y `DaemonShutdownParams.mode`.
-    // Los dos son ADITIVOS y ninguno cambia lo que ya se emitía: `mode` no se
-    // serializa cuando vale `Stop`, así que una parada corriente de un cliente
-    // 0.46 es byte por byte el mensaje de 0.45; y una notificación que un
-    // cliente viejo no conoce se ignora, que es lo que ADR 0004 le obliga a
-    // hacer — se queda sin saber que venía un relevo y reconecta como siempre,
-    // que es exactamente el comportamiento de hoy. MINOR.
+    // 0.46.0 (roadmap item 10): `daemon.going_away` and
+    // `DaemonShutdownParams.mode`. Both are ADDITIVE and neither changes
+    // what was already emitted: `mode` is not serialized when it is `Stop`,
+    // so an ordinary stop from a 0.46 client is byte for byte 0.45's
+    // message; and a notification an old client does not know is ignored,
+    // which is what ADR 0004 requires of it — it is left not knowing a
+    // handover was coming and reconnects as always, which is exactly
+    // today's behavior. MINOR.
     //
-    // `ShutdownMode` NO lleva `#[serde(other)]`, contra la costumbre de este
-    // wire: degradar está bien cuando malinterpretar un valor cuesta una
-    // feature, y mal cuando apaga un daemon de una forma que nadie pidió.
-    // 0.47.0 (roadmap ítem 11): `rar` en `ARCHIVE_FORMATS`. Ampliar la
-    // whitelist no cambia ningún mensaje: cambia qué schemes compuestos se
-    // pueden FORMAR. Un cliente 0.46 no los forma y no ve la funcionalidad;
-    // uno 0.47 contra un daemon 0.46 no llega a intentarlo, porque
-    // `version_compatible` no negocia un minor de cliente MAYOR que el del
-    // servidor. MINOR.
+    // `ShutdownMode` does NOT carry `#[serde(other)]`, against this wire's
+    // habit: degrading is fine when misreading a value costs a feature, and
+    // wrong when it shuts down a daemon in a way nobody asked for.
+    // 0.47.0 (roadmap item 11): `rar` in `ARCHIVE_FORMATS`. Widening the
+    // whitelist changes no message: it changes which composed schemes can
+    // be FORMED. A 0.46 client does not form them and does not see the
+    // feature; a 0.47 one against a 0.46 daemon never gets to try, because
+    // `version_compatible` does not negotiate a client minor GREATER than
+    // the server's. MINOR.
     assert!(norte_proto::ARCHIVE_FORMATS.contains(&"rar"));
-    // 0.48.0 (L2): `session.get`/`session.put` y sus cuatro tipos, más
-    // `ConflictKind::StaleRevision` y el token `Error::LIMIT_SESSION_BODY`.
-    // Aditivo: no toca un solo mensaje existente, y el cuerpo de la sesión es
-    // OPACO —el wire congela que viaja tal cual, no qué lleva dentro—. El
-    // subtipo degrada a `Unknown` por el `#[serde(other)]` de ADR 0005 y el
-    // token de límite es vocabulario ABIERTO que un cliente N-1 enseña tal
-    // cual: los dos dejan al cliente viejo con la conducta correcta —volver a
-    // leer, y no reintentar el mismo cuerpo—. MINOR.
+    // 0.48.0 (L2): `session.get`/`session.put` and their four types, plus
+    // `ConflictKind::StaleRevision` and the `Error::LIMIT_SESSION_BODY`
+    // token. Additive: it touches not a single existing message, and the
+    // session's body is OPAQUE —the wire freezes that it travels as is, not
+    // what it carries inside—. The subtype degrades to `Unknown` through ADR
+    // 0005's `#[serde(other)]` and the limit token is OPEN vocabulary that an
+    // N-1 client shows as is: both leave the old client with the correct
+    // behavior —read again, and do not retry the same body—. MINOR.
     assert_eq!(norte_proto::Error::LIMIT_SESSION_BODY, "session-body");
-    // Los NOMBRES, como los de todas las demás familias: renombrar un método
-    // es un cambio de wire, y el doctest que los enseña no es el sitio donde
-    // este test dice que lo mira.
+    // The NAMES, like every other family's: renaming a method is a wire
+    // change, and the doctest that shows them is not where this test says it
+    // looks.
     assert_eq!(methods::SESSION_GET, "session.get");
     assert_eq!(methods::SESSION_PUT, "session.put");
-    // 0.49.0: `fs.dir_size` con su `TaskKind::DirSize` (#139) y
-    // `connection.close` (#140). Aditivo — métodos nuevos que un cliente viejo
-    // no forma, y una variante de kind que su `#[serde(other)]` degrada a
-    // `Unknown` desde 0.10. Los dos van en el MISMO bump a propósito: la
-    // ventana se mueve una vez por release del wire, y esta rama no ha salido.
-    // MINOR.
+    // 0.49.0: `fs.dir_size` with its `TaskKind::DirSize` (#139) and
+    // `connection.close` (#140). Additive — new methods an old client does
+    // not form, and a kind variant its `#[serde(other)]` has degraded to
+    // `Unknown` since 0.10. Both go in the SAME bump on purpose: the window
+    // moves once per wire release, and this branch has not shipped. MINOR.
     assert_eq!(methods::FS_DIR_SIZE, "fs.dir_size");
     assert_eq!(methods::FS_CHECKSUM, "fs.checksum");
     assert_eq!(methods::FS_CHECKSUM_REPORT, "fs.checksum_report");
     assert_eq!(methods::FS_CHECKSUM_MAX_PATHS, 4096);
-    // 0.60.0 (#314). El golden del payload se indexa por el nombre de la
-    // FIXTURA, no por esta constante, así que sin estas dos líneas renombrar
-    // el método pasaba la suite entera — que es justo lo que este test existe
-    // para impedir. `MODE_PERMISSION_BITS` es contrato de validación citado en
-    // la rustdoc del campo: un cliente dimensiona contra él.
+    // 0.60.0 (#314). The payload's golden is indexed by the FIXTURE's name,
+    // not by this constant, so without these two lines renaming the method
+    // passed the whole suite — which is exactly what this test exists to
+    // prevent. `MODE_PERMISSION_BITS` is validation contract cited in the
+    // field's rustdoc: a client sizes against it.
     assert_eq!(methods::FS_SET_MODE, "fs.set_mode");
     assert_eq!(methods::FS_SET_MODE_MAX_PATHS, 4096);
     assert_eq!(methods::MODE_PERMISSION_BITS, 0o7777);
-    // 0.62.0 (#315, #121). Los dos topes son contrato como los de arriba, y el
-    // primero además es de otra clase: los demás RECHAZAN por encima de su
-    // número y éste TRUNCA, así que lo que el cliente necesita para no leerlo
-    // mal es la señal (`TaskProgress::unvisited`), no el número.
+    // 0.62.0 (#315, #121). Both caps are contract like the ones above, and
+    // the first is also of a different class: the others REJECT above their
+    // number and this one TRUNCATES, so what the client needs to not
+    // misread it is the signal (`TaskProgress::unvisited`), not the number.
     assert_eq!(methods::SET_MODE_RECURSIVE_MAX, 100_000);
     assert_eq!(methods::AI_RENAME_NAMES_MAX, 4096);
     assert_eq!(methods::CONNECTION_CLOSE, "connection.close");
-    // 0.50.0: escribir archivos (#132). Cuatro métodos y cuatro kinds nuevos,
-    // aditivos por la misma razón que los de arriba. Ninguno escribe DENTRO de
-    // un contenedor —el provider de archivos sigue `READ_ONLY`, ADR 0018—: los
-    // cuatro fabrican ficheros nuevos. Desempaquetar no aparece porque no
-    // necesita método: es un `fs.copy` desde el interior, que ya existía.
-    // MINOR.
+    // 0.50.0: writing archives (#132). Four methods and four new kinds,
+    // additive for the same reason as the ones above. None writes INSIDE a
+    // container —the archive provider stays `READ_ONLY`, ADR 0018—: all four
+    // make new files. Unpacking does not appear because it needs no method:
+    // it is an `fs.copy` from the inside, which already existed. MINOR.
     assert_eq!(methods::ARCHIVE_PACK, "archive.pack");
     assert_eq!(methods::ARCHIVE_TEST, "archive.test");
     assert_eq!(methods::FILE_SPLIT, "file.split");
     assert_eq!(methods::FILE_COMBINE, "file.combine");
-    // El QUINTO: sin esta línea, renombrar `archive.test_report` pasaba la
-    // suite entera. Es el método por el que se recoge qué entrada está
-    // corrupta, así que su nombre es contrato igual que los otros cuatro.
+    // The FIFTH: without this line, renaming `archive.test_report` passed
+    // the whole suite. It is the method that collects which entry is
+    // corrupt, so its name is contract just like the other four.
     assert_eq!(methods::ARCHIVE_TEST_REPORT, "archive.test_report");
-    // Y el SEXTO, por lo mismo (#250): los goldens congelan la forma del
-    // payload, no la cadena del método, y tanto el brazo del dispatch como el
-    // SDK citan la constante — así que se mueven juntos y renombrarla pasaba
-    // la suite entera.
+    // And the SIXTH, for the same reason (#250): the goldens freeze the
+    // payload's shape, not the method's string, and both the dispatch arm
+    // and the SDK cite the constant — so they move together and renaming it
+    // passed the whole suite.
     assert_eq!(methods::ARCHIVE_PACK_REPORT, "archive.pack_report");
-    // Los topes que un cliente puede enseñar ANTES de mandar nada: 999 trozos
-    // es la convención `.001`, y descubrirlo en el trozo 1000 dejaría un
-    // conjunto que nadie puede volver a juntar.
+    // The caps a client can show BEFORE sending anything: 999 chunks is the
+    // `.001` convention, and discovering it at chunk 1000 would leave a set
+    // nobody can put back together.
     assert_eq!(methods::FILE_SPLIT_MAX_PARTS, 999);
     assert_eq!(methods::FILE_SPLIT_MIN_BYTES, 4096);
     assert_eq!(methods::ARCHIVE_TEST_MAX_FAILURES, 256);
-    // 0.51.0 (#247): ni un tipo ni un campo nuevos — lo que cambió es lo que
-    // `session.put` ACEPTA (un esquema que este core no sabe leer se rehúsa,
-    // en vez de escribirse y matar la persistencia desde el arranque
-    // siguiente). Un bump por comportamiento del wire, que también cuenta.
-    // 0.53.0 (#251, #265, #282): tres campos OPCIONALES —el recuento de
-    // ilegibles de una task, los bytes del directorio de un plugin roto y el
-    // ancla que un humano leyó al aprobar—. Los tres se omiten cuando no hay
-    // nada que decir, así que el JSON de un caso corriente no cambia; lo que
-    // desplaza la ventana es que un peer viejo no puede hacer la comprobación
-    // que cada uno habilita.
-    // 0.54.0 (#295): dos campos OPCIONALES que son el mismo dato en los dos
-    // sentidos —la identidad opaca del directorio que un listado devolvió, y
-    // la que la copia o el movimiento devuelven para decir «era ese»—. Se
-    // omiten cuando no hay nada que decir, así que el JSON corriente no
-    // cambia; lo que desplaza la ventana es que un peer 0.53 no puede hacer
-    // la comprobación que habilitan.
-    // 0.55.0 (#279): `Error::ApprovalGone`, que dice CUÁL de las tres formas
-    // de «esa aprobación ya no está» ocurrió. Aditivo —`Error` es
-    // `#[non_exhaustive]` y una categoría desconocida cae en `Unknown`—, así
-    // que lo que desplaza la ventana no es el JSON sino que un peer 0.54
-    // seguirá contando las tres como un error genérico.
-    // 0.56.0 (#264): `connection.list`. Aditivo —un método que un cliente
-    // viejo no llama—, y aun así la ventana se DESPLAZA: contra un daemon
-    // 0.55 no hay selector de conexiones. Lo que no se pierde es conectar,
-    // que sigue siendo navegar a una URL.
-    // 0.57.0 (#290): `fs.create`, un fichero VACÍO como Task. Aditivo —método
-    // nuevo, kind nuevo que degrada a `Unknown`—, y desplaza la ventana porque
-    // contra un daemon 0.56 un frontend sin terminal no puede ofrecer «editar
-    // uno nuevo»: no hay forma de crear el fichero.
-    // 0.58.0 (#250): `archive.pack_report`, qué guardó ese empaquetado que
-    // SIGNIFICA otra cosa fuera. Aditivo —método nuevo que un cliente viejo no
-    // llama— y la ventana se desplaza en la dirección de 0.51.0: un cliente
-    // 0.57 contra un daemon 0.58 empaqueta igual y se queda sin el aviso. (Las
-    // colisiones por plegado no entran en este informe: esas se RECHAZAN al
-    // empaquetar, porque ahí sí desaparece un fichero al extraer.)
-    // 0.59.0 (#311): `fs.checksum` y su informe. Aditivo —dos métodos que un
-    // cliente viejo no llama y un kind que degrada a `Unknown`— y aquí no hay
-    // degradación parcial ninguna: contra un daemon 0.58 no se puede
-    // comprobar una suma en absoluto, que es lo que desplaza la ventana.
-    // 0.60.0 (#314): `fs.set_mode`, con su kind y la capability `POSIX_MODE`.
-    // Aditivo, y la ventana se desplaza porque contra un daemon 0.59 no se
-    // pueden cambiar permisos: la superficie de propiedades sigue siendo de
-    // solo mirar, que es lo que era antes de esta versión.
-    // 0.61.0 (#314): `ApprovalDetail`, y con él el `detail` de las dos formas
-    // de una aprobación. Aditivo —se omite cuando no dice nada— y la ventana se
-    // desplaza porque contra un daemon 0.60 la pregunta de un `set-mode` no
-    // puede decir QUÉ modo, que es la mitad de esa decisión.
-    // 0.62.0 (#315, #121): `recursive`/`dir_mode` en `fs.set_mode` y `names`
-    // en `ai.rename_plan`. Los tres campos son ALCANCE —sobre qué actúa una
-    // petición— y los tres se omiten cuando no dicen nada, así que el JSON de
-    // un cliente que no los manda no cambia ni un byte. La ventana se desplaza
-    // porque contra un daemon 0.61 no se puede pedir ninguna de las dos cosas:
-    // los permisos se cambian ruta a ruta y el plan de la IA es del directorio
-    // entero.
-    // 0.63.0 (#325): `Error::SecretNeeded` y `connection.provide_secret`. La
-    // pregunta que el core no puede hacer por su cuenta —su resolver de
-    // secretos no tiene interfaz de usuario ni debe tenerla— subiendo por el
-    // cable para que la conteste quien está delante, con el mismo flujo que el
-    // TOFU de las host keys. Un cliente 0.62 degrada el error a `Unknown` y
-    // enseña un fallo donde el nuevo abre un diálogo: es lo que ya hacía.
+    // 0.51.0 (#247): neither a new type nor a new field — what changed is
+    // what `session.put` ACCEPTS (a schema this core cannot read is refused,
+    // instead of being written and killing persistence from the next
+    // startup on). A bump for wire behavior, which also counts.
+    // 0.53.0 (#251, #265, #282): three OPTIONAL fields —a task's unreadable
+    // count, a broken plugin's directory bytes, and the anchor a human read
+    // when approving—. All three are omitted when there is nothing to say,
+    // so an ordinary case's JSON does not change; what shifts the window is
+    // that an old peer cannot perform the check each one enables.
+    // 0.54.0 (#295): two OPTIONAL fields that are the same datum in both
+    // directions —the opaque identity of the directory a listing returned,
+    // and the one copy or move return to say "it was that one"—. They are
+    // omitted when there is nothing to say, so the ordinary JSON does not
+    // change; what shifts the window is that a 0.53 peer cannot perform the
+    // check they enable.
+    // 0.55.0 (#279): `Error::ApprovalGone`, which says WHICH of the three
+    // forms of "that approval is no longer there" happened. Additive —
+    // `Error` is `#[non_exhaustive]` and an unknown category falls to
+    // `Unknown`—, so what shifts the window is not the JSON but that a 0.54
+    // peer will keep counting all three as a generic error.
+    // 0.56.0 (#264): `connection.list`. Additive —a method an old client
+    // does not call—, and the window still SHIFTS: against a 0.55 daemon
+    // there is no connection selector. What is not lost is connecting,
+    // which is still navigating to a URL.
+    // 0.57.0 (#290): `fs.create`, an EMPTY file as a Task. Additive —new
+    // method, new kind that degrades to `Unknown`—, and it shifts the window
+    // because against a 0.56 daemon a terminal-less frontend cannot offer
+    // "edit a new one": there is no way to create the file.
+    // 0.58.0 (#250): `archive.pack_report`, what that packaging saved that
+    // MEANS something else outside. Additive —a new method an old client
+    // does not call— and the window shifts in the same direction as 0.51.0:
+    // a 0.57 client against a 0.58 daemon packages the same and is left
+    // without the warning. (Fold collisions do not enter this report: those
+    // are REJECTED when packaging, because there a file really does
+    // disappear on extraction.)
+    // 0.59.0 (#311): `fs.checksum` and its report. Additive —two methods an
+    // old client does not call and a kind that degrades to `Unknown`— and
+    // here there is no partial degradation at all: against a 0.58 daemon a
+    // checksum cannot be checked at all, which is what shifts the window.
+    // 0.60.0 (#314): `fs.set_mode`, with its kind and the `POSIX_MODE`
+    // capability. Additive, and the window shifts because against a 0.59
+    // daemon permissions cannot be changed: the properties surface stays
+    // look-only, which is what it was before this version.
+    // 0.61.0 (#314): `ApprovalDetail`, and with it the `detail` of both
+    // shapes of an approval. Additive —it is omitted when it says nothing—
+    // and the window shifts because against a 0.60 daemon a `set-mode`
+    // question cannot say WHICH mode, which is half of that decision.
+    // 0.62.0 (#315, #121): `recursive`/`dir_mode` in `fs.set_mode` and
+    // `names` in `ai.rename_plan`. All three fields are SCOPE —what a
+    // request acts on— and all three are omitted when they say nothing, so a
+    // client that does not send them changes not a single byte of the JSON.
+    // The window shifts because against a 0.61 daemon neither of the two
+    // things can be requested: permissions are changed path by path and the
+    // AI's plan is for the whole directory.
+    // 0.63.0 (#325): `Error::SecretNeeded` and `connection.provide_secret`.
+    // The question the core cannot ask on its own —its secret resolver has
+    // no user interface and should not have one— going up the wire so
+    // whoever is in front answers it, with the same flow as host keys' TOFU.
+    // A 0.62 client degrades the error to `Unknown` and shows a failure
+    // where the new one opens a dialog: that is what it already did.
     assert_eq!(
         methods::CONNECTION_PROVIDE_SECRET,
         "connection.provide_secret"
     );
-    // 0.64.0 (#322): `connection.failed`. El fallo de conexión llegaba como
-    // categoría —`PermissionDenied`, indistinguible de una clave equivocada— y
-    // la frase que lo explicaba moría en el log del daemon; con la CLI
-    // embebida sí se leía, o sea que el diagnóstico dependía del TRANSPORTE.
-    // Va por notificación porque la taxonomía no lleva texto libre a
-    // propósito: con el error se decide, y se decide por categoría. Un cliente
-    // 0.63 la descarta y se queda como estaba.
+    // 0.64.0 (#322): `connection.failed`. A connection failure arrived as a
+    // category —`PermissionDenied`, indistinguishable from a wrong
+    // password— and the sentence explaining it died in the daemon's log;
+    // with the embedded CLI it did get read, meaning the diagnosis depended
+    // on the TRANSPORT. It goes by notification because the taxonomy
+    // deliberately carries no free text: the error is what decides, and it
+    // decides by category. A 0.63 client discards it and stays as it was.
     assert_eq!(methods::CONNECTION_FAILED, "connection.failed");
-    // 0.65.0 (#328): `log.tail` y `log.level`. El registro del DAEMON, que un
-    // frontend con proceso aparte no puede ver de ninguna otra forma — su
-    // panel pinta el anillo del proceso equivocado, y desde #326 lo dice. Se
-    // TIRA con un cursor y no se empuja: el daemon no guarda estado por
-    // cliente y la respuesta dice cuántas líneas se cayeron por detrás, que es
-    // lo que una notificación perdida no puede decir. Y subir el nivel es un
-    // MÉTODO para que la cota que impide enseñar un `PASS` de FTP la aplique
-    // el único código que puede aplicarla: el que tiene el anillo.
+    // 0.65.0 (#328): `log.tail` and `log.level`. The DAEMON's own log, which
+    // a frontend with a separate process cannot see any other way — its
+    // panel paints the wrong process's ring, and has said so since #326. It
+    // is PULLED with a cursor and not pushed: the daemon keeps no per-client
+    // state and the response says how many lines fell off the back, which is
+    // what a lost notification cannot say. And raising the level is a METHOD
+    // so that the cap stopping an FTP `PASS` from being shown is applied by
+    // the only code that can apply it: the one holding the ring.
     assert_eq!(methods::LOG_TAIL, "log.tail");
     assert_eq!(methods::LOG_LEVEL, "log.level");
-    // 0.66.0 (D4): ningún método nuevo — dos campos opcionales, `SpanWire::bg`
-    // y `PluginPreviewStyledParams::columns`, para el previewer de imagen que
-    // pinta medios bloques y necesita saber a cuántas celdas encoger.
-    // 0.69.0 (ADR 0100): `plugin.notice`, la notificación con la que un
-    // plugin `hook` le dice algo al humano sobre una mutación ya registrada —
-    // o con la que el daemon dice que apagó los hooks de un plugin. Solo a
-    // humanos, como `connection.failed`; un cliente 0.68 la descarta.
+    // 0.66.0 (D4): no new method — two optional fields, `SpanWire::bg` and
+    // `PluginPreviewStyledParams::columns`, for the image previewer that
+    // paints half-blocks and needs to know how many cells to shrink into.
+    // 0.69.0 (ADR 0100): `plugin.notice`, the notification a `hook` plugin
+    // uses to tell the human something about a mutation already recorded —
+    // or that the daemon uses to say it turned off a plugin's hooks. Humans
+    // only, like `connection.failed`; a 0.68 client discards it.
     assert_eq!(methods::PLUGIN_NOTICE, "plugin.notice");
-    // 0.70.0 (ADR 0101): ningún método nuevo — un valor más en el
-    // vocabulario de `PluginNotice::kind`, `effect-denied`.
-    // 0.71.0 (ADR 0104): `plugin.uninstall`, el gestor de extensiones
-    // desinstala sin pasar por la CLI. Solo humanos, como sus hermanos.
+    // 0.70.0 (ADR 0101): no new method — one more value in
+    // `PluginNotice::kind`'s vocabulary, `effect-denied`.
+    // 0.71.0 (ADR 0104): `plugin.uninstall`, the extension manager
+    // uninstalls without going through the CLI. Humans only, like its siblings.
     assert_eq!(methods::PLUGIN_UNINSTALL, "plugin.uninstall");
-    // 0.72.0 (ADR 0105): ningún método nuevo — `kinds` en los params de
-    // `plugin.decorate` y `slot` en cada bloque de decoraciones.
-    // 0.73.0 (ADR 0107): `plugin.thumbnail`, la miniatura de un fichero por
-    // un plugin del kind nuevo. Abierto, como `plugin.preview`.
+    // 0.72.0 (ADR 0105): no new method — `kinds` in `plugin.decorate`'s
+    // params and `slot` in each decoration block.
+    // 0.73.0 (ADR 0107): `plugin.thumbnail`, a file's thumbnail from a
+    // plugin of the new kind. Open, like `plugin.preview`.
     assert_eq!(methods::PLUGIN_THUMBNAIL, "plugin.thumbnail");
-    // 0.74.0 (fase 3): `plugin.panel_render`, el marco que un plugin del kind
-    // `panel` pinta en un hueco del reparto. Abierto, como sus gemelos.
+    // 0.74.0 (phase 3): `plugin.panel_render`, the frame a `panel`-kind
+    // plugin paints into a layout slot. Open, like its twins.
     assert_eq!(methods::PLUGIN_PANEL_RENDER, "plugin.panel_render");
-    // 0.75.0 (fase 4): `fs.dir_usage` y su informe — de qué está HECHO un
-    // directorio, hijo a hijo. Dos métodos porque la lista no cabe en el
-    // desenlace de una Task, igual que `fs.checksum` y sus gemelos; el
-    // `fs.dir_size` de 0.49.0 sigue contestando lo suyo, que es otra pregunta.
+    // 0.75.0 (phase 4): `fs.dir_usage` and its report — what a directory is
+    // MADE of, child by child. Two methods because the list does not fit in
+    // a Task's outcome, same as `fs.checksum` and its twins; 0.49.0's
+    // `fs.dir_size` still answers its own thing, which is a different question.
     assert_eq!(methods::FS_DIR_USAGE, "fs.dir_usage");
     assert_eq!(methods::FS_DIR_USAGE_REPORT, "fs.dir_usage_report");
-    // 0.76.0 (fase 7): la línea de tiempo del journal. `journal.list` lo LEE
-    // paginando hacia atrás por `seq`, y `journal.undo_after` deshace lo del
-    // humano posterior a un `seq` — con el undo de siempre, o sea que informa
-    // por `policy.undo_report`. Los dos, solo conexiones humanas: el journal
-    // entero es un oráculo sobre todo lo que se ha tocado en la máquina, y
-    // deshacer trabajo es decisión de quien lo hizo.
+    // 0.76.0 (phase 7): the journal's timeline. `journal.list` READS it,
+    // paging backward by `seq`, and `journal.undo_after` undoes the human's
+    // work after a `seq` — with the usual undo, i.e. it reports through
+    // `policy.undo_report`. Both, human connections only: the whole journal
+    // is an oracle over everything touched on the machine, and undoing work
+    // is a decision for whoever did it.
     assert_eq!(methods::JOURNAL_LIST, "journal.list");
     assert_eq!(methods::JOURNAL_UNDO_AFTER, "journal.undo_after");
-    // 0.77.0 (fase 8): organizar. El plan lo propone un modelo
-    // (`ai.organize_plan`) o un plugin del kind `organizer`
-    // (`plugin.organize_plan`), y los dos contestan el MISMO tipo — lo que
-    // hace segura la operación no es de dónde salieron los nombres.
-    // Aplicarlo es `fs.organize`, que es un método y no N llamadas del
-    // cliente porque crear los directorios y mover tiene que ir bajo un solo
-    // `batch_id`: si no, deshacer el lote devuelve los ficheros y se olvida
-    // las carpetas.
+    // 0.77.0 (phase 8): organizing. The plan is proposed by a model
+    // (`ai.organize_plan`) or by an `organizer`-kind plugin
+    // (`plugin.organize_plan`), and both answer the SAME type — what makes
+    // the operation safe is not where the names came from. Applying it is
+    // `fs.organize`, which is one method and not N client calls because
+    // creating the directories and moving has to happen under a single
+    // `batch_id`: otherwise, undoing the batch gives the files back and
+    // forgets the folders.
     assert_eq!(methods::AI_ORGANIZE_PLAN, "ai.organize_plan");
     assert_eq!(methods::PLUGIN_ORGANIZE_PLAN, "plugin.organize_plan");
     assert_eq!(methods::FS_ORGANIZE, "fs.organize");
-    // 0.78.0 (fase 9): soltar la sesión de UI sin desconectarse, que es lo
-    // que hace posible el relevo entre frontends. Hasta aquí soltar sólo
-    // pasaba al DESCONECTAR, así que el que se iba tenía que morirse antes de
-    // que el que llegaba pudiera reclamar.
+    // 0.78.0 (phase 9): releasing the UI session without disconnecting,
+    // which is what makes the handover between frontends possible. Until
+    // now releasing only happened on DISCONNECT, so whoever was leaving had
+    // to die before whoever was arriving could claim it.
     assert_eq!(methods::SESSION_RELEASE, "session.release");
-    // 0.79.0: ningún método nuevo — `policy.undo_report` contesta `NotFound`
-    // de la taxonomía a un id que no conoce, como `fs.rename_batch_report`.
-    // 0.80.0: `journal.undo_after` gana el techo opcional `upto_seq`.
-    // 0.81.0: ningún método nuevo — `fs.search` gana diez filtros opcionales,
-    // y ninguno viaja cuando no se pide, así que el JSON de una búsqueda
-    // corriente no se mueve.
-    // 0.82.0: una task se puede pausar (ADR 0147).
+    // 0.79.0: no new method — `policy.undo_report` answers the taxonomy's
+    // `NotFound` for an id it does not know, like `fs.rename_batch_report`.
+    // 0.80.0: `journal.undo_after` gains the optional ceiling `upto_seq`.
+    // 0.81.0: no new method — `fs.search` gains ten optional filters, and
+    // none of them travels when not requested, so an ordinary search's JSON
+    // does not move.
+    // 0.82.0: a task can be paused (ADR 0147).
     assert_eq!(methods::TASK_PAUSE, "task.pause");
     assert_eq!(methods::TASK_RESUME, "task.resume");
-    // 0.83.0: la cola en serie (ADR 0149).
+    // 0.83.0: the serial queue (ADR 0149).
     assert_eq!(methods::TASK_MOVE, "task.move");
-    // 0.84.0: ningún método nuevo. Un subtipo de conflicto,
-    // `ConflictKind::DestinationGone` (ADR 0151), para cuando el directorio de
-    // destino deja de estar donde se pidió con la tarea ya en marcha; un
-    // contador en el informe del undo, `skipped_not_ours` (ADR 0152, #371); un
-    // motivo de fallo de conexión, `rsa-too-small` (#370); y `unusable` en
-    // `connection.list`, para las entradas que el daemon no supo leer (#365).
+    // 0.84.0: no new method. A conflict subtype,
+    // `ConflictKind::DestinationGone` (ADR 0151), for when the destination
+    // directory stops being where it was requested with the task already
+    // under way; a counter in the undo's report, `skipped_not_ours` (ADR
+    // 0152, #371); a connection-failure reason, `rsa-too-small` (#370); and
+    // `unusable` in `connection.list`, for the entries the daemon failed to
+    // read (#365).
     assert_eq!(norte_proto::PROTOCOL_VERSION, "0.84.0");
 }
 
-/// Una [`Entry`] de fila de comparación: los cuatro campos que el panel pinta,
-/// sin atributos (se omiten vacíos).
+/// An [`Entry`] for a comparison row: the four fields the panel paints,
+/// with no attributes (empty ones are omitted).
 fn compare_entry(wire: &str, kind: EntryKind, size: Option<u64>, mtime_ms: Option<i64>) -> Entry {
     Entry {
         path: vpath(wire),
@@ -4972,8 +4981,8 @@ fn compare_entry(wire: &str, kind: EntryKind, size: Option<u64>, mtime_ms: Optio
     }
 }
 
-/// Una fila sin los tres campos opcionales; quien necesite alguno la completa
-/// con sintaxis de actualización de struct.
+/// A row without the three optional fields; whoever needs one fills it in
+/// with struct-update syntax.
 fn compare_row(
     id: u64,
     left: Option<Entry>,
@@ -4996,46 +5005,47 @@ fn compare_row(
     }
 }
 
-/// La FILA de `fs.compare` (0.39.0, ADR 0048), congelada: una fixture por
-/// veredicto y, entre todas, el vocabulario ENTERO que el core llega a emitir
-/// — los seis criterios, las tres confianzas, los cinco motivos, los dos
-/// lados y, desde 0.42.0, las tres transformaciones de emparejamiento
-/// ([`compare_row_cases_paired`]). Los cinco fallbacks de `#[serde(other)]` NO
-/// tienen fixture a propósito: el core jamás los emite, así que no hay
-/// dirección de encode que pinear, y su degradación en DECODE la cubre
-/// `types.rs` (`unknown_enum_tokens_degrade_and_do_not_error`).
+/// The `fs.compare` ROW (0.39.0, ADR 0048), frozen: one fixture per verdict
+/// and, across all of them, the WHOLE vocabulary the core ever emits — the
+/// six criteria, the three confidences, the five reasons, the two sides and,
+/// since 0.42.0, the three pairing transformations
+/// ([`compare_row_cases_paired`]). The five `#[serde(other)]` fallbacks have
+/// NO fixture on purpose: the core never emits them, so there is no encode
+/// direction to pin, and their DECODE degradation is covered by `types.rs`
+/// (`unknown_enum_tokens_degrade_and_do_not_error`).
 ///
-/// Lo que estas fixtures pinean, campo a campo:
+/// What these fixtures pin, field by field:
 ///
-/// - `same_size_unknown` es la razón de ser de la confianza: el lado derecho
-///   está DENTRO de un zip (`zip+file://…/!/…`, ADR 0018), que no da tamaño ni
-///   fecha fiables. La respuesta es `Same`/`Unknown`, no un error y no un
-///   `Certain` inventado.
-/// - `only_left_hostile` (izquierda) y las dos `ambiguous_case_fold_hostile*`
-///   llevan nombres no-UTF8 (`%FF`, `%FE`): regla dura 1 en las dos
-///   direcciones, y en los DOS lados de la comparación
-///   (`ambiguous_normalization_right` es del lado derecho).
-/// - Las tres filas `ambiguous_*` congelan la FORMA que el rustdoc de
-///   `CompareVerdict::Ambiguous` declara normativa: una colisión es de UN
-///   lado, así que es UNA fila por entrada implicada, con el otro lado en
-///   `None`. Las dos del par `case_fold` son las dos entradas que colapsan,
-///   con TAMAÑOS DISTINTOS para que se vea que son dos entradas y no una
-///   contada dos veces.
-/// - `ambiguous_normalization_right` escribe el gemelo NFD con escapes para
-///   que ningún editor pueda normalizarlo por su cuenta — mismo cuidado que
+/// - `same_size_unknown` is confidence's reason for existing: the right side
+///   is INSIDE a zip (`zip+file://…/!/…`, ADR 0018), which gives neither a
+///   reliable size nor date. The answer is `Same`/`Unknown`, not an error and
+///   not a made-up `Certain`.
+/// - `only_left_hostile` (left) and the two `ambiguous_case_fold_hostile*`
+///   carry non-UTF8 names (`%FF`, `%FE`): hard rule 1 in both directions, and
+///   on BOTH sides of the comparison (`ambiguous_normalization_right` is the
+///   right side's).
+/// - The three `ambiguous_*` rows freeze the SHAPE that
+///   `CompareVerdict::Ambiguous`'s rustdoc declares normative: a collision is
+///   of ONE side, so it is ONE row per entry involved, with the other side
+///   at `None`. The two in the `case_fold` pair are the two entries that
+///   collapse, with DIFFERENT SIZES so it is visible that they are two
+///   entries and not one counted twice.
+/// - `ambiguous_normalization_right` writes the NFD twin with escapes so no
+///   editor can normalize it on its own — the same care as
 ///   `rename_collision.json`.
-/// - `error_dir_too_large_right` NO lleva entrada de ningún lado: un
-///   directorio que se pasa del tope se reporta sin haber podido listar nada,
-///   y esa es justo la forma que exime [`CompareRow::sides_are_consistent`].
-/// - Los `criterion` de las filas de problema (`ambiguous`, `error`) son
-///   `presence` salvo cuando un rung concreto sí llegó a correr
-///   (`error_read_failed_left`, que muere DENTRO del hash). El tipo no tiene
-///   variante «ningún rung» y no se le inventa una aquí: `unknown` es el
-///   fallback de decode y el core no lo emite jamás.
-/// - Las QUINCE filas de 0.39.0 no llevan `paired_under` y su JSON no cambió ni
-///   un byte al añadirlo (0.42.0): la clave se omite cuando no hay
-///   transformación que nombrar, que es el caso corriente. Eso es lo que hace
-///   ADITIVO el campo, y este fichero es donde se ve.
+/// - `error_dir_too_large_right` carries NO entry from either side: a
+///   directory that goes over the cap is reported without having been able
+///   to list anything, and that is exactly the shape
+///   [`CompareRow::sides_are_consistent`] exempts.
+/// - The `criterion` of the problem rows (`ambiguous`, `error`) is
+///   `presence` except when a specific rung actually got to run
+///   (`error_read_failed_left`, which dies INSIDE the hash). The type has no
+///   "no rung" variant and none is invented here: `unknown` is decode's
+///   fallback and the core never emits it.
+/// - The FIFTEEN rows from 0.39.0 carry no `paired_under` and their JSON did
+///   not change a single byte when it was added (0.42.0): the key is
+///   omitted when there is no transformation to name, which is the ordinary
+///   case. That is what makes the field ADDITIVE, and this file is where it shows.
 #[test]
 fn golden_compare_row() {
     let mut cases = compare_row_cases_content();
@@ -5043,40 +5053,39 @@ fn golden_compare_row() {
     cases.extend(compare_row_cases_problems());
     cases.extend(compare_row_cases_paired());
 
-    // Toda fixture congelada tiene que ser una fila LEGAL: si un golden dijera
-    // `OnlyLeft` llevando lado derecho, congelaría el bug en vez del contrato,
-    // y el core de la task C6 se escribiría contra él.
+    // Every frozen fixture has to be a LEGAL row: if a golden said `OnlyLeft`
+    // while carrying a right side, it would freeze the bug instead of the
+    // contract, and task C6's core would be written against it.
     for (name, row) in &cases {
-        assert!(row.sides_are_consistent(), "[compare_row/{name}] lados");
-        assert!(row.reason_is_consistent(), "[compare_row/{name}] motivo");
+        assert!(row.sides_are_consistent(), "[compare_row/{name}] sides");
+        assert!(row.reason_is_consistent(), "[compare_row/{name}] reason");
     }
 
     check_family("compare_row.json", &cases);
 }
 
-/// Las parejas cuyos dos nombres NO son los mismos bytes (0.42.0, #152): el
-/// veredicto es normal —`Same` o `Different`, decidido por el rung que tocara—
-/// y lo que congela cada fixture es [`CompareRow::paired_under`], que es lo
-/// único que dice que las dos mitades se deletrean distinto.
+/// The pairs whose two names are NOT the same bytes (0.42.0, #152): the
+/// verdict is ordinary —`Same` or `Different`, decided by whichever rung ran—
+/// and what each fixture freezes is [`CompareRow::paired_under`], which is
+/// the only thing saying both halves are spelled differently.
 ///
-/// Las tres, y no una: separar el singleton de las otras dos ES el contrato.
-/// Un consumidor que solo viera «difieren en bytes» tendría que elegir entre
-/// fiarse de todo emparejamiento por normalización —el bug de #152— o
-/// rechazarlos todos, que rompe el caso macOS↔Linux para el que la clave
-/// existe.
+/// All three, not one: separating the singleton from the other two IS the
+/// contract. A consumer that only saw "they differ in bytes" would have to
+/// choose between trusting every pairing by normalization —#152's bug— or
+/// rejecting them all, which breaks the macOS↔Linux case the key exists for.
 ///
-/// El KELVIN SIGN y el gemelo NFD van escritos con escapes `\u`, por lo mismo
-/// que `ambiguous_normalization_right`: un editor que normalizara el fichero
-/// convertiría estos tests en tautologías.
+/// The KELVIN SIGN and the NFD twin are written with `\u` escapes, for the
+/// same reason as `ambiguous_normalization_right`: an editor that normalized
+/// the file would turn these tests into tautologies.
 fn compare_row_cases_paired() -> Vec<(&'static str, norte_proto::methods::CompareRow)> {
     use norte_proto::methods::CompareConfidence as Conf;
     use norte_proto::methods::CompareCriterion as Crit;
     use norte_proto::methods::CompareVerdict as V;
     use norte_proto::methods::{CompareRow, PairTransform};
     vec![
-        // Un lado no distingue caja, así que los dos nombres NO pueden
-        // coexistir allí y emparejarlos es lo correcto. Viaja para que un
-        // pintor pueda explicar por qué la fila enseña dos grafías.
+        // One side does not distinguish case, so the two names CANNOT
+        // coexist there and pairing them is the correct call. It travels so
+        // a painter can explain why the row shows two spellings.
         (
             "same_paired_under_case_fold",
             CompareRow {
@@ -5091,9 +5100,9 @@ fn compare_row_cases_paired() -> Vec<(&'static str, norte_proto::methods::Compar
                 )
             },
         ),
-        // El caso para el que se diseñó la clave: el MISMO texto repartido en
-        // NFC por Linux y en NFD por macOS. Tampoco es un aviso; lo que importa
-        // al escribir es que el destino se deletrea de otra manera.
+        // The case the key was designed for: the SAME text spelled in NFC by
+        // Linux and in NFD by macOS. This is not a warning either; what
+        // matters when writing is that the destination is spelled differently.
         (
             "same_paired_under_normalization",
             CompareRow {
@@ -5108,11 +5117,11 @@ fn compare_row_cases_paired() -> Vec<(&'static str, norte_proto::methods::Compar
                 )
             },
         ),
-        // #145 en una fila: `straße.txt` contra `strasse.txt`. Los junta el
-        // pliegue COMPLETO de un ext4/f2fs `+F` y nada más — en cualquier otro
-        // volumen son dos ficheros, y pueden ser dos ficheros distintos. Por
-        // eso NO comparte variante con `case_fold`, cuya promesa es «un mismo
-        // texto escrito de dos maneras».
+        // #145 in one row: `straße.txt` against `strasse.txt`. Only an
+        // ext4/f2fs `+F`'s FULL fold joins them — on any other volume they
+        // are two files, and they can be two distinct files. That is why it
+        // does NOT share a variant with `case_fold`, whose promise is "the
+        // same text written two ways".
         (
             "different_paired_under_full_fold",
             CompareRow {
@@ -5127,12 +5136,12 @@ fn compare_row_cases_paired() -> Vec<(&'static str, norte_proto::methods::Compar
                 )
             },
         ),
-        // #152 entero en una fila: U+212A KELVIN SIGN contra la `K` ASCII.
-        // Coexisten en ext4, se leen como caracteres DISTINTOS, y sin esta
-        // marca un plan de sincronización lee este `Different` como «actualiza
-        // el de la derecha con el de la izquierda» y escribe encima de un
-        // fichero que no tiene nada que ver. El veredicto y el criterio son los
-        // normales: lo anómalo no es la comparación, es la PAREJA.
+        // The whole of #152 in one row: U+212A KELVIN SIGN against the ASCII
+        // `K`. They coexist on ext4, read as DISTINCT characters, and
+        // without this mark a sync plan reads this `Different` as "update
+        // the right one with the left one" and writes over a file that has
+        // nothing to do with it. The verdict and criterion are the ordinary
+        // ones: what is anomalous is not the comparison, it is the PAIR.
         (
             "different_paired_under_singleton",
             CompareRow {
@@ -5150,7 +5159,7 @@ fn compare_row_cases_paired() -> Vec<(&'static str, norte_proto::methods::Compar
     ]
 }
 
-/// La fecha de referencia de las fixtures de comparación.
+/// The reference date for the comparison fixtures.
 const COMPARE_T: i64 = 1_720_000_000_000;
 
 fn cf(wire: &str, size: Option<u64>, mtime_ms: Option<i64>) -> Entry {
@@ -5165,10 +5174,10 @@ fn cln(wire: &str) -> Entry {
     compare_entry(wire, EntryKind::Symlink, None, None)
 }
 
-/// Las filas que decide un rung de CONTENIDO (hash, mtime, size,
-/// `link_target`): las tres confianzas del vocabulario salen de aquí, porque es
-/// aquí donde un criterio prueba, sugiere o no puede decir. Ver el rustdoc de
-/// [`golden_compare_row`].
+/// The rows a CONTENT rung decides (hash, mtime, size, `link_target`): the
+/// vocabulary's three confidences come from here, because this is where a
+/// criterion proves, suggests, or cannot tell. See [`golden_compare_row`]'s
+/// rustdoc.
 fn compare_row_cases_content() -> Vec<(&'static str, norte_proto::methods::CompareRow)> {
     use norte_proto::methods::CompareConfidence as Conf;
     use norte_proto::methods::CompareCriterion as Crit;
@@ -5186,8 +5195,8 @@ fn compare_row_cases_content() -> Vec<(&'static str, norte_proto::methods::Compa
                 Conf::Certain,
             ),
         ),
-        // Dentro de la tolerancia por defecto (2000 ms): `Same`, pero solo
-        // `Probable` — dos fechas parecidas no prueban dos ficheros iguales.
+        // Within the default tolerance (2000 ms): `Same`, but only
+        // `Probable` — two similar dates do not prove two identical files.
         (
             "same_by_mtime",
             compare_row(
@@ -5221,8 +5230,8 @@ fn compare_row_cases_content() -> Vec<(&'static str, norte_proto::methods::Compa
                 Conf::Certain,
             ),
         ),
-        // El campo que esta spec NO lee y la 2 necesita: qué lado es más
-        // nuevo. Se produce aquí porque no cuesta nada.
+        // The field this spec does NOT read and spec 2 needs: which side is
+        // newer. It is produced here because it costs nothing.
         (
             "different_by_mtime_newer_right",
             CompareRow {
@@ -5241,7 +5250,7 @@ fn compare_row_cases_content() -> Vec<(&'static str, norte_proto::methods::Compa
                 )
             },
         ),
-        // Los symlinks se comparan, no se siguen: el destino es bytes.
+        // Symlinks are compared, not followed: the target is bytes.
         (
             "different_by_link_target",
             compare_row(
@@ -5256,8 +5265,8 @@ fn compare_row_cases_content() -> Vec<(&'static str, norte_proto::methods::Compa
     ]
 }
 
-/// Las filas que decide la PRESENCIA o el tipo, antes de mirar contenido
-/// alguno: siempre `Certain`, porque un lado que no existe no admite matices.
+/// The rows that PRESENCE or type decides, before looking at any content:
+/// always `Certain`, because a side that does not exist admits no shades.
 fn compare_row_cases_presence() -> Vec<(&'static str, norte_proto::methods::CompareRow)> {
     use norte_proto::methods::CompareConfidence as Conf;
     use norte_proto::methods::CompareCriterion as Crit;
@@ -5274,8 +5283,8 @@ fn compare_row_cases_presence() -> Vec<(&'static str, norte_proto::methods::Comp
                 Conf::Certain,
             ),
         ),
-        // Un directorio huérfano es UNA fila y no se enumera: el plan de la
-        // spec 2 lo copiará con un `fs.copy` recursivo.
+        // An orphan directory is ONE row and is not enumerated: spec 2's
+        // plan will copy it with a recursive `fs.copy`.
         (
             "only_right_dir",
             compare_row(
@@ -5301,8 +5310,8 @@ fn compare_row_cases_presence() -> Vec<(&'static str, norte_proto::methods::Comp
     ]
 }
 
-/// Las filas de PROBLEMA: las dos que llevan `reason` —`ambiguous` y
-/// `error`— y, con ellas, los cinco motivos del vocabulario cerrado.
+/// The PROBLEM rows: the two that carry `reason` —`ambiguous` and `error`—
+/// and, with them, the five reasons in the closed vocabulary.
 fn compare_row_cases_problems() -> Vec<(&'static str, norte_proto::methods::CompareRow)> {
     use norte_proto::methods::CompareConfidence as Conf;
     use norte_proto::methods::CompareCriterion as Crit;
@@ -5310,16 +5319,15 @@ fn compare_row_cases_problems() -> Vec<(&'static str, norte_proto::methods::Comp
     use norte_proto::methods::CompareVerdict as V;
     use norte_proto::methods::{CompareRow, Side};
     vec![
-        // Una colisión es de UN lado, así que la fila también: UNA fila por
-        // entrada implicada, con esa entrada en el campo de SU lado y el otro
-        // en `None`. `LEEME%FF.txt` y `leeme%FF.txt` son DOS filas —con
-        // tamaños distintos, para que se vea que no son la misma entrada
-        // contada dos veces— porque un plan de sincronización tiene que ver
-        // los DOS nombres antes de escribir sobre cualquiera de ellos. La
-        // forma está congelada en el rustdoc de `CompareVerdict::Ambiguous`
-        // (hallazgo MAJOR de protocol-guardian: estas fixtures llevaban una
-        // pareja cruzada, que es justo lo que el diseño dice que NO es una
-        // ambigüedad).
+        // A collision is of ONE side, so the row is too: ONE row per entry
+        // involved, with that entry in ITS side's field and the other at
+        // `None`. `LEEME%FF.txt` and `leeme%FF.txt` are TWO rows —with
+        // different sizes, so it is visible they are not the same entry
+        // counted twice— because a sync plan has to see BOTH names before
+        // writing over either of them. The shape is frozen in
+        // `CompareVerdict::Ambiguous`'s rustdoc (protocol-guardian's MAJOR
+        // finding: these fixtures used to carry a crossed pair, which is
+        // exactly what the design says is NOT an ambiguity).
         (
             "ambiguous_case_fold_hostile",
             CompareRow {
@@ -5350,11 +5358,11 @@ fn compare_row_cases_problems() -> Vec<(&'static str, norte_proto::methods::Comp
                 )
             },
         ),
-        // La colisión por normalización, y en el lado DERECHO: el gemelo NFD
-        // de un nombre que ese mismo directorio ya tiene en NFC. Va escrito
-        // con escapes para que ningún editor lo normalice por su cuenta —
-        // mismo cuidado que `rename_collision.json`—, y su gemelo NFC tiene su
-        // propia fila exactamente igual que la pareja de arriba.
+        // The normalization collision, and on the RIGHT side: the NFD twin
+        // of a name that same directory already has in NFC. It is written
+        // with escapes so no editor normalizes it on its own — the same
+        // care as `rename_collision.json`—, and its NFC twin has its own row
+        // exactly like the pair above.
         (
             "ambiguous_normalization_right",
             CompareRow {
@@ -5411,8 +5419,8 @@ fn compare_row_cases_problems() -> Vec<(&'static str, norte_proto::methods::Comp
     ]
 }
 
-/// Un paso sin los tres campos opcionales; quien necesite alguno la completa
-/// con sintaxis de actualización de struct.
+/// A step without the three optional fields; whoever needs one fills it in
+/// with struct-update syntax.
 fn sync_step(
     id: u64,
     kind: norte_proto::methods::SyncStepKind,
@@ -5434,55 +5442,54 @@ fn sync_step(
     }
 }
 
-/// El PASO de `sync.plan` (0.40.0, ADR 0049), congelado: una fixture por clase
-/// de paso y, entre todas, el vocabulario ENTERO que el core llega a emitir —
-/// las cinco clases, las tres reversas, los cuatro motivos y las tres
-/// confianzas. Los fallbacks de `#[serde(other)]` NO tienen fixture a
-/// propósito, por el mismo motivo que en `compare_row.json`: el core jamás los
-/// emite, así que no hay dirección de encode que pinear, y su degradación en
-/// DECODE la cubre `types.rs`.
+/// The `sync.plan` STEP (0.40.0, ADR 0049), frozen: one fixture per step
+/// class and, across all of them, the WHOLE vocabulary the core ever emits —
+/// the five classes, the three reversals, the four reasons and the three
+/// confidences. The `#[serde(other)]` fallbacks have NO fixture on purpose,
+/// for the same reason as in `compare_row.json`: the core never emits them,
+/// so there is no encode direction to pin, and their DECODE degradation is
+/// covered by `types.rs`.
 ///
-/// Lo que estas fixtures pinean, campo a campo:
+/// What these fixtures pin, field by field:
 ///
-/// - Las tres parejas `*_trash` / `*_irreversible` son la razón de ser de
-///   [`StepReversal`]: el MISMO paso vale `restore_trash` o `irreversible`
-///   según si el DESTINO tiene papelera, y en el segundo caso debe una razón.
-///   Un plan que no supiera distinguirlos le prometería a un humano un undo
-///   que no existe.
-/// - `copy_hostile` lleva un `rel` no-UTF8 (`%FF%FE`): regla dura 1 en las dos
-///   direcciones. El `rel` es RELATIVO a las dos raíces, así que no lleva
-///   ninguna de ellas.
-/// - `overwrite_dest_spelt_differently` es la pareja que la clave de
-///   emparejamiento junta y los bytes separan: el paso lleva los DOS caminos,
-///   porque se lee del que el origen deletrea y se escribe sobre el que el
-///   destino tiene. Congela dos cosas — que `dest_rel` viaja SOLO cuando
-///   difiere (en las otras diez fixtures la clave no aparece) y que lo que se
-///   compara es la ruta ENTERA, no el último segmento.
-/// - `overwrite_unknown_confidence` es el default `on_unknown: copy`: se
-///   escribe, y el paso CONSERVA `confidence: unknown` para que el informe
-///   pueda decir que copió porque nadie pudo asegurar nada.
-///   `skip_unknown_confidence` es el mismo caso con la otra elección.
-/// - Ningún `skip` lleva `reversal`, y todos llevan `reason`: es la invariante
-///   que `shape_is_consistent` enuncia, y aquí está congelada como forma.
-/// - `delete_tree` no lleva `size`: un borrado no mueve bytes, y la clave
-///   ausente lo dice mejor que un cero.
+/// - The three `*_trash` / `*_irreversible` pairs are [`StepReversal`]'s
+///   reason for existing: the SAME step is worth `restore_trash` or
+///   `irreversible` depending on whether the DESTINATION has a trash, and in
+///   the second case it owes a reason. A plan that could not tell them apart
+///   would promise a human an undo that does not exist.
+/// - `copy_hostile` carries a non-UTF8 `rel` (`%FF%FE`): hard rule 1 in both
+///   directions. `rel` is RELATIVE to both roots, so it carries neither of them.
+/// - `overwrite_dest_spelt_differently` is the pair the pairing key joins and
+///   the bytes split: the step carries BOTH paths, because it reads from the
+///   one the source spells and writes over the one the destination has. It
+///   freezes two things — that `dest_rel` travels ONLY when it differs (in
+///   the other ten fixtures the key does not appear) and that what is
+///   compared is the WHOLE path, not the last segment.
+/// - `overwrite_unknown_confidence` is the `on_unknown: copy` default: it
+///   writes, and the step KEEPS `confidence: unknown` so the report can say
+///   it copied because nobody could be sure of anything.
+///   `skip_unknown_confidence` is the same case with the other choice.
+/// - No `skip` carries `reversal`, and all carry `reason`: it is the
+///   invariant `shape_is_consistent` states, and it is frozen here as shape.
+/// - `delete_tree` carries no `size`: a delete moves no bytes, and the
+///   absent key says so better than a zero.
 #[test]
 fn golden_sync_step() {
     let mut cases = sync_step_cases_acting();
     cases.extend(sync_step_cases_deleting());
     cases.extend(sync_step_cases_skipped());
 
-    // Toda fixture congelada tiene que ser un paso LEGAL: uno que prometiera
-    // una reversa imposible congelaría el bug en vez del contrato, y el
-    // transductor de `norte-sync` se escribiría contra él.
+    // Every frozen fixture has to be a LEGAL step: one that promised an
+    // impossible reversal would freeze the bug instead of the contract, and
+    // `norte-sync`'s transducer would be written against it.
     for (name, step) in &cases {
-        assert!(step.shape_is_consistent(), "[sync_step/{name}] forma");
+        assert!(step.shape_is_consistent(), "[sync_step/{name}] shape");
     }
 
     check_family("sync_step.json", &cases);
 }
 
-/// Los pasos que ESCRIBEN: crear, copiar y sobrescribir, con sus reversas.
+/// The steps that WRITE: create, copy and overwrite, with their reversals.
 fn sync_step_cases_acting() -> Vec<(&'static str, norte_proto::methods::SyncStep)> {
     use norte_proto::methods::{
         CompareConfidence as Conf, CompareCriterion as Crit, StepReversal as Rev,
@@ -5529,10 +5536,10 @@ fn sync_step_cases_acting() -> Vec<(&'static str, norte_proto::methods::SyncStep
             },
         ),
         (
-            // La MISMA fila que `overwrite_trash` —mismo rung, misma confianza,
-            // mismo tamaño— contra un destino SIN papelera. Que la pareja no
-            // varíe en nada más es lo que la convierte en una A/B de la
-            // capacidad en vez de en dos ejemplos sueltos.
+            // The SAME row as `overwrite_trash` —same rung, same confidence,
+            // same size— against a destination WITHOUT a trash. That the
+            // pair varies in nothing else is what turns it into an A/B of
+            // the capability instead of two loose examples.
             "overwrite_irreversible",
             SyncStep {
                 size: Some(4096),
@@ -5562,26 +5569,27 @@ fn sync_step_cases_acting() -> Vec<(&'static str, norte_proto::methods::SyncStep
             },
         ),
         (
-            // La pareja que la clave de emparejamiento junta y el wire tenía
-            // que poder nombrar: el origen deletrea el directorio `NOTAS` y el
-            // destino —que no distingue caja— lo tiene como `notas`. El paso
-            // lleva LOS DOS caminos; sin `dest_rel` el ejecutor escribiría bajo
-            // el del origen y crearía un segundo directorio al lado.
+            // The pair the pairing key joins and the wire had to be able to
+            // name: the source spells the directory `NOTAS` and the
+            // destination —which does not distinguish case— has it as
+            // `notas`. The step carries BOTH paths; without `dest_rel` the
+            // executor would write under the source's and create a second
+            // directory alongside it.
             //
-            // La diferencia va en un ANCESTRO y no en el último segmento, y es
-            // deliberado por dos motivos. Uno: congela la regla que este campo
-            // implementa de verdad —se compara la ruta ENTERA, porque la clave
-            // pliega en cada nivel—. Dos: la hoja lleva el byte 0xFF, y un
-            // nombre que no es UTF-8 NO se pliega (`key_for` lo devuelve crudo,
-            // para no estropear los bytes de cola de Shift-JIS), así que una
-            // pareja que solo difiriera en la caja de una hoja no-UTF8 no
-            // existe: ningún walk la produce.
+            // The difference is in an ANCESTOR and not in the last segment,
+            // and that is deliberate for two reasons. One: it freezes the
+            // rule this field really implements —the WHOLE path is compared,
+            // because the key folds at every level—. Two: the leaf carries
+            // byte 0xFF, and a name that is not UTF-8 does NOT fold
+            // (`key_for` returns it raw, so as not to spoil Shift-JIS's tail
+            // bytes), so a pair that differed only in the case of a non-UTF8
+            // leaf does not exist: no walk produces it.
             //
-            // La otra mitad del caso —NFC contra NFD— no se congela AQUÍ y
-            // también es deliberado: las dos formas son UTF-8 válido, así que
-            // el códec las deja literales y esta fixture llevaría dos cadenas
-            // que se pintan IGUAL. El fallo de una fixture así sería invisible
-            // en la revisión. Va en `types.rs`, con los bytes como escapes.
+            // The other half of the case —NFC against NFD— is NOT frozen
+            // HERE and is also deliberate: both forms are valid UTF-8, so the
+            // codec leaves them literal and this fixture would carry two
+            // strings that render THE SAME. Such a fixture's failure would be
+            // invisible in review. It goes in `types.rs`, with the bytes as escapes.
             "overwrite_dest_spelt_differently",
             SyncStep {
                 dest_rel: Some(rel_path("notas/informe%FF%FE.dat")),
@@ -5599,9 +5607,9 @@ fn sync_step_cases_acting() -> Vec<(&'static str, norte_proto::methods::SyncStep
     ]
 }
 
-/// Los pasos que BORRAN, que son de `Mirror` y llevan la misma pareja de
-/// reversas: con papelera se saca de ella, sin papelera no se saca de ningún
-/// sitio y el plan lo dice antes de que nadie apruebe.
+/// The steps that DELETE, which belong to `Mirror` and carry the same pair
+/// of reversals: with a trash it comes back out of it, without a trash it
+/// comes back from nowhere and the plan says so before anyone approves.
 fn sync_step_cases_deleting() -> Vec<(&'static str, norte_proto::methods::SyncStep)> {
     use norte_proto::methods::{
         CompareConfidence as Conf, CompareCriterion as Crit, StepReversal as Rev,
@@ -5636,7 +5644,7 @@ fn sync_step_cases_deleting() -> Vec<(&'static str, norte_proto::methods::SyncSt
     ]
 }
 
-/// Los pasos que NO tocan nada: uno por motivo, y ninguno con reversa.
+/// The steps that touch NOTHING: one per reason, and none with a reversal.
 fn sync_step_cases_skipped() -> Vec<(&'static str, norte_proto::methods::SyncStep)> {
     use norte_proto::methods::{
         CompareConfidence as Conf, CompareCriterion as Crit, SyncReason as Why, SyncStep,
@@ -5658,9 +5666,9 @@ fn sync_step_cases_skipped() -> Vec<(&'static str, norte_proto::methods::SyncSte
             },
         ),
         (
-            // Sin `size`: un `Skip` no mueve bytes, y `counts.bytes` es la suma
-            // de ese campo — un tamaño aquí sería un byte contado que nadie
-            // escribió, en el número con el que se aprueba el plan.
+            // With no `size`: a `Skip` moves no bytes, and `counts.bytes` is
+            // the sum of that field — a size here would be a counted byte
+            // nobody wrote, in the number the plan is approved with.
             "skip_unknown_confidence",
             SyncStep {
                 reason: Some(Why::UnknownConfidence),
@@ -5689,10 +5697,11 @@ fn sync_step_cases_skipped() -> Vec<(&'static str, norte_proto::methods::SyncSte
             },
         ),
         (
-            // 0.43.0 (#207): la pareja del KELVIN. LAS DOS ORTOGRAFÍAS viajan
-            // —`rel` con U+212A y `dest_rel` con la `K` ASCII— porque son el
-            // punto de la fila: quien la lea tiene que poder ver que los dos
-            // nombres NO son el mismo texto. Sin `size`, como todo `Skip`.
+            // 0.43.0 (#207): the KELVIN pair. BOTH SPELLINGS travel —`rel`
+            // with U+212A and `dest_rel` with the ASCII `K`— because they are
+            // the row's whole point: whoever reads it has to be able to see
+            // that the two names are NOT the same text. With no `size`, like
+            // every `Skip`.
             "skip_non_injective_pairing",
             SyncStep {
                 reason: Some(Why::NonInjectivePairing),
@@ -5710,15 +5719,16 @@ fn sync_step_cases_skipped() -> Vec<(&'static str, norte_proto::methods::SyncSte
     ]
 }
 
-/// El BLOQUEO (0.40.0, ADR 0049): las cinco clases, y el `side` presente
-/// exactamente cuando el bloqueo es de un lado. `dest_read_only` es del árbol
-/// entero, así que su `rel` es la RAÍZ — la forma que un frontend tiene que
-/// saber pintar sin nombre que enseñar.
+/// The BLOCKER (0.40.0, ADR 0049): the five classes, and `side` present
+/// exactly when the blocker is of one side. `dest_read_only` is of the WHOLE
+/// tree, so its `rel` is the ROOT — the shape a frontend has to know how to
+/// paint with no name to show.
 ///
-/// `type_mismatch_dir` va DOS veces porque su `side` es lo que lo hace legible:
-/// el mismo bloqueo con `left` y con `right` son dos frases distintas («no copio
-/// un árbol del origen sobre un fichero» / «no borro un árbol del destino para
-/// poner un fichero»), y congelar una sola dejaría la otra sin fixture.
+/// `type_mismatch_dir` appears TWICE because its `side` is what makes it
+/// legible: the same blocker with `left` and with `right` are two distinct
+/// sentences ("I will not copy a source tree over a file" / "I will not
+/// delete a destination tree to put a file there"), and freezing only one
+/// would leave the other with no fixture.
 #[test]
 fn golden_sync_blocker() {
     use norte_proto::methods::{RelPath, Side, SyncBlocker, SyncBlockerKind as Kind};
@@ -5750,9 +5760,9 @@ fn golden_sync_blocker() {
                 },
             ),
             (
-                // 0.52.0 (#163): un nombre que el destino no puede tener. El
-                // lado es SIEMPRE el destino — es su sistema de ficheros el
-                // que lo rehúsa, no el origen el que lo escribió mal.
+                // 0.52.0 (#163): a name the destination cannot have. The
+                // side is ALWAYS the destination — it is its filesystem that
+                // refuses it, not the source that wrote it wrong.
                 "illegal_dest_name",
                 SyncBlocker {
                     rel: rel_path("CON"),
@@ -5761,8 +5771,8 @@ fn golden_sync_blocker() {
                 },
             ),
             (
-                // El solape es de las DOS raíces a la vez: no hay un lado que
-                // nombrar, y `side` se omite en vez de inventar uno.
+                // The overlap is of BOTH roots at once: there is no side to
+                // name, and `side` is omitted instead of inventing one.
                 "overlap_detected",
                 SyncBlocker {
                     rel: rel_path("sub"),
@@ -5771,9 +5781,9 @@ fn golden_sync_blocker() {
                 },
             ),
             (
-                // Un directorio del ORIGEN contra un fichero del destino, con
-                // un nombre no-UTF8 para que el `rel` del bloqueo pase por el
-                // mismo códec que el de un paso.
+                // A SOURCE directory against a destination file, with a
+                // non-UTF8 name so the blocker's `rel` goes through the same
+                // codec as a step's.
                 "type_mismatch_dir_source",
                 SyncBlocker {
                     rel: rel_path("informe%FF.d"),
@@ -5782,7 +5792,8 @@ fn golden_sync_blocker() {
                 },
             ),
             (
-                // Y al revés: el árbol que se borraría está en el DESTINO.
+                // And the other way around: the tree that would be deleted
+                // is in the DESTINATION.
                 "type_mismatch_dir_dest",
                 SyncBlocker {
                     rel: rel_path("build"),
@@ -5893,33 +5904,33 @@ fn golden_attrs() {
     );
     let attr_values = [
         ("uint", AttrValue::Uint(33188)),
-        // u64::MAX: donde un cliente JS pierde el valor en su f64.
+        // u64::MAX: where a JS client loses the value in its f64.
         ("uint_max", AttrValue::Uint(u64::MAX)),
         ("int", AttrValue::Int(-7)),
         ("text", AttrValue::Text("STANDARD_IA".to_owned())),
-        // Bytes que NO son UTF-8: la razón de existir de la variante.
+        // Bytes that are NOT UTF-8: the variant's reason for existing.
         ("bytes_b64", AttrValue::Bytes(vec![0xFF, 0xFE])),
-        // Vacío NO es ausente: la celda existe y su valor son cero bytes.
+        // Empty is NOT absent: the cell exists and its value is zero bytes.
         ("bytes_b64_empty", AttrValue::Bytes(Vec::new())),
-        // Negativo: pre-1970 es real y el wire lo admite.
+        // Negative: pre-1970 is real and the wire allows it.
         ("time_ms", AttrValue::TimeMs(-86_400_000)),
         ("bool", AttrValue::Bool(true)),
         ("unknown", AttrValue::Unknown),
     ];
-    // Exhaustividad: `attr_value_tag` es un `match` sin comodín, así que una
-    // variante NUEVA rompe la compilación hasta que alguien la cubra; este
-    // set-check convierte "añadí la variante, olvidé la fixture" en rojo.
-    let cubiertas: BTreeSet<&str> = attr_values.iter().map(|(_, v)| attr_value_tag(v)).collect();
-    let todas: BTreeSet<&str> = ATTR_VALUE_TAGS.into_iter().collect();
+    // Exhaustiveness: `attr_value_tag` is a `match` with no wildcard, so a
+    // NEW variant breaks compilation until someone covers it; this set-check
+    // turns "I added the variant, forgot the fixture" into red.
+    let covered: BTreeSet<&str> = attr_values.iter().map(|(_, v)| attr_value_tag(v)).collect();
+    let all: BTreeSet<&str> = ATTR_VALUE_TAGS.into_iter().collect();
     assert_eq!(
-        cubiertas, todas,
-        "[attr_value.json] toda variante de AttrValue necesita al menos una fixture"
+        covered, all,
+        "[attr_value.json] every AttrValue variant needs at least one fixture"
     );
     check_family("attr_value.json", &attr_values);
 }
 
-/// Todas las etiquetas de wire de [`AttrValue`], cruzadas contra el `match`
-/// exhaustivo de [`attr_value_tag`].
+/// All of [`AttrValue`]'s wire tags, cross-checked against
+/// [`attr_value_tag`]'s exhaustive `match`.
 const ATTR_VALUE_TAGS: [&str; 7] = [
     "uint",
     "int",
@@ -5930,8 +5941,8 @@ const ATTR_VALUE_TAGS: [&str; 7] = [
     "unknown",
 ];
 
-/// Etiqueta de wire de un valor. EXHAUSTIVO por construcción (sin `_`): añadir
-/// una variante a `AttrValue` rompe aquí la compilación.
+/// A value's wire tag. EXHAUSTIVE by construction (no `_`): adding a variant
+/// to `AttrValue` breaks compilation here.
 fn attr_value_tag(v: &AttrValue) -> &'static str {
     match v {
         AttrValue::Uint(_) => "uint",
@@ -5944,18 +5955,18 @@ fn attr_value_tag(v: &AttrValue) -> &'static str {
     }
 }
 
-/// Familia `host.*` (0.37.0/0.38.0, #131): enumeración de volúmenes del
-/// host. `Volume::mount` es un [`VPath`] — `volume_hostile_no_sizes` usa un
-/// mount point NO-UTF8 para demostrar el round-trip byte a byte (regla dura
-/// 1), y la MISMA fixture pinea la forma de "sin sizes": `total_bytes`/
-/// `free_bytes` ausentes del wire, jamás un cero disfrazado de "desconocido"
-/// (diseño §A de `2026-08-10-volumes-design.md`).
+/// `host.*` family (0.37.0/0.38.0, #131): enumerating the host's volumes.
+/// `Volume::mount` is a [`VPath`] — `volume_hostile_no_sizes` uses a NON-UTF8
+/// mount point to demonstrate the byte-for-byte round trip (hard rule 1),
+/// and the SAME fixture pins the "no sizes" shape: `total_bytes`/
+/// `free_bytes` absent from the wire, never a zero disguised as "unknown"
+/// (design §A of `2026-08-10-volumes-design.md`).
 ///
-/// V3.5 (0.38.0): `Volume::label` es `Option<Vec<u8>>`, base64 en el wire —
-/// `volume` pinea el caso normal (`"USB Nico"` codificado), y la MISMA
-/// fixture `volume_hostile_no_sizes` que ya llevaba el mount no-UTF8 gana
-/// TAMBIÉN un label no-UTF8 (`\xFF\xFE`), así que un solo fixture demuestra
-/// que ninguno de los dos campos-bytes del tipo pasa por un `String`.
+/// V3.5 (0.38.0): `Volume::label` is `Option<Vec<u8>>`, base64 on the wire —
+/// `volume` pins the ordinary case (`"USB Nico"` encoded), and the SAME
+/// `volume_hostile_no_sizes` fixture that already carried the non-UTF8 mount
+/// ALSO gains a non-UTF8 label (`\xFF\xFE`), so a single fixture demonstrates
+/// that neither of the type's two byte fields goes through a `String`.
 fn check_methods_host(fixtures: &BTreeMap<String, Value>) {
     use norte_proto::methods::{HostVolumesParams, HostVolumesResult, Volume, VolumeKind};
 
@@ -5985,8 +5996,8 @@ fn check_methods_host(fixtures: &BTreeMap<String, Value>) {
     };
     check_one(fixtures, "volume", &removable);
 
-    // Non-UTF8 mount point Y label + la forma "sin sizes" — ver el
-    // comentario de la función.
+    // Non-UTF8 mount point AND label + the "no sizes" shape — see the
+    // function's comment.
     let hostile_no_sizes = Volume {
         mount: vpath("file:///media/informe%FF%FE"),
         label: Some(vec![0xFF, 0xFE]),
@@ -6006,43 +6017,44 @@ fn check_methods_host(fixtures: &BTreeMap<String, Value>) {
         },
     );
 
-    // Decode-only (asimétrico, como `plugin_help_result_absent`): un `kind`
-    // que este cliente no conoce degrada a `Unknown` por `#[serde(other)]`
-    // en vez de tirar toda la respuesta de `host.volumes` — el core JAMÁS
-    // emite este valor, así que no hay dirección de encode que pinear.
+    // Decode-only (asymmetric, like `plugin_help_result_absent`): a `kind`
+    // this client does not know degrades to `Unknown` through
+    // `#[serde(other)]` instead of throwing away the whole `host.volumes`
+    // response — the core NEVER emits this value, so there is no encode
+    // direction to pin.
     let future_kind: Volume = serde_json::from_value(
         fixtures
             .get("volume_future_kind")
-            .expect("[methods.json] falta la fixture volume_future_kind")
+            .expect("[methods.json] missing the volume_future_kind fixture")
             .clone(),
     )
     .expect("[methods/volume_future_kind] deserialize");
     assert_eq!(
         future_kind.kind,
         VolumeKind::Unknown,
-        "un kind desconocido degrada a Unknown, no rompe la decodificación"
+        "an unknown kind degrades to Unknown, it does not break decoding"
     );
 
-    // Decode-only, sin fixture registrada (protocol-guardian MINOR, V3.5
-    // review): `label` con base64 ilegible degrada ESE CAMPO a `None`, no
-    // el `Volume` entero — el contrato que el rustdoc de `label_wire`
-    // promete. `mount`/`fs_type` siguen intactos, que es justo lo que
-    // demuestra que el resto de la entrada no se perdió con el campo malo.
+    // Decode-only, with no fixture registered (protocol-guardian MINOR, V3.5
+    // review): `label` with unreadable base64 degrades THAT FIELD to `None`,
+    // not the whole `Volume` — the contract `label_wire`'s rustdoc promises.
+    // `mount`/`fs_type` stay intact, which is exactly what demonstrates that
+    // the rest of the entry was not lost along with the bad field.
     let bad_label_json = serde_json::json!({
         "mount": "file:///media/usb",
-        "label": "esto no es base64 !!",
+        "label": "this is not base64 !!",
         "fs_type": "vfat",
         "kind": "removable",
         "read_only": false
     });
     let bad_label: Volume =
-        serde_json::from_value(bad_label_json).expect("[methods/label malo] deserialize");
-    assert_eq!(bad_label.label, None, "base64 ilegible degrada a None");
+        serde_json::from_value(bad_label_json).expect("[methods/bad label] deserialize");
+    assert_eq!(bad_label.label, None, "unreadable base64 degrades to None");
     assert_eq!(bad_label.mount, vpath("file:///media/usb"));
     assert_eq!(bad_label.fs_type, "vfat");
 
-    // Mismo contrato para un payload DECODIFICABLE pero sobre el tope
-    // (`ATTR_BYTES_MAX`, reutilizado — ver el rustdoc de `label_wire`).
+    // Same contract for a DECODABLE payload that is over the cap
+    // (`ATTR_BYTES_MAX`, reused — see `label_wire`'s rustdoc).
     let oversized = norte_proto::attrs::ATTR_BYTES_MAX + 1;
     let oversized_b64 = base64::Engine::encode(
         &base64::engine::general_purpose::STANDARD,
@@ -6056,9 +6068,9 @@ fn check_methods_host(fixtures: &BTreeMap<String, Value>) {
         "read_only": false
     });
     let oversized_label: Volume =
-        serde_json::from_value(oversized_json).expect("[methods/label gordo] deserialize");
+        serde_json::from_value(oversized_json).expect("[methods/oversized label] deserialize");
     assert_eq!(
         oversized_label.label, None,
-        "un label decodificado por encima del tope también degrada a None"
+        "a label decoded over the cap also degrades to None"
     );
 }

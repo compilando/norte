@@ -2355,7 +2355,7 @@ fn map_sort(s: Option<&norte_config::SortChoice>) -> crate::sort::SortSpec {
 /// tiene que enseñarla encendida — decir que está apagada mientras se pinta
 /// convierte confirmar el diálogo en borrarla sin avisar.
 #[must_use]
-pub fn pone_los_permisos(
+pub fn sets_permission_column(
     settings: &ColumnsSettings,
     scheme: &str,
     catalog: Option<&norte_proto::AttrCatalog>,
@@ -2381,7 +2381,7 @@ fn items_pintables(
     let mut set = settings.layout_items_for(scheme);
     // Una columna que pidió el usuario se queda aunque salga vacía: es su
     // elección, y borrársela sería contestarle que no.
-    if !settings.has_user_columns(scheme) && !pone_los_permisos(settings, scheme, catalog) {
+    if !settings.has_user_columns(scheme) && !sets_permission_column(settings, scheme, catalog) {
         set.retain(|(id, _)| !matches!(id, ColumnId::Attr(a) if a == POSIX_MODE_ATTR));
     }
     set

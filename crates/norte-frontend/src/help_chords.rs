@@ -93,12 +93,12 @@ const NO_IMPEDIMENT: Facts = Facts {
 /// assert_eq!(r.chord("no.such.command"), None);
 /// ```
 #[derive(Debug)]
-// El campo `chords` repite el nombre del tipo, y es el nombre correcto de las
-// dos cosas: el tipo ES el resolver de acordes y el campo ES su mapa. Cualquier
-// otro nombre («map», «por_comando») describiría peor lo que hay dentro.
+// The `chords` field repeats the type's name, and it is the correct name for
+// both things: the type IS the chord resolver and the field IS its map. Any
+// other name (`map`, `by_command`) would describe what is inside worse.
 #[expect(
     clippy::struct_field_names,
-    reason = "el tipo ES el resolver de acordes y el campo ES su mapa"
+    reason = "the type IS the chord resolver and the field IS its map"
 )]
 pub struct Chords {
     /// Command to its painted chord, filled browse → viewer → dialog.
@@ -447,18 +447,18 @@ keymap = [{ on = ["f5"], run = "pane.copy" }]
     /// the reader and stop `norte_help`'s own fallback chain from ever naming
     /// the command.
     #[test]
-    fn una_clave_sin_entrada_en_el_catalogo_contesta_en_blanco() {
+    fn a_key_with_no_catalogue_entry_answers_blank() {
         assert_eq!(resolver().label("no.such.command"), "");
     }
 
     /// A `plugin:` key the snapshot does not name still wears its id — but
     /// masked, because that id is THIRD-PARTY text on its way to a row.
     #[test]
-    fn una_clave_de_plugin_hostil_no_se_pinta_cruda() {
+    fn a_hostile_plugin_key_is_not_painted_raw() {
         let label = resolver().label("plugin:demo\u{202e}evil:run");
         assert!(
             !label.contains('\u{202e}'),
-            "una marca de dirección llegó cruda: {label:?}"
+            "a direction mark arrived raw: {label:?}"
         );
         assert!(label.starts_with("plugin:demo"), "{label:?}");
     }
@@ -466,7 +466,7 @@ keymap = [{ on = ["f5"], run = "pane.copy" }]
     /// Before anything is frozen the resolver dims NOTHING: the facts table is
     /// a list of known impediments, and "I have not looked" is not one.
     #[test]
-    fn sin_hechos_congelados_no_se_atenua_nada() {
+    fn nothing_dims_with_no_frozen_facts() {
         assert_eq!(
             resolver().availability("pane.copy"),
             Availability::Available
@@ -477,7 +477,7 @@ keymap = [{ on = ["f5"], run = "pane.copy" }]
     /// allowlist, so "I have not looked" means "I cannot vouch for any of
     /// them" — the opposite default from the facts table above, on purpose.
     #[test]
-    fn sin_foto_de_plugins_ninguna_fila_de_plugin_se_ofrece() {
+    fn no_plugin_row_is_offered_with_no_plugin_snapshot() {
         assert!(
             !resolver()
                 .availability("plugin:org.norte.demo:greet")

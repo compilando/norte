@@ -1,28 +1,30 @@
-//! Contra qué WIT se compiló un guest, leído del binario (ADR 0094).
+//! What WIT a guest was compiled against, read from the binary (ADR 0094).
 //!
-//! La versión de un paquete WIT viaja DENTRO del nombre de cada interfaz que
-//! un componente importa o exporta (`norte:host/host-log@0.1.0`,
-//! `norte:plugin/previewer@0.8.0`), así que un bump —cualquiera— hace que un
-//! `.wasm` ya compilado no instancie: wasmtime falla nombrando la interfaz
-//! que falta, y nada más. Este módulo lee esos nombres sin compilar nada,
-//! para que el catálogo pueda decir «compilado contra `norte:plugin@0.7.0`,
-//! este norte sirve `@0.8.0`» y listar el plugin como roto con ese motivo.
+//! A WIT package's version travels INSIDE the name of every interface a
+//! component imports or exports (`norte:host/host-log@0.1.0`,
+//! `norte:plugin/previewer@0.8.0`), so a bump — any bump — makes an
+//! already-compiled `.wasm` fail to instantiate: wasmtime fails naming the
+//! missing interface, and nothing more. This module reads those names
+//! without compiling anything, so the catalog can say "compiled against
+//! `norte:plugin@0.7.0`, this norte serves `@0.8.0`" and list the plugin
+//! as broken with that reason.
 //!
-//! Se miran imports Y exports: un previewer IMPORTA `norte:host` y EXPORTA
-//! `norte:plugin`, y las dos versiones tienen que casar.
+//! Both imports AND exports are looked at: a previewer IMPORTS
+//! `norte:host` and EXPORTS `norte:plugin`, and both versions have to
+//! match.
 //!
-//! El host sirve UNA versión de cada paquete ([`SERVED_WIT`]), sin ventana de
-//! compatibilidad: mantenerla querría decir dejar linkado cada world viejo
-//! para siempre, y el primer plugin que pida un hueco del WIT es el
-//! argumento para no prometerlo todavía.
+//! The host serves ONE version of each package ([`SERVED_WIT`]), with no
+//! compatibility window: keeping one would mean leaving every old world
+//! linked forever, and the first plugin that asks for a WIT slot is the
+//! argument for not promising that yet.
 
 use wasmparser::{Parser, Payload};
 
-/// La única versión de cada paquete `norte:*` que este host sirve.
+/// The single version of each `norte:*` package this host serves.
 ///
-/// Un test estructural (`tests/wit_packages.rs`) la compara con las líneas
-/// `package …;` de los ficheros `.wit`: subir un paquete sin tocar esto
-/// listaría como rotos los guests recién compilados.
+/// A structural test (`tests/wit_packages.rs`) compares it against the
+/// `package …;` lines of the `.wit` files: bumping a package without
+/// touching this would list freshly compiled guests as broken.
 pub const SERVED_WIT: &[(&str, &str)] = &[
     ("norte:host", "0.1.0"),
     ("norte:plugin", "0.10.0"),
@@ -34,33 +36,33 @@ pub const SERVED_WIT: &[(&str, &str)] = &[
     ("norte:panel", "0.1.0"),
 ];
 
-/// Un guest compilado contra una versión de un paquete que el host sirve a
-/// OTRA versión.
+/// A guest compiled against one version of a package that the host serves
+/// as ANOTHER version.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WitMismatch {
-    /// El paquete (`norte:plugin`).
+    /// The package (`norte:plugin`).
     pub package: String,
-    /// La versión que el guest referencia.
+    /// The version the guest references.
     pub built_against: String,
-    /// La que este host sirve.
+    /// The one this host serves.
     pub served: String,
 }
 
-/// Los pares `(paquete, versión)` de los paquetes `norte:*` que un componente
-/// importa o exporta, ordenados y sin repetir. Un módulo core (no un
-/// componente), unos bytes que no parsean, o un componente que no nombra
-/// ningún paquete de norte: vector vacío — nunca un error ni un pánico,
-/// porque el catálogo lo llama sobre lo que haya en `plugin.wasm`.
+/// The `(package, version)` pairs of the `norte:*` packages a component
+/// imports or exports, sorted and deduplicated. A core module (not a
+/// component), bytes that do not parse, or a component that names no
+/// norte package: empty vector — never an error nor a panic, because the
+/// catalog calls it on whatever is in `plugin.wasm`.
 ///
-/// Recorre también los componentes ANIDADOS: un guest que embeba un
-/// componente que nombre `norte:plugin@0.7.0` se lista como desfasado
-/// aunque wasmtime solo enlace los nombres del exterior. Es un falso
-/// positivo posible, nunca un falso pase, y ningún guest de norte anida
-/// componentes hoy. Quien lo necesite estrecha esto a la sección exterior.
+/// It also walks NESTED components: a guest embedding a component that
+/// names `norte:plugin@0.7.0` is listed as mismatched even though
+/// wasmtime only links the outer names. That is a possible false
+/// positive, never a false pass, and no norte guest nests components
+/// today. Whoever needs it can narrow this to the outer section.
 ///
-/// El coste es lineal en el tamaño del fichero, que el catálogo acota ANTES
-/// de leerlo ([`crate::MAX_ARTIFACT_BYTES`]); `wasmparser` no descomprime ni
-/// recurre.
+/// The cost is linear in the file's size, which the catalog caps BEFORE
+/// reading it ([`crate::MAX_ARTIFACT_BYTES`]); `wasmparser` neither
+/// decompresses nor recurses.
 ///
 /// ```
 /// use norte_plugin_host::wit_packages;
@@ -72,7 +74,8 @@ pub fn wit_packages(bytes: &[u8]) -> Vec<(String, String)> {
     let mut out: Vec<(String, String)> = Vec::new();
     for payload in Parser::new(0).parse_all(bytes) {
         let Ok(payload) = payload else {
-            // Bytes rotos a partir de aquí: lo recogido hasta ahora vale.
+            // Broken bytes from here on: what was collected so far still
+            // counts.
             break;
         };
         match payload {
@@ -96,15 +99,16 @@ pub fn wit_packages(bytes: &[u8]) -> Vec<(String, String)> {
     out
 }
 
-/// `norte:<pkg>/<iface>@<ver>` → `(norte:<pkg>, <ver>)`; cualquier otra forma,
+/// `norte:<pkg>/<iface>@<ver>` → `(norte:<pkg>, <ver>)`; any other shape,
 /// `None`.
 ///
-/// La versión viene del BINARIO, y el binario lo escribe un tercero: solo se
-/// acepta una con forma de versión (`[A-Za-z0-9.+-]`, 64 bytes como mucho).
-/// Lo que no la tenga no es un nombre de norte y no produce mismatch — y la
-/// cadena que acaba en el gestor, en `plugin list` y en `norte doctor` no
-/// puede llevar un escape de terminal ni cien kilobytes. `wasmparser` solo
-/// garantiza UTF-8.
+/// The version comes from the BINARY, and the binary is written by a
+/// third party: only one shaped like a version is accepted
+/// (`[A-Za-z0-9.+-]`, 64 bytes at most). Anything without that shape is
+/// not a norte name and produces no mismatch — and the string that ends
+/// up in the manager, in `plugin list` and in `norte doctor` cannot carry
+/// a terminal escape nor a hundred kilobytes. `wasmparser` only
+/// guarantees UTF-8.
 fn parse_norte_name(name: &str) -> Option<(String, String)> {
     let rest = name.strip_prefix("norte:")?;
     let (pkg, tail) = rest.split_once('/')?;
@@ -125,15 +129,15 @@ fn parse_norte_name(name: &str) -> Option<(String, String)> {
     Some((format!("norte:{pkg}"), version.to_owned()))
 }
 
-/// El primer paquete que el host sirve a OTRA versión, o `None` si todo casa
-/// (o si el guest no nombra nada de norte).
+/// The first package the host serves as ANOTHER version, or `None` if
+/// everything matches (or the guest names nothing from norte).
 ///
 /// ```
 /// use norte_plugin_host::wit_mismatch;
 /// let ok = vec![("norte:host".to_owned(), "0.1.0".to_owned())];
 /// assert!(wit_mismatch(&ok).is_none());
-/// let viejo = vec![("norte:plugin".to_owned(), "0.1.0".to_owned())];
-/// let m = wit_mismatch(&viejo).unwrap();
+/// let old = vec![("norte:plugin".to_owned(), "0.1.0".to_owned())];
+/// let m = wit_mismatch(&old).unwrap();
 /// assert_eq!((m.package.as_str(), m.built_against.as_str()), ("norte:plugin", "0.1.0"));
 /// ```
 #[must_use]
@@ -153,7 +157,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parsea_el_nombre_de_una_interfaz_de_norte() {
+    fn parses_the_name_of_a_norte_interface() {
         assert_eq!(
             parse_norte_name("norte:host/host-log@0.1.0"),
             Some(("norte:host".to_owned(), "0.1.0".to_owned()))
@@ -163,17 +167,17 @@ mod tests {
         assert_eq!(parse_norte_name("norte:/x@1"), None);
     }
 
-    /// La versión la escribe el binario de un tercero: un escape de terminal
-    /// o cien kilobytes tras la `@` no es una versión, y no llega a ninguna
-    /// pantalla.
+    /// The version is written by a third party's binary: a terminal
+    /// escape or a hundred kilobytes after the `@` is not a version, and
+    /// it never reaches any screen.
     #[test]
-    fn una_version_que_no_tiene_forma_de_version_no_es_un_nombre_de_norte() {
+    fn a_version_not_shaped_like_a_version_is_not_a_norte_name() {
         assert_eq!(
             parse_norte_name("norte:plugin/previewer@\u{1b}]0;x\u{7}"),
             None
         );
-        let larga = format!("norte:plugin/previewer@{}", "9".repeat(100_000));
-        assert_eq!(parse_norte_name(&larga), None);
+        let long = format!("norte:plugin/previewer@{}", "9".repeat(100_000));
+        assert_eq!(parse_norte_name(&long), None);
         assert_eq!(
             parse_norte_name("norte:plugin/previewer@0.9.0-rc.1+b"),
             Some(("norte:plugin".to_owned(), "0.9.0-rc.1+b".to_owned()))

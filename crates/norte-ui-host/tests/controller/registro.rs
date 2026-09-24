@@ -763,26 +763,27 @@ async fn a_response_in_flight_does_not_enter_the_reopened_panel() {
     );
 }
 
-/// Entra en `docs`, que es la navegación que dispara el listado remoto.
+/// Enters `docs`, which is the navigation that triggers the remote listing.
 pub(super) async fn entrar_en_docs(h: &UiHost, snap: &norte_ui_host::ViewSnapshot) {
     let docs = listado(snap)
         .rows
         .iter()
         .find(|r| r.display_name == "docs")
-        .expect("el directorio está");
+        .expect("the directory is there");
     h.dispatch(UiAction::Activate {
         slot_id: 1,
         key: docs.key,
         generation: listado(snap).generation,
     })
     .await
-    .expect("host vivo");
+    .expect("host alive");
 }
 
-/// Arma el doble para que el SIGUIENTE listado pida la contraseña (#327).
+/// Arms the double so the NEXT listing asks for the password (#327).
 ///
-/// Después de arrancar el host, no antes: el listado del arranque se llevaría
-/// la petición y la ventana nacería con el panel en error, que es otro caso.
+/// After starting the host, not before: the startup listing would carry off
+/// the request and the window would be born with the pane in error, which is
+/// another case.
 pub(super) fn pedira_el_secreto(f: &Falso) {
     *f.pide_secreto.lock().expect("pide_secreto") = Some(norte_proto::Error::SecretNeeded {
         conn: "rosetta".to_owned(),
@@ -790,111 +791,112 @@ pub(super) fn pedira_el_secreto(f: &Falso) {
     });
 }
 
-/// Un hueco que arranca pidiendo la contraseña NO pregunta solo, pero DICE
-/// cuál y se puede reintentar — y el reintento sí pregunta.
+/// A slot that starts up asking for the password does NOT ask on its own, but
+/// SAYS which one, and it can be retried — and the retry does ask.
 ///
-/// Es el caso de reabrir norte: el daemon anterior se apagó por inactividad y
-/// se llevó el secreto de sesión, así que el panel guardado sobre `s3://…`
-/// vuelve con `SecretNeeded`. El arranque no abre el diálogo a propósito
-/// —restaurar una sesión no es pedir conectarse, y una contraseña pedida antes
-/// de que la pantalla exista es la forma que el ADR 0015 llama phishing— pero
-/// tampoco puede dejar un panel parado sin decir qué le pasa.
+/// This is the case of reopening norte: the previous daemon shut down from
+/// inactivity and took the session secret with it, so the pane saved over
+/// `s3://…` comes back with `SecretNeeded`. Startup does not open the dialog
+/// on purpose — restoring a session is not asking to connect, and a password
+/// asked for before the screen exists is the shape ADR 0015 calls phishing —
+/// but it also cannot leave a stalled pane without saying what happened to
+/// it.
 #[tokio::test]
-async fn un_hueco_que_pide_secreto_dice_cual_y_el_reintento_pregunta() {
+async fn a_slot_that_asks_for_a_secret_says_which_one_and_the_retry_asks() {
     let backend = Arc::new(arbol_como_falso());
     pedira_el_secreto(&backend);
-    // El listado del ARRANQUE es el que se topa con el error, así que la
-    // avería se arma antes de construir el host.
+    // The STARTUP listing is the one that runs into the error, so the
+    // breakdown is armed before building the host.
     let (h, snap) = host_arbol(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
 
     let SlotView::Browser(b) = &snap.slots[0] else {
-        panic!("el primer hueco es un listado");
+        panic!("the first slot is a listing");
     };
     let norte_ui_host::dto::SlotState::Error { reason_key, detail } = &b.state else {
-        panic!("el hueco se queda en error, no fingiendo un directorio vacío");
+        panic!("the slot stays in error, not pretending to be an empty directory");
     };
     assert_eq!(reason_key, "err-secret-needed");
     assert_eq!(
         detail.as_deref(),
         Some("rosetta"),
-        "y CUÁL: con dos paneles remotos, «hace falta un secreto» no es \
-         contestable"
+        "and WHICH ONE: with two remote panes, \"a secret is needed\" is not \
+         answerable"
     );
-    // Sin diálogo: el arranque no pregunta solo.
+    // No dialog: startup does not ask on its own.
     assert!(
         snap.dialogs.is_empty(),
-        "el arranque no abre la pregunta: la abre el primer gesto"
+        "startup does not open the question: the first gesture does"
     );
 
-    // El reintento SÍ la abre, porque es un gesto. Se rearma la avería: el
-    // secreto sigue faltando —nadie lo ha entregado— y el doble la consume de
-    // una en una.
+    // The retry DOES open it, because it is a gesture. The breakdown is
+    // rearmed: the secret is still missing — nobody has handed it over — and
+    // the double consumes it one at a time.
     pedira_el_secreto(&backend);
     h.dispatch(UiAction::RefreshSlot { slot_id: 1 })
         .await
-        .expect("host vivo");
+        .expect("host alive");
     let dialogos = siguientes_dialogos(&mut sub).await;
     assert_eq!(
         dialogos.last().map(|d| d.title_key.as_str()),
         Some("modal-ask-secret-title"),
-        "reintentar es el gesto que convierte el panel parado en la pregunta"
+        "retrying is the gesture that turns the stalled pane into the question"
     );
 }
 
-/// #327: la ventana PREGUNTA la contraseña en vez de pintar el error.
+/// #327: the window ASKS for the password instead of painting the error.
 ///
-/// Hasta ahora un usuario de `norte-gui` sobre una conexión `secret = "prompt"`
-/// veía el texto de `err-secret-needed` —que nombra una variable de entorno— y
-/// ahí se acababa el camino. La TUI abría un diálogo desde #325: el mismo
-/// hueco de paridad que ADR 0077 existe para no dejar abierto.
+/// Until now, a `norte-gui` user on a `secret = "prompt"` connection saw the
+/// text of `err-secret-needed` — which names an environment variable — and
+/// that is where the road ended. The TUI opened a dialog since #325: the same
+/// parity gap ADR 0077 exists to not leave open.
 #[tokio::test]
-async fn la_ventana_pide_el_secreto_y_reintenta_la_navegacion() {
+async fn the_window_asks_for_the_secret_and_retries_the_navigation() {
     let backend = Arc::new(arbol_como_falso());
     let (h, snap) = host_arbol(Arc::clone(&backend)).await;
     pedira_el_secreto(&backend);
     let mut sub = h.subscribe();
-    // Entrar en el directorio dispara el listado que pide el secreto.
+    // Entering the directory triggers the listing that asks for the secret.
     entrar_en_docs(&h, &snap).await;
 
     let dialogos = siguientes_dialogos(&mut sub).await;
-    let d = dialogos.last().expect("el diálogo se abrió");
+    let d = dialogos.last().expect("the dialog opened");
     assert_eq!(d.title_key, "modal-ask-secret-title");
-    // La pregunta dice A DÓNDE va la contraseña, y no solo cómo se llama la
-    // entrada: el nombre lo eligió un fichero, y un fichero se edita.
+    // The question says WHERE the password is going, not just what the entry
+    // is called: the name was chosen by a file, and a file gets edited.
     assert_eq!(
         d.destination.as_ref().map(|l| l.text.as_str()),
         Some("s3://cubo.example"),
-        "sin el destino la pregunta no es contestable"
+        "without the destination the question is not answerable"
     );
     assert_eq!(d.subject.as_ref().map(|l| l.text.as_str()), Some("rosetta"));
-    assert!(d.input_secret, "el campo es una contraseña");
-    assert_eq!(d.input.as_deref(), Some(""), "nace vacío");
+    assert!(d.input_secret, "the field is a password");
+    assert_eq!(d.input.as_deref(), Some(""), "born empty");
 
-    // Teclear por el camino de un NOMBRE no hace nada sobre este diálogo: el
-    // host no guarda contraseñas, y un renderer que las mandara por ahí
-    // estaría metiendo material secreto por la vía de un nombre de fichero.
+    // Typing through the NAME path does nothing to this dialog: the host
+    // does not store passwords, and a renderer that sent them that way would
+    // be smuggling secret material through a file name.
     let ack = h
         .dispatch(UiAction::DialogInput {
             id: d.id,
             text: "s3cr3t".to_owned(),
         })
         .await
-        .expect("host vivo");
+        .expect("host alive");
     assert_eq!(
         ack,
         ActionAck::Stale {
             reason: StaleAction::Modal
         },
-        "un campo de contraseña no se teclea por `dialog_input`"
+        "a password field is not typed through `dialog_input`"
     );
 
-    // Ni por el camino de un FORMULARIO (puente 91), que es el otro sitio
-    // donde el host SÍ guarda lo que se escribe: un diálogo de contraseña no
-    // lleva campos, y `tocar_campo_de_dialogo` lo comprueba antes de tocar
-    // nada. Sin este test, la invariante de #327 quedaba enforzada en dos
-    // sitios y probada en uno — el viejo.
-    assert!(d.fields.is_empty(), "una contraseña no es un formulario");
+    // Nor through the FORM path (bridge 91), the other place where the host
+    // DOES store what gets typed: a password dialog carries no fields, and
+    // `tocar_campo_de_dialogo` checks that before touching anything. Without
+    // this test, #327's invariant stayed enforced in two places and tested
+    // in one — the old one.
+    assert!(d.fields.is_empty(), "a password is not a form");
     let ack = h
         .dispatch(UiAction::DialogField {
             id: d.id,
@@ -904,38 +906,40 @@ async fn la_ventana_pide_el_secreto_y_reintenta_la_navegacion() {
             },
         })
         .await
-        .expect("host vivo");
+        .expect("host alive");
     assert_eq!(
         ack,
         ActionAck::Stale {
             reason: StaleAction::Modal
         },
-        "un campo de contraseña tampoco se teclea por `dialog_field`"
+        "a password field is not typed through `dialog_field` either"
     );
 
-    // Confirmar entrega el secreto TAL CUAL y reintenta ESA navegación. Va
-    // CON la respuesta: cruza una vez, en el instante en que se decide.
+    // Confirming hands over the secret AS IS and retries THAT navigation. It
+    // travels WITH the response: it crosses once, at the instant it is
+    // decided.
     h.dispatch(UiAction::Dialog {
         id: d.id,
         choice: "confirm".to_owned(),
         secret: Some("s3cr3t".to_owned()),
     })
     .await
-    .expect("host vivo");
+    .expect("host alive");
 
-    let dados = anotados(&backend, "el secreto entregado", 1, |f| {
+    let dados = anotados(&backend, "the secret handed over", 1, |f| {
         f.secretos_dados.lock().expect("secretos_dados").clone()
     })
     .await;
     assert_eq!(
         dados[0],
         ("rosetta".to_owned(), "s3cr3t".to_owned()),
-        "llega entero y a la conexión que lo pidió"
+        "arrives whole, to the connection that asked for it"
     );
 
-    // Y el panel acaba DONDE iba: entregar la contraseña sin reanudar la
-    // navegación dejaría al lector con el secreto dado y el panel quieto.
-    let dir = foto_hasta(&h, &mut sub, "el panel entró", |f| {
+    // And the pane ends up WHERE it was going: handing over the password
+    // without resuming the navigation would leave the reader with the
+    // secret given and the pane standing still.
+    let dir = foto_hasta(&h, &mut sub, "the pane entered", |f| {
         let SlotView::Browser(b) = f.slots.first()? else {
             return None;
         };
@@ -947,24 +951,25 @@ async fn la_ventana_pide_el_secreto_y_reintenta_la_navegacion() {
     assert!(dir.ends_with("/casa/docs"), "{dir}");
 }
 
-/// Confirmar con el campo VACÍO es inerte: ni entrega, ni cierra.
+/// Confirming with an EMPTY field is inert: it neither hands anything over
+/// nor closes.
 ///
-/// Entregar la cadena vacía reproduce #320 —un secreto vacío hace que la
-/// conexión autentique con la cadena ambiente, o sea con una identidad que
-/// nadie pidió— y cerrar convertiría un dedo que se adelanta en una navegación
-/// abandonada.
+/// Handing over the empty string reproduces #320 — an empty secret makes the
+/// connection authenticate with the ambient string, that is, with an
+/// identity nobody asked for — and closing would turn a finger getting ahead
+/// of itself into an abandoned navigation.
 #[tokio::test]
-async fn confirmar_sin_teclear_nada_no_entrega_ni_cierra() {
+async fn confirming_without_typing_anything_neither_hands_over_nor_closes() {
     let backend = Arc::new(arbol_como_falso());
     let (h, snap) = host_arbol(Arc::clone(&backend)).await;
     pedira_el_secreto(&backend);
     let mut sub = h.subscribe();
     entrar_en_docs(&h, &snap).await;
     let dialogos = siguientes_dialogos(&mut sub).await;
-    let id = dialogos.last().expect("el diálogo se abrió").id;
+    let id = dialogos.last().expect("the dialog opened").id;
 
-    // Sin acuse previo: lo abrió la navegación del lector, así que la primera
-    // respuesta ya es una respuesta. Y con el campo vacío, no hace nada.
+    // No prior ack: the reader's navigation opened it, so the first response
+    // is already a response. And with the field empty, it does nothing.
     let ack = h
         .dispatch(UiAction::Dialog {
             id,
@@ -972,13 +977,13 @@ async fn confirmar_sin_teclear_nada_no_entrega_ni_cierra() {
             secret: None,
         })
         .await
-        .expect("host vivo");
+        .expect("host alive");
     assert_eq!(
         ack,
         ActionAck::Unavailable {
             reason_key: "host-secret-empty".to_owned()
         },
-        "el confirmar de un campo de contraseña vacío es inerte"
+        "confirming an empty password field is inert"
     );
 
     asentar().await;
@@ -988,10 +993,10 @@ async fn confirmar_sin_teclear_nada_no_entrega_ni_cierra() {
             .lock()
             .expect("secretos_dados")
             .is_empty(),
-        "no se entregó NADA: la cadena vacía es #320"
+        "NOTHING was handed over: the empty string is #320"
     );
-    // Y el diálogo sigue delante: responder con un `Stale` querría decir que
-    // se cerró.
+    // And the dialog stays up front: answering with a `Stale` would mean it
+    // closed.
     let ack = h
         .dispatch(UiAction::Dialog {
             id,
@@ -999,27 +1004,27 @@ async fn confirmar_sin_teclear_nada_no_entrega_ni_cierra() {
             secret: None,
         })
         .await
-        .expect("host vivo");
+        .expect("host alive");
     assert!(
         matches!(ack, ActionAck::Applied { .. }),
-        "el diálogo seguía abierto: {ack:?}"
+        "the dialog was still open: {ack:?}"
     );
 }
 
-/// Una contraseña que no cabe se RECHAZA, no se recorta.
+/// A password that does not fit is REJECTED, not truncated.
 ///
-/// Recortar era peor que el tope: entregar los primeros 256 caracteres de una
-/// frase de paso más larga falla la autenticación sin decir por qué, y el
-/// lector no puede sospecharlo porque el campo va enmascarado.
+/// Truncating was worse than the cap: handing over the first 256 characters
+/// of a longer passphrase fails authentication without saying why, and the
+/// reader cannot suspect it because the field is masked.
 #[tokio::test]
-async fn una_contrasena_que_no_cabe_se_rechaza() {
+async fn a_password_that_does_not_fit_is_rejected() {
     let backend = Arc::new(arbol_como_falso());
     let (h, snap) = host_arbol(Arc::clone(&backend)).await;
     pedira_el_secreto(&backend);
     let mut sub = h.subscribe();
     entrar_en_docs(&h, &snap).await;
     let dialogos = siguientes_dialogos(&mut sub).await;
-    let id = dialogos.last().expect("el diálogo se abrió").id;
+    let id = dialogos.last().expect("the dialog opened").id;
 
     let ack = h
         .dispatch(UiAction::Dialog {
@@ -1028,7 +1033,7 @@ async fn una_contrasena_que_no_cabe_se_rechaza() {
             secret: Some("x".repeat(257)),
         })
         .await
-        .expect("host vivo");
+        .expect("host alive");
     assert_eq!(
         ack,
         ActionAck::Unavailable {
@@ -1042,17 +1047,17 @@ async fn una_contrasena_que_no_cabe_se_rechaza() {
             .lock()
             .expect("secretos_dados")
             .is_empty(),
-        "no se entregó una contraseña a medias"
+        "no password was handed over halfway"
     );
 }
 
-/// Dos paneles sobre la misma conexión NO apilan dos preguntas iguales.
+/// Two panes on the SAME connection do not stack two identical questions.
 ///
-/// Cada una traía su propio campo vacío, y bajo suficientes de ellas el
-/// desalojo por tope de la pila se lleva por delante las aprobaciones de
-/// agente sin reconocer, que es lo primero que sacrifica.
+/// Each one carried its own empty field, and under enough of them the
+/// cap-driven eviction of the stack sweeps away unrecognized agent
+/// approvals, which is the first thing it sacrifices.
 #[tokio::test]
-async fn dos_listados_de_la_misma_conexion_no_apilan_dos_preguntas() {
+async fn two_listings_of_the_same_connection_do_not_stack_two_questions() {
     let backend = Arc::new(arbol_como_falso());
     let (h, snap) = host_arbol(Arc::clone(&backend)).await;
     pedira_el_secreto(&backend);
@@ -1061,27 +1066,30 @@ async fn dos_listados_de_la_misma_conexion_no_apilan_dos_preguntas() {
     let dialogos = siguientes_dialogos(&mut sub).await;
     assert_eq!(dialogos.len(), 1);
 
-    // Otra navegación al mismo sitio, y otra vez sin secreto.
+    // Another navigation to the same place, and again without a secret.
     pedira_el_secreto(&backend);
     h.dispatch(UiAction::Parent { slot_id: 1 })
         .await
-        .expect("host vivo");
+        .expect("host alive");
     asentar().await;
-    let foto = foto_hasta(&h, &mut sub, "la pila estable", |f| Some(f.dialogs.len())).await;
-    assert_eq!(foto, 1, "una pregunta por conexión, no una por listado");
+    let foto = foto_hasta(&h, &mut sub, "the stack is stable", |f| {
+        Some(f.dialogs.len())
+    })
+    .await;
+    assert_eq!(foto, 1, "one question per connection, not one per listing");
 }
 
-/// Cerrar el diálogo abandona la navegación, como el TOFU: no se entrega nada
-/// y el hueco se queda con el error que ya sabía explicarse.
+/// Closing the dialog abandons the navigation, like TOFU: nothing is handed
+/// over and the slot stays with the error it already knew how to explain.
 #[tokio::test]
-async fn cancelar_el_secreto_abandona_la_navegacion() {
+async fn canceling_the_secret_abandons_the_navigation() {
     let backend = Arc::new(arbol_como_falso());
     let (h, snap) = host_arbol(Arc::clone(&backend)).await;
     pedira_el_secreto(&backend);
     let mut sub = h.subscribe();
     entrar_en_docs(&h, &snap).await;
     let dialogos = siguientes_dialogos(&mut sub).await;
-    let id = dialogos.last().expect("el diálogo se abrió").id;
+    let id = dialogos.last().expect("the dialog opened").id;
 
     h.dispatch(UiAction::Dialog {
         id,
@@ -1089,7 +1097,7 @@ async fn cancelar_el_secreto_abandona_la_navegacion() {
         secret: None,
     })
     .await
-    .expect("host vivo");
+    .expect("host alive");
     asentar().await;
     assert!(
         backend
@@ -1097,9 +1105,9 @@ async fn cancelar_el_secreto_abandona_la_navegacion() {
             .lock()
             .expect("secretos_dados")
             .is_empty(),
-        "cancelar no entrega nada"
+        "canceling hands nothing over"
     );
-    let motivo = foto_hasta(&h, &mut sub, "el hueco en error", |f| {
+    let motivo = foto_hasta(&h, &mut sub, "the slot in error", |f| {
         let SlotView::Browser(b) = f.slots.first()? else {
             return None;
         };
@@ -1111,20 +1119,22 @@ async fn cancelar_el_secreto_abandona_la_navegacion() {
     .await;
     assert_eq!(
         motivo, "err-secret-needed",
-        "detrás del diálogo queda la pantalla que ya sabía explicarse"
+        "behind the dialog stays the screen that already knew how to explain itself"
     );
 }
 
-/// #322: una conexión que NO se abre dice POR QUÉ, y con la frase concreta.
+/// #322: a connection that does NOT open says WHY, with the concrete phrase.
 ///
-/// Sin esto el fallo llegaba como la categoría del error —`PermissionDenied`—
-/// que no distingue un secreto vacío de una clave equivocada ni de un bucket
-/// sin permisos. La frase exacta se quedaba en el log del daemon.
+/// Without this, the failure arrived as the error's category —
+/// `PermissionDenied` — which does not distinguish an empty secret from a
+/// wrong key or from a bucket with no permissions. The exact phrase stayed
+/// in the daemon's log.
 ///
-/// Y llega como aviso EFÍMERO, no como banner: la degradación describe una
-/// sesión que sigue abierta mientras se mira; esto, un intento que terminó.
+/// And it arrives as an EPHEMERAL notice, not a banner: degradation
+/// describes a session that stays open while it is being watched; this, an
+/// attempt that ended.
 #[tokio::test]
-async fn una_conexion_que_falla_dice_por_que() {
+async fn a_connection_that_fails_says_why() {
     let falso = arbol_como_falso();
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
     *falso.fallidas.lock().expect("fallidas") = Some(rx);
@@ -1135,15 +1145,15 @@ async fn una_conexion_que_falla_dice_por_que() {
         scheme: "s3".to_owned(),
         host: "cubo.example".to_owned(),
         reason: "secret-empty".to_owned(),
-        detail: Some("el secreto de «rosetta» está definido pero VACÍO".to_owned()),
+        detail: Some("the secret for «rosetta» is defined but EMPTY".to_owned()),
     })
-    .expect("el host escucha");
+    .expect("the host is listening");
 
-    // Sobre la PANTALLA, no sobre el sobre del puente. El renderer solo
-    // atiende los `Notice` de clase `fatal` y su texto de estado sale de
-    // `status.message`: un test que afirmara sobre el aviso se ponía verde con
-    // la ventana sin pintar nada, que es justo lo que pasó.
-    let detalle = foto_hasta(&h, &mut sub, "el fallo en la barra", |f| {
+    // On the SCREEN, not on the bridge's envelope. The renderer only
+    // attends to `Notice`s of class `fatal`, and its status text comes from
+    // `status.message`: a test that asserted on the notice went green with
+    // the window painting nothing, which is exactly what happened.
+    let detalle = foto_hasta(&h, &mut sub, "the failure in the bar", |f| {
         f.status
             .message
             .clone()
@@ -1152,26 +1162,26 @@ async fn una_conexion_que_falla_dice_por_que() {
     .await;
     assert!(
         detalle.contains("cubo.example"),
-        "el aviso nombra la máquina a la que no se entró: {detalle}"
+        "the notice names the machine that was not reached: {detalle}"
     );
     assert!(
         detalle.contains("rosetta"),
-        "y el nombre de connections.toml, que es el que el humano escribió: {detalle}"
+        "and the name from connections.toml, the one the human wrote: {detalle}"
     );
     assert!(
         detalle.contains(&norte_i18n::t_in(
             norte_i18n::Lang::Es,
             "failed-reason-secret-empty"
         )),
-        "y el MOTIVO traducido, que es lo que #322 existe para que cruce: {detalle}"
+        "and the translated REASON, which is what #322 exists to make cross over: {detalle}"
     );
     assert!(
         !detalle.contains("s3://"),
-        "la autoridad va etiquetada, jamás como URL: {detalle}"
+        "the authority is labeled, never as a URL: {detalle}"
     );
 
-    // Y el aviso viaja TAMBIÉN, con la misma línea: un frontend que sí atienda
-    // los `Notice` no depende de haber leído la foto.
+    // And the notice travels ALSO, with the same line: a frontend that does
+    // attend to `Notice`s does not depend on having read the snapshot.
     let mut sub2 = h.subscribe();
     tx.send(norte_proto::methods::ConnectionFailed {
         conn: None,
@@ -1180,15 +1190,16 @@ async fn una_conexion_que_falla_dice_por_que() {
         reason: "auth-rejected".to_owned(),
         detail: None,
     })
-    .expect("el host escucha");
+    .expect("the host is listening");
     let aviso = foto_hasta_notice(&mut sub2, "status-connection-failed").await;
     assert!(aviso.contains("otro.example"), "{aviso}");
 }
 
-/// El vocabulario de fallos también puede CRECER, y uno desconocido no puede
-/// heredar la frase del de al lado: se apoya en `detail`, como pide el proto.
+/// The vocabulary of failures can also GROW, and an unknown one cannot
+/// inherit the phrase from the one next to it: it leans on `detail`, as the
+/// proto requires.
 #[tokio::test]
-async fn un_fallo_de_motivo_desconocido_se_apoya_en_el_detalle() {
+async fn a_failure_with_an_unknown_reason_leans_on_the_detail() {
     let falso = arbol_como_falso();
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
     *falso.fallidas.lock().expect("fallidas") = Some(rx);
@@ -1198,12 +1209,12 @@ async fn un_fallo_de_motivo_desconocido_se_apoya_en_el_detalle() {
         conn: None,
         scheme: "sftp".to_owned(),
         host: "maquina.example".to_owned(),
-        reason: "algo-que-no-existia".to_owned(),
-        detail: Some("el servidor pidió un método que norte no tiene".to_owned()),
+        reason: "something-that-did-not-exist".to_owned(),
+        detail: Some("the server asked for a method norte does not have".to_owned()),
     })
-    .expect("el host escucha");
+    .expect("the host is listening");
 
-    let detalle = foto_hasta(&h, &mut sub, "el fallo desconocido en la barra", |f| {
+    let detalle = foto_hasta(&h, &mut sub, "the unknown failure in the bar", |f| {
         f.status
             .message
             .clone()
@@ -1211,19 +1222,19 @@ async fn un_fallo_de_motivo_desconocido_se_apoya_en_el_detalle() {
     })
     .await;
     assert!(
-        detalle.contains("el servidor pidió un método que norte no tiene"),
-        "sin motivo conocido, el detalle es lo único que orienta: {detalle}"
+        detalle.contains("the server asked for a method norte does not have"),
+        "with no known reason, the detail is the only thing that orients: {detalle}"
     );
     assert!(
         !detalle.contains(&norte_i18n::t_in(
             norte_i18n::Lang::Es,
             "failed-reason-auth-rejected"
         )),
-        "un motivo desconocido no hereda la frase de otro: {detalle}"
+        "an unknown reason does not inherit another one's phrase: {detalle}"
     );
 }
 
-/// Espera el siguiente aviso con esta clave y devuelve su detalle.
+/// Waits for the next notice with this key and returns its detail.
 pub(super) async fn foto_hasta_notice(
     sub: &mut norte_ui_host::controller::UiSubscription,
     clave: &str,
@@ -1231,8 +1242,8 @@ pub(super) async fn foto_hasta_notice(
     for _ in 0..40 {
         match tokio::time::timeout(ESPERA_MAX, sub.recv())
             .await
-            .expect("llega")
-            .expect("el host sigue vivo")
+            .expect("arrives")
+            .expect("the host is still alive")
         {
             Update::Message(m) => {
                 if let UiUpdate::Notice(UiNotice::Message { key, detail }) = &m.payload
@@ -1244,15 +1255,15 @@ pub(super) async fn foto_hasta_notice(
             Update::Lagged => {}
         }
     }
-    panic!("no llegó el aviso {clave}");
+    panic!("the notice {clave} never arrived");
 }
 
-/// **Un motivo que este binario no conoce no se lee como «FTP en claro»**
-/// (#279). El vocabulario del wire puede crecer, y antes de esto un daemon más
-/// nuevo informando de una degradación NUEVA producía exactamente la misma
-/// frase: un aviso de seguridad afirmando una causa que nadie había dicho.
+/// **A reason this binary does not know is not read as «FTP in the clear»**
+/// (#279). The wire's vocabulary can grow, and before this a newer daemon
+/// reporting a NEW degradation produced exactly the same phrase: a security
+/// notice asserting a cause nobody had said.
 #[tokio::test]
-async fn un_motivo_desconocido_no_se_pinta_como_el_conocido() {
+async fn an_unknown_reason_is_not_painted_as_the_known_one() {
     let falso = arbol_como_falso();
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
     *falso.degradadas.lock().expect("degradadas") = Some(rx);
@@ -1261,20 +1272,20 @@ async fn un_motivo_desconocido_no_se_pinta_como_el_conocido() {
     tx.send(norte_proto::methods::ConnectionDegraded {
         scheme: "sftp".to_owned(),
         host: "archivo.example".to_owned(),
-        reason: "algo-que-no-existia".to_owned(),
+        reason: "something-that-did-not-exist".to_owned(),
         detail: Some("el servidor negoció un perfil antiguo".to_owned()),
     })
-    .expect("el host escucha");
+    .expect("the host is listening");
 
     let banners = siguientes_banners(&mut sub).await;
     let subject = banners
         .iter()
         .find_map(|b| b.subject.as_ref())
-        .expect("el aviso nombra la conexión");
+        .expect("the notice names the connection");
     assert_eq!(
         subject.reason,
         norte_i18n::t_in(norte_i18n::Lang::Es, "degraded-reason-unknown"),
-        "un motivo desconocido lo dice: {subject:?}"
+        "an unknown reason says so: {subject:?}"
     );
     assert_ne!(
         subject.reason,
@@ -1283,21 +1294,21 @@ async fn un_motivo_desconocido_no_se_pinta_como_el_conocido() {
     assert_eq!(
         subject.detail.as_deref(),
         Some("el servidor negoció un perfil antiguo"),
-        "y se apoya en `detail`, que es lo que el proto pide"
+        "and it leans on `detail`, which is what the proto asks for"
     );
 }
 
-/// El daemon que avisa de que se PARA lo dice, y lo dice de forma persistente:
-/// «reconectando…» sobre un daemon que no vuelve es una espera falsa.
+/// The daemon that warns it is STOPPING says so, and says so persistently:
+/// «reconnecting…» over a daemon that does not come back is a false wait.
 #[tokio::test]
-async fn un_daemon_que_se_para_lo_dice() {
+async fn a_daemon_that_stops_says_so() {
     let falso = arbol_como_falso();
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
     *falso.eventos.lock().expect("eventos") = Some(rx);
     let (h, _snap) = host_arbol(Arc::new(falso)).await;
     let mut sub = h.subscribe();
     tx.send(norte_client::ConnEvent::GoingAway { reconnect: false })
-        .expect("el host escucha");
+        .expect("the host is listening");
 
     let banners = siguientes_banners(&mut sub).await;
     assert_eq!(
@@ -1309,16 +1320,17 @@ async fn un_daemon_que_se_para_lo_dice() {
     );
 }
 
-/// Un relevo NO es una parada, y se dice distinto: uno vuelve y el otro no.
+/// A handoff is NOT a stop, and it is said differently: one comes back and
+/// the other does not.
 #[tokio::test]
-async fn un_relevo_no_se_lee_como_una_parada() {
+async fn a_handoff_is_not_read_as_a_stop() {
     let falso = arbol_como_falso();
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
     *falso.eventos.lock().expect("eventos") = Some(rx);
     let (h, _snap) = host_arbol(Arc::new(falso)).await;
     let mut sub = h.subscribe();
     tx.send(norte_client::ConnEvent::GoingAway { reconnect: true })
-        .expect("el host escucha");
+        .expect("the host is listening");
     let banners = siguientes_banners(&mut sub).await;
     assert_eq!(
         banners.iter().map(|b| b.text.clone()).collect::<Vec<_>>(),
@@ -1328,10 +1340,11 @@ async fn un_relevo_no_se_lee_como_una_parada() {
         )],
     );
 
-    // Y cuando vuelve, el aviso se apaga: un aviso que no sabe volverse
-    // «ya está» miente en cuanto el daemon reaparece.
+    // And when it comes back, the notice turns off: a notice that does not
+    // know how to become "it's back now" lies as soon as the daemon
+    // reappears.
     tx.send(norte_client::ConnEvent::Restored)
-        .expect("el host escucha");
+        .expect("the host is listening");
     for _ in 0..40 {
         if let Ok(Some(Update::Message(m))) = tokio::time::timeout(ESPERA_MAX, sub.recv()).await
             && let UiUpdate::Patch(p) = &m.payload
@@ -1344,20 +1357,20 @@ async fn un_relevo_no_se_lee_como_una_parada() {
             return;
         }
     }
-    panic!("el aviso del daemon no se apagó al volver");
+    panic!("the daemon's notice did not turn off when it came back");
 }
 
-/// Una mutación que el daemon RECHAZA por no poder abrir el journal deja
-/// aviso persistente: «no se registra» es un hecho de toda la sesión, y la
-/// regla dura 4 dice que sin registro no se muta.
+/// A mutation the daemon REJECTS for failing to open the journal leaves a
+/// persistent notice: "it is not being logged" is a fact about the whole
+/// session, and hard rule 4 says no journal means no mutation.
 #[tokio::test]
-async fn una_mutacion_sin_journal_deja_aviso() {
+async fn a_mutation_without_a_journal_leaves_a_notice() {
     let falso = arbol_como_falso();
     *falso.error_al_borrar.lock().expect("error") = Some(norte_proto::Error::JournalUnavailable);
     let backend = Arc::new(falso);
     let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
-    h.dispatch(tecla("F8")).await.expect("host vivo");
+    h.dispatch(tecla("F8")).await.expect("host alive");
     let id = siguientes_dialogos(&mut sub).await[0].id;
     h.dispatch(UiAction::Dialog {
         id,
@@ -1365,7 +1378,7 @@ async fn una_mutacion_sin_journal_deja_aviso() {
         secret: None,
     })
     .await
-    .expect("host vivo");
+    .expect("host alive");
 
     let banners = siguientes_banners(&mut sub).await;
     assert_eq!(
@@ -1377,14 +1390,14 @@ async fn una_mutacion_sin_journal_deja_aviso() {
     );
 }
 
-/// Una aprobación que llega DOS veces no abre dos diálogos.
+/// An approval that arrives TWICE does not open two dialogs.
 ///
-/// No es hipotético: el SDK resincroniza `policy.pending` en cada
-/// reconexión, así que una aprobación que sigue viva vuelve por el canal.
-/// Dos diálogos para la misma decisión son dos respuestas, y la segunda cae
-/// sobre un `approval_id` que el daemon ya cerró.
+/// It is not hypothetical: the SDK resyncs `policy.pending` on every
+/// reconnection, so an approval that is still alive comes back over the
+/// channel. Two dialogs for the same decision are two responses, and the
+/// second one lands on an `approval_id` the daemon already closed.
 #[tokio::test]
-async fn una_aprobacion_repetida_no_abre_dos_dialogos() {
+async fn a_repeated_approval_does_not_open_two_dialogs() {
     let falso = arbol_como_falso();
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
     *falso.aprobaciones.lock().expect("aprobaciones") = Some(rx);
@@ -1400,27 +1413,27 @@ async fn una_aprobacion_repetida_no_abre_dos_dialogos() {
         ttl_ms: ttl,
         detail: norte_proto::methods::ApprovalDetail::default(),
     };
-    tx.send(peticion(30_000)).expect("el host escucha");
+    tx.send(peticion(30_000)).expect("the host is listening");
     assert_eq!(siguientes_dialogos(&mut sub).await.len(), 1);
-    // La misma, reconstruida por el resync: sin TTL, porque `policy.pending`
-    // no lo transporta.
-    tx.send(peticion(0)).expect("el host escucha");
+    // The same one, rebuilt by the resync: no TTL, because `policy.pending`
+    // does not carry it.
+    tx.send(peticion(0)).expect("the host is listening");
     asentar().await;
     assert!(
         !hubo_dialogos(&mut sub).await,
-        "la repetida no abre nada nuevo"
+        "the repeat opens nothing new"
     );
 }
 
-/// Una aprobación CADUCA: el daemon deja de aceptarla, así que su diálogo se
-/// cierra solo y se dice.
+/// An approval EXPIRES: the daemon stops accepting it, so its dialog closes
+/// on its own and says so.
 ///
-/// Un diálogo que sigue delante después del TTL invita a aprobar en el vacío:
-/// se pulsa aprobar, el daemon contesta que ese id ya no existe, y el agente
-/// lleva rato denegado. Peor todavía si mientras tanto el humano se creyó que
-/// lo había autorizado.
+/// A dialog that stays up front after the TTL invites approving into the
+/// void: approve gets pressed, the daemon answers that the id no longer
+/// exists, and the agent has been denied for a while. Worse still if
+/// meanwhile the human believed they had authorized it.
 #[tokio::test]
-async fn una_aprobacion_caduca_y_su_dialogo_se_cierra() {
+async fn an_approval_expires_and_its_dialog_closes() {
     let falso = arbol_como_falso();
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
     *falso.aprobaciones.lock().expect("aprobaciones") = Some(rx);
@@ -1436,21 +1449,24 @@ async fn una_aprobacion_caduca_y_su_dialogo_se_cierra() {
         ttl_ms: 60,
         detail: norte_proto::methods::ApprovalDetail::default(),
     })
-    .expect("el host escucha");
+    .expect("the host is listening");
     let abiertos = siguientes_dialogos(&mut sub).await;
     assert_eq!(abiertos.len(), 1);
 
     let vacios = siguientes_dialogos(&mut sub).await;
-    assert!(vacios.is_empty(), "el diálogo se cerró solo: {vacios:?}");
+    assert!(
+        vacios.is_empty(),
+        "the dialog closed on its own: {vacios:?}"
+    );
 }
 
-/// Un undo que termina PIDE su informe y lo enseña.
+/// An undo that finishes ASKS FOR its report and shows it.
 ///
-/// El desenlace de la Task dice si el undo corrió; lo que NO volvió lo dice
-/// solo el informe, y un undo que paró a mitad deja el árbol en un estado
-/// que nadie más va a contar.
+/// The Task's outcome says whether the undo ran; what did NOT come back is
+/// said only by the report, and an undo that stopped halfway leaves the tree
+/// in a state nobody else is going to account for.
 #[tokio::test]
-async fn un_undo_terminado_pide_su_informe_y_dice_lo_que_no_volvio() {
+async fn a_finished_undo_asks_for_its_report_and_says_what_did_not_come_back() {
     let falso = arbol_como_falso();
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
     *falso.ajenas.lock().expect("ajenas") = Some(rx);
@@ -1491,15 +1507,15 @@ async fn un_undo_terminado_pide_su_informe_y_dice_lo_que_no_volvio() {
         .join("\n");
     assert!(
         cuerpo.contains("42"),
-        "cita la entrada donde paró: {cuerpo}"
+        "cites the entry where it stopped: {cuerpo}"
     );
     assert_eq!(dialogos[0].title_key, "modal-undo-report-title");
 }
 
-/// #250 — un empaquetado que COMPLETA pide su informe y dice lo que guardó que
-/// significa otra cosa fuera.
+/// #250 — an archiving that COMPLETES asks for its report and says what it
+/// saved that means something else outside.
 #[tokio::test]
-async fn un_empaquetado_terminado_dice_los_nombres_que_significan_otra_cosa() {
+async fn a_finished_archiving_says_the_names_that_mean_something_else() {
     let falso = arbol_como_falso();
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
     *falso.ajenas.lock().expect("ajenas") = Some(rx);
@@ -1537,18 +1553,18 @@ async fn un_empaquetado_terminado_dice_los_nombres_que_significan_otra_cosa() {
             return;
         }
     }
-    panic!("un empaquetado con un nombre hostil dentro no dijo nada");
+    panic!("an archiving with a hostile name inside said nothing");
 }
 
-/// Y un empaquetado CANCELADO no dice nada, porque no hay archivo del que
-/// hablar (hallazgo del `protocol-guardian`).
+/// And a CANCELLED archiving says nothing, because there is no archive to
+/// speak of (a `protocol-guardian` finding).
 ///
-/// El informe existe igual —se calcula antes de escribir el primer byte—, y la
-/// cancelación deja el destino LIMPIO. Pintarlo diría «empaquetado, pero…»
-/// sobre algo que nadie empaquetó, y además haría a la ventana decir una cosa
-/// que la TUI no dice (ADR 0077).
+/// The report exists just the same — it is computed before the first byte is
+/// written — and cancellation leaves the destination CLEAN. Painting it
+/// would say "archived, but…" about something nobody archived, and it would
+/// also make the window say something the TUI does not say (ADR 0077).
 #[tokio::test]
-async fn un_empaquetado_cancelado_no_avisa_de_un_archivo_que_no_existe() {
+async fn a_cancelled_archiving_does_not_warn_about_a_file_that_does_not_exist() {
     let falso = arbol_como_falso();
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
     *falso.ajenas.lock().expect("ajenas") = Some(rx);
@@ -1570,8 +1586,8 @@ async fn un_empaquetado_cancelado_no_avisa_de_un_archivo_que_no_existe() {
     siguientes_tasks(&mut sub).await;
     p.send_modify(|p| p.state = norte_proto::TaskState::Cancelled);
 
-    // Lo que se afirma es que NO lo pide: se deja correr todo lo que el
-    // desenlace de la task pudiera haber encolado, y se mira después.
+    // What is asserted is that it does NOT ask for it: everything the task's
+    // outcome might have queued is left to run, and is checked afterward.
     asentar().await;
     assert!(
         backend
@@ -1579,13 +1595,13 @@ async fn un_empaquetado_cancelado_no_avisa_de_un_archivo_que_no_existe() {
             .lock()
             .expect("pedidos")
             .is_empty(),
-        "de un empaquetado cancelado no hay archivo del que avisar"
+        "a cancelled archiving has no archive to warn about"
     );
 }
 
-/// Un undo limpio no interrumpe: el tablero lo dice y ya.
+/// A clean undo does not interrupt: the board says so and that is it.
 #[tokio::test]
-async fn un_undo_limpio_no_abre_nada() {
+async fn a_clean_undo_opens_nothing() {
     let falso = arbol_como_falso();
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
     *falso.ajenas.lock().expect("ajenas") = Some(rx);
@@ -1607,28 +1623,29 @@ async fn un_undo_limpio_no_abre_nada() {
     siguientes_tasks(&mut sub).await;
     p.send_modify(|p| p.state = norte_proto::TaskState::Completed);
     let detalle = detalle_de_task(&mut sub).await;
-    assert!(detalle.contains('4'), "el tablero dice cuántas: {detalle}");
+    assert!(detalle.contains('4'), "the board says how many: {detalle}");
     assert!(!hubo_dialogos(&mut sub).await);
 }
 
-/// El aviso de «sin journal» se APAGA cuando el daemon vuelve a aceptar una
-/// mutación.
+/// The "no journal" notice TURNS OFF when the daemon goes back to accepting
+/// a mutation.
 ///
-/// Un indicador que no sabe volverse «ya sí» miente sobre lo único que
-/// describe de toda la sesión, y es la misma lección que el TUI aprendió en
-/// el #179: la ventana de propiedad de `journal.db` se reabre sola cuando el
-/// ocupante de paso lo suelta. Aquí no hay una notificación que lo anuncie,
-/// así que la prueba es la que hay: una mutación que el daemon ACEPTA.
+/// An indicator that does not know how to become "it's fine now" lies about
+/// the one thing it describes for the whole session, and it is the same
+/// lesson the TUI learned in #179: the ownership window over `journal.db`
+/// reopens on its own once the passing occupant releases it. There is no
+/// notification announcing it here, so the test there is to have is a
+/// mutation the daemon ACCEPTS.
 #[tokio::test]
-async fn el_aviso_de_journal_se_apaga_cuando_vuelve_a_aceptarse_una_mutacion() {
+async fn the_journal_notice_turns_off_once_a_mutation_is_accepted_again() {
     let falso = arbol_como_falso();
     *falso.error_al_borrar.lock().expect("error") = Some(norte_proto::Error::JournalUnavailable);
     let backend = Arc::new(falso);
     let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
 
-    // Un borrado rechazado por el journal enciende el aviso.
-    h.dispatch(tecla("F8")).await.expect("host vivo");
+    // A delete rejected by the journal turns the notice on.
+    h.dispatch(tecla("F8")).await.expect("host alive");
     let id = siguientes_dialogos(&mut sub).await[0].id;
     h.dispatch(UiAction::Dialog {
         id,
@@ -1636,12 +1653,12 @@ async fn el_aviso_de_journal_se_apaga_cuando_vuelve_a_aceptarse_una_mutacion() {
         secret: None,
     })
     .await
-    .expect("host vivo");
+    .expect("host alive");
     assert!(!siguientes_banners(&mut sub).await.is_empty());
 
-    // El journal se arregla: la siguiente mutación entra.
+    // The journal gets fixed: the next mutation goes through.
     *backend.error_al_borrar.lock().expect("error") = None;
-    h.dispatch(tecla("F8")).await.expect("host vivo");
+    h.dispatch(tecla("F8")).await.expect("host alive");
     let id = siguientes_dialogos(&mut sub).await[0].id;
     h.dispatch(UiAction::Dialog {
         id,
@@ -1649,7 +1666,7 @@ async fn el_aviso_de_journal_se_apaga_cuando_vuelve_a_aceptarse_una_mutacion() {
         secret: None,
     })
     .await
-    .expect("host vivo");
+    .expect("host alive");
 
     for _ in 0..40 {
         if let Ok(Some(Update::Message(m))) = tokio::time::timeout(ESPERA_MAX, sub.recv()).await
@@ -1663,19 +1680,19 @@ async fn el_aviso_de_journal_se_apaga_cuando_vuelve_a_aceptarse_una_mutacion() {
             return;
         }
     }
-    panic!("el aviso de journal no se apagó al aceptarse una mutación");
+    panic!("the journal notice did not turn off once a mutation was accepted");
 }
 
-/// El informe de un lote con un nombre HOSTIL dentro no lo pinta crudo, y
-/// dice que lo enmascaró.
+/// The report of a batch with a HOSTILE name inside does not paint it raw,
+/// and it says it masked it.
 ///
-/// El nombre de ahora es lo único accionable del informe, así que es
-/// exactamente donde un nombre con anulaciones bidi haría que quien lo lee
-/// busque otro fichero.
+/// The name shown now is the only actionable thing in the report, so it is
+/// exactly where a name with bidi overrides would make the reader go
+/// looking for a different file.
 #[tokio::test]
-async fn el_informe_de_un_lote_enmascara_el_nombre_y_lo_dice() {
+async fn a_batchs_report_masks_the_name_and_says_so() {
     let hostil_bytes = hostil("rtl_override");
-    let nombre = String::from_utf8(hostil_bytes).expect("la fixture es UTF-8");
+    let nombre = String::from_utf8(hostil_bytes).expect("the fixture is UTF-8");
     let falso = arbol_como_falso();
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
     *falso.ajenas.lock().expect("ajenas") = Some(rx);
@@ -1707,25 +1724,26 @@ async fn el_informe_de_un_lote_enmascara_el_nombre_y_lo_dice() {
             .body
             .iter()
             .all(|l| !l.text.contains('\u{202E}')),
-        "no se pinta crudo: {:?}",
+        "it is not painted raw: {:?}",
         dialogos[0].body
     );
     assert!(
         dialogos[0].body.iter().any(|l| l.hostile),
-        "y se DICE que lo pintado no es lo que hay: {:?}",
+        "and it SAYS that what is painted is not what there is: {:?}",
         dialogos[0].body
     );
 }
 
-/// Una reconexión que REANUNCIA un lote ya terminado no borra su informe.
+/// A reconnection that RE-ANNOUNCES an already-finished batch does not erase
+/// its report.
 ///
-/// El SDK vuelve a anunciar las tasks al reconectar, y el registro proyecta
-/// la vista otra vez desde el progreso — que no sabe nada del informe. Sin
-/// esto, la única señal de que el directorio se quedó a medias desaparecía
-/// del tablero justo cuando la conexión se recupera, que es cuando el lector
-/// vuelve a mirarlo.
+/// The SDK re-announces tasks on reconnecting, and the log projects the view
+/// again from the progress — which knows nothing about the report. Without
+/// this, the only signal that the directory was left halfway would
+/// disappear from the board exactly when the connection recovers, which is
+/// when the reader looks at it again.
 #[tokio::test]
-async fn un_reanuncio_no_borra_el_informe_del_lote() {
+async fn a_reannouncement_does_not_erase_the_batchs_report() {
     let falso = arbol_como_falso();
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
     *falso.ajenas.lock().expect("ajenas") = Some(rx);
@@ -1738,29 +1756,29 @@ async fn un_reanuncio_no_borra_el_informe_del_lote() {
     p.send_modify(|p| p.state = norte_proto::TaskState::Completed);
     let detalle = detalle_de_task(&mut sub).await;
 
-    // La misma task, reanunciada por el canal de ajenas como haría una
-    // reconexión: ya terminal.
+    // The same task, re-announced over the "others'" channel the way a
+    // reconnection would: already terminal.
     let p2 = inyectar_task_de(&tx, 71, norte_proto::TaskKind::RenameBatch);
     p2.send_modify(|p| p.state = norte_proto::TaskState::Completed);
 
     let tasks = siguientes_tasks(&mut sub).await;
-    let t = tasks.iter().find(|t| t.task_id == 71).expect("sigue ahí");
+    let t = tasks.iter().find(|t| t.task_id == 71).expect("still there");
     assert_eq!(t.detail.as_deref(), Some(detalle.as_str()), "{t:?}");
     assert_eq!(
         backend.informes_pedidos.lock().expect("pedidos").len(),
         1,
-        "y no se vuelve a pedir"
+        "and it is not asked for again"
     );
 }
 
-/// Una aprobación que NO llega al daemon se dice.
+/// An approval that does NOT reach the daemon is said.
 ///
-/// `policy.decide` se manda y se olvida, así que si el daemon se cayó entre
-/// la pregunta y el sí, la ventana daba por autorizada una operación que va a
-/// quedar denegada por silencio. En una superficie de seguridad, «lo dije» y
-/// «llegó» no son lo mismo.
+/// `policy.decide` is sent and forgotten, so if the daemon went down between
+/// the question and the yes, the window would take an operation for
+/// authorized that is going to end up denied by silence. On a security
+/// surface, "I said it" and "it arrived" are not the same thing.
 #[tokio::test]
-async fn una_aprobacion_que_no_llega_al_daemon_se_dice() {
+async fn an_approval_that_does_not_reach_the_daemon_is_said() {
     let falso = arbol_como_falso();
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
     *falso.aprobaciones.lock().expect("aprobaciones") = Some(rx);
@@ -1778,9 +1796,10 @@ async fn una_aprobacion_que_no_llega_al_daemon_se_dice() {
         ttl_ms: 30_000,
         detail: norte_proto::methods::ApprovalDetail::default(),
     })
-    .expect("el host escucha");
+    .expect("the host is listening");
     let id = siguientes_dialogos(&mut sub).await[0].id;
-    // Dos veces: la primera solo reconoce la superficie, que se abrió sola.
+    // Twice: the first only acknowledges the surface, which opened on its
+    // own.
     for _ in 0..2 {
         host.dispatch(UiAction::Dialog {
             id,
@@ -1788,7 +1807,7 @@ async fn una_aprobacion_que_no_llega_al_daemon_se_dice() {
             secret: None,
         })
         .await
-        .expect("host vivo");
+        .expect("host alive");
     }
 
     for _ in 0..40 {
@@ -1796,18 +1815,18 @@ async fn una_aprobacion_que_no_llega_al_daemon_se_dice() {
             return;
         }
     }
-    panic!("nadie dijo que la aprobación no llegó");
+    panic!("nobody said the approval did not arrive");
 }
 
-/// Con el tablero RECORTADO, se cancela la fila que se ve.
+/// With the board CAPPED, the row that is visible gets cancelled.
 ///
-/// El tablero cruza el puente acotado a `MAX_TASKS` y el cursor es un
-/// índice. Mientras el recorte y el cursor contaban sobre listas distintas,
-/// con más de 256 tasks —marcar tres mil ficheros y pulsar F5, y el desalojo
-/// solo se lleva las TERMINADAS— la fila resaltada y la task que paraba eran
-/// dos tasks distintas.
+/// The board crosses the bridge capped at `MAX_TASKS`, and the cursor is an
+/// index. While the cap and the cursor counted over different lists, with
+/// more than 256 tasks — mark three thousand files and press F5, and the
+/// eviction only takes the FINISHED ones — the highlighted row and the task
+/// that was stopped were two different tasks.
 #[tokio::test]
-async fn con_el_tablero_recortado_se_cancela_la_fila_que_se_ve() {
+async fn with_the_board_capped_the_visible_row_is_the_one_cancelled() {
     let falso = arbol_como_falso();
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
     *falso.ajenas.lock().expect("ajenas") = Some(rx);
@@ -1819,40 +1838,42 @@ async fn con_el_tablero_recortado_se_cancela_la_fila_que_se_ve() {
     for i in 0..total {
         vivas.push(inyectar_task(&tx, 1000 + i as u64, &canceladas));
     }
-    // Se suscribe DESPUÉS de meterlas: doscientas sesenta y una altas
-    // producen más parches de los que cabe leer, y quedarse atrás no es lo
-    // que este test mide. La foto que pide el resync trae el tablero entero.
+    // Subscribes AFTER inserting them: two hundred sixty-one insertions
+    // produce more patches than fit to read, and falling behind is not what
+    // this test measures. The snapshot the resync asks for brings the whole
+    // board.
     asentar().await;
     let mut sub = h.subscribe();
-    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    h.dispatch(UiAction::Resync).await.expect("host alive");
     let foto = siguiente_foto(&mut sub).await;
-    assert_eq!(foto.tasks.len(), max, "el tablero va acotado");
+    assert_eq!(foto.tasks.len(), max, "the board is capped");
     let primera_pintada = foto.tasks[0].task_id;
 
     h.dispatch(UiAction::FocusSlot { slot_id: 7 })
         .await
-        .expect("host vivo");
-    // Cursor en la primera fila PINTADA (arriba del todo).
-    h.dispatch(tecla("Home")).await.expect("host vivo");
+        .expect("host alive");
+    // Cursor on the first PAINTED row (all the way up).
+    h.dispatch(tecla("Home")).await.expect("host alive");
     h.dispatch(tecla_mod("k", true, false))
         .await
-        .expect("host vivo");
+        .expect("host alive");
     assert_eq!(
         *canceladas.lock().expect("canceladas"),
         vec![primera_pintada],
-        "se cancela la de la fila resaltada, no una que no está en pantalla"
+        "the one on the highlighted row is cancelled, not one off screen"
     );
     drop(vivas);
 }
 
-/// Un lote que NACE terminal pide su informe igual.
+/// A batch that IS BORN terminal asks for its report just the same.
 ///
-/// El daemon puede completarlo antes de que vuelva la llamada; entonces el
-/// watch ya está resuelto, `progreso` no se llama ni una vez, y la única
-/// señal de que el directorio quedó a medias no se pedía nunca — justo en
-/// los lotes rápidos, que es donde el desenlace más parece que todo fue bien.
+/// The daemon can complete it before the call returns; then the watch is
+/// already resolved, `progreso` is never called even once, and the only
+/// signal that the directory was left halfway was never asked for — right
+/// in the fast batches, which is where the outcome most looks like
+/// everything went fine.
 #[tokio::test]
-async fn un_lote_que_nace_terminal_pide_su_informe() {
+async fn a_batch_born_terminal_asks_for_its_report() {
     let falso = arbol_como_falso();
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
     *falso.ajenas.lock().expect("ajenas") = Some(rx);
@@ -1861,8 +1882,8 @@ async fn un_lote_que_nace_terminal_pide_su_informe() {
     let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
 
-    // Nace COMPLETADA: el emisor se suelta acto seguido, como hace el SDK
-    // con una task que ya llegó terminal.
+    // Born COMPLETED: the sender is dropped right after, as the SDK does
+    // with a task that already arrived terminal.
     let progreso = norte_proto::TaskProgress {
         task_id: norte_proto::TaskId::new(81),
         kind: norte_proto::TaskKind::RenameBatch,
@@ -1885,25 +1906,25 @@ async fn un_lote_que_nace_terminal_pide_su_informe() {
         cola: None,
         foreign: false,
     })
-    .expect("el host escucha");
+    .expect("the host is listening");
 
     let detalle = detalle_de_task(&mut sub).await;
     assert!(
         detalle.contains('2'),
-        "el informe llegó al tablero: {detalle}"
+        "the report reached the board: {detalle}"
     );
     assert_eq!(*backend.informes_pedidos.lock().expect("pedidos"), vec![81]);
 }
 
-/// Un CLIC sobre una aprobación recién abierta no la aprueba.
+/// A CLICK on a just-opened approval does not approve it.
 ///
-/// El diálogo se pinta en el mismo sitio que el anterior y con la misma
-/// primera opción, así que un clic ya en marcha sobre «Confirmar» aterrizaba
-/// sobre el «Aprobar» de una aprobación de agente que acababa de llegar. La
-/// regla de «se abre solo, la primera respuesta solo reconoce» era solo del
-/// teclado, y el ratón es la entrada primaria de esta superficie.
+/// The dialog is painted in the same place as the previous one and with the
+/// same first option, so a click already in motion toward "Confirm" would
+/// land on the "Approve" of an agent approval that had just arrived. The
+/// rule "it opens on its own, the first response only acknowledges" was
+/// keyboard-only, and the mouse is this surface's primary input.
 #[tokio::test]
-async fn un_clic_sobre_una_aprobacion_recien_abierta_no_la_aprueba() {
+async fn a_click_on_a_just_opened_approval_does_not_approve_it() {
     let falso = arbol_como_falso();
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
     *falso.aprobaciones.lock().expect("aprobaciones") = Some(rx);
@@ -1920,7 +1941,7 @@ async fn un_clic_sobre_una_aprobacion_recien_abierta_no_la_aprueba() {
         ttl_ms: 30_000,
         detail: norte_proto::methods::ApprovalDetail::default(),
     })
-    .expect("el host escucha");
+    .expect("the host is listening");
     let id = siguientes_dialogos(&mut sub).await[0].id;
 
     host.dispatch(UiAction::Dialog {
@@ -1929,22 +1950,22 @@ async fn un_clic_sobre_una_aprobacion_recien_abierta_no_la_aprueba() {
         secret: None,
     })
     .await
-    .expect("host vivo");
+    .expect("host alive");
     asentar().await;
     assert!(
         backend.decisiones.lock().expect("decisiones").is_empty(),
-        "el primer clic solo reconoce"
+        "the first click only acknowledges"
     );
 
-    // El segundo sí aprueba: la pregunta ya se ha visto.
+    // The second one does approve: the question has already been seen.
     host.dispatch(UiAction::Dialog {
         id,
         choice: "approve".to_owned(),
         secret: None,
     })
     .await
-    .expect("host vivo");
-    hasta(&backend, "la decisión mandada", |f| {
+    .expect("host alive");
+    hasta(&backend, "the decision sent", |f| {
         (!f.decisiones.lock().expect("decisiones").is_empty()).then_some(())
     })
     .await;
@@ -1954,22 +1975,23 @@ async fn un_clic_sobre_una_aprobacion_recien_abierta_no_la_aprueba() {
     );
 }
 
-/// Una ruta que el daemon YA redactó va marcada.
+/// A path the daemon ALREADY redacted is marked.
 ///
-/// Las rutas de una aprobación llegan como texto pasado por el lossy del
-/// daemon: los controles, los overrides bidi y los bytes inválidos ya son
-/// U+FFFD. Calcular la marca comparando contra ese texto daba `false`
-/// exactamente en la clase más peligrosa, y encima de forma inconsistente
-/// —un `zwsp`, que el lossy no toca, sí la encendía—.
+/// An approval's paths arrive as text passed through the daemon's lossy
+/// conversion: the controls, the bidi overrides and the invalid bytes are
+/// already U+FFFD. Computing the mark by comparing against that text gave
+/// `false` in exactly the most dangerous class, and inconsistently on top of
+/// it — a `zwsp`, which the lossy conversion does not touch, DID turn it on.
 #[tokio::test]
-async fn una_ruta_ya_redactada_por_el_daemon_va_marcada() {
+async fn a_path_already_redacted_by_the_daemon_is_marked() {
     let falso = arbol_como_falso();
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
     *falso.aprobaciones.lock().expect("aprobaciones") = Some(rx);
     let (host, _snap) = host_arbol(Arc::new(falso)).await;
     let mut sub = host.subscribe();
 
-    // Tal cual lo manda el daemon: `display_lossy` ya sustituyó el override.
+    // Exactly as the daemon sends it: `display_lossy` has already replaced
+    // the override.
     tx.send(norte_proto::methods::PolicyApprovalRequired {
         approval_id: 22,
         session: None,
@@ -1979,25 +2001,25 @@ async fn una_ruta_ya_redactada_por_el_daemon_va_marcada() {
         ttl_ms: 30_000,
         detail: norte_proto::methods::ApprovalDetail::default(),
     })
-    .expect("el host escucha");
+    .expect("the host is listening");
 
     let d = siguientes_dialogos(&mut sub).await;
     assert!(
         d[0].body.iter().any(|l| l.hostile),
-        "lo que se lee no es lo que hay, y se dice: {:?}",
+        "what is read is not what there is, and it is said: {:?}",
         d[0].body
     );
 }
 
-/// Una ruta LIMPIA pero más larga que el tope del puente se marca por el
-/// recorte.
+/// A CLEAN path that is longer than the bridge's cap is marked by the
+/// truncation.
 ///
-/// El recorte le pega una elipsis DESPUÉS del veredicto de `path_display`, y
-/// `…` es un carácter legal en un nombre: sin marca, quien lee no distingue
-/// «se llama así» de «esto está cortado». Y en el informe de un lote ese
-/// nombre es lo único accionable que hay.
+/// The truncation attaches an ellipsis AFTER `path_display`'s verdict, and
+/// `…` is a legal character in a name: without a mark, the reader cannot
+/// tell "that is its name" from "this got cut". And in a batch's report,
+/// that name is the only actionable thing there is.
 #[tokio::test]
-async fn una_ruta_limpia_pero_recortada_se_marca() {
+async fn a_clean_but_truncated_path_is_marked() {
     let largo: String = std::iter::repeat_n("segmento_larguisimo_pero_limpio", 200)
         .collect::<Vec<_>>()
         .join("/");
@@ -2029,20 +2051,21 @@ async fn una_ruta_limpia_pero_recortada_se_marca() {
     let d = siguientes_dialogos(&mut sub).await;
     assert!(
         d[0].body.iter().any(|l| l.hostile),
-        "el recorte también altera lo pintado: {:?}",
+        "the truncation also alters what is painted: {:?}",
         d[0].body
     );
 }
 
-/// Tras un RELEVO del daemon, una task con el mismo id no hereda nada de la
-/// anterior.
+/// After a daemon HANDOFF, a task with the same id inherits nothing from the
+/// previous one.
 ///
-/// Los ids los reparte el scheduler de un proceso y empiezan en 1 en cada
-/// arranque, así que el daemon nuevo reparte los MISMOS números. La task 3
-/// nueva heredaba de la vieja que su informe ya se había pedido — y entonces
-/// no se pedía nunca, que es perder la única señal de un directorio a medias.
+/// Ids are handed out by one process's scheduler and start at 1 on every
+/// startup, so the new daemon hands out the SAME numbers. New task 3 was
+/// inheriting from the old one that its report had already been asked for —
+/// and then it was never asked for, which is losing the only signal that a
+/// directory was left halfway.
 #[tokio::test]
-async fn tras_un_relevo_un_id_repetido_no_hereda_nada() {
+async fn after_a_handoff_a_repeated_id_inherits_nothing() {
     let falso = arbol_como_falso();
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
     *falso.ajenas.lock().expect("ajenas") = Some(rx);
@@ -2059,31 +2082,32 @@ async fn tras_un_relevo_un_id_repetido_no_hereda_nada() {
     detalle_de_task(&mut sub).await;
     assert_eq!(backend.informes_pedidos.lock().expect("pedidos").len(), 1);
 
-    // Relevo: se va y vuelve. Al otro lado, otro daemon.
+    // Handoff: it leaves and comes back. On the other end, a different
+    // daemon.
     evtx.send(norte_client::ConnEvent::GoingAway { reconnect: true })
-        .expect("el host escucha");
+        .expect("the host is listening");
     evtx.send(norte_client::ConnEvent::Restored)
-        .expect("el host escucha");
-    // El relevo lo procesa el actor: se le deja correr antes de inyectar la
-    // task del daemon nuevo, o la carrera sería con el reconectado.
+        .expect("the host is listening");
+    // The handoff is processed by the actor: it is let run before injecting
+    // the new daemon's task, or the race would be with the reconnected one.
     asentar().await;
 
-    // Su primera task también es la 3, y también es un lote.
+    // Its first task is also 3, and also a batch.
     let p2 = inyectar_task_de(&tx, 3, norte_proto::TaskKind::RenameBatch);
     p2.send_modify(|p| p.state = norte_proto::TaskState::Completed);
-    anotados(&backend, "el informe de la task NUEVA", 2, |f| {
+    anotados(&backend, "the NEW task's report", 2, |f| {
         f.informes_pedidos.lock().expect("pedidos").clone()
     })
     .await;
 }
 
-/// La pila de diálogos tiene techo, y que se cayó uno se DICE.
+/// The dialog stack has a ceiling, and losing one is SAID.
 ///
-/// Desde que la alimenta el wire —un informe por cada lote ajeno que quedó a
-/// medias— una pila sin techo es un canal de memoria de crecimiento libre, y
-/// cada parche de diálogos clona la pila entera.
+/// Since the wire feeds it — one report per foreign batch left halfway — a
+/// ceiling-less stack is a channel for free-growing memory, and every dialog
+/// patch clones the whole stack.
 #[tokio::test]
-async fn la_pila_de_dialogos_tiene_techo() {
+async fn the_dialog_stack_has_a_ceiling() {
     let falso = arbol_como_falso();
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
     *falso.ajenas.lock().expect("ajenas") = Some(rx);
@@ -2117,19 +2141,19 @@ async fn la_pila_de_dialogos_tiene_techo() {
     }
     assert!(
         ultimos.len() <= tope,
-        "la pila no pasa del techo: {}",
+        "the stack does not go past the ceiling: {}",
         ultimos.len()
     );
     drop(vivas);
 }
 
-/// Una ventana SIN efectos no aborta la task de otro cliente.
+/// A window WITHOUT effects does not abort another client's task.
 ///
-/// Cancelar una copia deja el destino limpio o un `.norte-partial`: toca el
-/// disco. Sus propias tasks son otra cosa — para lanzarlas ya hacía falta el
-/// interruptor.
+/// Cancelling a copy leaves the destination clean or a `.norte-partial`: it
+/// touches disk. Its own tasks are a different matter — launching them
+/// already needed the switch.
 #[tokio::test]
-async fn en_solo_lectura_no_se_para_la_task_de_otro() {
+async fn read_only_does_not_stop_someone_elses_task() {
     let falso = arbol_como_falso();
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
     *falso.ajenas.lock().expect("ajenas") = Some(rx);
@@ -2154,7 +2178,7 @@ async fn en_solo_lectura_no_se_para_la_task_de_otro() {
         log_ring: None,
     })
     .await
-    .expect("arranca");
+    .expect("starts");
     let mut sub = h.subscribe();
     let canceladas = Arc::new(std::sync::Mutex::new(Vec::new()));
     let _p = inyectar_task(&tx, 55, &canceladas);
@@ -2163,24 +2187,24 @@ async fn en_solo_lectura_no_se_para_la_task_de_otro() {
     let ack = h
         .dispatch(tecla_mod("k", true, false))
         .await
-        .expect("host vivo");
+        .expect("host alive");
     assert!(
         matches!(ack, ActionAck::Unavailable { .. }),
-        "una ventana sin efectos no la para: {ack:?}"
+        "a window without effects does not stop it: {ack:?}"
     );
     assert!(canceladas.lock().expect("canceladas").is_empty());
 }
 
-/// Una aprobación dice QUÉ se pide y QUIÉN lo pide, y los dos van fuera de
-/// la lista de rutas.
+/// An approval says WHAT is being asked and WHO is asking, and both stay
+/// outside the list of paths.
 ///
-/// Mezclados con las rutas eran una línea más: un fichero llamado `delete`
-/// —o llamado como una sesión de agente— era indistinguible de la línea que
-/// dice qué se está aprobando. Y el plazo, lo mismo: con `ttl_ms == 0` no se
-/// pintaba ninguna línea de plazo, así que un fichero llamado «caduca en
-/// 3600 s» era la única con pinta de serlo.
+/// Mixed in with the paths they were one more line: a file named `delete` —
+/// or named like an agent session — was indistinguishable from the line
+/// saying what is being approved. And the deadline, the same: with
+/// `ttl_ms == 0` no deadline line was painted at all, so a file named
+/// «expires in 3600 s» was the only one that looked like one.
 #[tokio::test]
-async fn una_aprobacion_dice_que_pide_quien_y_hasta_cuando() {
+async fn an_approval_says_what_who_and_until_when() {
     let falso = arbol_como_falso();
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
     *falso.aprobaciones.lock().expect("aprobaciones") = Some(rx);
@@ -2196,7 +2220,7 @@ async fn una_aprobacion_dice_que_pide_quien_y_hasta_cuando() {
         ttl_ms: 30_000,
         detail: norte_proto::methods::ApprovalDetail::default(),
     })
-    .expect("el host escucha");
+    .expect("the host is listening");
 
     let d = &siguientes_dialogos(&mut sub).await[0];
     assert_eq!(
@@ -2213,21 +2237,16 @@ async fn una_aprobacion_dice_que_pide_quien_y_hasta_cuando() {
             norte_i18n::ta_in(norte_i18n::Lang::Es, "modal-approval-ttl", &[("s", "30")]).as_str()
         )
     );
-    assert_eq!(
-        d.body.len(),
-        2,
-        "el cuerpo son SOLO las rutas: {:?}",
-        d.body
-    );
+    assert_eq!(d.body.len(), 2, "the body is ONLY the paths: {:?}", d.body);
 }
 
-/// Sin TTL —una pendiente reconstruida por el resync— se dice que el plazo
-/// NO se sabe, en vez de callar.
+/// Without a TTL — a pending one rebuilt by the resync — it is said that the
+/// deadline is NOT known, instead of staying silent.
 ///
-/// Callar deja el diálogo delante invitando a aprobar sobre un id que el
-/// daemon puede haber reapado hace rato.
+/// Staying silent leaves the dialog up front inviting approval on an id the
+/// daemon may have reaped a while ago.
 #[tokio::test]
-async fn una_aprobacion_sin_ttl_dice_que_no_sabe_el_plazo() {
+async fn an_approval_without_a_ttl_says_it_does_not_know_the_deadline() {
     let falso = arbol_como_falso();
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
     *falso.aprobaciones.lock().expect("aprobaciones") = Some(rx);
@@ -2243,25 +2262,25 @@ async fn una_aprobacion_sin_ttl_dice_que_no_sabe_el_plazo() {
         ttl_ms: 0,
         detail: norte_proto::methods::ApprovalDetail::default(),
     })
-    .expect("el host escucha");
+    .expect("the host is listening");
 
     let d = &siguientes_dialogos(&mut sub).await[0];
     assert_eq!(
         d.deadline.as_deref(),
         Some(norte_i18n::t_in(norte_i18n::Lang::Es, "modal-approval-ttl-unknown").as_str())
     );
-    assert!(d.asker.is_none(), "sin sesión, no se inventa una");
+    assert!(d.asker.is_none(), "with no session, one is not invented");
 }
 
-/// El aviso de sesión en claro lleva la conexión en su PROPIO campo y con su
-/// marca.
+/// The plaintext-session notice carries the connection in its OWN field and
+/// with its mark.
 ///
-/// Dentro de la frase, un host llamado `banco.example@malo.example` —que no
-/// lleva ni un carácter que se enmascare— se lee como userinfo de un host
-/// legítimo. Y enmascarar sin decirlo, en el indicador de que algo viaja sin
-/// cifrar, es donde más caro sale.
+/// Inside the sentence, a host named `banco.example@malo.example` — which
+/// carries not one character to mask — reads as the userinfo of a
+/// legitimate host. And masking without saying so, on the indicator that
+/// something is traveling unencrypted, is where it costs the most.
 #[tokio::test]
-async fn el_aviso_en_claro_lleva_la_conexion_aparte_y_marcada() {
+async fn a_plaintext_notice_carries_the_connection_separately_and_marked() {
     let falso = arbol_como_falso();
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
     *falso.degradadas.lock().expect("degradadas") = Some(rx);
@@ -2273,27 +2292,28 @@ async fn el_aviso_en_claro_lleva_la_conexion_aparte_y_marcada() {
         reason: "ftp-plaintext".to_owned(),
         detail: None,
     })
-    .expect("el host escucha");
+    .expect("the host is listening");
 
     let banners = siguientes_banners(&mut sub).await;
     let sujeto = banners
         .iter()
         .find_map(|b| b.subject.clone())
-        .expect("el aviso lleva su conexión");
+        .expect("the notice carries its connection");
     assert!(!sujeto.host.contains('\u{202E}'), "{sujeto:?}");
-    assert!(sujeto.hostile, "y dice que la enmascaró: {sujeto:?}");
+    assert!(sujeto.hostile, "and says it masked it: {sujeto:?}");
     assert!(
         banners.iter().all(|b| !b.text.contains("://")),
-        "la conexión no se monta dentro de la frase: {banners:?}"
+        "the connection is not assembled inside the sentence: {banners:?}"
     );
 }
 
-/// Un kind que este host no proyecta y cuyo nombre viene alterado va MARCADO.
+/// A kind this host does not project and whose name arrives altered is
+/// MARKED.
 ///
-/// Sale del fichero de disposición del usuario: se enmascaraba y se tiraba la
-/// bandera, así que se leía como fiel (#266).
+/// It comes from the user's layout disposition file: it was being masked and
+/// the flag was being dropped, so it read as faithful (#266).
 #[tokio::test]
-async fn un_kind_desconocido_con_nombre_alterado_va_marcado() {
+async fn an_unknown_kind_with_an_altered_name_is_marked() {
     use norte_frontend::layout::{KindId, Node, SlotId};
     let disposicion = Node::Split {
         dir: norte_frontend::layout::Dir::Vertical,

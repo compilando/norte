@@ -1,31 +1,33 @@
-//! Soporte de tests: compila un guest WASM de `examples-wasm/` a
-//! `wasm32-wasip2` bajo demanda y devuelve la ruta del componente.
+//! Test support: compiles an `examples-wasm/` WASM guest to
+//! `wasm32-wasip2` on demand and returns the component's path.
 //!
-//! Si el target `wasm32-wasip2` no está instalado, el helper hace SKIP
-//! (devuelve `None`) para que el test pase en toolchains sin ese target; si el
-//! target ESTÁ pero el guest no compila, es un fallo real y aborta.
+//! If the `wasm32-wasip2` target is not installed, the helper does a SKIP
+//! (returns `None`) so the test passes on toolchains without that target; if
+//! the target IS there but the guest does not compile, it is a real failure
+//! and aborts.
 
 use std::path::PathBuf;
 use std::process::Command;
 
-/// Compila el guest `examples-wasm/<name>/` a `wasm32-wasip2` en modo release y
-/// devuelve el `.wasm` producido como artefacto, con la huella de lo que
-/// acaba de compilar (ADR 0142): el test es la autoridad de ese fichero.
+/// Compiles the `examples-wasm/<name>/` guest to `wasm32-wasip2` in
+/// release mode and returns the produced `.wasm` as an artifact, with the
+/// fingerprint of what it just compiled (ADR 0142): the test is the
+/// authority for that file.
 ///
-/// Devuelve `None` (con un aviso por `stderr`) si el target `wasm32-wasip2` no
-/// está instalado.
+/// Returns `None` (with a `stderr` warning) if the `wasm32-wasip2` target
+/// is not installed.
 #[must_use]
 pub fn build_guest(name: &str) -> Option<norte_plugin_host::WasmArtifact> {
     build_guest_path(name)
-        .map(|p| norte_plugin_host::WasmArtifact::trusting_current(p).expect("se lee el guest"))
+        .map(|p| norte_plugin_host::WasmArtifact::trusting_current(p).expect("the guest is read"))
 }
 
-/// Como [`build_guest`], pero la RUTA: para quien tiene que copiarlo o
-/// reescribirlo antes de instanciarlo.
+/// Like [`build_guest`], but the PATH: for whoever has to copy it or
+/// rewrite it before instantiating it.
 #[must_use]
 pub fn build_guest_path(name: &str) -> Option<PathBuf> {
     if !target_installed("wasm32-wasip2") {
-        eprintln!("SKIP: target wasm32-wasip2 no instalado");
+        eprintln!("SKIP: target wasm32-wasip2 not installed");
         return None;
     }
 
@@ -45,36 +47,32 @@ pub fn build_guest_path(name: &str) -> Option<PathBuf> {
         ])
         .arg(&target_dir)
         .status()
-        .expect("no se pudo lanzar cargo para compilar el guest");
+        .expect("could not launch cargo to compile the guest");
     assert!(
         status.success(),
-        "el guest {name} no compiló (target wasm32-wasip2 presente)"
+        "guest {name} did not compile (wasm32-wasip2 target present)"
     );
 
     let wasm = target_dir
         .join("wasm32-wasip2")
         .join("release")
         .join(format!("{}.wasm", name.replace('-', "_")));
-    assert!(
-        wasm.exists(),
-        "no se encontró el artefacto {}",
-        wasm.display()
-    );
+    assert!(wasm.exists(), "artifact {} was not found", wasm.display());
     Some(wasm)
 }
 
-/// Reemplaza CADA aparición de `from` por `to` en `bytes`. Solo con
-/// longitudes iguales: es para fabricar un guest «compilado contra otra
-/// versión» reescribiendo `@0.8.0` en su sección de imports sin mover ni un
-/// offset de las demás secciones.
+/// Replaces EVERY occurrence of `from` with `to` in `bytes`. Only with
+/// equal lengths: it is meant to build a guest "compiled against another
+/// version" by rewriting `@0.8.0` in its imports section without shifting
+/// so much as one offset in the other sections.
 ///
 /// # Panics
-/// Si las longitudes difieren: un reemplazo que desplaza bytes deja un
-/// componente que ningún lector recorre, y el test estaría probando basura.
+/// If the lengths differ: a replacement that shifts bytes leaves a
+/// component no reader can walk, and the test would be testing garbage.
 #[must_use]
 #[allow(dead_code)]
 pub fn rewrite_bytes(bytes: &[u8], from: &[u8], to: &[u8]) -> Vec<u8> {
-    assert_eq!(from.len(), to.len(), "solo reemplazos de la misma longitud");
+    assert_eq!(from.len(), to.len(), "only same-length replacements");
     let mut out = bytes.to_vec();
     if from.is_empty() {
         return out;
@@ -91,7 +89,7 @@ pub fn rewrite_bytes(bytes: &[u8], from: &[u8], to: &[u8]) -> Vec<u8> {
     out
 }
 
-/// `true` si `rustup` reporta `target` entre los instalados.
+/// `true` if `rustup` reports `target` among the installed ones.
 fn target_installed(target: &str) -> bool {
     Command::new("rustup")
         .args(["target", "list", "--installed"])
@@ -105,11 +103,12 @@ fn target_installed(target: &str) -> bool {
         })
 }
 
-/// Un [`LocationHost`](norte_plugin_host::LocationHost) de mentira que CUENTA
-/// las veces que se le pregunta: así un test puede afirmar que el host no
-/// resolvió nada, que es distinto de que resolviera y el guest tirara el dato.
-// `support` se compila DENTRO de cada binario de test, y solo `columns_e2e`
-// usa el espía: en los demás está muerto por construcción, no por olvido.
+/// A fake [`LocationHost`](norte_plugin_host::LocationHost) that COUNTS
+/// how many times it is asked: this lets a test assert that the host
+/// resolved nothing, which is different from it resolving and the guest
+/// dropping the data.
+// `support` is compiled INSIDE every test binary, and only `columns_e2e`
+// uses the spy: in the others it is dead by construction, not by neglect.
 #[allow(dead_code)]
 #[derive(Debug, Default)]
 pub struct SpyLocation {
@@ -118,7 +117,7 @@ pub struct SpyLocation {
 
 #[allow(dead_code)]
 impl SpyLocation {
-    /// Cuántas veces se le ha preguntado algo.
+    /// How many times it has been asked something.
     #[must_use]
     pub fn calls(&self) -> usize {
         self.calls.load(std::sync::atomic::Ordering::Relaxed)
@@ -134,9 +133,9 @@ impl norte_plugin_host::LocationHost for SpyLocation {
     fn read(&self, _token: &str, rel: &[u8]) -> Result<Vec<u8>, String> {
         self.count();
         if rel == b"a.txt" {
-            Ok(b"contenido".to_vec())
+            Ok(b"content".to_vec())
         } else {
-            Err("no existe".into())
+            Err("does not exist".into())
         }
     }
 
@@ -153,7 +152,7 @@ impl norte_plugin_host::LocationHost for SpyLocation {
     ) -> Result<norte_plugin_host::location_iface::Meta, String> {
         self.count();
         if rel != b"a.txt" {
-            return Err("no existe".into());
+            return Err("does not exist".into());
         }
         Ok(norte_plugin_host::location_iface::Meta {
             kind: norte_plugin_host::location_iface::EntryKind::File,
@@ -178,15 +177,15 @@ impl norte_plugin_host::LocationHost for SpyLocation {
     }
 }
 
-/// Capabilities con `location = "read"` concedida.
+/// Capabilities with `location = "read"` granted.
 #[allow(dead_code)]
 #[must_use]
-pub fn caps_con_location() -> norte_plugin_host::Capabilities {
+pub fn caps_with_location() -> norte_plugin_host::Capabilities {
     norte_plugin_host::Manifest::from_toml(
         r#"
 [plugin]
-id = "org.norte.columnas"
-name = "Columnas"
+id = "org.norte.columns"
+name = "Columns"
 publisher = "norte"
 version = "0.1.0"
 category = "columns"
@@ -195,6 +194,6 @@ category = "columns"
 location = "read"
 "#,
     )
-    .expect("manifiesto de prueba válido")
+    .expect("valid test manifest")
     .capabilities
 }

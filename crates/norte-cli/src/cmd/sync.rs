@@ -1,4 +1,4 @@
-//! `norte sync`: planifica, enseña el plan, pregunta y aplica (ADR 0049).
+//! `norte sync`: plans, shows the plan, asks and applies (ADR 0049).
 
 use std::process::ExitCode;
 
@@ -8,60 +8,63 @@ use norte_frontend::sync::Approval;
 use norte_proto::TaskState;
 
 use crate::SyncCliOpts;
-use crate::cmd::compare::{codigo_por_escritura, parse_compare_criteria, rel_marcado};
+use crate::cmd::compare::{parse_compare_criteria, rel_marked, write_error_code};
 use crate::cmd::connect::vpath;
 use crate::task::{SigintGate, drive_task};
 
-/// `norte sync`: planifica, enseña, pregunta, aplica — TODO en una conexión.
+/// `norte sync`: plans, shows, asks, applies — ALL in one connection.
 ///
-/// # Por qué una sola invocación
-/// Un plan aprobado se retiene POR CONEXIÓN, en un registro en memoria que
-/// nace vacío, y `sync.apply` no lleva nada más que el `plan_hash`. Un CLI que
-/// planease en un proceso y aplicara en otro no podría funcionar ni queriendo:
-/// el registro del segundo no conoce ese hash. Así que la pregunta se hace con
-/// la conexión viva, y `--dry-run` es esta misma función sin la segunda mitad.
+/// # Why a single invocation
+/// An approved plan is retained PER CONNECTION, in an in-memory registry
+/// that starts out empty, and `sync.apply` carries nothing but the
+/// `plan_hash`. A CLI that planned in one process and applied in another
+/// could not work even if it wanted to: the second one's registry does not
+/// know that hash. So the question is asked with the connection alive, and
+/// `--dry-run` is this same function without the second half.
 ///
-/// Planifica, drena el stream por [`norte_frontend::sync::SyncState`] —el
-/// ÚNICO sitio donde los pasos se cuadran contra los contadores del cierre—,
-/// enseña el plan entero, y solo ENTONCES resuelve el journal, pregunta (salvo
-/// `--yes`) y aplica. `--dry-run` es esta misma función cortada justo antes de
-/// esa resolución: ningún camino que pase por `--dry-run` llega a
-/// `Backend::sync_apply`.
+/// Plans, drains the stream through [`norte_frontend::sync::SyncState`] —
+/// the ONLY place where the steps are squared against the closing
+/// counters — shows the whole plan, and only THEN resolves the journal,
+/// asks (unless `--yes`) and applies. `--dry-run` is this same function cut
+/// right before that resolution: no path that goes through `--dry-run`
+/// reaches `Backend::sync_apply`.
 ///
-/// # El spool se desmonta al salir, pase lo que pase
-/// Ésta es sólo la envolvente que lo garantiza. `sync.plan` deja en el
-/// directorio de estado un fichero con el listado relativo de los DOS árboles
-/// (ADR 0049), y el daemon lo recoge en dos sitios que este proceso no tiene:
-/// un barrido al arrancar y un `drop_connection` al cerrar cada conexión. Sin
-/// esto, un `--dry-run` —que por definición no aplica nada— dejaría el fichero
-/// ahí para siempre, y lo mismo cada pregunta contestada que no.
+/// # The spool is unmounted on exit, whatever happens
+/// This is just the wrapper that guarantees it. `sync.plan` leaves a file
+/// in the state directory with the relative listing of the TWO trees
+/// (ADR 0049), and the daemon collects it in two places this process does
+/// not have: a sweep at startup and a `drop_connection` when each
+/// connection closes. Without this, a `--dry-run` — which by definition
+/// applies nothing — would leave the file there forever, and the same for
+/// every question answered no.
 ///
-/// Va en una función aparte y no al final del cuerpo porque el cuerpo tiene
-/// `?`: media docena de caminos de salida, y la limpieza tiene que estar en
-/// todos.
+/// Lives in a separate function and not at the end of the body because the
+/// body has `?`: half a dozen exit paths, and the cleanup has to be in all
+/// of them.
 pub(crate) async fn sync_cmd(
     backend: &Backend,
     source: &std::path::Path,
     dest: &std::path::Path,
     opts: SyncCliOpts<'_>,
 ) -> anyhow::Result<ExitCode> {
-    // UNA vez por mandato, y antes de cualquier fase: ver `SigintGate`. Armarla
-    // por fase deja el prompt `[y/N]` con un `Ctrl+C` que tokio se traga y que
-    // ya no mata el proceso (revisión de rama de W2, BLOCKER-1).
+    // ONCE per invocation, and before any phase: see `SigintGate`. Arming
+    // it per phase leaves the `[y/N]` prompt with a `Ctrl+C` that tokio
+    // swallows and that no longer kills the process (W2 branch review,
+    // BLOCKER-1).
     let sigint = SigintGate::arm();
-    let salida = sync_plan_show_apply(backend, source, dest, opts, &sigint).await;
-    // Un Ctrl+C durante la planificación YA no mata el proceso a las bravas
-    // (#180: `sync_plan_show_apply` arma su propio `watch_ctrl_c` y cancela
-    // por el token, así que `run_sync_plan` cierra el spool antes de volver
-    // aquí). Esta llamada sigue siendo necesaria por lo demás: un `--dry-run`
-    // o una pregunta contestada que no también dejarían el plan retenido si
-    // nadie lo soltara.
+    let outcome = sync_plan_show_apply(backend, source, dest, opts, &sigint).await;
+    // A Ctrl+C during planning no longer kills the process outright
+    // (#180: `sync_plan_show_apply` arms its own `watch_ctrl_c` and
+    // cancels via the token, so `run_sync_plan` closes the spool before
+    // returning here). This call is still needed for the rest: a
+    // `--dry-run` or a question answered no would also leave the plan
+    // retained if nobody released it.
     backend.drop_retained_plans().await;
-    salida
+    outcome
 }
 
-/// El cuerpo de [`sync_cmd`], con sus salidas tempranas. Ver allí por qué está
-/// partido en dos.
+/// The body of [`sync_cmd`], with its early exits. See there for why it is
+/// split in two.
 async fn sync_plan_show_apply(
     backend: &Backend,
     source: &std::path::Path,
@@ -72,9 +75,9 @@ async fn sync_plan_show_apply(
     let source = vpath(source)?;
     let dest = vpath(dest)?;
 
-    // `SyncCompareOptions` sí deriva un `Default` de verdad (a diferencia de
-    // `FsCompareParams` en `compare_cmd`), así que no hay un 2000 mágico que
-    // repetir aquí.
+    // `SyncCompareOptions` DOES derive a real `Default` (unlike
+    // `FsCompareParams` in `compare_cmd`), so there is no magic 2000 to
+    // repeat here.
     let mut compare = norte_proto::methods::SyncCompareOptions {
         criteria: parse_compare_criteria(opts.criteria)?,
         ..norte_proto::methods::SyncCompareOptions::default()
@@ -88,37 +91,40 @@ async fn sync_plan_show_apply(
         dest,
         mode: opts.mode.into(),
         compare,
-        // "ausente = del llamante no es" — se deja en su default (Copy), como
-        // pide la tarea.
+        // "absent = the caller doesn't have one" — left at its default
+        // (Copy), as the task asks.
         on_unknown: norte_proto::methods::OnUnknown::default(),
         include: None,
     };
 
-    // La Task nace DENTRO de `sync_plan`, y el `.part` del spool con ella: el
-    // `Ctrl+C` que llegue entre una cosa y otra tiene que esperar al handle,
-    // no matar el proceso (que se saltaría el `Drop` que borra el `.part`).
-    sigint.naciendo();
+    // The Task is born INSIDE `sync_plan`, and the spool's `.part` with
+    // it: a `Ctrl+C` arriving between the two has to wait for the handle,
+    // not kill the process (which would skip the `Drop` that deletes the
+    // `.part`).
+    sigint.arming();
     let (task, mut rx) = backend
         .sync_plan(params)
         .await
         .map_err(|e| anyhow::anyhow!("{e}"))
         .context(norte_i18n::t("cli-sync-failed"))?;
 
-    // Ctrl+C durante el drenaje cancela la Task por su `CancellationToken`
-    // (regla dura 3), igual que la mitad de apply — y no por el SIGINT por
-    // defecto del SO. Antes de esto, este `while let` no tenía manejador
-    // alguno: Ctrl+C mataba el proceso ENTERO antes de que `run_sync_plan`
-    // pudiera ver el token y cerrar el spool, así que el `.part` que
-    // `sync.plan` deja en `<estado>/sync-spools/` quedaba huérfano para
-    // siempre (#180) — el TTL solo barre planes CERRADOS y esta CLI no tiene
-    // daemon que lo recoja al arrancar. Cancelado LIMPIO, en cambio,
-    // `run_sync_plan` ve el token, corta el flujo y llama
-    // `writer.finish(PlanOutcome::Interrupted)`, que sí borra el `.part`.
-    sigint.apunta_a(&task);
+    // A Ctrl+C during the drain cancels the Task via its
+    // `CancellationToken` (hard rule 3), like the apply half — and not via
+    // the OS's default SIGINT. Before this, this `while let` had no
+    // handler at all: Ctrl+C killed the WHOLE process before
+    // `run_sync_plan` could see the token and close the spool, so the
+    // `.part` that `sync.plan` leaves in `<state>/sync-spools/` stayed
+    // orphaned forever (#180) — the TTL only sweeps CLOSED plans and this
+    // CLI has no daemon to collect it at startup. Cancelled CLEANLY,
+    // instead, `run_sync_plan` sees the token, cuts the flow and calls
+    // `writer.finish(PlanOutcome::Interrupted)`, which does delete the
+    // `.part`.
+    sigint.point_at(&task);
 
-    // El ÚNICO sitio donde los pasos se cuadran contra `SyncPlanDone::counts`
-    // es `SyncState`; montar un `SyncPlan` a mano sería una segunda ocasión de
-    // olvidar esa comprobación (la razón de ser de esta tarea).
+    // The ONLY place where the steps are squared against
+    // `SyncPlanDone::counts` is `SyncState`; assembling a `SyncPlan` by
+    // hand would be a second chance to forget that check (this task's
+    // whole reason for existing).
     let mut state = norte_frontend::sync::SyncState::default();
     while let Some(event) = rx.recv().await {
         match event {
@@ -130,19 +136,21 @@ async fn sync_plan_show_apply(
             }
         }
     }
-    // La Task terminó (el canal se cerró): el manejador ya no tiene nada que
-    // cancelar. Sin este `abort()` el `ctrl_c()` de dentro se queda vivo para
-    // siempre, esperando una señal que ya no le sirve a nadie.
-    sigint.suelta();
+    // The Task finished (the channel closed): the handler no longer has
+    // anything to cancel. Without this `abort()`, the `ctrl_c()` inside
+    // stays alive forever, waiting for a signal that is no longer useful
+    // to anyone.
+    sigint.release();
 
-    // El canal se cierra cuando la Task termina, así que este `join` no
-    // espera de más. Se exige AMBAS cosas: que el estado haya cerrado
-    // (`sync.plan_done` llegó) Y que la Task terminara `Completed`. Un canal
-    // que se cierra con el diálogo aún en `Planning` — la Task murió,
-    // canceló, o el buffer de este proceso se llenó y el enrutado cerró el
-    // feed (ver la rustdoc de `Backend::sync_plan`) — es exactamente el "no
-    // se pudo saber" que no puede confundirse con "sin diferencias": sin
-    // `sync.plan_done` no hay `plan_hash` y no hay nada que aprobar.
+    // The channel closes when the Task finishes, so this `join` does not
+    // wait extra. BOTH things are required: that the state has closed
+    // (`sync.plan_done` arrived) AND that the Task finished `Completed`.
+    // A channel that closes with the dialog still in `Planning` — the
+    // Task died, cancelled, or this process's buffer filled up and the
+    // routing closed the feed (see `Backend::sync_plan`'s rustdoc) — is
+    // exactly the "could not tell" that must not be confused with "no
+    // differences": without `sync.plan_done` there is no `plan_hash` and
+    // nothing to approve.
     let task_state = task.join().await;
     let plan = match state {
         norte_frontend::sync::SyncState::Ready(plan) if task_state == TaskState::Completed => plan,
@@ -158,18 +166,19 @@ async fn sync_plan_show_apply(
         }
     };
 
-    // Si el plan se puede aprobar, y si no por qué, lo decide
-    // `SyncPlan::approval` — el MISMO veredicto que habilita la tecla de
-    // aprobar en la TUI y en la ventana (regla 7). Esta CLI repetía sus tres
-    // condiciones a mano y en otro orden, y en ese orden una lista vacía se
-    // leía como «ya coinciden» ANTES de mirar la integridad: un plan que
-    // anunciaba dos copias y no traía ninguna salía con 0.
+    // Whether the plan can be approved, and if not why, is decided by
+    // `SyncPlan::approval` — the SAME verdict that enables the approve
+    // key in the TUI and in the window (rule 7). This CLI used to repeat
+    // its three conditions by hand and in a different order, and in that
+    // order an empty list read as "already matching" BEFORE looking at
+    // integrity: a plan announcing two copies and bringing none would
+    // exit with 0.
     //
-    // Un plan BLOQUEADO no se enseña (no hay plan: `!executable` ⟹ `steps`
-    // vacío, y leerlo por la lista diría «nada que sincronizar»), y uno ya
-    // sincronizado no tiene nada que enseñar.
-    let aprobacion = plan.approval();
-    match aprobacion {
+    // A BLOCKED plan is not shown (there is no plan: `!executable` ⟹
+    // empty `steps`, and reading it from the list would say "nothing to
+    // sync"), and one already in sync has nothing to show.
+    let approval = plan.approval();
+    match approval {
         Approval::Blocked => return Ok(report_blockers(plan.done())),
         Approval::InSync => {
             println!("{}", norte_i18n::t("cli-sync-empty"));
@@ -179,30 +188,31 @@ async fn sync_plan_show_apply(
     }
 
     if let Err(e) = print_plan(&plan) {
-        return Ok(codigo_por_escritura(&e));
+        return Ok(write_error_code(&e));
     }
 
-    match aprobacion {
-        // Los pasos que se acaban de enseñar no cuadran con lo que el plan
-        // dice ser. Se enseñan igual —son la explicación— pero no se aplica: el
-        // plan que `sync.apply` ejecutaría es el RETENIDO, entero, y aprobar
-        // una lista que no es esa es aprobar a ciegas. Vale también para
-        // `--dry-run`: un plan que no se puede enseñar entero tampoco se ha
-        // «enseñado».
-        Approval::Incomplete(integridad) => {
+    match approval {
+        // The steps that were just shown do not match what the plan
+        // claims to be. They are shown anyway — they are the explanation
+        // — but nothing is applied: the plan `sync.apply` would run is
+        // the RETAINED one, whole, and approving a list that is not that
+        // one is approving blind. Also applies to `--dry-run`: a plan
+        // that cannot be shown whole has not been "shown" either.
+        Approval::Incomplete(integrity) => {
             eprintln!(
                 "norte: {}",
                 norte_i18n::ta(
                     "cli-sync-integrity",
-                    &[("detail", &format!("{integridad:?}"))],
+                    &[("detail", &format!("{integrity:?}"))],
                 )
             );
             return Ok(ExitCode::from(2));
         }
-        // Ni un paso que escriba: todo lo que el plan trae son omisiones. No
-        // hay nada que aprobar y aplicar no cambiaría un byte, pero tampoco se
-        // ha resuelto la diferencia que las provocó — así que no es un 0. Con
-        // `--dry-run` es un 1 como cualquier otra diferencia.
+        // Not even one step that writes: everything the plan brings is
+        // omissions. There is nothing to approve and applying would not
+        // change a byte, but the difference that caused them has not been
+        // resolved either — so it is not a 0. With `--dry-run` it is a 1
+        // like any other difference.
         Approval::NothingActs if !opts.dry_run => {
             eprintln!("norte: {}", norte_i18n::t("cli-sync-nothing-to-apply"));
             return Ok(ExitCode::from(2));
@@ -216,36 +226,37 @@ async fn sync_plan_show_apply(
     sync_apply_and_report(backend, &plan, opts.yes, sigint).await
 }
 
-/// Enseña por qué un plan no se puede ejecutar, y devuelve el código con el
-/// que se sale de ahí (siempre 2: no ocurrió nada).
+/// Shows why a plan cannot be run, and returns the code it exits with
+/// (always 2: nothing happened).
 ///
-/// A stderr porque no es el plan —el plan no existe: `!executable` ⟹ `steps`
-/// vacío— sino la explicación de que no lo haya.
+/// To stderr because it is not the plan — the plan does not exist:
+/// `!executable` ⟹ empty `steps` — but the explanation of why not.
 ///
-/// Cada bloqueo son TRES líneas —ruta, ancla si consta, y motivo— nunca una
-/// sola con `: ` en medio: era la misma forma que se le quitó a
-/// `cli-sync-failure`, y un nombre puede fingirla (corpus `cause_join_spoof`,
-/// #189). El ancla importa porque tres de las cuatro clases nombradas
-/// —`AmbiguousDest`, `DestReadOnly`, `DirTooLarge`— nombran el DESTINO por
-/// definición, y antes de `blocker_anchor` esta lista las leía con la
-/// reinterpretación del origen (#152 reproducido contra tres rutas del otro
-/// árbol).
+/// Each blocker is THREE lines — path, anchor if there is one, and reason
+/// — never a single one with `: ` in the middle: that was the same shape
+/// removed from `cli-sync-failure`, and a name can fake it (corpus
+/// `cause_join_spoof`, #189). The anchor matters because three of the four
+/// named classes — `AmbiguousDest`, `DestReadOnly`, `DirTooLarge` — name
+/// the DESTINATION by definition, and before `blocker_anchor` this list
+/// read them with the source's reinterpretation (#152 reproduced against
+/// three paths of the other tree).
 fn report_blockers(done: &norte_proto::methods::SyncPlanDone) -> ExitCode {
     eprintln!("norte: {}", norte_i18n::t("cli-sync-blocked"));
     let lang = norte_i18n::active();
     let enc = norte_frontend::sync::SyncEncodings::default();
     for blocker in &done.blockers {
         let anchor = norte_frontend::sync::blocker_anchor(blocker);
-        // Y no `rel_display` a secas: un bloqueo que no es de un sitio
-        // concreto —un destino de solo lectura— trae la RAÍZ (`rel` vacío),
-        // y `rel_display` sola pinta eso como nada. `rel_display_or_root` es
-        // el contrato que `RelDisplay::text` documenta y que ningún painter
-        // cumplía (#193): «todo el árbol», no una línea en blanco.
+        // And not plain `rel_display`: a blocker that is not about a
+        // specific spot — a read-only destination — carries the ROOT
+        // (empty `rel`), and `rel_display` alone paints that as nothing.
+        // `rel_display_or_root` is the contract `RelDisplay::text`
+        // documents and that no painter honored (#193): "the whole tree",
+        // not a blank line.
         let rel =
             norte_frontend::sync::rel_display_or_root(&blocker.rel, enc.for_anchor(anchor), lang);
         eprintln!(
             "  {}",
-            norte_i18n::ta("cli-sync-blocker", &[("rel", &rel_marcado(&rel))])
+            norte_i18n::ta("cli-sync-blocker", &[("rel", &rel_marked(&rel))])
         );
         if let Some(q) = norte_frontend::sync::anchor_label(anchor, lang) {
             eprintln!("    {q}");
@@ -261,92 +272,92 @@ fn report_blockers(done: &norte_proto::methods::SyncPlanDone) -> ExitCode {
             )
         );
     }
-    // La lista viene CAPADA (`SYNC_MAX_BLOCKERS_REPORTED`) y el total no:
-    // callar la diferencia haría creer que se han visto todos.
-    let mostrados = u64::try_from(done.blockers.len()).unwrap_or(u64::MAX);
-    if done.blockers_total > mostrados {
+    // The list arrives CAPPED (`SYNC_MAX_BLOCKERS_REPORTED`) and the total
+    // does not: staying silent about the difference would suggest all of
+    // them were seen.
+    let shown = u64::try_from(done.blockers.len()).unwrap_or(u64::MAX);
+    if done.blockers_total > shown {
         eprintln!(
             "  {}",
             norte_i18n::ta(
                 "cli-sync-blockers-more",
-                &[(
-                    "n",
-                    &done.blockers_total.saturating_sub(mostrados).to_string(),
-                )],
+                &[("n", &done.blockers_total.saturating_sub(shown).to_string(),)],
             )
         );
     }
     ExitCode::from(2)
 }
 
-/// Escribe el plan ENTERO —cabecera, un paso por línea, y el resumen— a
-/// stdout.
+/// Writes the WHOLE plan — header, one step per line, and the summary —
+/// to stdout.
 ///
-/// Nombres que este proceso no controla del todo (el destino puede deletrear
-/// una entrada distinto del origen, #152): MARCAR el enmascarado, igual que
-/// `ai_cmd` y `compare_cmd` — ver [`rel_marcado`].
+/// Names this process does not fully control (the destination can spell
+/// an entry differently from the source, #152): MARK the masked one, like
+/// `ai_cmd` and `compare_cmd` — see [`rel_marked`].
 ///
-/// Por un `BufWriter` que se suelta al volver: bufferizado para no pagar una
-/// syscall por paso, y devolviendo el error de escritura en vez de hacer
-/// `panic!` como haría `println!` (`| head` sobre un plan de diez mil pasos es
-/// la forma normal de asomarse a él). Que el lock se suelte AQUÍ importa: lo
-/// que se imprima después —la pregunta, el informe— no puede adelantarse al
-/// plan.
+/// Via a `BufWriter` released on return: buffered so as not to pay one
+/// syscall per step, and returning the write error instead of panicking
+/// the way `println!` would (`| head` on a ten-thousand-step plan is the
+/// normal way to peek at it). The lock being released HERE matters: what
+/// gets printed afterward — the question, the report — must not get ahead
+/// of the plan.
 ///
 /// # Errors
-/// Lo que diga la escritura a stdout; el llamante lo traduce con
-/// [`codigo_por_escritura`].
-/// Las LÍNEAS de un paso del plan: una por campo, nunca una unida.
+/// Whatever stdout's write says; the caller translates it with
+/// [`write_error_code`].
+/// The LINES of a plan step: one per field, never joined into one.
 ///
-/// Pura y separada de [`print_plan`] para poder pinearla — el e2e solo alcanza
-/// pasos sin `dest_rel`, que es justo la rama que no falla.
+/// Pure and separate from [`print_plan`] so it can be pinned — the e2e
+/// only reaches steps without `dest_rel`, which is exactly the branch
+/// that does not fail.
 ///
-/// **Un campo por línea** (auditoría de encoding de la revisión de rama de C2,
-/// MAJOR-2). ` → ` y `  (…)` son imprimibles corrientes que
-/// `display_name_with` no enmascara, así que llegan SIN el `!` de
-/// [`rel_marcado`]: un fichero llamado `a → mem_b.txt` —corpus
-/// `arrow_join_spoof`— fingía la pareja entera, y uno llamado
-/// `backup  (unreadable)` fingía el VEREDICTO, en la lista que el humano
-/// repasa buscando qué se borra. Y aquí pesa más que en el informe: el informe
-/// es posterior, esto es la pantalla ANTES del `y`. El salto de línea sí es un
-/// separador que un nombre no puede falsificar — `\n` es Cc y
-/// `is_terminal_hazard` lo enmascara a `U+FFFD`.
+/// **One field per line** (C2 branch review's encoding audit, MAJOR-2).
+/// ` → ` and `  (…)` are ordinary printables that `display_name_with`
+/// does not mask, so they arrive WITHOUT [`rel_marked`]'s `!`: a file
+/// named `a → mem_b.txt` — corpus `arrow_join_spoof` — faked the whole
+/// pair, and one named `backup  (unreadable)` faked the VERDICT, in the
+/// list a human reviews looking for what gets deleted. And here it
+/// weighs more than in the report: the report comes later, this is the
+/// screen BEFORE the `y`. The newline IS a separator a name cannot fake —
+/// `\n` is Cc and `is_terminal_hazard` masks it to `U+FFFD`.
 ///
-/// LOS TRES glifos van en la primera, los mismos que la TUI: el del medio es
-/// la CONFIANZA de la comparación que produjo el paso —o sea «esta
-/// sobrescritura se decide sólo por la fecha»— y ésta es la pantalla en la que
-/// un humano dice que sí a borrar un subárbol.
+/// ALL THREE glyphs go in the first line, the same as the TUI: the middle
+/// one is the CONFIDENCE of the comparison that produced the step — i.e.
+/// "this overwrite is decided by date alone" — and this is the screen
+/// where a human says yes to deleting a subtree.
 fn plan_step_lines(cells: &norte_frontend::sync::StepCells) -> Vec<String> {
     let lang = norte_i18n::active();
-    let mut lineas = vec![format!(
+    let mut lines = vec![format!(
         "{}{}{} {}",
         cells.glyphs.kind,
         cells.glyphs.confidence,
         cells.glyphs.undo,
-        rel_marcado(&cells.rel)
+        rel_marked(&cells.rel)
     )];
-    // El ancla, cuando la ruta NO cuelga del origen. En una lista donde una
-    // ruta sin calificar significa «del origen», callarlo lo AFIRMA — y el
-    // `rel` de un `DeleteTree` cuelga del destino (MAJOR-1: la CLI era el
-    // único de los tres painters que tiraba este campo).
+    // The anchor, when the path does NOT hang off the source. In a list
+    // where an unqualified path means "from the source", staying silent
+    // AFFIRMS it — and a `DeleteTree`'s `rel` hangs off the destination
+    // (MAJOR-1: the CLI was the only one of the three painters dropping
+    // this field).
     if let Some(q) = norte_frontend::sync::anchor_label(cells.anchor, lang) {
-        lineas.push(format!("  {q}"));
+        lines.push(format!("  {q}"));
     }
     if let Some(d) = &cells.dest_rel {
-        lineas.push(format!(
+        lines.push(format!(
             "  {}",
-            norte_i18n::ta("cli-sync-step-dest", &[("dest", &rel_marcado(d))])
+            norte_i18n::ta("cli-sync-step-dest", &[("dest", &rel_marked(d))])
         ));
-        // Las dos mitades pintan igual (un par NFC/NFD, típicamente) sin que
-        // ninguna llegue hostil: sin esto la CLI repite la misma cadena en
-        // dos líneas y nada explica por qué (#192).
+        // Both halves paint the same (an NFC/NFD pair, typically) without
+        // either being hostile: without this the CLI repeats the same
+        // string on two lines and nothing explains why (#192).
         if let Some(q) = norte_frontend::sync::dest_twin_label(cells.dest_rel_twin, lang) {
-            lineas.push(format!("  {q}"));
+            lines.push(format!("  {q}"));
         }
     }
-    // El porqué de una omisión, o de un undo que no devolvería el fichero.
+    // The reason for an omission, or an undo that would not restore the
+    // file.
     if let Some(r) = cells.reason {
-        lineas.push(format!(
+        lines.push(format!(
             "  {}",
             norte_i18n::ta(
                 "cli-sync-step-reason",
@@ -354,7 +365,7 @@ fn plan_step_lines(cells: &norte_frontend::sync::StepCells) -> Vec<String> {
             )
         ));
     }
-    lineas
+    lines
 }
 
 fn print_plan(plan: &norte_frontend::sync::SyncPlan) -> std::io::Result<()> {
@@ -363,15 +374,15 @@ fn print_plan(plan: &norte_frontend::sync::SyncPlan) -> std::io::Result<()> {
     let mut out = std::io::BufWriter::new(std::io::stdout().lock());
     writeln!(out, "{}", norte_i18n::t("cli-sync-plan"))?;
     for step in plan.steps() {
-        // Sin reinterpretación por lado: el CLI no tiene panes, así que los
-        // nombres se leen como vienen (`SyncEncodings::default()`).
+        // No per-side reinterpretation: the CLI has no panes, so names
+        // are read as they come (`SyncEncodings::default()`).
         let cells = norte_frontend::sync::render_step(
             step,
             plan.dest_trash(),
             norte_frontend::sync::SyncEncodings::default(),
         );
-        for linea in plan_step_lines(&cells) {
-            writeln!(out, "{linea}")?;
+        for line in plan_step_lines(&cells) {
+            writeln!(out, "{line}")?;
         }
     }
     for line in plan.summary_lines(norte_i18n::active()) {
@@ -380,46 +391,48 @@ fn print_plan(plan: &norte_frontend::sync::SyncPlan) -> std::io::Result<()> {
     out.flush()
 }
 
-/// La segunda mitad de `norte sync` (tarea 3): resolver el journal, preguntar
-/// salvo `--yes`, aplicar y contar. Separada de [`sync_cmd`] por longitud, no
-/// por independencia — solo se llama desde ahí, con el plan que ACABA de
-/// imprimirse, así que no hay camino que la alcance sin que el plan entero ya
-/// estuviera en pantalla.
+/// The second half of `norte sync` (task 3): resolve the journal, ask
+/// unless `--yes`, apply and count. Separate from [`sync_cmd`] for length,
+/// not independence — it is only called from there, with the plan that
+/// JUST got printed, so there is no path that reaches it without the
+/// whole plan already being on screen.
 async fn sync_apply_and_report(
     backend: &Backend,
     plan: &norte_frontend::sync::SyncPlan,
     yes: bool,
     sigint: &SigintGate,
 ) -> anyhow::Result<ExitCode> {
-    // El llamante ya descartó todo lo que no es `Approvable`, y lo que se
-    // enseñó fue ESTE plan. Se comprueba igual porque lo que sigue escribe en
-    // el disco de alguien: si un día otro camino llega aquí, se para con el
-    // mismo código que todo lo que no llegó a escribir.
+    // The caller already discarded everything that is not `Approvable`,
+    // and what got shown was THIS plan. It is checked anyway because what
+    // follows writes to someone's disk: if another path ever reaches here,
+    // it stops with the same code as everything that never got to write.
     if !plan.can_approve() {
         eprintln!("norte: {}", norte_i18n::t("cli-sync-nothing-to-apply"));
         return Ok(ExitCode::from(2));
     }
 
-    // El journal se resuelve AQUÍ, antes de preguntar y antes de escribir, y no
-    // en la primera mutación: lo que se está decidiendo es si se reescribe un
-    // subárbol, y «esto no se va a poder deshacer» es parte de la pregunta, no
-    // una nota a pie después del sí. FUERA del `if !yes` porque con `--yes` no
-    // hay pregunta que completar pero sigue habiendo un log que alguien lee, y
-    // ese es justamente el camino donde nadie mira la pantalla.
+    // The journal is resolved HERE, before asking and before writing, and
+    // not on the first mutation: what is being decided is whether to
+    // rewrite a subtree, and "this cannot be undone" is part of the
+    // question, not a footnote after the yes. OUTSIDE the `if !yes` because
+    // with `--yes` there is no question to complete but there is still a
+    // log someone reads, and that is exactly the path where nobody is
+    // looking at the screen.
     //
-    // Y se PARA, no se avisa: `Engine::sync_apply_as` se niega igual unas
-    // líneas más abajo, así que seguir sólo cambia dónde aparece el «no» y
-    // quién lo entiende.
+    // And it STOPS, it does not just warn: `Engine::sync_apply_as` refuses
+    // just the same a few lines below, so continuing only changes where
+    // the "no" appears and who understands it.
     //
-    // **Dos motivos, dos frases** (#178). El caso corriente es que el journal
-    // lo tenga OTRO: el embebido es el MISMO `journal.db` que el daemon abre en
-    // exclusiva, así que cualquiera con un `ntc` o un daemon vivo cae ahí, y el
-    // remedio —hablar con ese daemon en vez de pelearle el fichero— es
-    // `--daemon`. Pero con un journal ILEGIBLE ese remedio no existe: `norte
-    // daemon run` se niega a arrancar con ese mismo fichero, así que mandar al
-    // usuario a `--daemon` sería mandarlo a otra pared. Decirle cuál de las dos
-    // paredes tiene delante es toda la diferencia entre un mensaje accionable y
-    // uno que hace perder media hora.
+    // **Two reasons, two sentences** (#178). The common case is that
+    // SOMEONE ELSE holds the journal: the embedded one is the SAME
+    // `journal.db` the daemon opens exclusively, so anyone with an `ntc`
+    // or a live daemon lands there, and the remedy — talk to that daemon
+    // instead of fighting it for the file — is `--daemon`. But with an
+    // UNREADABLE journal that remedy does not exist: `norte daemon run`
+    // refuses to start with that same file, so sending the user to
+    // `--daemon` would send them into another wall. Telling them which of
+    // the two walls they are facing is the whole difference between an
+    // actionable message and one that wastes half an hour.
     match backend.journal_obstacle().await {
         Some(norte_core::embedded::NoJournal::Failed(_)) => {
             eprintln!("norte: {}", norte_i18n::t("cli-sync-journal-unreadable"));
@@ -434,30 +447,32 @@ async fn sync_apply_and_report(
 
     if !yes {
         use std::io::{IsTerminal as _, Write as _};
-        // Sin terminal no hay a quién preguntar, y una pregunta que nadie va a
-        // contestar no se hace: se rehúsa ANTES, como el prompt TOFU de este
-        // mismo fichero. Leer el EOF de un `< /dev/null` como una negativa
-        // sería igual de correcto en cuanto a lo que se escribe (nada) y mucho
-        // peor de explicar, porque el humano que montó el cron no está aquí
-        // para leerlo; que salga nombrando `--yes` sí lo lee mañana en el log.
+        // Without a terminal there is nobody to ask, and a question
+        // nobody is going to answer is not asked: it refuses BEFOREHAND,
+        // like this same file's TOFU prompt. Reading a `< /dev/null`'s
+        // EOF as a "no" would be just as correct as far as what gets
+        // written (nothing), and much worse to explain, because the
+        // human who set up the cron job is not here to read it; exiting
+        // while naming `--yes` does get read tomorrow, in the log.
         if !std::io::stdin().is_terminal() {
             eprintln!("norte: {}", norte_i18n::t("cli-sync-noninteractive"));
             return Ok(ExitCode::from(2));
         }
-        // La SEGUNDA pregunta, cuando el plan la merece (borra árboles del
-        // destino o el undo no lo devuelve todo): `SyncPlan::confirmation` ya
-        // la redacta a partir de `dest_trash` y los contadores — no hay una
-        // segunda frase sobre borrado que escribir aquí sin arriesgarse a que
-        // diga algo distinto de lo que el resumen ya dijo. Que aparezca
-        // depende de `can_approve`, y sus tres condiciones están comprobadas
-        // antes de llegar aquí: si no lo estuvieran, el plan MENOS fiable sería
-        // justo el que preguntara con un `[s/N]` pelado.
+        // The SECOND question, when the plan deserves it (it deletes
+        // destination trees or the undo does not restore everything):
+        // `SyncPlan::confirmation` already writes it from `dest_trash`
+        // and the counters — there is no second sentence about deletion
+        // to write here without risking it saying something different
+        // from what the summary already said. Whether it shows up
+        // depends on `can_approve`, and its three conditions are checked
+        // before reaching here: if they weren't, the LEAST trustworthy
+        // plan would be exactly the one asking with a bare `[y/N]`.
         if let Some(confirmation) = plan.confirmation(norte_i18n::active()) {
             eprintln!("{}", confirmation.text);
         }
         eprint!("{} ", norte_i18n::t("cli-sync-confirm"));
         std::io::stderr().flush().ok();
-        // stdin es bloqueante: fuera del reactor (regla 2).
+        // stdin is blocking: off the reactor (hard rule 2).
         let line = tokio::task::spawn_blocking(|| {
             let mut s = String::new();
             std::io::stdin().read_line(&mut s).map(|_| s)
@@ -466,41 +481,42 @@ async fn sync_apply_and_report(
         .context(norte_i18n::t("cli-confirm-read"))??;
         let ans = line.trim().to_ascii_lowercase();
         if ans != "y" && ans != "s" {
-            // Un «no» NO es «los árboles están sincronizados». Sale por el
-            // mismo código que todo lo demás que no llegó a escribir, que es
-            // lo que un `norte sync src dst && echo ok` necesita para no
-            // mentir.
+            // A "no" is NOT "the trees are in sync". It exits with the
+            // same code as everything else that never got to write, which
+            // is what a `norte sync src dst && echo ok` needs so as not
+            // to lie.
             println!("{}", norte_i18n::t("cli-sync-abort"));
             return Ok(ExitCode::from(2));
         }
     }
 
-    // Misma ventana que en la planificación: la Task de apply ya está
-    // ESCRIBIENDO antes de que `drive_task` la apunte, y un `Ctrl+C` ahí
-    // mataba el proceso en crudo — sin cancelación limpia y sin el
-    // `.norte-partial` que la regla dura 3 promete.
-    sigint.naciendo();
+    // Same window as in planning: the apply Task is already WRITING
+    // before `drive_task` points at it, and a `Ctrl+C` there used to kill
+    // the process raw — without clean cancellation and without the
+    // `.norte-partial` hard rule 3 promises.
+    sigint.arming();
     let apply_task = backend
         .sync_apply(&plan.done().plan_hash)
         .await
         .map_err(|e| anyhow::anyhow!("{e}"))
         .context(norte_i18n::t("cli-sync-failed"))?;
     let task_id = apply_task.id();
-    // `drive_task` y no `run_task`: Ctrl+C tiene que cancelar LIMPIO por el
-    // `CancellationToken` de la Task (regla dura 3), no matar el proceso a
-    // medio escribir un árbol — la trampa que la propia CLAUDE.md nombra
-    // («cancelar una copia debe dejar un destino limpio o un
-    // `.norte-partial`, nunca un parcial sin marcar»). Hasta ahí es lo mismo
-    // que `cp`/`mv`/`rm`/`undo`.
+    // `drive_task` and not `run_task`: Ctrl+C has to cancel CLEANLY via
+    // the Task's `CancellationToken` (hard rule 3), not kill the process
+    // halfway through writing a tree — the trap CLAUDE.md itself names
+    // ("cancelling a copy must leave a clean destination or a
+    // `.norte-partial`, never an unmarked partial file"). Up to there it
+    // is the same as `cp`/`mv`/`rm`/`undo`.
     //
-    // Donde diverge (#187): `run_task` traduciría un `Cancelled` a «destino
-    // limpio» y volvería sin pedir el informe — cierto para esos cuatro
-    // comandos, falso aquí. Un `sync.apply` cancelado deja lo aplicado hasta
-    // el corte JOURNALIZADO (regla dura 4), y `sync.report` es la única forma
-    // de decir cuánto: la TUI y la GUI ya lo piden siempre que la Task
-    // termina, cancelación incluida (`harvest_sync_apply`,
-    // `norte_frontend::sync::SyncView::on_apply_ended`). Este comando era el
-    // único de los tres frontends que no podía decirlo.
+    // Where it diverges (#187): `run_task` would translate a `Cancelled`
+    // to "clean destination" and return without asking for the report —
+    // true for those four commands, false here. A cancelled `sync.apply`
+    // leaves what was applied up to the JOURNALED cutoff (hard rule 4),
+    // and `sync.report` is the only way to say how much: the TUI and the
+    // GUI already ask for it whenever the Task ends, cancellation
+    // included (`harvest_sync_apply`,
+    // `norte_frontend::sync::SyncView::on_apply_ended`). This command was
+    // the only one of the three frontends that could not say so.
     let final_state = drive_task(apply_task, true, Some(sigint)).await;
     match &final_state {
         TaskState::Completed => {}
@@ -514,10 +530,10 @@ async fn sync_apply_and_report(
             );
         }
         other => {
-            // El canal de progreso se cerró sin que la Task llegara a un
-            // desenlace terminal (la conexión murió a medio camino): no hay
-            // nada fiable que pedir, mismo criterio que la rama equivalente de
-            // `run_task`.
+            // The progress channel closed without the Task reaching a
+            // terminal outcome (the connection died halfway): there is
+            // nothing reliable to ask for, same criterion as `run_task`'s
+            // equivalent branch.
             eprintln!(
                 "{}",
                 norte_i18n::ta("cli-unexpected-state", &[("state", &format!("{other:?}"))])
@@ -533,14 +549,15 @@ async fn sync_apply_and_report(
 
     print_sync_report(&report);
 
-    // El ÚNICO 1 de este comando: un apply que TERMINÓ (`Completed`) y no
-    // dejó ningún fallo detrás. Todo lo demás —lo que no se pudo planificar,
-    // lo que no se aprobó, lo que no se pudo aplicar, lo que se canceló y lo
-    // que se aplicó a medias— es 2. Antes de #187 una `Task` que `Failed`
-    // salía por el 1 de `ExitCode::FAILURE` de `run_task` — el MISMO código
-    // que un apply limpio sin fallos, colisión que el `match` de arriba ya
-    // resolvió devolviendo 2 antes de llegar hasta aquí para todo lo que no
-    // sea `Completed`.
+    // The ONLY 1 this command returns: an apply that FINISHED
+    // (`Completed`) and left no failure behind. Everything else — what
+    // could not be planned, what was not approved, what could not be
+    // applied, what was cancelled and what was applied halfway — is 2.
+    // Before #187 a `Task` that `Failed` exited with `run_task`'s
+    // `ExitCode::FAILURE` of 1 — the SAME code as a clean apply with no
+    // failures, a collision the `match` above already resolved by
+    // returning 2 before reaching here for anything that is not
+    // `Completed`.
     Ok(ExitCode::from(
         if matches!(final_state, TaskState::Completed) && report.failed == 0 {
             1
@@ -550,14 +567,14 @@ async fn sync_apply_and_report(
     ))
 }
 
-/// La línea de cuentas y la lista de fallos de un
-/// [`SyncReportResult`](norte_proto::methods::SyncReportResult), en el
-/// mismo formato pase lo que pase (#187): un informe cancelado a medias se
-/// imprime IGUAL que uno completo, porque lo aplicado hasta el corte es tan
-/// real como lo demás.
+/// The count line and the failure list of a
+/// [`SyncReportResult`](norte_proto::methods::SyncReportResult), in the
+/// same format no matter what (#187): a report cancelled halfway prints
+/// THE SAME as a complete one, because what got applied up to the cutoff
+/// is as real as the rest.
 ///
-/// Separada de [`sync_apply_and_report`] solo por longitud (`too_many_lines`
-/// de clippy) — no hay un segundo llamante.
+/// Separate from [`sync_apply_and_report`] only for length (clippy's
+/// `too_many_lines`) — there is no second caller.
 fn print_sync_report(report: &norte_proto::methods::SyncReportResult) {
     println!(
         "{}",
@@ -570,12 +587,13 @@ fn print_sync_report(report: &norte_proto::methods::SyncReportResult) {
             ],
         )
     );
-    // Y si esto se puede devolver o no (#208). La CLI es el lector que NUNCA
-    // tuvo el `sync.plan_done` delante —imprime un informe y termina—, así que
-    // hasta 0.42.0 esta línea no se podía escribir: cinco copias contra un
-    // destino sin papelera y cinco contra uno con papelera restaurable eran
-    // byte a byte el mismo informe. Solo cuando algo se aplicó: decirle «nada
-    // se puede deshacer» a quien no hizo nada es ruido.
+    // And whether this can be undone or not (#208). The CLI is the reader
+    // that NEVER had `sync.plan_done` in front of it — it prints a report
+    // and exits — so until 0.42.0 this line could not be written: five
+    // copies against a trash-less destination and five against one with
+    // restorable trash were byte-for-byte the same report. Only when
+    // something was applied: telling someone who did nothing "nothing can
+    // be undone" is noise.
     if report.done > 0 {
         let outlook = norte_frontend::sync::UndoOutlook::of_report(report);
         println!(
@@ -583,52 +601,54 @@ fn print_sync_report(report: &norte_proto::methods::SyncReportResult) {
             norte_i18n::t(&format!("sync-outlook-{}", outlook.id()))
         );
     }
-    // Una fila de fallo son TRES campos y va en TRES líneas, no en una unida
-    // por `: ` y ` → ` (auditoría de encoding MAJOR-4). Los dos joiners son
-    // imprimibles corrientes que `display_name_with` no enmascara, así que
-    // llegan SIN el `!` de `marcado`: `informe :→ copia.txt: permission
-    // denied` es un nombre legal en ext4 y APFS —está en la corpus, como
-    // `cause_join_spoof`— y en banda imprimía una fila entera fabricada,
-    // después de un `Mirror` destructivo.
+    // A failure row is THREE fields and goes on THREE lines, not joined
+    // into one with `: ` and ` → ` (encoding audit MAJOR-4). Both joiners
+    // are ordinary printables `display_name_with` does not mask, so they
+    // arrive WITHOUT `marked`'s `!`: `report :→ copy.txt: permission
+    // denied` is a legal name on ext4 and APFS — it is in the corpus, as
+    // `cause_join_spoof` — and used to print a whole fabricated row, after
+    // a destructive `Mirror`.
     //
-    // El salto de línea SÍ es un separador que un nombre no puede falsificar:
-    // `\n` es Cc, `is_terminal_hazard` lo enmascara a `U+FFFD` y el nombre
-    // llega badgeado. Es lo que la GUI consigue con elementos hermanos y una
-    // tubería no tiene.
+    // The newline IS a separator a name cannot fake: `\n` is Cc,
+    // `is_terminal_hazard` masks it to `U+FFFD` and the name arrives
+    // badged. It is what the GUI gets with sibling elements and a pipe
+    // does not have.
     //
-    // Esta lista ya se enseña también tras una cancelación (#187): el
-    // `match` de arriba solo AVISA de cómo acabó, y el informe —éste, con sus
-    // fallos— se pide y se imprime igual sea cual sea el desenlace terminal.
+    // This list is now also shown after a cancellation (#187): the
+    // `match` above only WARNS about how it ended, and the report —
+    // this one, with its failures — is requested and printed the same
+    // regardless of the terminal outcome.
     for failure in &report.failures {
-        // Por `render_failure` y no por dos `rel_display` sueltos: el plegado
-        // de la ortografía del destino cuando los BYTES coinciden es la misma
-        // regla que la de un paso, y vive una sola vez para los tres frontends
-        // (#161). Repetir la misma ruta con una flecha en medio sugiere un
-        // renombrado que no hay.
+        // Via `render_failure` and not two loose `rel_display` calls: the
+        // destination spelling's folding when the BYTES match is the same
+        // rule as a step's, and it lives once for the three frontends
+        // (#161). Repeating the same path with an arrow in the middle
+        // suggests a rename that did not happen.
         let cells = norte_frontend::sync::render_failure(
             failure,
             norte_frontend::sync::SyncEncodings::default(),
         );
         eprintln!(
             "{}",
-            norte_i18n::ta("cli-sync-failure", &[("rel", &rel_marcado(&cells.rel))])
+            norte_i18n::ta("cli-sync-failure", &[("rel", &rel_marked(&cells.rel))])
         );
-        // El ancla, por la misma razón que en el plan: `render_failure` la
-        // calcula y esta llamada existe para ella, pero la CLI la tiraba
-        // (auditoría de encoding, MAJOR-1). Un `DeleteTree` denegado bajo
-        // `Mirror` es la fila hostil más común de un `Mirror`, y su `rel`
-        // cuelga del DESTINO: sin calificar, el operador va a arreglar el
-        // árbol equivocado.
+        // The anchor, for the same reason as in the plan: `render_failure`
+        // computes it and this call exists for it, but the CLI dropped it
+        // (encoding audit, MAJOR-1). A `DeleteTree` denied under `Mirror`
+        // is a `Mirror`'s most common hostile row, and its `rel` hangs off
+        // the DESTINATION: unqualified, the operator is going to fix the
+        // wrong tree.
         if let Some(q) = norte_frontend::sync::anchor_label(cells.anchor, norte_i18n::active()) {
             eprintln!("  {q}");
         }
         if let Some(d) = &cells.dest_rel {
             eprintln!(
                 "  {}",
-                norte_i18n::ta("cli-sync-failure-dest", &[("dest", &rel_marcado(d))])
+                norte_i18n::ta("cli-sync-failure-dest", &[("dest", &rel_marked(d))])
             );
-            // #192: sin badge en ninguna mitad (las dos son UTF-8 válido), un
-            // par NFC/NFD se repite en dos líneas sin nada que lo explique.
+            // #192: with no badge on either half (both are valid UTF-8),
+            // an NFC/NFD pair repeats on two lines with nothing explaining
+            // it.
             if let Some(q) =
                 norte_frontend::sync::dest_twin_label(cells.dest_rel_twin, norte_i18n::active())
             {
@@ -652,14 +672,14 @@ fn print_sync_report(report: &norte_proto::methods::SyncReportResult) {
 mod tests {
     use super::*;
 
-    /// `cli-sync-blocker` no vuelve a unir la ruta y el motivo con `: `
-    /// (#189): la fixture `cause_join_spoof` de la corpus llevaba justo ese
-    /// joiner y habría fingido una fila entera.
+    /// `cli-sync-blocker` no longer joins the path and the reason with `: `
+    /// (#189): the corpus's `cause_join_spoof` fixture carried exactly
+    /// that joiner and would have faked a whole row.
     #[test]
-    fn el_bloqueo_no_une_ruta_y_motivo_en_una_linea() {
+    fn a_blocker_does_not_join_path_and_reason_on_one_line() {
         for lang in [norte_i18n::Lang::En, norte_i18n::Lang::Es] {
             let rel_line = norte_i18n::ta_in(lang, "cli-sync-blocker", &[("rel", "sub/a.txt")]);
-            assert_eq!(rel_line, "sub/a.txt", "{lang:?}: nada pegado a la ruta");
+            assert_eq!(rel_line, "sub/a.txt", "{lang:?}: nothing stuck to the path");
             let why_line =
                 norte_i18n::ta_in(lang, "cli-sync-blocker-why", &[("why", "dest read only")]);
             assert!(why_line.contains("dest read only"), "{lang:?}: {why_line}");
@@ -667,12 +687,11 @@ mod tests {
         }
     }
 
-    /// Un bloqueo de todo el árbol (`DestReadOnly`, cuyo `rel` es la raíz) no
-    /// se pinta como una ruta vacía (#193): `report_blockers` usa
-    /// `rel_display_or_root`, no `rel_display` a secas, precisamente para
-    /// esto.
+    /// A whole-tree blocker (`DestReadOnly`, whose `rel` is the root) is
+    /// not painted as an empty path (#193): `report_blockers` uses
+    /// `rel_display_or_root`, not plain `rel_display`, precisely for this.
     #[test]
-    fn un_bloqueo_de_todo_el_arbol_no_imprime_una_ruta_vacia() {
+    fn a_whole_tree_blocker_does_not_print_an_empty_path() {
         let root = norte_proto::methods::RelPath::parse_wire("").expect("rel");
         assert!(root.is_root());
         let blocker = norte_proto::methods::SyncBlocker {
@@ -682,21 +701,21 @@ mod tests {
         };
         let anchor = norte_frontend::sync::blocker_anchor(&blocker);
         let rel = norte_frontend::sync::rel_display_or_root(&root, None, norte_i18n::Lang::En);
-        assert!(!rel.text.is_empty(), "la raíz no se pinta como nada");
+        assert!(!rel.text.is_empty(), "the root is not painted as nothing");
         assert_eq!(anchor, norte_frontend::sync::RelAnchor::Dest);
     }
 
-    /// #189, con un nombre ADVERSARIAL: `cause_join_spoof`
-    /// (`informe :→ copia.txt: permission denied`) lleva los DOS joiners que
-    /// una fila de bloqueo en banda fabricaría (` → ` y `: `), y es
-    /// imprimible corriente —`display_name_with` no lo enmascara, así que
-    /// `rel_marcado` no lo marca—. La prueba tibia de arriba solo cubre la
-    /// plantilla con literales inocuos; ésta hace pasar el nombre REAL por
-    /// el mismo camino que `report_blockers` usa (`rel_display_or_root` +
-    /// `rel_marcado`), que es donde una fila fabricada tendría que aparecer
-    /// si alguien reintrodujera el joiner.
+    /// #189, with an ADVERSARIAL name: `cause_join_spoof`
+    /// (`report :→ copy.txt: permission denied`) carries the TWO joiners a
+    /// blocker row would fabricate in-band (` → ` and `: `), and is an
+    /// ordinary printable — `display_name_with` does not mask it, so
+    /// `rel_marked` does not mark it. The lukewarm test above only covers
+    /// the template with innocuous literals; this one runs the REAL name
+    /// through the same path `report_blockers` uses
+    /// (`rel_display_or_root` + `rel_marked`), which is where a fabricated
+    /// row would have to show up if anyone reintroduced the joiner.
     #[test]
-    fn un_bloqueo_con_un_nombre_adversarial_no_fabrica_una_fila() {
+    fn a_blocker_with_an_adversarial_name_does_not_fabricate_a_row() {
         let fixture = norte_testkit::corpus::hostile_names()
             .into_iter()
             .find(|f| f.id == "cause_join_spoof")
@@ -715,25 +734,27 @@ mod tests {
             norte_frontend::sync::SyncEncodings::default().for_anchor(anchor),
             lang,
         );
-        let rel_line = rel_marcado(&rel);
+        let rel_line = rel_marked(&rel);
         let why_line = norte_frontend::sync::blocker_label(blocker.kind, lang);
         assert!(
             !rel_line.contains(&why_line),
-            "la línea de la ruta no lleva pegado el motivo: {rel_line:?}"
+            "the path line does not carry the reason stuck to it: {rel_line:?}"
         );
         assert!(
             !why_line.contains("permission denied"),
-            "la línea del motivo no lleva pegados los bytes del nombre: {why_line:?}"
+            "the reason line does not carry the name's bytes stuck to it: {why_line:?}"
         );
-        // Y el propio joiner que el fixture lleva DENTRO del nombre no se
-        // confunde con uno estructural: sigue siendo parte del texto pintado.
+        // And the joiner the fixture carries INSIDE the name is not
+        // confused with a structural one: it stays part of the painted
+        // text.
         assert!(rel_line.contains("permission denied"), "{rel_line:?}");
     }
 
-    /// `report_blockers` no panica para ninguna combinación de clase y lado,
-    /// y siempre devuelve el 2 —nada se aplicó— sea cual sea el bloqueo.
+    /// `report_blockers` does not panic for any combination of class and
+    /// side, and always returns 2 — nothing was applied — whatever the
+    /// blocker.
     #[test]
-    fn report_blockers_no_panica_para_cualquier_clase_o_lado() {
+    fn report_blockers_does_not_panic_for_any_class_or_side() {
         use norte_proto::methods::{
             DestTrash, PlanHash, Side, SyncBlocker, SyncBlockerKind, SyncCounts, SyncPlanDone,
         };
@@ -784,7 +805,7 @@ mod plan_step_lines_tests {
     /// Antes iban unidas por ` → ` en la misma línea, y ese carácter es un
     /// imprimible corriente que `display_name_with` no enmascara — o sea que
     /// un nombre que lo lleve dentro (corpus `arrow_join_spoof`) fingía la
-    /// pareja SIN que saltara el `!` de `rel_marcado`. Esto es la pantalla
+    /// pareja SIN que saltara el `!` de `rel_marked`. Esto es la pantalla
     /// donde se teclea `y` para borrar.
     #[test]
     fn las_dos_ortografias_no_comparten_linea() {

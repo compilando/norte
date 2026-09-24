@@ -1,8 +1,8 @@
-//! Un daemon con el provider LOCAL, que es contra lo que corre la ventana.
+//! A daemon with the LOCAL provider, which is what the window runs against.
 //!
-//! El spike enseñó las columnas `size` y `mtime` en blanco sobre `file://`, y
-//! el e2e del host no lo veía porque su daemon monta `MemProvider`. Este
-//! reproduce el camino real: ficheros de verdad en un directorio temporal.
+//! The spike showed the `size` and `mtime` columns blank over `file://`, and
+//! the host's e2e did not see it because its daemon mounts `MemProvider`.
+//! This one reproduces the real path: real files in a temp directory.
 
 #![cfg(unix)]
 
@@ -17,13 +17,14 @@ use norte_ui_host::dto::SlotView;
 use norte_ui_host::{UiHost, UiHostOptions};
 use norte_vfs::Provider;
 
-/// `[ui.columns]` con `size` en formato EXACTO.
+/// `[ui.columns]` with `size` in EXACT format.
 ///
-/// La otra mitad de #108 que esta ventana ignoraba: pedía el estilo de
-/// fábrica, así que un `format` configurado no hacía nada aquí mientras el
-/// terminal sí lo honraba. Se elige `exact` porque su respuesta es un número
-/// comprobable —`12`— y la de fábrica para `size` es `iec`, o sea «12 B»: si
-/// el estilo no se aplicara, el test lo diría en vez de agotar su bucle.
+/// The other half of #108 this window used to ignore: it asked for the
+/// factory style, so a configured `format` did nothing here while the
+/// terminal did honor it. `exact` is chosen because its answer is a
+/// checkable number — `12` — and the factory one for `size` is `iec`, i.e.
+/// "12 B": if the style were not applied, the test would say so instead of
+/// exhausting its loop.
 fn columnas_con_tamano_exacto() -> norte_frontend::columns::ColumnsSettings {
     let cfg = norte_config::ColumnsConfig {
         specs: [(
@@ -42,18 +43,18 @@ fn columnas_con_tamano_exacto() -> norte_frontend::columns::ColumnsSettings {
     norte_frontend::columns::ColumnsSettings::resolve(&cfg)
 }
 
-/// Las celdas de tamaño y fecha traen valor sobre ficheros de verdad.
+/// Size and date cells carry a value over real files.
 #[tokio::test]
 async fn el_tamano_y_la_fecha_no_van_en_blanco() {
     let dir = tempfile::tempdir().expect("tempdir");
-    std::fs::write(dir.path().join("a.txt"), b"hola que tal").expect("escribe");
-    // El socket va en /tmp y no en el tempdir: un `sockaddr_un` no llega a
-    // 108 bytes de ruta, y el temporal de un test ya se los come.
-    // Y en un directorio PROPIO: el daemon endurece a 0700 el dir que
-    // contiene su socket, y `/tmp` es de todo el mundo.
+    std::fs::write(dir.path().join("a.txt"), b"hello world!").expect("writes");
+    // The socket goes in /tmp and not in the tempdir: a `sockaddr_un` does
+    // not reach 108 bytes of path, and a test's temp dir already eats them
+    // up. And in its OWN directory: the daemon hardens to 0700 the dir that
+    // holds its socket, and `/tmp` belongs to everyone.
     let sock_dir =
         std::path::PathBuf::from(format!("/tmp/norte-gui-celdas-{}", std::process::id()));
-    std::fs::create_dir_all(&sock_dir).expect("dir del socket");
+    std::fs::create_dir_all(&sock_dir).expect("socket dir");
     let socket = sock_dir.join("d.sock");
     let _ = std::fs::remove_file(&socket);
 
@@ -84,7 +85,7 @@ async fn el_tamano_y_la_fecha_no_van_en_blanco() {
         },
     )
     .await
-    .expect("conecta");
+    .expect("connects");
     let inicio = norte_vfs_local::vpath_from_native(dir.path()).expect("vpath");
     let (h, _snap) = UiHost::start(UiHostOptions {
         backend: Arc::new(backend),
@@ -101,28 +102,28 @@ async fn el_tamano_y_la_fecha_no_van_en_blanco() {
         paths: norte_ui_host::settings::HostPaths::default(),
         theme: norte_ui_host::pickers::HostTheme::default(),
         user_layouts: Vec::new(),
-        // Sin perfil: este test mira las celdas de un listado local, y un
-        // perfil activo no cambia lo que un `stat` devuelve.
+        // No profile: this test looks at a local listing's cells, and an
+        // active profile does not change what a `stat` returns.
         profile: None,
         columns: columnas_con_tamano_exacto(),
         effects: norte_ui_host::commands::Efectos::Completo,
         log_ring: None,
     })
     .await
-    .expect("arranca");
+    .expect("starts");
     let _ = std::fs::remove_dir_all(&sock_dir);
 
-    // La primera foto sale SIN esperar a los sondeos —bloquearla sería
-    // retrasar el primer frame por una columna—, así que el tamaño llega
-    // enseguida después, en un parche. Lo que se comprueba es que llega.
+    // The first frame comes out WITHOUT waiting for the probes — blocking it
+    // would delay the first frame for a column's sake — so the size arrives
+    // shortly after, in a patch. What is checked is that it arrives.
     let mut sub = h.subscribe();
     for _ in 0..40 {
         tokio::time::sleep(Duration::from_millis(25)).await;
         h.dispatch(norte_ui_host::UiAction::Resync)
             .await
-            .expect("host vivo");
+            .expect("host is alive");
         let foto = loop {
-            match sub.recv().await.expect("el host sigue vivo") {
+            match sub.recv().await.expect("the host is still alive") {
                 norte_ui_host::Update::Message(m) => {
                     if let norte_ui_host::dto::UiUpdate::Snapshot(s) = m.payload {
                         break s;
@@ -132,7 +133,7 @@ async fn el_tamano_y_la_fecha_no_van_en_blanco() {
             }
         };
         let SlotView::Browser(b) = &foto.slots[0] else {
-            panic!("el primer hueco es un listado");
+            panic!("the first slot is a listing");
         };
         let Some(fila) = b.rows.iter().find(|r| r.display_name == "a.txt") else {
             continue;
@@ -141,19 +142,19 @@ async fn el_tamano_y_la_fecha_no_van_en_blanco() {
             .cells
             .iter()
             .find(|c| c.column == "size")
-            .expect("size configurada");
-        // `12` y no «12 B»: con `format = "exact"` puesto, la celda tiene que
-        // salir en exacto. Si el estilo configurado no se aplicara, aquí
-        // llegaría el de fábrica (`iec`) y este bucle se agotaría.
+            .expect("size configured");
+        // `12` and not "12 B": with `format = "exact"` set, the cell has to
+        // come out exact. If the configured style were not applied, the
+        // factory one (`iec`) would arrive here and this loop would run out.
         if size.text.as_deref() == Some("12") {
             return;
         }
         assert_ne!(
             size.text.as_deref(),
             Some("12 B"),
-            "la celda salió con el formato de FÁBRICA: `[ui.columns]` no se \
-             está aplicando en la ventana"
+            "the cell came out with the FACTORY format: `[ui.columns]` is \
+             not being applied in the window"
         );
     }
-    panic!("el tamaño de un fichero real nunca llegó a la celda");
+    panic!("a real file's size never reached the cell");
 }

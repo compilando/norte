@@ -252,7 +252,7 @@ async fn the_viewer_shows_a_plugins_preview_and_says_whose_it_is() {
     );
     f.previews.insert(
         "mem:///casa/informe.pdf".to_owned(),
-        preview_de("PDF de ACME", &["Informe anual", "Página 1 de 12"], true),
+        preview_de("PDF de ACME", &["Annual report", "Page 1 of 12"], true),
     );
     let (h, _snap) = host_arbol(Arc::new(f)).await;
     let mut sub = h.subscribe();
@@ -273,7 +273,7 @@ async fn the_viewer_shows_a_plugins_preview_and_says_whose_it_is() {
     let v = viewer.expect("the viewer opens with the plugin's view");
 
     assert!(
-        v.lines.iter().any(|l| l.contains("Informe anual")),
+        v.lines.iter().any(|l| l.contains("Annual report")),
         "shows the previewer's: {:?}",
         v.lines
     );

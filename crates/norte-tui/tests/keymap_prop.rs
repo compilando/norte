@@ -1,12 +1,12 @@
-//! Property-based del keymap engine (spec §12: "resolución de keybindings
-//! — ninguna secuencia ambigua"). Si `Effective::build` acepta un keymap,
-//! TODA secuencia ligada se resuelve determinista: Pending en cada prefijo
-//! y Run exactamente en la última tecla; y ningún stream arbitrario puede
-//! panicar ni dejar pending por encima de la secuencia más larga.
+//! Property-based tests for the keymap engine (spec §12: "keybinding
+//! resolution — no ambiguous sequence"). If `Effective::build` accepts a
+//! keymap, EVERY bound sequence resolves deterministically: Pending on
+//! every prefix and Run exactly on the last key; and no arbitrary stream
+//! can panic or leave a pending state longer than the longest sequence.
 //!
-//! K2a añade la segunda máquina de estados del resolver — el acumulador del
-//! contador numérico — con la misma disciplina: sobre CUALQUIER stream, el
-//! contador ni desborda ni se pega a la tecla siguiente.
+//! K2a adds the resolver's second state machine — the numeric count's
+//! accumulator — with the same discipline: over ANY stream, the count
+//! neither overflows nor sticks to the next key.
 
 use norte_tui::keymap::{Count, Effective, Resolution, Resolver, parse_chord, parse_keymap};
 use proptest::prelude::*;
@@ -61,75 +61,76 @@ proptest! {
             to_toml("pane", &user_pre, "prepend_keymap"),
             to_toml("global", &user_app, "append_keymap"),
         );
-        let file = parse_keymap(&src).expect("TOML generado válido");
-        let user = parse_keymap(&user_src).expect("TOML de usuario válido");
+        let file = parse_keymap(&src).expect("valid generated TOML");
+        let user = parse_keymap(&user_src).expect("valid user TOML");
         let Ok(eff) = Effective::build(&file, Some(&user), COMANDOS) else {
-            // Rechazado al cargar (ambiguo/duplicado): exactamente el contrato.
+            // Rejected on load (ambiguous/duplicate): exactly the contract.
             return Ok(());
         };
         let todas = || pane.iter().chain(&global).chain(&user_pre).chain(&user_app);
         let max_len = todas().map(|(on, _)| on.len()).max().unwrap_or(0);
 
-        // 1) Toda secuencia ligada camina Pending…Pending→Run (da igual la
-        //    capa: una secuencia exacta pisada sigue estando LIGADA).
+        // 1) Every bound sequence walks Pending…Pending→Run (it does not
+        //    matter which layer: an exact sequence that got overridden is
+        //    still BOUND).
         for (on, _) in todas() {
             let mut r = Resolver::new(eff.clone());
             for (i, k) in on.iter().enumerate() {
                 let res = r.push(parse_chord(k).unwrap());
                 if i + 1 < on.len() {
-                    prop_assert_eq!(res, Resolution::Pending(i + 1), "prefijo de {:?}", on);
+                    prop_assert_eq!(res, Resolution::Pending(i + 1), "prefix of {:?}", on);
                 } else {
                     prop_assert!(
                         matches!(res, Resolution::Run { .. }),
-                        "fin de {:?}: {:?}", on, res
+                        "end of {:?}: {:?}", on, res
                     );
                 }
             }
         }
 
-        // 2) Ningún stream arbitrario panica ni desborda el pending; y la
-        //    resolución es una FUNCIÓN del stream (dos pasadas idénticas).
+        // 2) No arbitrary stream panics or overflows the pending state; and
+        //    the resolution is a FUNCTION of the stream (two identical passes).
         let mut r1 = Resolver::new(eff.clone());
         let mut r2 = Resolver::new(eff.clone());
         for k in &stream {
             let c = parse_chord(k).unwrap();
             let a = r1.push(c);
             let b = r2.push(c);
-            prop_assert_eq!(a, b, "determinismo");
+            prop_assert_eq!(a, b, "determinism");
             prop_assert!(r1.pending().len() <= max_len.max(1));
         }
     }
 }
 
-// --- K2a: el acumulador del contador ------------------------------------
+// --- K2a: the count's accumulator ------------------------------------
 
-/// El techo del acumulador (`MAX_COUNT` en `resolve.rs`, privado). Escrito
-/// aquí a mano A PROPÓSITO: derivarlo del motor haría que el test siguiera a
-/// la implementación en vez de pinearla, y el número es la promesa («cuatro
-/// dígitos, el quinto se descarta»), no un detalle.
+/// The accumulator's ceiling (`MAX_COUNT` in `resolve.rs`, private). Written
+/// here by hand ON PURPOSE: deriving it from the engine would make the test
+/// follow the implementation instead of pinning it, and the number is the
+/// promise ("four digits, the fifth gets discarded"), not a detail.
 const MAX_COUNT: u32 = 9_999;
 
-/// Comandos que los keymaps generados ligan. `cursor.page-down` está en el
-/// CATÁLOGO pero NO en [`CONOCIDOS`]: así es como se fabrica un
-/// [`Resolution::Unavailable`] — la cuarta resolución terminal, y la única
-/// cuyo camino de limpieza del contador no pinea ningún ejemplo. Los otros
-/// dos cubren los dos lados del catálogo (`app.quit` no acepta contador,
-/// `cursor.down` sí).
+/// Commands the generated keymaps bind. `cursor.page-down` is in the
+/// CATALOGUE but NOT in [`CONOCIDOS`]: that is how a
+/// [`Resolution::Unavailable`] gets manufactured — the fourth terminal
+/// resolution, and the only one whose count-clearing path no example pins.
+/// The other two cover both sides of the catalogue (`app.quit` does not
+/// accept a count, `cursor.down` does).
 const COMANDOS_CONTADOR: &[&str] = &["app.quit", "cursor.down", "cursor.page-down"];
 
-/// Lo que este «frontend» implementa de verdad.
+/// What this "frontend" really implements.
 const CONOCIDOS: &[&str] = &["app.quit", "cursor.down"];
 
-/// Teclas LIGABLES con contadores encendidos. El `0` va dentro a propósito
-/// (sigue siendo ligable: un contador jamás empieza por cero); los dígitos
-/// `1`-`9` no, porque con `counts = true` ligarlos es error de CARGA y todos
-/// los casos se irían por el `else` sin resolver nada. `esc` tampoco: solo
-/// vale como binding suelto y las secuencias generadas lo tumbarían al
-/// cargar.
+/// BINDABLE keys with counts on. `0` goes in on purpose (it is still
+/// bindable: a count never starts with zero); digits `1`-`9` do not,
+/// because with `counts = true` binding them is a LOAD error and every case
+/// would go down the `else` resolving nothing. `esc` does not either: it
+/// only works as a standalone binding and the generated sequences would
+/// knock it out on load.
 const TECLAS_LIGABLES: &[&str] = &["a", "g", "q", "0", "enter"];
 
-/// Teclas del STREAM: dígitos (el contador), teclas ligables, una sin ligar
-/// (`z`, que es un miss) y `esc` (la cancelación).
+/// STREAM keys: digits (the count), bindable keys, one unbound one (`z`, a
+/// miss) and `esc` (the cancellation).
 const TECLAS_STREAM: &[&str] = &["a", "g", "q", "z", "enter", "esc"];
 const DIGITOS: &[&str] = &["0", "1", "2", "3", "5", "9"];
 
@@ -150,9 +151,9 @@ fn arb_bindings_contador() -> impl Strategy<Value = Vec<(Vec<String>, String)>> 
     )
 }
 
-/// Una pulsación del stream, cargada hacia los dígitos: con reparto uniforme
-/// casi ningún caso llegaría a teclear cinco dígitos seguidos, que es justo
-/// donde vive el techo.
+/// A stream keystroke, loaded toward digits: with a uniform split almost no
+/// case would get to type five digits in a row, which is exactly where the
+/// ceiling lives.
 fn arb_pulsacion() -> impl Strategy<Value = &'static str> {
     prop_oneof![
         7 => proptest::sample::select(DIGITOS),
@@ -161,33 +162,33 @@ fn arb_pulsacion() -> impl Strategy<Value = &'static str> {
 }
 
 proptest! {
-    /// El acumulador del contador es la SEGUNDA máquina de estados del
-    /// resolver, y los ejemplos de `keymap/mod.rs` la pinean tecla a tecla.
-    /// Lo que no pinean es lo que debe valer para CUALQUIER stream:
+    /// The count's accumulator is the resolver's SECOND state machine, and
+    /// `keymap/mod.rs`'s examples pin it key by key. What they do not pin is
+    /// what must hold for ANY stream:
     ///
-    /// 1. **El contador jamás sobrevive a una resolución terminal.** `Run`,
-    ///    `Reset` y `Unavailable` lo dejan en `None`, siempre. Un número
-    ///    pegado a la pulsación siguiente es el peor fallo que este mecanismo
-    ///    puede tener, y `Unavailable` —el único de los tres sin ejemplo— es
-    ///    donde más fácil se cuela: es un `Exact` como el de `Run`, pero por
-    ///    otra rama.
-    /// 2. **El contador que llega con el comando es el que se tecleó.**
-    ///    `Repeat(n)`/`Ignored(n)` valen exactamente lo que había en vuelo
-    ///    antes de la tecla, y `None` solo aparece si no había nada: el
-    ///    resolver ni inventa ni redondea.
-    /// 3. **`Repeat` es del catálogo, no del resolver.** Solo lo emite para un
-    ///    comando cuyo `CommandDef` dice `counts: true`; el resto es
-    ///    `Ignored`. Es la regla que decide si `5` sobre un comando dispara
-    ///    una vez o cinco mil.
-    /// 4. **El acumulador no desborda ni retrocede.** Con cualquier ristra de
-    ///    dígitos de cualquier largo se queda en `1..=MAX_COUNT` y es
-    ///    monótono: un quinto dígito se DESCARTA, jamás envuelve `u32` a un
-    ///    número que nadie tecleó.
-    /// 5. **Sin el flag del preset no hay contador que valga.** El mismo
-    ///    keymap sin `counts = true` no emite un solo `Counting` ni un solo
-    ///    `Count` distinto de `None` — `orthodox` y `cua` no pueden criar
-    ///    contadores por la espalda. Y el `0` sigue ligable con contadores:
-    ///    los dos keymaps cargan o fallan a la vez.
+    /// 1. **The count never survives a terminal resolution.** `Run`,
+    ///    `Reset` and `Unavailable` all leave it at `None`, always. A
+    ///    number stuck to the next keystroke is the worst failure this
+    ///    mechanism can have, and `Unavailable` — the only one of the three
+    ///    with no example — is where it slips in most easily: it is an
+    ///    `Exact` like `Run`'s, but through a different branch.
+    /// 2. **The count that arrives with the command is the one that was
+    ///    typed.** `Repeat(n)`/`Ignored(n)` are worth exactly what was in
+    ///    flight before the key, and `None` only shows up if there was
+    ///    nothing: the resolver neither invents nor rounds.
+    /// 3. **`Repeat` belongs to the catalogue, not the resolver.** It only
+    ///    emits it for a command whose `CommandDef` says `counts: true`;
+    ///    the rest get `Ignored`. It is the rule that decides whether `5`
+    ///    over a command fires once or five thousand times.
+    /// 4. **The accumulator neither overflows nor goes backward.** With any
+    ///    digit string of any length it stays within `1..=MAX_COUNT` and is
+    ///    monotonic: a fifth digit gets DISCARDED, it never wraps `u32`
+    ///    into a number nobody typed.
+    /// 5. **Without the preset's flag there is no count worth anything.**
+    ///    The same keymap without `counts = true` does not emit a single
+    ///    `Counting` nor a single `Count` other than `None` — `orthodox`
+    ///    and `cua` cannot grow counts behind your back. And `0` is still
+    ///    bindable with counts on: both keymaps load or fail together.
     #[test]
     fn el_contador_ni_desborda_ni_se_pega_a_la_tecla_siguiente(
         pane in arb_bindings_contador(),
@@ -199,91 +200,91 @@ proptest! {
             to_toml("pane", &pane, "keymap"),
             to_toml("global", &global, "keymap"),
         );
-        let con = parse_keymap(&format!("counts = true\n\n{body}")).expect("TOML generado válido");
-        let sin = parse_keymap(&body).expect("TOML generado válido");
+        let con = parse_keymap(&format!("counts = true\n\n{body}")).expect("valid generated TOML");
+        let sin = parse_keymap(&body).expect("valid generated TOML");
         let (con, sin) = (
             Effective::build(&con, None, CONOCIDOS),
             Effective::build(&sin, None, CONOCIDOS),
         );
-        // Propiedad 5, primera mitad: encender los contadores no cambia QUÉ
-        // keymaps son legales, porque la única tecla que los dos se disputan
-        // —el `0`— está exenta de la regla de carga.
+        // Property 5, first half: turning counts on does not change WHICH
+        // keymaps are legal, because the only key the two dispute — `0` —
+        // is exempt from the load rule.
         prop_assert_eq!(
             con.is_ok(),
             sin.is_ok(),
-            "el flag de contadores cambió la legalidad del keymap"
+            "the counts flag changed the keymap's legality"
         );
         let (Ok(con), Ok(sin)) = (con, sin) else {
-            // Rechazado al cargar (ambiguo/duplicado): el contrato de arriba.
+            // Rejected on load (ambiguous/duplicate): the contract above.
             return Ok(());
         };
 
         let mut r = Resolver::new(con);
         let mut r_sin = Resolver::new(sin);
         for k in &stream {
-            let c = parse_chord(k).expect("tecla del alfabeto");
+            let c = parse_chord(k).expect("key from the alphabet");
             let before = r.count();
             let res = r.push(c);
             match &res {
                 Resolution::Counting(n) => {
-                    // 4: ni desborda ni retrocede.
-                    prop_assert!((1..=MAX_COUNT).contains(n), "fuera de rango: {:?}", res);
-                    prop_assert_eq!(r.count(), Some(*n), "lo que se pinta es lo que hay");
+                    // 4: neither overflows nor goes backward.
+                    prop_assert!((1..=MAX_COUNT).contains(n), "out of range: {:?}", res);
+                    prop_assert_eq!(r.count(), Some(*n), "what is painted is what there is");
                     if let Some(previo) = before {
-                        prop_assert!(*n >= previo, "el contador retrocedió: {previo} → {n}");
-                        // Un dígito solo puede DESCARTARSE por el techo. Sin
-                        // esto, un acumulador que dejara de sumar antes de
-                        // tiempo seguiría siendo monótono y pasaría.
+                        prop_assert!(*n >= previo, "the count went backward: {previo} → {n}");
+                        // A digit can only be DISCARDED by the ceiling.
+                        // Without this, an accumulator that stopped adding
+                        // early would still be monotonic and would pass.
                         prop_assert!(
                             *n != previo || previo > MAX_COUNT / 10,
-                            "dígito descartado por debajo del techo: {previo}"
+                            "digit discarded below the ceiling: {previo}"
                         );
                     }
                     prop_assert!(
                         r.pending().is_empty(),
-                        "un contador jamás se abre con secuencia en vuelo"
+                        "a count never opens with a sequence in flight"
                     );
                 }
                 Resolution::Run { command, count } => {
-                    // 1: el contador NO sobrevive al comando.
-                    prop_assert_eq!(r.count(), None, "contador vivo tras {:?}", res);
-                    // 3: la autoridad es el catálogo.
+                    // 1: the count does NOT survive the command.
+                    prop_assert_eq!(r.count(), None, "count alive after {:?}", res);
+                    // 3: the catalogue is the authority.
                     let acepta = norte_frontend::keymap::catalogue::lookup(command)
                         .is_some_and(|d| d.counts);
                     match count {
-                        // 2: ni inventa…
-                        Count::None => prop_assert_eq!(before, None, "contador inventado"),
-                        // …ni redondea.
+                        // 2: neither invents…
+                        Count::None => prop_assert_eq!(before, None, "invented count"),
+                        // …nor rounds.
                         Count::Repeat(n) => {
-                            prop_assert_eq!(before, Some(*n), "contador alterado");
-                            prop_assert!(acepta, "{command} no acepta contador y le llegó Repeat");
+                            prop_assert_eq!(before, Some(*n), "altered count");
+                            prop_assert!(acepta, "{command} does not accept a count and got Repeat");
                         }
                         Count::Ignored(n) => {
-                            prop_assert_eq!(before, Some(*n), "contador alterado");
-                            prop_assert!(!acepta, "{command} acepta contador y le llegó Ignored");
+                            prop_assert_eq!(before, Some(*n), "altered count");
+                            prop_assert!(!acepta, "{command} accepts a count and got Ignored");
                         }
                     }
                 }
-                // 1: las otras dos terminales lo limpian igual.
+                // 1: the other two terminals clear it the same way.
                 Resolution::Reset | Resolution::Unavailable { .. } => {
-                    prop_assert_eq!(r.count(), None, "contador vivo tras {:?}", res);
+                    prop_assert_eq!(r.count(), None, "count alive after {:?}", res);
                 }
-                // Una secuencia a medias NO toca el contador: en `12gg`
-                // conviven.
-                Resolution::Pending(_) => prop_assert_eq!(r.count(), before, "el contador se movió"),
+                // A half-typed sequence does NOT touch the count: in `12gg`
+                // they coexist.
+                Resolution::Pending(_) => prop_assert_eq!(r.count(), before, "the count moved"),
             }
 
-            // 5, segunda mitad: el mismo stream sin el flag del preset.
+            // 5, second half: the same stream without the preset's flag.
             let res_sin = r_sin.push(c);
             prop_assert!(
                 !matches!(res_sin, Resolution::Counting(_)),
-                "sin el flag no hay Counting: {:?}", res_sin
+                "without the flag there is no Counting: {:?}", res_sin
             );
             prop_assert!(
                 !matches!(res_sin, Resolution::Run { count, .. } if count != Count::None),
-                "sin el flag todo Run llega con Count::None: {:?}", res_sin
+                "without the flag every Run arrives with Count::None: {:?}", res_sin
             );
-            prop_assert_eq!(r_sin.count(), None, "sin el flag no hay contador que acumular");
+            prop_assert_eq!(r_sin.count(), None, "without the flag there is no count to accumulate");
         }
     }
 }

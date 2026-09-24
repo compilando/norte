@@ -1,17 +1,18 @@
-//! Estado PURO de un pane (sin render) para los frontends de norte. La GUI
-//! (GPUI) consume [`PaneState`] como su modelo de un panel navegable: cursor,
-//! quick search y el listado actual, sin una sola dependencia de UI.
+//! PURE state (no render) of a pane for norte's frontends. The GUI (GPUI)
+//! consumes [`PaneState`] as its model of a navigable panel: cursor, quick
+//! search, and the current listing, with not a single UI dependency.
 //!
-//! El `Pane` de la TUI (`norte-tui::app`) embebe este `PaneState` y le delega
-//! toda la mecánica pura de cursor + quick search (#82 cerrado): la
-//! duplicación se eliminó; la TUI solo añade su estado de render, scroll de
-//! ratatui y búsqueda viva ENCIMA de `PaneState`.
+//! The TUI's `Pane` (`norte-tui::app`) embeds this `PaneState` and delegates
+//! to it all the pure cursor + quick search mechanics (#82 closed): the
+//! duplication was removed; the TUI only adds its render state, ratatui
+//! scroll, and live search ON TOP of `PaneState`.
 //!
-//! Incluye el contrato de refresh-tras-lote para el fill paginado (ADR 0017):
-//! [`PaneState::extend`] (añade un lote, re-ordena y re-ancla el cursor por
-//! path), [`PaneState::refill`] (reemplaza el listado del mismo dir con clamp)
-//! y [`PaneState::refresh_quick`] (re-aplica el filtro vivo). La GUI hoy lista
-//! de una sola vez y no los usa; la TUI sí.
+//! Includes the refresh-after-batch contract for the paginated fill (ADR
+//! 0017): [`PaneState::extend`] (adds a batch, re-sorts, and re-anchors the
+//! cursor by path), [`PaneState::refill`] (replaces the same dir's listing
+//! with a clamp), and [`PaneState::refresh_quick`] (re-applies the live
+//! filter). The GUI today lists all at once and does not use them; the TUI
+//! does.
 
 mod marks;
 mod quick;
@@ -19,9 +20,9 @@ mod viewport;
 
 pub use marks::MarksSummary;
 
-// `PaneState` sigue siendo UNO: lo que se reparte son sus métodos, en
-// bloques `impl` hermanos. Un módulo hijo ve lo privado de su padre, así que
-// esto no abre nada — solo pone junto lo que se lee junto.
+// `PaneState` is still ONE: what is split up are its methods, in sibling
+// `impl` blocks. A child module sees its parent's private items, so this
+// opens nothing — it only groups together what is read together.
 
 use crate::decoration::Decoration;
 use crate::nav::{Mode, QuickSearch};
@@ -46,32 +47,32 @@ pub enum PatternError {
     Glob(String),
 }
 
-/// Recompila el regex byte-mode de un [`globset::Glob`] en modo Unicode
-/// (#110): globset compila con `(?-u)`, donde `?` consume UN BYTE y una
-/// clase casa byte a byte — `a?o` no casaba `año` (ñ = 2 bytes) y `a[ñx]o`
-/// casaba `axo` pero JAMÁS `año`, marcando en silencio otro fichero que el
-/// nombrado. globset sigue siendo la ÚNICA autoridad de sintaxis (misma
-/// lib que `fs.search`): esto solo traduce su salida.
+/// Recompiles a [`globset::Glob`]'s byte-mode regex in Unicode mode (#110):
+/// globset compiles with `(?-u)`, where `?` consumes ONE BYTE and a class
+/// matches byte for byte — `a?o` did not match `año` (`ñ` = 2 bytes) and
+/// `a[ñx]o` matched `axo` but NEVER `año`, silently marking a different file
+/// than the one named. globset remains the ONLY syntax authority (same lib
+/// as `fs.search`): this only translates its output.
 ///
-/// La traducción decodifica los runs de escapes `\xNN` con NN ≥ 0x80 —
-/// la ÚNICA forma en que globset emite los bytes no-ASCII del patrón
-/// (`&str`, así que los runs son SIEMPRE UTF-8 completo) — de vuelta a sus
-/// caracteres, que nunca son metacaracteres de regex y van literales tanto
-/// dentro como fuera de una clase. Un rango de clase con extremos
-/// multibyte (`[ñ-ü]` → `[\xc3\xb1-\xc3\xbc]`) también cae bien: el `-`
-/// ASCII corta el run y cada extremo decodifica a su char. `(?-u)` se pela
-/// del prefijo; el resto de flags pasa tal cual.
+/// The translation decodes runs of `\xNN` escapes with NN ≥ 0x80 —the ONLY
+/// way globset emits the pattern's non-ASCII bytes (`&str`, so the runs are
+/// ALWAYS complete UTF-8)— back into their characters, which are never regex
+/// metacharacters and go literal both inside and outside a class. A class
+/// range with multibyte ends (`[ñ-ü]` → `[\xc3\xb1-\xc3\xbc]`) also falls out
+/// right: the ASCII `-` cuts the run and each end decodes to its char.
+/// `(?-u)` is stripped from the prefix; the rest of the flags pass through
+/// as-is.
 ///
-/// COPIA deliberada del traductor de `norte-core::search` (mismo criterio
-/// que el fold, duplicado core/frontend): no hay crate común por debajo de
-/// ambos donde quepa sin arrastrar `globset`+`regex` a un crate ajeno.
-/// Cada copia pinea la forma de globset con su propio test guardia.
+/// Deliberate COPY of `norte-core::search`'s translator (same criterion as
+/// the fold, duplicated core/frontend): there is no common crate under both
+/// where it would fit without dragging `globset`+`regex` into an unrelated
+/// crate. Each copy pins globset's shape with its own guard test.
 ///
 /// # Errors
-/// [`PatternError::Glob`] si un run decodificado no es UTF-8 válido — no
-/// debería ocurrir con la globset pineada (test de guardia
-/// `globset_regex_shape_is_the_one_this_translation_expects`); fail-loud
-/// antes que casar bytes que el usuario no escribió.
+/// [`PatternError::Glob`] if a decoded run is not valid UTF-8 — should not
+/// happen with the pinned globset (guard test
+/// `globset_regex_shape_is_the_one_this_translation_expects`); fail loud
+/// rather than match bytes the user never wrote.
 fn unicode_glob_regex(glob: &globset::Glob) -> Result<String, PatternError> {
     let src = glob.regex();
     let stripped = src.strip_prefix("(?-u)").unwrap_or(src);
@@ -95,10 +96,10 @@ fn unicode_glob_regex(glob: &globset::Glob) -> Result<String, PatternError> {
     let bytes = stripped.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
-        // `stripped.get(..)` y no un slice directo: si un `\x` precediera a
-        // un char multibyte, el rango i+2..i+4 partiría el char y un slice
-        // directo PANICARÍA — inalcanzable con la globset pineada, pero
-        // esta función falla por Result, no por panic.
+        // `stripped.get(..)` and not a direct slice: if a `\x` preceded a
+        // multibyte char, the i+2..i+4 range would split the char and a
+        // direct slice would PANIC — unreachable with the pinned globset,
+        // but this function fails through a Result, not a panic.
         if bytes[i] == b'\\'
             && bytes.get(i + 1) == Some(&b'x')
             && let Some(hex) = stripped.get(i + 2..i + 4)
@@ -110,8 +111,8 @@ fn unicode_glob_regex(glob: &globset::Glob) -> Result<String, PatternError> {
             continue;
         }
         flush(&mut run, &mut out)?;
-        // Copia el resto tal cual — incluidos escapes ASCII (`\.`), cuyo
-        // significado es idéntico en modo Unicode.
+        // Copies the rest as-is — including ASCII escapes (`\.`), whose
+        // meaning is identical in Unicode mode.
         let step = if bytes[i] == b'\\' && i + 1 < bytes.len() {
             1 + stripped[i + 1..].chars().next().map_or(0, char::len_utf8)
         } else {
@@ -124,93 +125,96 @@ fn unicode_glob_regex(glob: &globset::Glob) -> Result<String, PatternError> {
     Ok(out)
 }
 
-/// ¿Entrada oculta? (#107): decisión por BYTES del ÚLTIMO segmento — la
-/// regla 1 manda — con el criterio unix del `.` (0x2E) inicial. `a.txt` no
-/// lo es; un nombre no-UTF8 que empieza por 0x2E sí. El atributo hidden de
-/// Windows llegará por los attrs del wire (proto 0.30) cuando algún
-/// provider lo anuncie.
+/// Hidden entry? (#107): decided by the BYTES of the LAST segment — rule 1
+/// demands it — with the unix criterion of a leading `.` (0x2E). `a.txt` is
+/// not one; a non-UTF8 name starting with 0x2E is. Windows's hidden
+/// attribute will arrive through the wire's attrs (proto 0.30) once some
+/// provider announces it.
 fn is_hidden_entry(e: &Entry) -> bool {
     e.path
         .file_name()
         .is_some_and(|n| n.as_bytes().first() == Some(&b'.'))
 }
 
-/// Cubos del histograma de anchos de nombre: el último cuenta todo lo que
-/// mide 64 celdas o más, que ya es más de lo que ningún panel le dará.
-const CUBOS_DE_NOMBRE: usize = 65;
+/// Buckets of the name-width histogram: the last one counts everything that
+/// measures 64 cells or more, which is already more than any panel will
+/// give it.
+const NAME_WIDTH_BUCKETS: usize = 65;
 
-/// Suma a `cubos` el ancho (celdas) del nombre de cada una de `entries`.
+/// Adds each of `entries`' name width (cells) to `buckets`.
 ///
-/// Sin reservar nada por entrada: un nombre UTF-8 se mide en sitio, y solo
-/// uno que no lo es pasa por la conversión con pérdida — la misma que lo
-/// pinta. La reinterpretación de encoding por panel no se mira: cambia qué
-/// glifos salen, no cuántos caben.
-fn medir_nombres(cubos: &mut [u32; CUBOS_DE_NOMBRE], entries: &[Entry]) {
+/// Nothing is allocated per entry: a UTF-8 name is measured in place, and
+/// only one that is not goes through the lossy conversion — the same one
+/// that paints it. The per-pane encoding reinterpretation is not looked at:
+/// it changes which glyphs come out, not how many fit.
+fn measure_names(buckets: &mut [u32; NAME_WIDTH_BUCKETS], entries: &[Entry]) {
     use unicode_width::UnicodeWidthStr;
     for e in entries {
         let bytes = e.path.file_name().map_or(&[][..], |n| n.as_bytes());
-        let ancho = match std::str::from_utf8(bytes) {
+        let width = match std::str::from_utf8(bytes) {
             Ok(s) => s.width(),
             Err(_) => String::from_utf8_lossy(bytes).width(),
         };
-        let cubo = ancho.min(CUBOS_DE_NOMBRE - 1);
-        cubos[cubo] = cubos[cubo].saturating_add(1);
+        let bucket = width.min(NAME_WIDTH_BUCKETS - 1);
+        buckets[bucket] = buckets[bucket].saturating_add(1);
     }
 }
 
-/// El histograma de anchos de nombre de `entries`, desde cero.
-fn cubos_de(entries: &[Entry]) -> [u32; CUBOS_DE_NOMBRE] {
-    let mut cubos = [0u32; CUBOS_DE_NOMBRE];
-    medir_nombres(&mut cubos, entries);
-    cubos
+/// `entries`' name-width histogram, from scratch.
+fn buckets_of(entries: &[Entry]) -> [u32; NAME_WIDTH_BUCKETS] {
+    let mut buckets = [0u32; NAME_WIDTH_BUCKETS];
+    measure_names(&mut buckets, entries);
+    buckets
 }
 
-/// En qué estado está la fila `..` de un listado.
+/// What state a listing's `..` row is in.
 ///
-/// Un enum y no dos `bool` porque el cuarto estado que dos booleanos
-/// permitirían —«no pedida pero puesta»— no existe, y porque la diferencia
-/// entre los dos que sí existen es justo la que se olvida: en una RAÍZ está
-/// pedida y no puesta, y confundirlas haría que la primera entrada de verdad
-/// del listado se comportara como la fila de subir.
+/// An enum and not two `bool`s because the fourth state two booleans would
+/// allow —"not requested but present"— does not exist, and because the
+/// difference between the two that DO exist is exactly the one that gets
+/// forgotten: at a ROOT it is requested and not present, and confusing them
+/// would make the listing's first real entry behave like the go-up row.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum FilaDeSubir {
-    /// La configuración no la quiere.
-    Apagada,
-    /// La quiere, pero aquí no la hay: este directorio no tiene padre.
-    Pedida,
-    /// Está en `entries[0]`.
-    Puesta,
+enum ParentRow {
+    /// The configuration does not want it.
+    Off,
+    /// It wants it, but there is none here: this directory has no parent.
+    Requested,
+    /// It is at `entries[0]`.
+    Present,
 }
 
-/// Estado no-render de un pane: directorio, entradas (normalizadas
-/// internamente — ya no exige orden previo del caller, ver [`PaneState::new`]),
-/// cursor y quick search.
+/// Non-render state of a pane: directory, entries (normalised internally —
+/// no longer requires a pre-sorted caller, see [`PaneState::new`]), cursor
+/// and quick search.
 ///
-/// El cursor es un índice en `entries` (0 incluso con lista vacía). Con un
-/// quick search en modo [`Mode::Filter`] activo, la SELECCIÓN vive dentro del
-/// quick search (el cursor real no se mueve hasta confirmar); en
-/// [`Mode::Jump`] el cursor real salta directo al match.
+/// The cursor is an index into `entries` (0 even with an empty list). With a
+/// quick search active in [`Mode::Filter`] mode, the SELECTION lives inside
+/// the quick search (the real cursor does not move until confirmed); in
+/// [`Mode::Jump`] the real cursor jumps straight to the match.
 #[derive(Debug)]
 pub struct PaneState {
     dir: VPath,
     entries: Vec<Entry>,
-    /// En qué estado está la fila `..` (`[ui] parent_entry`).
-    fila_de_subir: FilaDeSubir,
-    /// Claves de orden persistidas, índice-paralelas a `entries` (#54): el
-    /// fill mergea lotes O(n+m) sin recomputar la clave NFC de lo ya listado.
+    /// What state the `..` row is in (`[ui] parent_entry`).
+    parent_row: ParentRow,
+    /// Persisted sort keys, index-parallel to `entries` (#54): the fill
+    /// merges batches O(n+m) without recomputing the NFC key of what was
+    /// already listed.
     sort_keys: Vec<SortKey>,
     cursor: usize,
     loading: bool,
     quick: Option<QuickSearch>,
     marks: HashSet<VPath>,
-    /// La selección de ANTES del último gesto en bloque, para `mark.restore`
-    /// (#313). UNA foto por panel, ni un historial ni algo que se persista:
-    /// es la red del que pulsa «desmarcar todo» sin querer, y con dos fotos ya
-    /// nadie sabría a cuál vuelve.
+    /// The selection from BEFORE the last bulk gesture, for `mark.restore`
+    /// (#313). ONE snapshot per panel, neither a history nor something
+    /// persisted: it is the net for whoever presses "unmark all" by
+    /// accident, and with two snapshots nobody would know which one to go
+    /// back to.
     ///
-    /// `None` = no ha habido ningún gesto en bloque desde que este panel
-    /// existe (o desde el último `cd`, que la tira: las rutas de otro
-    /// directorio no nombran nada de este listado).
+    /// `None` = there has been no bulk gesture since this panel exists (or
+    /// since the last `cd`, which drops it: another directory's paths name
+    /// nothing in this listing).
     marks_previous: Option<HashSet<VPath>>,
     /// Snapshot of `marks` from before the pointer sweep in progress, so
     /// that [`Self::apply_sweep`] can RESTORE it and re-mark, making a drag
@@ -241,14 +245,14 @@ pub struct PaneState {
     /// one is a claim about mark IDENTITY (paths), and it is kept where it
     /// already was.
     listing_epoch: u64,
-    /// Histograma de anchos de nombre del listado, del que sale
-    /// [`Self::name_width_p80`]. Se mide cuando el listado cambia, no al
-    /// pintar: es lo que [`crate::columns::fitted_columns`] intenta dar al
-    /// nombre, y medirlo por frame sería recorrer el directorio entero en
-    /// cada tecla. Un lote de un relleno paginado SUMA sus nombres en vez de
-    /// remedir: `extend` es O(n+m) a propósito, y remedir lo haría
-    /// cuadrático en un directorio grande.
-    name_cubos: [u32; CUBOS_DE_NOMBRE],
+    /// The listing's name-width histogram, which [`Self::name_width_p80`]
+    /// comes from. Measured when the listing changes, not while painting: it
+    /// is what [`crate::columns::fitted_columns`] tries to give the name,
+    /// and measuring it per frame would mean walking the whole directory on
+    /// every keystroke. A paginated fill's batch ADDS its names instead of
+    /// re-measuring: `extend` is O(n+m) on purpose, and re-measuring would
+    /// make it quadratic in a large directory.
+    name_buckets: [u32; NAME_WIDTH_BUCKETS],
     /// Extent (`lo..=hi`, clamped nowhere) the sweep in progress applied
     /// last, so the next [`Self::apply_sweep`] can give back exactly the
     /// rows that left the range instead of rebuilding the mark set.
@@ -259,119 +263,119 @@ pub struct PaneState {
     /// back to the CURSOR entry once the set empties — a silent prune would
     /// retarget the next bulk operation onto something nobody marked.
     pruned_marks: usize,
-    /// Reinterpretación de NOMBRES no-UTF8 para display (#57, spec §6.1):
-    /// `Some(enc)` = «ver nombres como enc» — SOLO display, los bytes jamás
-    /// se mutan (regla 1). Compartida por los frontends (#98/m2): el quick
-    /// search pliega sobre el texto reinterpretado y los renders la leen
-    /// vía [`PaneState::name_encoding`]. Persistente por pane.
+    /// Reinterpretation of non-UTF8 NAMES for display (#57, spec §6.1):
+    /// `Some(enc)` = "see names as enc" — display ONLY, the bytes are never
+    /// mutated (rule 1). Shared by the frontends (#98/m2): the quick search
+    /// folds over the reinterpreted text and the renders read it through
+    /// [`PaneState::name_encoding`]. Persistent per pane.
     name_encoding: Option<norte_encoding::NameEncoding>,
-    /// Índice del ciclo por el que ENTRÓ la reinterpretación activa (la
-    /// sugerencia de chardetng, o 0): el ciclo da la VUELTA COMPLETA y se
-    /// apaga al volver aquí — sin esto, los encodings anteriores a la
-    /// sugerencia serían inalcanzables (M1 del review #57).
+    /// Index of the cycle position the active reinterpretation ENTERED at
+    /// (chardetng's suggestion, or 0): the cycle goes the FULL WAY AROUND and
+    /// turns off on returning here — without this, encodings before the
+    /// suggestion would be unreachable (M1 of review #57).
     name_encoding_entry: usize,
-    /// Omitidas del CONTENEDOR del listado actual (#93/#96): entradas que el
-    /// índice del provider archive descartó (nombres hostiles/límites) y que
-    /// por tanto NO están en `entries` — un listado incompleto jamás es
-    /// silencioso. `None` = no aplica/desconocido; los frontends solo pintan
-    /// `Some(n)` con `n > 0`. Se resetea con cada listado nuevo
-    /// ([`Self::set_listing`]); el caller lo fija con el valor FRESCO de su
-    /// `list_with_skipped`/`list_stream`.
+    /// Skipped from the current listing's CONTAINER (#93/#96): entries the
+    /// archive provider's index discarded (hostile names/limits) and that
+    /// are therefore NOT in `entries` — an incomplete listing is never
+    /// silent. `None` = not applicable/unknown; the frontends only paint
+    /// `Some(n)` with `n > 0`. Reset on every new listing
+    /// ([`Self::set_listing`]); the caller sets it with the FRESH value from
+    /// its `list_with_skipped`/`list_stream`.
     skipped: Option<u64>,
-    /// Memoria de cursor por directorio (spec 2026-07-24 §S1): sesión-solo,
-    /// per-pane (no persiste entre reinicios — mismo precedente que
-    /// [`crate::nav`]'s history), LRU por recencia con tope
-    /// [`CURSOR_MEMORY_CAP`]. Identidad de dir por [`VPath`] BYTE-EXACTO
-    /// (regla 1): jamás se normaliza, así que dos gemelos hostiles con la
-    /// misma forma visual pero bytes distintos son entradas DISTINTAS. Se
-    /// alimenta con [`Self::remember_cursor`] y se consulta desde
-    /// [`Self::set_listing`].
+    /// Per-directory cursor memory (spec 2026-07-24 §S1): session-only,
+    /// per-pane (does not persist across restarts — same precedent as
+    /// [`crate::nav`]'s history), recency-LRU with a cap of
+    /// [`CURSOR_MEMORY_CAP`]. Directory identity by BYTE-EXACT [`VPath`]
+    /// (rule 1): never normalised, so two hostile twins with the same visual
+    /// shape but different bytes are DIFFERENT entries. Fed by
+    /// [`Self::remember_cursor`] and read from [`Self::set_listing`].
     cursor_memory: Vec<(VPath, usize)>,
-    /// Foco pendiente de un `nav.parent` (spec §S1): el hijo del que
-    /// venimos, para seleccionarlo en el listado del padre. Gana sobre
-    /// [`Self::cursor_memory`] y se CONSUME (una sola vez) en el próximo
-    /// [`Self::set_listing`], case o no case con una entrada del listado.
-    /// Identidad por `VPath` byte-exacto, igual que la memoria.
+    /// Pending focus from a `nav.parent` (spec §S1): the child we came from,
+    /// to select it in the parent's listing. Wins over
+    /// [`Self::cursor_memory`] and is CONSUMED (once) on the next
+    /// [`Self::set_listing`], whether or not it matches an entry of the
+    /// listing. Identity by byte-exact `VPath`, same as the memory.
     pending_focus: Option<VPath>,
-    /// Orden elegido del listado (#108 L7). Default = name/asc/dirs-first
-    /// (el orden histórico). Cambia por [`PaneState::set_sort`], que
-    /// re-ordena en sitio re-anclando el cursor por path.
+    /// The listing's chosen sort order (#108 L7). Default = name/asc/dirs-
+    /// first (the historical order). Changed by [`PaneState::set_sort`],
+    /// which re-sorts in place, re-anchoring the cursor by path.
     sort: crate::sort::SortSpec,
-    /// Mostrar entradas ocultas (#107). `true` por defecto (el constructor
-    /// no sabe de config; el frontend fija el default de `[ui] show_hidden`
-    /// con [`Self::set_show_hidden`] tras construir). SOLO presentación
-    /// (regla 7 al revés: la decisión vive aquí, compartida, y el provider
-    /// sigue listando todo).
+    /// Show hidden entries (#107). `true` by default (the constructor knows
+    /// nothing about config; the frontend sets `[ui] show_hidden`'s default
+    /// with [`Self::set_show_hidden`] after building). PRESENTATION ONLY
+    /// (rule 7 in reverse: the decision lives here, shared, and the provider
+    /// still lists everything).
     show_hidden: bool,
-    /// Entradas apartadas por la ocultación (#107): las de último segmento
-    /// con `.` inicial cuando `show_hidden == false`. Se devuelven al
-    /// listado (merge ordenado) al volver a mostrar — apartar, no tirar,
-    /// para que el toggle no necesite re-listar. Vacío con `show_hidden`.
+    /// Entries set aside by hiding (#107): the ones whose last segment
+    /// starts with `.` when `show_hidden == false`. They are returned to the
+    /// listing (sorted merge) when shown again — set aside, not dropped, so
+    /// the toggle needs no re-listing. Empty with `show_hidden` on.
     hidden_stash: Vec<Entry>,
-    /// Decoraciones de plugin por entrada (G3b, ADR 0037), YA saneadas
-    /// ([`crate::decoration::sanitize_decoration`]): badge/rol de la
-    /// entrada, si algún decorator consentido decoró esta ruta. Se llena de
-    /// forma ASÍNCRONA tras el listado (nunca bloquea `set_listing`, ver el
-    /// caller en cada frontend) y por eso vive FUERA del reset de
-    /// `set_listing`/`begin_loading` normal — [`Self::set_listing`] y
-    /// [`Self::begin_loading`] SÍ la limpian (un listado nuevo invalida las
-    /// decoraciones del anterior; llegan tarde, no en silencio hasta
-    /// entonces) mediante [`Self::clear_decorations`].
+    /// Per-entry plugin decorations (G3b, ADR 0037), ALREADY sanitised
+    /// ([`crate::decoration::sanitize_decoration`]): the entry's badge/role,
+    /// if some consented decorator decorated this path. Filled in
+    /// ASYNCHRONOUSLY after the listing (never blocks `set_listing`, see the
+    /// caller in each frontend) and that is why it lives OUTSIDE the normal
+    /// `set_listing`/`begin_loading` reset — [`Self::set_listing`] and
+    /// [`Self::begin_loading`] DO clear it (a new listing invalidates the
+    /// previous one's decorations; they arrive late, not silently wrong
+    /// until then) through [`Self::clear_decorations`].
     decorations: HashMap<VPath, Decoration>,
-    /// Valores de columnas `plugin:` por entrada (#117-follow-up), espejo
-    /// asíncrono de `decorations`: clave exterior = id Display de la
-    /// columna (`plugin:<p>/<c>`), interior = `VPath` del listado ACTUAL →
-    /// valor YA saneado en el ingest ([`crate::columns::sanitize_cell`]).
-    /// [`Self::set_listing`]/[`Self::begin_loading`] lo limpian (un
-    /// listado nuevo invalida los valores del anterior).
+    /// Per-entry `plugin:` column values (#117-follow-up), an async mirror of
+    /// `decorations`: outer key = the column's Display id
+    /// (`plugin:<p>/<c>`), inner = the CURRENT listing's `VPath` → value
+    /// ALREADY sanitised at ingest ([`crate::columns::sanitize_cell`]).
+    /// [`Self::set_listing`]/[`Self::begin_loading`] clear it (a new listing
+    /// invalidates the previous one's values).
     plugin_columns: HashMap<String, HashMap<VPath, String>>,
-    /// Filas de listado que el frontend pintó de este pane en el ÚLTIMO
-    /// frame (#124). El alto real lo decide el widget al pintar, así que el
-    /// modelo no puede deducirlo: el frontend lo DEVUELVE con
-    /// [`Self::set_viewport_rows`] y de ahí salen el salto de página
-    /// ([`Self::page_step`]) y el radio de la sonda de stat
-    /// ([`Self::needs_stat_window`]) — antes eran constantes que mentían en
-    /// cualquier terminal que no midiera justo eso. `None` = todavía sin
-    /// pintar (o pane tapado, p. ej. con el visor abierto): manda el
-    /// fallback del caller.
+    /// Listing rows the frontend painted for this pane on the LAST frame
+    /// (#124). The real height is decided by the widget when painting, so
+    /// the model cannot deduce it: the frontend REPORTS it back with
+    /// [`Self::set_viewport_rows`], and from that come the page jump
+    /// ([`Self::page_step`]) and the stat probe's radius
+    /// ([`Self::needs_stat_window`]) — before, these were constants that lied
+    /// in any terminal that did not measure exactly that. `None` = not
+    /// painted yet (or the pane is covered, e.g. with the viewer open):
+    /// the caller's fallback rules.
     viewport_rows: Option<usize>,
-    /// La primera fila VISIBLE del listado: la ventana, que es PEGAJOSA.
+    /// The listing's first VISIBLE row: the viewport, which is STICKY.
     ///
-    /// Antes se deducía del cursor en cada frame (`selected - (alto-1)`), y
-    /// eso ancla el cursor a la ÚLTIMA fila: pasada la primera pantalla, cada
-    /// pulsación movía el contenido en vez del cursor, y al volver hacia
-    /// arriba la lista bajaba con él sin que el cursor se despegara del borde.
-    /// Un gestor ortodoxo hace lo contrario — el cursor se mueve DENTRO de la
-    /// ventana y solo la arrastra al tocar un borde—, y para eso la ventana
-    /// tiene que recordar dónde estaba.
+    /// It used to be deduced from the cursor on every frame (`selected -
+    /// (height-1)`), and that anchors the cursor to the LAST row: past the
+    /// first screen, every keystroke moved the content instead of the
+    /// cursor, and moving back up scrolled the list down with it without the
+    /// cursor ever peeling off the edge. An orthodox file manager does the
+    /// opposite — the cursor moves INSIDE the viewport and only drags it when
+    /// it touches an edge— and for that the viewport has to remember where
+    /// it was.
     ///
-    /// Se reconcilia una vez por frame ([`Self::reconcile_viewport`]), ANTES
-    /// de pintar: el pintado y el hit test del ratón leen los dos este mismo
-    /// número, que es lo que impide que un click caiga en otra fila.
+    /// Reconciled once per frame ([`Self::reconcile_viewport`]), BEFORE
+    /// painting: both the painting and the mouse hit test read this same
+    /// number, which is what stops a click from landing on a different row.
     viewport_offset: usize,
 }
 
-/// Salto de página sin frame pintado todavía (#124): el valor histórico,
-/// solo hasta el primer [`PaneState::set_viewport_rows`].
+/// Page jump with no frame painted yet (#124): the historical value, only
+/// until the first [`PaneState::set_viewport_rows`].
 pub const DEFAULT_PAGE: usize = 10;
 
-/// Tope de la memoria de cursor por pane (spec §S1): sesión larga sin fuga
-/// de memoria sin depender de una nueva dependencia (LRU a mano sobre un
-/// `Vec`, barato para decenas de dirs visitados).
+/// Cap of the per-pane cursor memory (spec §S1): a long session with no
+/// memory leak without depending on a new dependency (a hand-rolled LRU over
+/// a `Vec`, cheap for dozens of visited dirs).
 const CURSOR_MEMORY_CAP: usize = 64;
 
 impl PaneState {
-    /// Pane sobre `dir` con `entries` (se normalizan internamente: ya no hace
-    /// falta ordenarlas antes — el contrato "ordénalas antes" deja de ser
-    /// footgun, ver [`sort_entries`](crate::sort_entries) para el criterio).
-    /// Cursor en 0, sin quick search, sin carga pendiente.
+    /// A pane over `dir` with `entries` (normalised internally: no longer
+    /// requires sorting them beforehand — the "sort them first" contract
+    /// stops being a footgun, see [`sort_entries`](crate::sort_entries) for
+    /// the criterion). Cursor at 0, no quick search, no pending load.
     #[must_use]
     pub fn new(dir: VPath, entries: Vec<Entry>) -> Self {
         let (entries, sort_keys) =
             crate::sort::sort_with_keys_spec(entries, &crate::sort::SortSpec::default());
-        let name_cubos = cubos_de(&entries);
+        let name_buckets = buckets_of(&entries);
         Self {
-            name_cubos,
+            name_buckets,
             dir,
             entries,
             sort_keys,
@@ -396,132 +400,135 @@ impl PaneState {
             plugin_columns: HashMap::new(),
             viewport_rows: None,
             viewport_offset: 0,
-            fila_de_subir: FilaDeSubir::Apagada,
+            parent_row: ParentRow::Off,
         }
     }
 
-    /// Enciende o apaga la fila `..` de este listado (`[ui] parent_entry`).
+    /// Turns this listing's `..` row on or off (`[ui] parent_entry`).
     ///
-    /// Se pide una vez, al montar el pane, y se conserva por listado: es
-    /// configuración, no estado de navegación.
+    /// Requested once, when the pane is mounted, and kept across listings:
+    /// it is configuration, not navigation state.
     pub fn set_parent_row(&mut self, on: bool) {
-        if on != matches!(self.fila_de_subir, FilaDeSubir::Apagada) {
+        if on != matches!(self.parent_row, ParentRow::Off) {
             return;
         }
-        self.quitar_padre();
-        self.fila_de_subir = if on {
-            FilaDeSubir::Pedida
+        self.remove_parent_row();
+        self.parent_row = if on {
+            ParentRow::Requested
         } else {
-            FilaDeSubir::Apagada
+            ParentRow::Off
         };
-        self.poner_padre();
+        self.insert_parent_row();
     }
 
-    /// ¿La fila `i` es la de `..`?
+    /// Is row `i` the `..` one?
     ///
-    /// Lo preguntan los dos renderers —para pintar `..` en vez del nombre del
-    /// directorio padre— y la navegación. Nadie más debería necesitarlo: lo
-    /// que evita que esa fila sea el OPERANDO de una operación es que
-    /// [`Self::selected`] devuelve `None` sobre ella, no que cada sitio se
-    /// acuerde de preguntar.
+    /// Both renderers ask it —to paint `..` instead of the parent
+    /// directory's name— and so does navigation. Nobody else should need it:
+    /// what stops that row from being an operation's OPERAND is that
+    /// [`Self::selected`] returns `None` over it, not that every call site
+    /// remembers to ask.
     #[must_use]
     pub fn is_parent_row(&self, i: usize) -> bool {
-        self.tiene_padre() && i == 0
+        self.has_parent_row() && i == 0
     }
 
-    /// A dónde lleva la fila `..`, si la hay: el directorio padre.
+    /// Where the `..` row leads, if there is one: the parent directory.
     #[must_use]
     pub fn parent_target(&self) -> Option<&VPath> {
-        self.tiene_padre().then(|| &self.entries[0].path)
+        self.has_parent_row().then(|| &self.entries[0].path)
     }
 
-    /// ¿Hay fila de padre AHORA MISMO en `entries`?
+    /// Is there a parent row RIGHT NOW in `entries`?
     ///
-    /// Es un campo y no una comparación de rutas: una entrada de verdad puede
-    /// apuntar al mismo sitio que el padre —un enlace, un montaje— y
-    /// preguntarlo por la ruta convertiría esa entrada en «la fila de subir».
-    /// El campo dice lo que de verdad se metió.
-    const fn tiene_padre(&self) -> bool {
-        matches!(self.fila_de_subir, FilaDeSubir::Puesta)
+    /// It is a field and not a path comparison: a real entry can point at
+    /// the same place as the parent —a link, a mount— and asking by path
+    /// would turn that entry into "the go-up row". The field says what was
+    /// really inserted.
+    const fn has_parent_row(&self) -> bool {
+        matches!(self.parent_row, ParentRow::Present)
     }
 
-    /// Da por NO puesta la fila, sin tocar `entries`: para cuando el listado
-    /// se reemplaza entero y lo que hubiera se fue con él.
-    const fn olvidar_padre(&mut self) {
-        if let FilaDeSubir::Puesta = self.fila_de_subir {
-            self.fila_de_subir = FilaDeSubir::Pedida;
+    /// Marks the row as NOT present, without touching `entries`: for when
+    /// the listing is replaced whole and whatever there was went with it.
+    const fn forget_parent_row(&mut self) {
+        if let ParentRow::Present = self.parent_row {
+            self.parent_row = ParentRow::Requested;
         }
     }
 
-    /// Mete la fila `..` al principio, si toca y no está ya.
+    /// Inserts the `..` row at the front, if it should be there and is not
+    /// already.
     ///
-    /// Se llama al FINAL de todo lo que reconstruye `entries`. Su pareja
-    /// [`Self::quitar_padre`] va al principio, y las dos juntas son lo que
-    /// permite que ordenar, filtrar y rellenar sigan trabajando sobre un
-    /// listado de entradas REALES — una fila sintética metida en un merge por
-    /// clave de orden es una fila que se duplica o se pierde.
+    /// Called at the END of everything that rebuilds `entries`. Its pair
+    /// [`Self::remove_parent_row`] goes at the start, and the two together
+    /// are what lets sorting, filtering, and filling keep working over a
+    /// listing of REAL entries — a synthetic row caught in a merge-by-sort-
+    /// key is a row that gets duplicated or lost.
     ///
-    /// En una raíz no aparece por mucho que la configuración la encienda: no
-    /// hay a dónde subir, y una fila que no lleva a ningún sitio es peor que
-    /// no tenerla.
-    fn poner_padre(&mut self) {
-        if !matches!(self.fila_de_subir, FilaDeSubir::Pedida) {
+    /// At a root it does not appear no matter how much the config turns it
+    /// on: there is nowhere to go up to, and a row that leads nowhere is
+    /// worse than not having it.
+    fn insert_parent_row(&mut self) {
+        if !matches!(self.parent_row, ParentRow::Requested) {
             return;
         }
-        let Some(padre) = self.dir.parent() else {
+        let Some(parent) = self.dir.parent() else {
             return;
         };
-        let fila = Entry {
+        let row = Entry {
             attrs: std::collections::BTreeMap::new(),
-            path: padre,
+            path: parent,
             kind: norte_proto::EntryKind::Dir,
-            // Ni tamaño ni fecha: no son de este directorio, y ponerlos sería
-            // contestar por el padre sin haberlo mirado.
+            // Neither size nor date: they are not this directory's, and
+            // setting them would be answering for the parent without having
+            // looked at it.
             size: None,
             mtime_ms: None,
         };
-        // La clave se computa de SU entrada, que es el invariante que el
-        // orden exige: una clave ajena compara mal en cuanto haya un empate.
-        self.sort_keys.insert(0, crate::sort::sort_key(&fila));
-        self.entries.insert(0, fila);
-        self.fila_de_subir = FilaDeSubir::Puesta;
+        // The key is computed from ITS entry, which is the invariant the
+        // sort demands: a borrowed key compares wrong the moment there is a
+        // tie.
+        self.sort_keys.insert(0, crate::sort::sort_key(&row));
+        self.entries.insert(0, row);
+        self.parent_row = ParentRow::Present;
     }
 
-    /// Saca la fila `..` si está puesta.
+    /// Removes the `..` row if it is present.
     ///
-    /// Al PRINCIPIO de lo que reconstruye el listado, para que lo que ordena
-    /// y mergea solo vea entradas de verdad.
-    fn quitar_padre(&mut self) {
-        if !self.tiene_padre() {
+    /// At the START of whatever rebuilds the listing, so that sorting and
+    /// merging only ever see real entries.
+    fn remove_parent_row(&mut self) {
+        if !self.has_parent_row() {
             return;
         }
         self.entries.remove(0);
         self.sort_keys.remove(0);
-        self.fila_de_subir = FilaDeSubir::Pedida;
+        self.parent_row = ParentRow::Requested;
     }
 
-    /// ¿Se muestran las entradas ocultas? (#107)
+    /// Are hidden entries shown? (#107)
     #[must_use]
     pub fn show_hidden(&self) -> bool {
         self.show_hidden
     }
 
-    /// Cuántas entradas del listado actual están APARTADAS por la
-    /// ocultación (#107). 0 con [`Self::show_hidden`] activo. El pie del
-    /// pane lo pinta con la misma disciplina que `skipped`: un listado que
-    /// enseña menos de lo que hay jamás es silencioso.
+    /// How many entries of the current listing are SET ASIDE by hiding
+    /// (#107). 0 with [`Self::show_hidden`] on. The pane's footer paints it
+    /// with the same discipline as `skipped`: a listing that shows less than
+    /// there is must never be silent about it.
     #[must_use]
     pub fn hidden_count(&self) -> usize {
         self.hidden_stash.len()
     }
 
-    /// Fija la visibilidad de ocultos (#107). Mostrar devuelve el stash al
-    /// listado por el MISMO camino que un lote paginado ([`Self::extend`]:
-    /// merge ordenado, cursor re-anclado por path, quick re-aplicado).
-    /// Ocultar aparta los dotfiles, re-ancla el cursor por path (clamp si
-    /// estaba sobre uno) y PODA sus marcas con el contador de
-    /// [`Self::pruned_marks`] — la misma regla que `refill`: una selección
-    /// que alimenta un bulk op jamás encoge en silencio.
+    /// Sets hidden visibility (#107). Showing returns the stash to the
+    /// listing through the SAME path as a paginated batch ([`Self::extend`]:
+    /// sorted merge, cursor re-anchored by path, quick re-applied). Hiding
+    /// sets the dotfiles aside, re-anchors the cursor by path (clamped if it
+    /// was on one), and PRUNES their marks with [`Self::pruned_marks`]'s
+    /// counter — the same rule as `refill`: a selection feeding a bulk op
+    /// must never shrink silently.
     pub fn set_show_hidden(&mut self, show: bool) {
         if show == self.show_hidden {
             return;
@@ -532,15 +539,16 @@ impl PaneState {
             self.extend(stash);
             return;
         }
-        // La fila `..` sale ANTES de particionar y vuelve después: no es una
-        // entrada del listado, así que ni se oculta ni se guarda en el stash.
-        self.quitar_padre();
+        // The `..` row comes out BEFORE partitioning and comes back
+        // afterwards: it is not an entry of the listing, so it is neither
+        // hidden nor saved to the stash.
+        self.remove_parent_row();
         let anchor = self.entries.get(self.cursor).map(|e| e.path.clone());
         let quick_prev = self.quick_selected_path();
         let mut kept = Vec::with_capacity(self.entries.len());
         let mut kept_keys = Vec::with_capacity(self.sort_keys.len());
-        // Partición manteniendo `sort_keys` índice-paralela (#54): un
-        // retain solo sobre `entries` las desalinearía.
+        // Partitions while keeping `sort_keys` index-parallel (#54): a
+        // retain over `entries` alone would misalign them.
         for (entry, key) in std::mem::take(&mut self.entries)
             .into_iter()
             .zip(std::mem::take(&mut self.sort_keys))
@@ -554,7 +562,7 @@ impl PaneState {
         }
         self.entries = kept;
         self.sort_keys = kept_keys;
-        self.poner_padre();
+        self.insert_parent_row();
         self.listing_moved();
         self.cursor = anchor
             .and_then(|p| self.entries.iter().position(|e| e.path == p))
@@ -568,41 +576,43 @@ impl PaneState {
         self.quick_sync_jump();
     }
 
-    /// El orden activo del listado (#108).
+    /// The listing's active sort order (#108).
     #[must_use]
     pub fn sort(&self) -> crate::sort::SortSpec {
         self.sort.clone()
     }
 
-    /// Cambia el orden del listado (#108 L7): re-ordena EN SITIO (claves
-    /// #54 conservadas — solo cambia el comparador), re-ancla el cursor al
-    /// PATH seleccionado y re-aplica el quick vivo. Las marcas no se tocan
-    /// (van por identidad). No-op si el spec no cambia.
+    /// Changes the listing's sort order (#108 L7): re-sorts IN PLACE (#54
+    /// keys kept — only the comparator changes), re-anchors the cursor to
+    /// the selected PATH, and re-applies the live quick search. Marks are
+    /// not touched (they go by identity). No-op if the spec does not
+    /// change.
     pub fn set_sort(&mut self, spec: crate::sort::SortSpec) {
         if spec == self.sort {
             return;
         }
         self.sort = spec;
-        // La fila `..` sale ANTES de reordenar y vuelve después: no participa
-        // del orden, va siempre primera. Ordenarla con las demás la mandaría
-        // al medio del listado en cuanto alguien ordene por tamaño.
-        self.quitar_padre();
+        // The `..` row comes out BEFORE sorting and comes back afterwards:
+        // it does not take part in the order, it always goes first. Sorting
+        // it with the rest would send it to the middle of the listing the
+        // moment someone sorts by size.
+        self.remove_parent_row();
         let anchor = self.entries.get(self.cursor).map(|e| e.path.clone());
         let quick_prev = self.quick_selected_path();
-        // Mismo guard anti-truncado que merge_keyed_spec (review m1): un
-        // zip de paralelas desincronizadas PERDERÍA entradas en silencio.
+        // Same anti-truncation guard as merge_keyed_spec (review m1): a zip
+        // of out-of-sync parallel vecs would LOSE entries silently.
         debug_assert_eq!(
             self.entries.len(),
             self.sort_keys.len(),
-            "entries↔sort_keys desincronizados"
+            "entries and sort_keys are out of sync"
         );
-        let mut pares: Vec<(Entry, crate::sort::SortKey)> = std::mem::take(&mut self.entries)
+        let mut pairs: Vec<(Entry, crate::sort::SortKey)> = std::mem::take(&mut self.entries)
             .into_iter()
             .zip(std::mem::take(&mut self.sort_keys))
             .collect();
-        pares.sort_by(|a, b| crate::sort::cmp_keyed_with((&a.1, &a.0), (&b.1, &b.0), &self.sort));
-        (self.entries, self.sort_keys) = pares.into_iter().unzip();
-        self.poner_padre();
+        pairs.sort_by(|a, b| crate::sort::cmp_keyed_with((&a.1, &a.0), (&b.1, &b.0), &self.sort));
+        (self.entries, self.sort_keys) = pairs.into_iter().unzip();
+        self.insert_parent_row();
         self.listing_moved();
         self.cursor = anchor
             .and_then(|p| self.entries.iter().position(|e| e.path == p))
@@ -613,14 +623,14 @@ impl PaneState {
         self.quick_sync_jump();
     }
 
-    /// Toggle de [`Self::set_show_hidden`]; devuelve el estado nuevo.
+    /// Toggle of [`Self::set_show_hidden`]; returns the new state.
     pub fn toggle_hidden(&mut self) -> bool {
         self.set_show_hidden(!self.show_hidden);
         self.show_hidden
     }
 
-    /// Aparta de `entries` las ocultas hacia el stash si la ocultación está
-    /// activa (#107); passthrough si no. Para los puntos de INGESTIÓN
+    /// Sets aside the hidden ones from `entries` into the stash if hiding is
+    /// on (#107); passthrough otherwise. For the INGESTION points
     /// ([`Self::set_listing`], [`Self::extend`], [`Self::refill`]).
     fn stash_hidden(&mut self, entries: Vec<Entry>) -> Vec<Entry> {
         if self.show_hidden {
@@ -632,21 +642,21 @@ impl PaneState {
         visible
     }
 
-    /// Reinterpretación de nombres activa (#57): los renders pintan con ella
-    /// ([`crate::display_name_with`]) y el quick search pliega sobre el
-    /// mismo texto.
+    /// The active name reinterpretation (#57): the renders paint with it
+    /// ([`crate::display_name_with`]) and the quick search folds over the
+    /// same text.
     #[must_use]
     pub fn name_encoding(&self) -> Option<norte_encoding::NameEncoding> {
         self.name_encoding
     }
 
-    /// Cicla la reinterpretación de nombres (#57): `None` → (sugerencia de
-    /// chardetng sobre los nombres no-UTF8 del listado, si cae en el ciclo;
-    /// si no, cp437) → VUELTA COMPLETA al ciclo — todos los encodings
-    /// alcanzables desde cualquier sugerencia — → `None` al regresar al
-    /// punto de entrada. Un quick search vivo se RE-PLIEGA sobre el texto
-    /// nuevo (#98/F1: el filtro casa contra lo que se VE). Devuelve la
-    /// etiqueta a anunciar (`None` = modo apagado).
+    /// Cycles the name reinterpretation (#57): `None` → (chardetng's
+    /// suggestion over the listing's non-UTF8 names, if it falls in the
+    /// cycle; cp437 otherwise) → FULL CIRCLE around the cycle — every
+    /// encoding reachable from any suggestion — → `None` on returning to the
+    /// entry point. A live quick search RE-FOLDS over the new text (#98/F1:
+    /// the filter matches against what is SEEN). Returns the label to
+    /// announce (`None` = off).
     pub fn cycle_name_encoding(&mut self) -> Option<&'static str> {
         let cycle = norte_encoding::name_reinterpret_cycle();
         self.name_encoding = match self.name_encoding {
@@ -657,8 +667,8 @@ impl PaneState {
                     .filter_map(|e| e.path.file_name().map(norte_proto::Segment::as_bytes))
                     .filter(|b| std::str::from_utf8(b).is_err())
                     .collect();
-                let sugerido = norte_encoding::suggest_name_encoding(&raws);
-                let entry = sugerido
+                let suggested = norte_encoding::suggest_name_encoding(&raws);
+                let entry = suggested
                     .and_then(|s| cycle.iter().position(|e| *e == s))
                     .unwrap_or(0);
                 self.name_encoding_entry = entry;
@@ -667,16 +677,16 @@ impl PaneState {
             Some(cur) => match cycle.iter().position(|e| *e == cur) {
                 Some(i) => {
                     let next = (i + 1) % cycle.len();
-                    // Vuelta completada: apagar (el ciclo siempre acaba en
-                    // off, pase por donde pase la sugerencia de entrada).
+                    // Full circle completed: turn off (the cycle always ends
+                    // at off, whatever the entry suggestion was).
                     (next != self.name_encoding_entry).then(|| cycle[next])
                 }
-                // Valor fuera del ciclo (imposible hoy): apagar.
+                // Value outside the cycle (impossible today): turn off.
                 None => None,
             },
         };
-        // #98/F1: el cache de folds del quick vivo quedó plegado con el
-        // encoding anterior — re-plegar conservando la selección.
+        // #98/F1: the live quick's fold cache was folded with the previous
+        // encoding — re-fold, keeping the selection.
         let prev = self.quick_selected_path();
         let enc = self.name_encoding;
         if let Some(q) = &mut self.quick {
@@ -686,53 +696,56 @@ impl PaneState {
         self.name_encoding.map(|e| e.label())
     }
 
-    /// Reemplaza el contenido tras un cd/refresh: resetea el cursor a 0, apaga
-    /// el `loading` y MATA cualquier quick search vivo (filtraba OTRO listado).
-    /// Normaliza `entries` internamente (mismo contrato que [`PaneState::new`]).
+    /// Replaces the content after a cd/refresh: resets the cursor to 0,
+    /// turns off `loading`, and KILLS any live quick search (it was
+    /// filtering ANOTHER listing). Normalises `entries` internally (same
+    /// contract as [`PaneState::new`]).
     ///
-    /// Tras el reset, RESTAURA el cursor (spec §S1) en este orden de
-    /// precedencia: (1) [`Self::set_pending_focus`] si hay un hint pendiente
-    /// Y una entrada de `entries` casa su path byte-exacto (se CONSUME aquí,
-    /// haya o no match); (2) si no, la memoria por dir
-    /// ([`Self::remember_cursor`]) para el `dir` nuevo, con clamp; (3) si
-    /// ninguna aplica, 0 — el comportamiento de siempre.
+    /// After the reset, RESTORES the cursor (spec §S1) in this precedence
+    /// order: (1) [`Self::set_pending_focus`] if there is a pending hint AND
+    /// an `entries` entry matches its byte-exact path (CONSUMED here,
+    /// whether or not it matches); (2) otherwise, the per-dir memory
+    /// ([`Self::remember_cursor`]) for the new `dir`, clamped; (3) if
+    /// neither applies, 0 — the behaviour it always had.
     pub fn set_listing(&mut self, dir: VPath, entries: Vec<Entry>) {
-        // #107: stash del listado ANTERIOR fuera; el nuevo se filtra al
-        // entrar si la ocultación está activa.
+        // #107: the PREVIOUS listing's stash goes away; the new one is
+        // filtered on entry if hiding is on.
         self.hidden_stash.clear();
         let entries = self.stash_hidden(entries);
         let (entries, sort_keys) = crate::sort::sort_with_keys_spec(entries, &self.sort);
         self.dir = dir;
         self.entries = entries;
         self.sort_keys = sort_keys;
-        // El dir cambió: la fila `..` de antes apuntaba a otro padre.
-        self.olvidar_padre();
-        self.poner_padre();
+        // The dir changed: the previous `..` row pointed at a different
+        // parent.
+        self.forget_parent_row();
+        self.insert_parent_row();
         self.listing_moved();
         self.cursor = 0;
         self.loading = false;
         self.quick = None;
         self.marks.clear();
-        // Y la foto de `mark.restore` (#313): sus rutas son del directorio
-        // ANTERIOR, y restaurarlas aquí no marcaría nada o —peor— marcaría lo
-        // que casualmente se llame igual.
+        // And the `mark.restore` snapshot (#313): its paths belong to the
+        // PREVIOUS directory, and restoring them here would mark nothing or
+        // —worse— mark whatever happens to be named the same.
         self.marks_previous = None;
         self.sweep_baseline = None;
         self.sweep_extent = None;
         self.pruned_marks = 0;
-        // #96: las omitidas eran del listado ANTERIOR; el caller fija las
-        // frescas con `set_skipped` si su fuente las trae.
+        // #96: the skipped count was the PREVIOUS listing's; the caller sets
+        // a fresh one with `set_skipped` if its source carries it.
         self.skipped = None;
-        // G3b: las decoraciones eran del listado ANTERIOR (claves por
-        // `VPath` byte-exacto de OTRO dir) — un listado nuevo las invalida.
+        // G3b: the decorations were the PREVIOUS listing's (keyed by
+        // byte-exact `VPath` of ANOTHER dir) — a new listing invalidates
+        // them.
         self.decorations.clear();
         self.plugin_columns.clear();
 
-        // #107 review MINOR-1 (aceptado): el hint se resuelve contra el
-        // listado YA filtrado — volver del interior de un dir oculto con la
-        // ocultación activa pierde el foco (cae a memoria/0). Corregirlo
-        // exigiría buscar en el stash y elegir un vecino visible; coste no
-        // pagado hasta que moleste de verdad.
+        // #107 review MINOR-1 (accepted): the hint is resolved against the
+        // ALREADY filtered listing — coming back from inside a hidden dir
+        // with hiding on loses the focus (falls back to memory/0). Fixing it
+        // would require searching the stash and picking a visible neighbour;
+        // a cost not paid until it actually becomes a nuisance.
         let restored = self
             .pending_focus
             .take()
@@ -748,18 +761,18 @@ impl PaneState {
         }
     }
 
-    /// Marca el pane como cargando `dir`: entradas vacías, `loading=true`, sin
-    /// quick search. La GUI lo usa para pintar el destino de un cd mientras la
-    /// Task de listado corre; el listado real llega luego por [`set_listing`].
+    /// Marks the pane as loading `dir`: empty entries, `loading=true`, no
+    /// quick search. The GUI uses it to paint a cd's destination while the
+    /// listing Task runs; the real listing arrives later through
+    /// [`set_listing`].
     ///
-    /// Punto de captura de la memoria de cursor (spec §S1) para el flujo de
-    /// la GUI: graba `(dir viejo, cursor viejo)` con [`Self::remember_cursor`]
-    /// ANTES de pisar el estado con el destino nuevo — es el único momento en
-    /// que el dir viejo sigue en `self.dir`. La TUI no llama a este método
-    /// (su `cd` espera el fetch entero antes de tocar el pane, ver
-    /// `norte-tui::app::Pane::begin_listing`), así que graba en su propio
-    /// punto de captura equivalente, justo antes de llamar a
-    /// [`Self::set_listing`].
+    /// The cursor memory's capture point (spec §S1) for the GUI's flow:
+    /// records `(old dir, old cursor)` with [`Self::remember_cursor`] BEFORE
+    /// overwriting the state with the new destination — it is the only
+    /// moment the old dir is still in `self.dir`. The TUI does not call this
+    /// method (its `cd` waits for the whole fetch before touching the pane,
+    /// see `norte-tui::app::Pane::begin_listing`), so it records at its own
+    /// equivalent capture point, right before calling [`Self::set_listing`].
     ///
     /// [`set_listing`]: PaneState::set_listing
     pub fn begin_loading(&mut self, dir: VPath) {
@@ -767,210 +780,217 @@ impl PaneState {
         self.dir = dir;
         self.entries = Vec::new();
         self.sort_keys = Vec::new();
-        self.olvidar_padre();
-        self.poner_padre();
+        self.forget_parent_row();
+        self.insert_parent_row();
         self.listing_moved();
         self.cursor = 0;
         self.loading = true;
         self.quick = None;
         self.marks.clear();
-        // Y la foto de `mark.restore` (#313): sus rutas son del directorio
-        // ANTERIOR, y restaurarlas aquí no marcaría nada o —peor— marcaría lo
-        // que casualmente se llame igual.
+        // And the `mark.restore` snapshot (#313): its paths belong to the
+        // PREVIOUS directory, and restoring them here would mark nothing or
+        // —worse— mark whatever happens to be named the same.
         self.marks_previous = None;
         self.sweep_baseline = None;
         self.sweep_extent = None;
         self.pruned_marks = 0;
         self.skipped = None;
-        self.hidden_stash.clear(); // #107: era del listado anterior
+        self.hidden_stash.clear(); // #107: belonged to the previous listing
         self.decorations.clear();
         self.plugin_columns.clear();
     }
 
-    /// Omitidas del contenedor del listado actual (#93/#96) — ver el campo.
+    /// Skipped from the current listing's container (#93/#96) — see the
+    /// field.
     #[must_use]
     pub fn skipped(&self) -> Option<u64> {
         self.skipped
     }
 
-    /// Fija las omitidas FRESCAS del listado actual (#96): llamar tras
-    /// [`Self::set_listing`]/[`Self::refill`] con el valor de la MISMA
-    /// respuesta de listado (`list_with_skipped`/`list_stream`) — nunca
-    /// arrastrar el de un listado anterior.
+    /// Sets the current listing's FRESH skipped count (#96): call after
+    /// [`Self::set_listing`]/[`Self::refill`] with the value from the SAME
+    /// listing response (`list_with_skipped`/`list_stream`) — never carry
+    /// over a previous listing's.
     pub fn set_skipped(&mut self, skipped: Option<u64>) {
         self.skipped = skipped;
     }
 
-    /// Decoración de plugin de `path` (G3b), ya saneada — `None` si ningún
-    /// decorator consentido decoró esa ruta, o si las decoraciones de esta
-    /// página no han llegado todavía (fetch asíncrono en curso).
+    /// `path`'s plugin decoration (G3b), already sanitised — `None` if no
+    /// consented decorator decorated that path, or if this page's
+    /// decorations have not arrived yet (an async fetch in progress).
     #[must_use]
     pub fn decoration_for(&self, path: &VPath) -> Option<&Decoration> {
         self.decorations.get(path)
     }
 
-    /// Si ALGUNA entrada del listado tiene icono (ADR 0105): entonces la
-    /// columna de iconos se pinta en TODAS las filas, con hueco en las que
-    /// no lo tienen, para que los nombres sigan alineados. Sin ningún icono
-    /// no hay columna, y el listado se ve como antes de que existiera.
+    /// Whether ANY entry of the listing has an icon (ADR 0105): if so, the
+    /// icon column is painted on EVERY row, with a gap on the ones that have
+    /// none, so names stay aligned. With no icon at all there is no column,
+    /// and the listing looks like it did before it existed.
     #[must_use]
     pub fn any_icon(&self) -> bool {
         self.decorations.values().any(|d| d.icon.is_some())
     }
 
-    /// Instala el LOTE de decoraciones ya resuelto y saneado (G3b): el
-    /// caller lo llama tras un `Backend::plugin_decorate` que responde para
-    /// EL MISMO listado que sigue activo (ver [`crate::merge_decorations`]
-    /// para construir el mapa desde el wire) — llamar con decoraciones de
-    /// un `dir` que ya no es el actual es un no-op observable inofensivo
-    /// (las claves por `VPath` de otro dir simplemente no casan ninguna
-    /// entrada visible), pero el caller debería descartar una respuesta
-    /// tardía cuyo `dir` no case el actual ANTES de llamar (ver el sitio de
-    /// la llamada en cada frontend).
+    /// Installs the BATCH of decorations already resolved and sanitised
+    /// (G3b): the caller calls it after a `Backend::plugin_decorate` that
+    /// answers for THE SAME listing that is still active (see
+    /// [`crate::merge_decorations`] to build the map from the wire) —
+    /// calling it with decorations for a `dir` that is no longer current is
+    /// a harmless observable no-op (keys by another dir's `VPath` simply
+    /// match no visible entry), but the caller should discard a late
+    /// response whose `dir` does not match the current one BEFORE calling
+    /// (see the call site in each frontend).
     pub fn set_decorations(&mut self, decorations: HashMap<VPath, Decoration>) {
         self.decorations = decorations;
     }
 
-    /// Limpia las decoraciones (G3b): llamado por [`Self::set_listing`]/
-    /// [`Self::begin_loading`] — expuesto también para que un caller pueda
-    /// forzar el reset (p. ej. al desactivar todos los decoradores).
+    /// Clears the decorations (G3b): called by [`Self::set_listing`]/
+    /// [`Self::begin_loading`] — also exposed so a caller can force the
+    /// reset (e.g. when disabling every decorator).
     pub fn clear_decorations(&mut self) {
         self.decorations.clear();
     }
 
-    /// Instala el LOTE de valores de columnas `plugin:` (#117-follow-up):
-    /// clave exterior = id Display (`plugin:<p>/<c>`), interior = `VPath`
-    /// del listado activo → valor saneado
-    /// ([`crate::columns::sanitize_column_values`] en el ingest). Mismo
-    /// contrato anti-rancio que [`Self::set_decorations`]: el caller
-    /// descarta una respuesta tardía cuyo `dir` no case el actual.
+    /// Installs the BATCH of `plugin:` column values (#117-follow-up): outer
+    /// key = Display id (`plugin:<p>/<c>`), inner = the active listing's
+    /// `VPath` → sanitised value
+    /// ([`crate::columns::sanitize_column_values`] at ingest). Same
+    /// anti-staleness contract as [`Self::set_decorations`]: the caller
+    /// discards a late response whose `dir` does not match the current one.
     pub fn set_plugin_columns(&mut self, columns: HashMap<String, HashMap<VPath, String>>) {
         self.plugin_columns = columns;
     }
 
-    /// Celda de la columna `plugin:` `display_id` para `path`
-    /// (#117-follow-up): `None` = sin valor (blanco, jamás fabricado). El
-    /// valor se RE-enmascara defensivamente al servirlo (doctrina P1: bidi
-    /// sin mascarar en ratatui DESAPARECE en silencio — los consumidores no
-    /// confían en que el ingest ya saneara).
+    /// The `plugin:` column `display_id`'s cell for `path` (#117-follow-up):
+    /// `None` = no value (blank, never fabricated). The value is
+    /// defensively RE-masked when served (P1 doctrine: an unmasked bidi
+    /// character in ratatui DISAPPEARS silently — consumers do not trust
+    /// that the ingest already sanitised it).
     #[must_use]
     pub fn plugin_cell(&self, display_id: &str, path: &VPath) -> Option<String> {
         let v = self.plugin_columns.get(display_id)?.get(path)?;
         crate::columns::sanitize_cell(Some(v))
     }
 
-    /// Sube el cursor una posición (tope en 0). No-op si la lista está vacía.
+    /// Moves the cursor up one position (stops at 0). No-op if the list is
+    /// empty.
     pub fn cursor_up(&mut self) {
         self.cursor = self.cursor.saturating_sub(1);
     }
 
-    /// Baja el cursor una posición (tope en la última entrada). No-op si vacía.
+    /// Moves the cursor down one position (stops at the last entry). No-op
+    /// if empty.
     pub fn cursor_down(&mut self) {
         let max = self.entries.len().saturating_sub(1);
         self.cursor = (self.cursor + 1).min(max);
     }
 
-    /// Sube el cursor `n` posiciones (tope en 0).
+    /// Moves the cursor up `n` positions (stops at 0).
     pub fn page_up(&mut self, n: usize) {
         self.cursor = self.cursor.saturating_sub(n);
     }
 
-    /// Baja el cursor `n` posiciones (tope en la última entrada).
+    /// Moves the cursor down `n` positions (stops at the last entry).
     pub fn page_down(&mut self, n: usize) {
         let max = self.entries.len().saturating_sub(1);
         self.cursor = (self.cursor + n).min(max);
     }
 
-    /// Cursor a la primera entrada.
+    /// Cursor to the first entry.
     pub fn home(&mut self) {
         self.cursor = 0;
     }
 
-    /// Cursor a la última entrada (0 si la lista está vacía).
+    /// Cursor to the last entry (0 if the list is empty).
     pub fn end(&mut self) {
         self.cursor = self.entries.len().saturating_sub(1);
     }
 
-    /// La entrada seleccionada: con quick search en modo [`Mode::Filter`], la
-    /// selección DENTRO del filtro (así las ops operan sobre lo filtrado sin
-    /// saber del quick search); si el filtro no tiene matches, `None` (jamás
-    /// una entrada que el usuario no ve). Sin filtro (o en [`Mode::Jump`], que
-    /// mueve el cursor real), la entrada bajo el cursor.
+    /// The selected entry: with a quick search in [`Mode::Filter`] mode, the
+    /// selection WITHIN the filter (so ops act on the filtered set without
+    /// knowing about the quick search); if the filter has no matches, `None`
+    /// (never an entry the user does not see). With no filter (or in
+    /// [`Mode::Jump`], which moves the real cursor), the entry under the
+    /// cursor.
     #[must_use]
     pub fn selected(&self) -> Option<&Entry> {
-        // La fila `..` NO es un operando, y este es EL sitio donde se decide.
+        // The `..` row is NOT an operand, and this is THE place that decides
+        // it.
         //
-        // Ochenta y siete llamadas preguntan por «lo señalado» para copiarlo,
-        // borrarlo, renombrarlo o mirarlo dentro, y ninguna tiene por qué
-        // saber que existe una fila que no es un fichero. Contestando `None`
-        // —que todas ya saben tratar: es «no hay nada señalado»— la fila deja
-        // de ser peligrosa por construcción, en vez de por acordarse.
+        // Eighty-seven call sites ask for "what is pointed at" to copy it,
+        // delete it, rename it, or look inside it, and none of them has any
+        // business knowing that a row exists that is not a file. Answering
+        // `None` —which all of them already know how to handle: it is "there
+        // is nothing selected"— makes the row harmless by construction,
+        // instead of by everyone remembering to check.
         //
-        // Subir con ella no pasa por aquí: eso es `parent_target`, y lo mira
-        // quien navega; describirla tampoco, y eso es [`Self::cursor_entry`].
+        // Going up with it does not go through here: that is
+        // `parent_target`, watched by whoever navigates; describing it does
+        // not either, and that is [`Self::cursor_entry`].
         //
-        // La guarda es sobre el ÍNDICE SEÑALADO y no sobre `self.cursor`, y
-        // eso arregla un agujero que llevaba aquí desde el principio: en
-        // `Mode::Filter` manda la selección del quick search y el cursor real
-        // no se mueve, así que abrir el filtro —cuya query vacía nace
-        // señalando la fila 0— dejaba a `selected()` devolviendo el
-        // directorio PADRE. F8 ahí borra el padre, que es justo lo que esta
-        // fila existe para impedir.
-        if self.is_parent_row(self.indice_senalado()?) {
+        // The guard is on the POINTED-AT INDEX and not on `self.cursor`, and
+        // that fixes a hole that had been here from the start: in
+        // `Mode::Filter` the quick search's selection rules and the real
+        // cursor does not move, so opening the filter —whose empty query is
+        // born pointing at row 0— left `selected()` returning the PARENT
+        // directory. F8 there deletes the parent, which is exactly what this
+        // row exists to prevent.
+        if self.is_parent_row(self.pointed_index()?) {
             return None;
         }
-        self.senalada()
+        self.pointed()
     }
 
-    /// La entrada bajo el cursor PARA DESCRIBIRLA, fila `..` incluida.
+    /// The entry under the cursor TO DESCRIBE IT, `..` row included.
     ///
-    /// [`Self::selected`] contesta «sobre qué se actúa» y por eso calla sobre
-    /// la fila de subir. Esta contesta «qué se está señalando», que es otra
-    /// pregunta y tiene otra respuesta: los paneles que siguen al cursor —la
-    /// hoja de atributos, el visor acoplado— DESCRIBEN lo que hay debajo.
+    /// [`Self::selected`] answers "what does this act on" and that is why it
+    /// stays silent about the go-up row. This one answers "what is being
+    /// pointed at", which is a different question with a different answer:
+    /// the panels that follow the cursor —the attribute sheet, the docked
+    /// viewer— DESCRIBE whatever is underneath.
     ///
-    /// Preguntando la primera decían «nada bajo el cursor» teniendo una fila
-    /// delante, y como el cursor nace sobre `..`, el panel de detalles
-    /// arrancaba vacío en cada apertura y después de cada `cd`.
+    /// Asking the first one used to say "nothing under the cursor" while a
+    /// row sat right there, and since the cursor is born over `..`, the
+    /// details panel started empty on every open and after every `cd`.
     ///
-    /// **No es un operando.** Quien copie, borre, renombre o mire dentro
-    /// pregunta a [`Self::selected`]; esta solo vale para pintar.
+    /// **It is not an operand.** Whoever copies, deletes, renames, or looks
+    /// inside asks [`Self::selected`]; this one is only good for painting.
     #[must_use]
     pub fn cursor_entry(&self) -> Option<&Entry> {
-        self.senalada()
+        self.pointed()
     }
 
-    /// ¿Lo señalado AHORA es la fila `..`?
+    /// Is what is pointed at RIGHT NOW the `..` row?
     ///
-    /// La pregunta que acompaña a [`Self::cursor_entry`]: quien la describa
-    /// necesita saber que lo es, porque la `Entry` sintética lleva la ruta
-    /// del PADRE y describirla por su `file_name` afirmaría que el cursor
-    /// está sobre el padre.
+    /// The question that goes with [`Self::cursor_entry`]: whoever describes
+    /// it needs to know it is, because the synthetic `Entry` carries the
+    /// PARENT's path and describing it by its `file_name` would assert that
+    /// the cursor is over the parent.
     ///
-    /// Sale del MISMO índice que la entrada, y por eso existe: preguntando
-    /// `is_parent_row(cursor())` por separado, un filtro de quick search
-    /// —que elige por su cuenta y no mueve el cursor real— dejaba la bandera
-    /// y la entrada hablando de filas distintas.
+    /// It comes from the SAME index as the entry, and that is why it exists:
+    /// asking `is_parent_row(cursor())` separately, a quick search filter
+    /// —which chooses on its own and does not move the real cursor— left the
+    /// flag and the entry talking about different rows.
     #[must_use]
     pub fn cursor_is_parent_row(&self) -> bool {
-        self.indice_senalado()
-            .is_some_and(|i| self.is_parent_row(i))
+        self.pointed_index().is_some_and(|i| self.is_parent_row(i))
     }
 
-    /// La fila que el cursor —o el filtro del quick search— está señalando,
-    /// sin la guarda de la fila `..`.
-    fn senalada(&self) -> Option<&Entry> {
-        self.entries.get(self.indice_senalado()?)
+    /// The row the cursor —or the quick search's filter— is pointing at,
+    /// without the `..` row's guard.
+    fn pointed(&self) -> Option<&Entry> {
+        self.entries.get(self.pointed_index()?)
     }
 
-    /// El ÍNDICE señalado: la selección del filtro cuando hay uno, y el
-    /// cursor real cuando no.
+    /// The pointed-at INDEX: the filter's selection when there is one, and
+    /// the real cursor when there is not.
     ///
-    /// UNA respuesta, y de ella salen las tres preguntas —«qué se opera»,
-    /// «qué se señala» y «¿es la fila de subir?»—. Tres cálculos
-    /// independientes de lo mismo es cómo dos de ellos acaban hablando de
-    /// filas distintas.
-    fn indice_senalado(&self) -> Option<usize> {
+    /// ONE answer, and the three questions come from it —"what does this
+    /// act on", "what is pointed at", and "is it the go-up row?". Three
+    /// independent calculations of the same thing is how two of them end up
+    /// talking about different rows.
+    fn pointed_index(&self) -> Option<usize> {
         if let Some(q) = &self.quick
             && q.mode() == Mode::Filter
         {
@@ -979,57 +999,57 @@ impl PaneState {
         Some(self.cursor)
     }
 
-    /// Directorio listado.
+    /// The listed directory.
     #[must_use]
     pub fn dir(&self) -> &VPath {
         &self.dir
     }
 
-    /// Entradas actuales (ordenadas por el caller), **la fila `..` incluida**.
+    /// Current entries (sorted by the caller), **`..` row included**.
     ///
-    /// Es la lista que se PINTA, y por eso la lleva: los índices de aquí son
-    /// los que responde [`Self::is_parent_row`] y los que usan el cursor, el
-    /// ratón y el marcado. Lo que se copia a OTRO pane es
-    /// [`Self::real_entries`].
+    /// It is the list that gets PAINTED, and that is why it carries it: the
+    /// indices here are the ones [`Self::is_parent_row`] answers about and
+    /// the ones the cursor, the mouse, and marking use. What gets copied to
+    /// ANOTHER pane is [`Self::real_entries`].
     #[must_use]
     pub fn entries(&self) -> &[Entry] {
         &self.entries
     }
 
-    /// SEÑALA la entrada `entrada`, sea quien sea el que manda en la selección.
+    /// POINTS AT entry `entry`, whoever is in charge of the selection.
     ///
-    /// Es la gemela de escritura de «el índice señalado», y existe porque
-    /// [`Self::set_cursor`] NO basta: con un quick search en [`Mode::Filter`]
-    /// vivo, lo señalado es la selección del filtro y el cursor real no se
-    /// mira, así que mover el cursor deja quieto todo lo que sigue a «lo
-    /// señalado» —el visor acoplado, la hoja de atributos— mientras el gesto
-    /// dice que funcionó.
+    /// It is the write twin of "the pointed-at index", and exists because
+    /// [`Self::set_cursor`] is NOT enough: with a live quick search in
+    /// [`Mode::Filter`], what is pointed at is the filter's selection and the
+    /// real cursor is not looked at, so moving the cursor leaves everything
+    /// that follows "what is pointed at" —the docked viewer, the attribute
+    /// sheet— standing still while the gesture claims it worked.
     ///
-    /// Con filtro se mueve la selección del quick, paso a paso por lo VISIBLE;
-    /// sin filtro, el cursor. Una `entrada` que el filtro no enseña no se
-    /// puede señalar: no se toca nada.
-    pub fn senalar(&mut self, entrada: usize) {
+    /// With a filter it moves the quick's selection, step by step through
+    /// what is VISIBLE; without one, the cursor. An `entry` the filter does
+    /// not show cannot be pointed at: nothing is touched.
+    pub fn senalar(&mut self, entry: usize) {
         let Some(vis) = self.quick_visible() else {
-            self.set_cursor(entrada);
+            self.set_cursor(entry);
             return;
         };
-        let destino = vis.iter().position(|&real| real == entrada);
-        let actual = self
+        let target = vis.iter().position(|&real| real == entry);
+        let current = self
             .quick()
             .and_then(QuickSearch::selected_entry_index)
             .and_then(|real| vis.iter().position(|&r| r == real));
-        let (Some(actual), Some(destino)) = (actual, destino) else {
+        let (Some(current), Some(target)) = (current, target) else {
             return;
         };
-        // Sin restas con signo: la dirección es un booleano y la distancia un
-        // conteo, que es justo lo que `quick_down`/`quick_up` consumen.
-        let (adelante, pasos) = if destino >= actual {
-            (true, destino - actual)
+        // No signed subtraction: the direction is a boolean and the distance
+        // a count, which is exactly what `quick_down`/`quick_up` consume.
+        let (forward, steps) = if target >= current {
+            (true, target - current)
         } else {
-            (false, actual - destino)
+            (false, current - target)
         };
-        for _ in 0..pasos {
-            if adelante {
+        for _ in 0..steps {
+            if forward {
                 self.quick_down();
             } else {
                 self.quick_up();
@@ -1037,20 +1057,21 @@ impl PaneState {
         }
     }
 
-    /// A dónde apunta un gesto que adopta el OBJETIVO DEL CURSOR: la carpeta
-    /// bajo el cursor si lo es, y si no el directorio de este pane.
+    /// Where a gesture that adopts the CURSOR'S TARGET points: the folder
+    /// under the cursor if it is one, and this pane's directory otherwise.
     ///
-    /// Es la regla de `Ctrl+←`/`Ctrl+→` de Krusader, literal: «on a folder:
+    /// It is Krusader's `Ctrl+←`/`Ctrl+→` rule, literally: "on a folder:
     /// refreshes the other panel with the contents of the folder; on a file:
-    /// the other panel gets the same path». Vive aquí, y no en cada frontend,
-    /// porque una decisión duplicada entre los dos diverge en silencio
-    /// (ADR 0077).
+    /// the other panel gets the same path". Lives here, and not in each
+    /// frontend, because a decision duplicated between the two diverges
+    /// silently (ADR 0077).
     ///
-    /// Sobre la fila `..` devuelve el directorio de este pane, no el padre:
-    /// [`Self::selected`] responde `None` ahí —es el embudo que impide que esa
-    /// fila sea el operando de nada— y este gesto no es la excepción. Un
-    /// enlace a un directorio tampoco cuenta: en M0 un symlink no se sigue, y
-    /// mandar al otro panel a donde apunta sería seguirlo.
+    /// Over the `..` row it returns this pane's directory, not the parent:
+    /// [`Self::selected`] answers `None` there —it is the choke point that
+    /// stops that row from being anything's operand— and this gesture is no
+    /// exception. A link to a directory does not count either: in M0 a
+    /// symlink is not followed, and sending the other panel to where it
+    /// points would be following it.
     #[must_use]
     pub fn target_dir(&self) -> &VPath {
         match self.selected() {
@@ -1059,44 +1080,46 @@ impl PaneState {
         }
     }
 
-    /// Las entradas de VERDAD: [`Self::entries`] sin la fila `..`.
+    /// The REAL entries: [`Self::entries`] without the `..` row.
     ///
-    /// Lo que hay que copiar cuando un pane nace del listado de otro —partir
-    /// un panel, abrir una pestaña—, porque el pane nuevo se pone la suya. Con
-    /// `entries()` la heredada se quedaba como entrada normal en medio del
-    /// listado, con el nombre del directorio padre y marcable: cada partición
-    /// añadía una, y marcar todo metía al PADRE en lo que se copia o se borra.
+    /// What has to be copied when a pane is born from another one's listing
+    /// —splitting a panel, opening a tab— because the new pane sets up its
+    /// own. With `entries()` the inherited one stayed as a normal entry in
+    /// the middle of the listing, with the parent directory's name and
+    /// markable: every split added one, and marking everything swept the
+    /// PARENT into what gets copied or deleted.
     ///
-    /// Lo decide el campo, no la ruta, por lo mismo que [`Self::is_parent_row`]:
-    /// una entrada de verdad puede apuntar al mismo sitio que el padre.
+    /// The field decides it, not the path, for the same reason as
+    /// [`Self::is_parent_row`]: a real entry can point at the same place as
+    /// the parent.
     #[must_use]
     pub fn real_entries(&self) -> &[Entry] {
-        if self.tiene_padre() {
+        if self.has_parent_row() {
             &self.entries[1..]
         } else {
             &self.entries
         }
     }
 
-    /// Los nombres que puede ORGANIZAR un productor de planes (fase 8): los
-    /// ficheros de este directorio, en texto.
+    /// The names a plan producer can ORGANIZE (phase 8): this directory's
+    /// files, in text.
     ///
-    /// Tres filtros, y cada uno tapa un agujero que se vio pilotando:
+    /// Three filters, and each one covers a hole seen while piloting:
     ///
-    /// - **Sin la fila `..`** — sale de [`Self::real_entries`]. Leyendo
-    ///   `entries()` a pelo, un organizer proponía mover el DIRECTORIO PADRE
-    ///   dentro de una carpeta nueva; es la misma trampa que ya documenta
-    ///   `real_entries`, y la razón de que esto viva aquí y no en cada
+    /// - **No `..` row** — it comes from [`Self::real_entries`]. Reading
+    ///   `entries()` raw, an organizer would propose moving the PARENT
+    ///   DIRECTORY into a new folder; it is the same trap `real_entries`
+    ///   already documents, and the reason this lives here and not in each
     ///   frontend.
-    /// - **Sin directorios.** Organizar es archivar FICHEROS en carpetas.
-    ///   Dejar entrar los directorios deja que el plan mueva una carpeta que
-    ///   otro movimiento del mismo plan usa de destino: el árbol enseña
-    ///   `pdf/a.pdf`, y al aplicarlo `pdf` se ha ido a otro sitio con `a.pdf`
-    ///   dentro. Nada se pierde, pero lo aplicado no es lo revisado, que es
-    ///   peor.
-    /// - **Solo lo que es texto.** `proposed_rel` viaja UTF-8, así que un
-    ///   nombre que no lo es no puede ser origen de un movimiento. Se queda
-    ///   fuera en vez de viajar lossy y volver apuntando a otro fichero.
+    /// - **No directories.** Organizing means filing FILES into folders.
+    ///   Letting directories in lets the plan move a folder that another
+    ///   move of the same plan uses as a destination: the tree shows
+    ///   `pdf/a.pdf`, and once applied `pdf` has moved elsewhere with `a.pdf`
+    ///   inside it. Nothing is lost, but what got applied is not what was
+    ///   reviewed, which is worse.
+    /// - **Only what is text.** `proposed_rel` travels as UTF-8, so a name
+    ///   that is not cannot be the source of a move. It stays out instead of
+    ///   travelling lossy and coming back pointing at a different file.
     #[must_use]
     pub fn organizable_names(&self) -> Vec<String> {
         self.real_entries()
@@ -1107,13 +1130,14 @@ impl PaneState {
             .collect()
     }
 
-    /// Los nombres que ya OCUPAN este directorio, en texto: lo que el árbol
-    /// de organizar necesita para distinguir una carpeta nueva de una que ya
-    /// estaba.
+    /// The names that already OCCUPY this directory, in text: what the
+    /// organize tree needs to tell a new folder apart from one that was
+    /// already there.
     ///
-    /// Aquí los directorios SÍ entran —son justo los que importan— y la fila
-    /// `..` sigue fuera: el padre no es una entrada de este directorio, y
-    /// contarlo haría «existente» a una carpeta que se llame como él.
+    /// Here directories DO get in —they are exactly the ones that matter—
+    /// and the `..` row stays out: the parent is not an entry of this
+    /// directory, and counting it would make a folder named the same as it
+    /// "existing".
     #[must_use]
     pub fn existing_names(&self) -> Vec<String> {
         self.real_entries()
@@ -1123,13 +1147,13 @@ impl PaneState {
             .collect()
     }
 
-    /// Índice bajo el cursor real (0 incluso con lista vacía).
+    /// Index under the real cursor (0 even with an empty list).
     #[must_use]
     pub fn cursor(&self) -> usize {
         self.cursor
     }
 
-    /// El listado se está cargando (destino de un cd en curso).
+    /// The listing is loading (an in-progress cd's destination).
     #[must_use]
     pub fn loading(&self) -> bool {
         self.loading
@@ -1149,9 +1173,9 @@ impl PaneState {
     ///
     /// let dir = VPath::parse("mem:///d").unwrap();
     /// let mut p = PaneState::new(dir.clone(), Vec::new());
-    /// let antes = p.listing_epoch();
+    /// let before = p.listing_epoch();
     /// p.set_listing(dir, Vec::new());
-    /// assert_ne!(p.listing_epoch(), antes, "otro listado, otros índices");
+    /// assert_ne!(p.listing_epoch(), before, "another listing, other indices");
     /// ```
     #[must_use]
     pub fn listing_epoch(&self) -> u64 {
@@ -1170,33 +1194,34 @@ impl PaneState {
     /// holding is the one outcome worth ruling out.
     fn listing_moved(&mut self) {
         self.listing_epoch = self.listing_epoch.saturating_add(1);
-        self.name_cubos = cubos_de(&self.entries);
+        self.name_buckets = buckets_of(&self.entries);
     }
 
-    /// Celdas que cubren al 80% de los nombres de este listado: lo que el
-    /// nombre necesita para leerse, medido al cambiar el listado.
+    /// Cells that cover 80% of this listing's names: what the name needs to
+    /// be readable, measured when the listing changes.
     #[must_use]
     pub fn name_width_p80(&self) -> u16 {
-        crate::columns::name_width_p80(&self.name_cubos)
+        crate::columns::name_width_p80(&self.name_buckets)
     }
 
-    /// Fija el cursor real a `i` con clamp (jamás fuera de rango). Para re-anclar
-    /// tras localizar un índice concreto (p. ej. un hit de búsqueda). (#82)
+    /// Sets the real cursor to `i`, clamped (never out of range). For
+    /// re-anchoring after locating a specific index (e.g. a search hit).
+    /// (#82)
     pub fn set_cursor(&mut self, i: usize) {
         let max = self.entries.len().saturating_sub(1);
         self.cursor = i.min(max);
     }
 
-    /// Graba `(dir actual, cursor actual)` en la memoria de cursor (spec
-    /// §S1): sesión-solo, por pane, LRU con tope `CURSOR_MEMORY_CAP`
-    /// (constante privada del módulo, 64).
-    /// Reemplaza cualquier entrada previa del mismo dir (identidad
-    /// byte-exacta, sin normalizar — regla 1) para que cada dir tenga como
-    /// mucho UNA entrada, siempre la más reciente.
+    /// Records `(current dir, current cursor)` in the cursor memory (spec
+    /// §S1): session-only, per pane, LRU with a `CURSOR_MEMORY_CAP` cap
+    /// (private module constant, 64).
+    /// Replaces any previous entry for the same dir (byte-exact identity,
+    /// not normalised — rule 1) so each dir has at most ONE entry, always
+    /// the most recent.
     ///
-    /// El caller debe invocarlo mientras `self.dir`/`self.cursor` TODAVÍA
-    /// reflejan el dir que se está abandonando — antes de cualquier reset
-    /// (ver [`Self::begin_loading`], que lo llama primero por eso).
+    /// The caller must invoke it while `self.dir`/`self.cursor` STILL
+    /// reflect the dir being left — before any reset (see
+    /// [`Self::begin_loading`], which calls it first for that reason).
     pub fn remember_cursor(&mut self) {
         let dir = self.dir.clone();
         self.cursor_memory.retain(|(d, _)| *d != dir);
@@ -1206,67 +1231,68 @@ impl PaneState {
         }
     }
 
-    /// Fija un foco pendiente (spec §S1, `nav.parent`): en el PRÓXIMO
-    /// [`Self::set_listing`], si una entrada del listado nuevo tiene este
-    /// path EXACTO (bytes, sin normalizar — regla 1), el cursor aterriza
-    /// ahí — por delante de la memoria. Se consume una sola vez (match o
-    /// no) para no filtrar a navegaciones futuras no relacionadas.
+    /// Sets a pending focus (spec §S1, `nav.parent`): on the NEXT
+    /// [`Self::set_listing`], if an entry of the new listing has this EXACT
+    /// path (bytes, not normalised — rule 1), the cursor lands there — ahead
+    /// of the memory. Consumed once (whether it matches or not) so it does
+    /// not leak into unrelated future navigations.
     pub fn set_pending_focus(&mut self, child: VPath) {
         self.pending_focus = Some(child);
     }
 
-    /// Descarta un foco pendiente SIN consumirlo contra un listado (revisión
-    /// S, M2): [`Self::set_listing`] es el ÚNICO sitio que hasta ahora
-    /// consumía `pending_focus` — un `nav.parent` cuyo `cd` FALLA (permiso
-    /// denegado, error del daemon…) nunca llega a `set_listing`, así que el
-    /// hint quedaba vivo y podía aterrizar en un `cd` MUY posterior y sin
-    /// relación, en el pane equivocado. El caller (`nav.parent`, ambos
-    /// frontends) llama a esto en la rama de error del `cd`.
+    /// Discards a pending focus WITHOUT consuming it against a listing
+    /// (review S, M2): [`Self::set_listing`] was, until now, the ONLY place
+    /// that consumed `pending_focus` — a `nav.parent` whose `cd` FAILS
+    /// (permission denied, daemon error…) never reaches `set_listing`, so
+    /// the hint stayed alive and could land on a MUCH later, unrelated `cd`,
+    /// in the wrong pane. The caller (`nav.parent`, both frontends) calls
+    /// this on the `cd`'s error branch.
     pub fn clear_pending_focus(&mut self) {
         self.pending_focus = None;
     }
 
-    /// Marca/desmarca el pane como cargando SIN tocar el resto del estado: un
-    /// fill paginado (ADR 0017) pinta la primera página y sigue (`true`), baja
-    /// el flag al terminar (`false`). (#82)
+    /// Marks/unmarks the pane as loading WITHOUT touching the rest of the
+    /// state: a paginated fill (ADR 0017) paints the first page and keeps
+    /// going (`true`), then drops the flag when it finishes (`false`). (#82)
     pub fn set_loading(&mut self, loading: bool) {
         self.loading = loading;
     }
 
-    /// Añade `batch` a un listado paginado en curso (ADR 0017): #54 mergea
-    /// O(n+m) con las claves NFC PERSISTIDAS (`sort_keys`) — el lote se ordena
-    /// solo y se mergea de forma estable contra lo ya listado, mismo orden
-    /// final que [`sort_entries`](crate::sort_entries) sobre el total, sin
-    /// recomputar la clave de lo que ya estaba. Reconcilia: re-ancla el cursor
-    /// al PATH seleccionado (clamp por índice si desapareció) y RE-APLICA el
-    /// quick por path. Lote vacío = no-op. (#82)
+    /// Adds `batch` to an in-progress paginated listing (ADR 0017): #54
+    /// merges O(n+m) with the PERSISTED NFC keys (`sort_keys`) — the batch
+    /// sorts itself and merges stably against what was already listed, the
+    /// same final order as [`sort_entries`](crate::sort_entries) over the
+    /// whole thing, without recomputing what was already there's key.
+    /// Reconciles: re-anchors the cursor to the selected PATH (clamped by
+    /// index if it disappeared) and RE-APPLIES the quick search by path. An
+    /// empty batch is a no-op. (#82)
     pub fn extend(&mut self, batch: Vec<Entry>) {
-        // #107: las ocultas del lote se apartan ANTES del merge — un lote
-        // que queda vacío tras el filtro sigue alimentando el stash.
+        // #107: the batch's hidden ones are set aside BEFORE the merge — a
+        // batch left empty after the filter still feeds the stash.
         let batch = self.stash_hidden(batch);
         if batch.is_empty() {
             return;
         }
         let quick_prev = self.quick_selected_path();
-        // El cursor EN EL TOPE se ancla a la POSICIÓN, no al path: la
-        // primera página de un dir paginado llega en orden de `readdir`
-        // (hash del FS), así que su primer elemento una vez ordenado es
-        // arbitrario. Anclarlo por path clavaba el cursor en mitad del
-        // listado final —un dir de 5000 entradas abría enseñando la COLA—
-        // aunque el usuario no hubiera tocado nada. En cuanto mueve el
-        // cursor, el anclaje por path vuelve a mandar (rellenar no debe
-        // mover su selección bajo los pies).
+        // The cursor AT THE TOP anchors to its POSITION, not the path: a
+        // paginated dir's first page arrives in `readdir` order (FS hash),
+        // so its first element once sorted is arbitrary. Anchoring it by
+        // path pinned the cursor in the middle of the final listing —a
+        // 5000-entry dir opened showing the TAIL— even though the user had
+        // touched nothing. As soon as it moves the cursor, anchoring by
+        // path takes over again (filling must not move its selection out
+        // from under it).
         let anchor = (self.cursor > 0)
             .then(|| self.entries.get(self.cursor).map(|e| e.path.clone()))
             .flatten();
-        // La fila `..` sale antes del MERGE: el merge empareja por clave de
-        // orden, y una fila sintética metida ahí se duplicaría o acabaría en
-        // medio del listado.
-        self.quitar_padre();
-        // Los nombres del lote se SUMAN al histograma: remedir el listado
-        // entero en cada página haría cuadrático el relleno que el merge
-        // mantiene lineal.
-        medir_nombres(&mut self.name_cubos, &batch);
+        // The `..` row comes out before the MERGE: the merge pairs by sort
+        // key, and a synthetic row caught in there would duplicate or end
+        // up in the middle of the listing.
+        self.remove_parent_row();
+        // The batch's names are ADDED to the histogram: re-measuring the
+        // whole listing on every page would make the fill quadratic when the
+        // merge keeps it linear.
+        measure_names(&mut self.name_buckets, &batch);
         let (batch, batch_keys) = crate::sort::sort_with_keys_spec(batch, &self.sort);
         crate::sort::merge_keyed_spec(
             &mut self.entries,
@@ -1275,10 +1301,10 @@ impl PaneState {
             batch_keys,
             &self.sort,
         );
-        self.poner_padre();
-        // Una página de un relleno paginado también MUEVE índices: el
-        // merge inserta en su sitio ordenado, no al final. Solo la época:
-        // los nombres ya se sumaron arriba.
+        self.insert_parent_row();
+        // A page of a paginated fill also MOVES indices: the merge inserts
+        // in its sorted spot, not at the end. Only the epoch: the names were
+        // already added above.
         self.listing_epoch = self.listing_epoch.saturating_add(1);
         self.cursor = anchor
             .and_then(|p| self.entries.iter().position(|e| e.path == p))
@@ -1289,12 +1315,12 @@ impl PaneState {
         self.quick_sync_jump();
     }
 
-    /// Reemplaza el listado COMPLETO del MISMO dir (refresh tras mutación):
-    /// conserva el cursor por ÍNDICE con clamp (tras un delete queda en la
-    /// siguiente entrada — ortodoxo) y RE-APLICA el quick por path. No toca el
-    /// flag de carga. Normaliza `entries` internamente (#54: cierra el mismo
-    /// footgun que `new`/`set_listing` — idempotente si el caller ya venía
-    /// ordenado). (#82)
+    /// Replaces the COMPLETE listing of the SAME dir (refresh after a
+    /// mutation): keeps the cursor by clamped INDEX (after a delete it lands
+    /// on the next entry — orthodox) and RE-APPLIES the quick search by
+    /// path. Does not touch the loading flag. Normalises `entries`
+    /// internally (#54: closes the same footgun as `new`/`set_listing` —
+    /// idempotent if the caller was already sorted). (#82)
     ///
     /// Marks are pruned to the paths present in `entries` (#103, see
     /// `prune_marks`/[`Self::pruned_marks`]) — the listing passed in
@@ -1303,18 +1329,18 @@ impl PaneState {
     pub fn refill(&mut self, mut entries: Vec<Entry>) {
         let quick_prev = self.quick_selected_path();
         self.inherit_known_metadata(&mut entries);
-        // #107: el refill trae el listado COMPLETO del dir — el stash se
-        // reconstruye fresco de él, nunca se acumula con el anterior.
+        // #107: the refill brings the dir's COMPLETE listing — the stash is
+        // rebuilt fresh from it, never accumulated with the previous one.
         self.hidden_stash.clear();
         let entries = self.stash_hidden(entries);
         let (entries, sort_keys) = crate::sort::sort_with_keys_spec(entries, &self.sort);
         self.entries = entries;
         self.sort_keys = sort_keys;
-        // El listado se rehízo entero: la fila vuelve, y el cursor se acota
-        // DESPUÉS de ponerla —si no, con un listado que encoge se quedaría
-        // una fila más arriba de lo que hay.
-        self.olvidar_padre();
-        self.poner_padre();
+        // The listing was rebuilt whole: the row comes back, and the cursor
+        // is clamped AFTER inserting it —otherwise, with a listing that
+        // shrank, it would end up one row above what there actually is.
+        self.forget_parent_row();
+        self.insert_parent_row();
         self.cursor = self.cursor.min(self.entries.len().saturating_sub(1));
         self.listing_moved();
         self.sweep_baseline = None;
@@ -1326,19 +1352,20 @@ impl PaneState {
         self.quick_sync_jump();
     }
 
-    /// Traslada a `entries` el size/mtime que este pane YA conocía para el
-    /// mismo path, solo donde el listado nuevo no lo trae.
+    /// Carries over to `entries` the size/mtime this pane ALREADY knew for
+    /// the same path, only where the new listing does not bring it.
     ///
-    /// El motivo es visual y concreto: un `fs.list` local no hace `stat` de
-    /// cada entrada (#52), así que un refresco del MISMO dir llega pelado y,
-    /// instalado tal cual, vacía las columnas de tamaño y fecha hasta que la
-    /// sonda las rellena. Con el watcher (#106) refrescando en cada evento
-    /// del directorio eso se ve como un parpadeo continuo. Heredar no
-    /// congela nada: un listado que sí trae el dato gana, y
-    /// [`Self::hydrate`] —la sonda— gana a ambos.
+    /// The reason is visual and concrete: a local `fs.list` does not `stat`
+    /// every entry (#52), so a refresh of the SAME dir arrives bare and,
+    /// installed as-is, empties the size and date columns until the probe
+    /// fills them in. With the watcher (#106) refreshing on every directory
+    /// event, that looks like continuous flicker. Inheriting freezes
+    /// nothing: a listing that DOES bring the data wins, and
+    /// [`Self::hydrate`] —the probe— wins over both.
     fn inherit_known_metadata(&self, entries: &mut [Entry]) {
-        // Los ocultos cuentan: el toggle de ocultación los devuelve al
-        // listado y perderían el dato si solo mirásemos lo visible.
+        // Hidden ones count: the hiding toggle returns them to the listing
+        // and they would lose the data if we only looked at the visible
+        // ones.
         let known: HashMap<&VPath, (Option<u64>, Option<i64>)> = self
             .entries
             .iter()
@@ -1357,19 +1384,19 @@ impl PaneState {
         }
     }
 
-    /// Hidrata size/mtime de la entrada `path` (stat on-demand, #52). No-op si
-    /// la entrada ya no está (un refresh la pisó). No reordena: size/mtime no
-    /// participan en el sort.
+    /// Hydrates the size/mtime of entry `path` (stat on-demand, #52). No-op
+    /// if the entry is no longer there (a refresh overwrote it). Does not
+    /// re-sort: size/mtime take no part in the sort.
     ///
-    /// La sonda es AUTORITATIVA: acaba de mirar el fichero, así que su valor
-    /// pisa el que hubiera (que puede venir heredado de antes del refresco,
-    /// ver `inherit_known_metadata` — sin esto, un fichero que crece
-    /// mostraría para siempre el tamaño con el que se listó la primera vez).
-    /// Lo que NO pisa es con `None`: un stat que falla o un provider que no
-    /// sabe el dato jamás borra uno que sí se conocía.
-    /// (#107 review MINOR-5, aceptado: un stat que resuelve tras moverse su
-    /// entrada al stash de ocultos se pierde — al re-mostrar, la fila pinta
-    /// `None` hasta la siguiente sonda de foco. Autocurativo y barato.)
+    /// The probe is AUTHORITATIVE: it just looked at the file, so its value
+    /// overwrites whatever there was (which can be inherited from before the
+    /// refresh, see `inherit_known_metadata` — without this, a growing file
+    /// would forever show the size it was listed with the first time). What
+    /// it does NOT overwrite with is `None`: a failed stat or a provider
+    /// that does not know the data never erases one that was known.
+    /// (#107 review MINOR-5, accepted: a stat that resolves after its entry
+    /// moved to the hidden stash is lost — on showing it again, the row
+    /// paints `None` until the next focus probe. Self-healing and cheap.)
     pub fn hydrate(&mut self, path: &VPath, size: Option<u64>, mtime_ms: Option<i64>) {
         if let Some(e) = self.entries.iter_mut().find(|e| &e.path == path) {
             e.size = size.or(e.size);

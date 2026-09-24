@@ -1,8 +1,8 @@
-//! El árbol de directorios (#136) como PANEL: el ratón y la barra de menús.
+//! The directory tree (#136) as a PANEL: the mouse and the menu bar.
 //!
-//! Lo que estos tests protegen es que un panel con teclado siga siendo parte
-//! de la aplicación: se puede pulsar con el ratón, y las teclas del cromo
-//! —la barra de menús— no se mueren por estar dentro de él.
+//! What these tests protect is that a panel with keyboard support stays
+//! part of the application: it can be clicked with the mouse, and the
+//! chrome's keys — the menu bar — do not die from being inside it.
 
 use norte_proto::{Entry, EntryKind, Segment, VPath};
 use norte_tui::app::{App, KeyOwner, Pane};
@@ -11,7 +11,7 @@ use ratatui::backend::TestBackend;
 
 fn vp(wire: &str) -> VPath {
     let _ = norte_i18n::force(norte_i18n::Lang::Es);
-    VPath::parse(wire).expect("wire válido")
+    VPath::parse(wire).expect("valid wire")
 }
 
 fn entradas(dir: &VPath) -> Vec<Entry> {
@@ -19,7 +19,7 @@ fn entradas(dir: &VPath) -> Vec<Entry> {
         .map(|i| Entry {
             attrs: std::collections::BTreeMap::new(),
             path: dir
-                .join(Segment::new(format!("f{i:02}").into_bytes()).expect("segmento"))
+                .join(Segment::new(format!("f{i:02}").into_bytes()).expect("segment"))
                 .clone(),
             kind: EntryKind::File,
             size: Some(1),
@@ -28,8 +28,8 @@ fn entradas(dir: &VPath) -> Vec<Entry> {
         .collect()
 }
 
-/// `App` con el árbol abierto sobre `file:///casa` y dos ramas ya leídas,
-/// una de ellas con un hijo.
+/// `App` with the tree open over `file:///casa` and two branches already
+/// read, one of them with a child.
 fn app_con_arbol() -> App {
     let dir = vp("file:///casa");
     let mut app = App::new(
@@ -37,9 +37,10 @@ fn app_con_arbol() -> App {
         Pane::new(dir.clone(), entradas(&dir)),
     );
     app.toggle_tree();
-    let t = app.tree_mut().expect("árbol abierto");
-    // Colgado del listado a mano: estos tests son de CLICS, no de dónde se
-    // ancla (que desde el 2026-09-21 es más arriba, en casa o en la raíz).
+    let t = app.tree_mut().expect("tree open");
+    // Hung off the listing by hand: these tests are about CLICKS, not about
+    // where it anchors (which since 2026-09-21 is higher up, at home or at
+    // the root).
     t.anchor(dir.clone());
     t.insert_children(
         dir.clone(),
@@ -62,8 +63,8 @@ fn pulsar_en(app: &mut App, col: u16, row: u16) -> norte_tui::mouse::After {
     )
 }
 
-/// Pinta un frame y devuelve al modelo la geometría de ese frame, que es
-/// contra la que el ratón resuelve.
+/// Paints a frame and returns that frame's geometry to the model, which is
+/// what the mouse resolves against.
 fn tras_pintar(app: &mut App, area: ratatui::layout::Rect) -> Vec<norte_tui::ui::TreeZone> {
     let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).expect("terminal");
     terminal
@@ -93,32 +94,32 @@ fn tras_pintar(app: &mut App, area: ratatui::layout::Rect) -> Vec<norte_tui::ui:
     ramas
 }
 
-/// El ratón sobre el árbol: pulsar una fila la selecciona y trae el teclado;
-/// pulsarla otra vez la ACTIVA, que es lo mismo que `Enter`.
+/// The mouse over the tree: clicking a row selects it and brings the
+/// keyboard; clicking it again ACTIVATES it, which is the same as `Enter`.
 ///
-/// El árbol se envió con teclado y nada más: sus celdas no son de ningún
-/// listado, así que un click ahí caía en «fuera de los panes» y no hacía nada
-/// — un panel que se pinta y no se puede tocar.
+/// The tree shipped with keyboard support and nothing more: its cells
+/// belong to no listing, so a click there landed on "outside the panes" and
+/// did nothing — a panel that paints and cannot be touched.
 #[test]
 fn pulsar_una_fila_del_arbol_la_selecciona_y_repulsarla_la_activa() {
     let mut app = app_con_arbol();
     let area = ratatui::layout::Rect::new(0, 0, 100, 30);
     let zonas = tras_pintar(&mut app, area);
-    assert!(!zonas.is_empty(), "el árbol tiene filas pulsables");
+    assert!(!zonas.is_empty(), "the tree has clickable rows");
     let rama = zonas
         .iter()
         .find(|z| z.index == 1)
         .copied()
-        .expect("la primera rama se ve");
+        .expect("the first branch is visible");
 
     app.return_keys_to_panes();
     let after = pulsar_en(&mut app, rama.x1, rama.row);
     assert_eq!(
         after,
         norte_tui::mouse::After::Nothing,
-        "la primera pulsación solo selecciona"
+        "the first click only selects"
     );
-    assert_eq!(app.key_owner(), KeyOwner::Tree, "y trae el teclado");
+    assert_eq!(app.key_owner(), KeyOwner::Tree, "and brings the keyboard");
     assert_eq!(app.tree().map(norte_frontend::tree::Tree::cursor), Some(1));
 
     let after = pulsar_en(&mut app, rama.x1, rama.row);
@@ -126,14 +127,14 @@ fn pulsar_una_fila_del_arbol_la_selecciona_y_repulsarla_la_activa() {
     assert_eq!(
         app.tree_activate(),
         Some(vp("file:///casa/a")),
-        "y hay rama a la que llevar el listado"
+        "and there is a branch to take the listing to"
     );
 }
 
-/// Pulsar la MARCA (`▸`/`▾`) pliega o despliega esa rama de una sola
-/// pulsación: es lo que dice la flecha que ya se pinta, y sin ella un lector
-/// que solo usa el ratón no puede cerrar lo que abrió — `Enter` despliega y
-/// navega, nunca pliega.
+/// Clicking the MARK (`▸`/`▾`) folds or unfolds that branch with a single
+/// click: it is what the already-painted arrow says, and without it a
+/// reader who only uses the mouse cannot close what they opened — `Enter`
+/// unfolds and navigates, never folds.
 #[test]
 fn pulsar_la_marca_de_una_rama_la_pliega_y_la_despliega() {
     let mut app = app_con_arbol();
@@ -143,32 +144,33 @@ fn pulsar_la_marca_de_una_rama_la_pliega_y_la_despliega() {
         .iter()
         .find(|z| z.index == 1)
         .copied()
-        .expect("la primera rama se ve");
+        .expect("the first branch is visible");
     let filas = |app: &App| app.tree().map_or(0, |t| t.rows().len());
     let antes = filas(&app);
 
     let after = pulsar_en(&mut app, rama.mark_x, rama.row);
-    assert_eq!(after, norte_tui::mouse::After::Nothing, "no navega a nada");
-    assert_eq!(filas(&app), antes + 1, "desplegar enseña su hijo");
+    assert_eq!(after, norte_tui::mouse::After::Nothing, "navigates nowhere");
+    assert_eq!(filas(&app), antes + 1, "unfolding shows its child");
 
     let _ = tras_pintar(&mut app, area);
     let after = pulsar_en(&mut app, rama.mark_x, rama.row);
     assert_eq!(after, norte_tui::mouse::After::Nothing);
-    assert_eq!(filas(&app), antes, "y la misma marca la vuelve a plegar");
+    assert_eq!(filas(&app), antes, "and the same mark folds it back");
 }
 
-/// La barra de menús es cromo de la APLICACIÓN, no de los listados: con el
-/// teclado dentro de un panel lateral su tecla tiene que seguir abriéndola.
+/// The menu bar is APPLICATION chrome, not the listings': with the
+/// keyboard inside a side panel its key still has to open it.
 ///
-/// `F10` (y `q`, y lo que ate `app.quit`) SALE también con el teclado dentro
-/// de un panel lateral, y honra `[ui] confirm_quit` igual que desde un
-/// listado.
+/// `F10` (and `q`, and whatever binds `app.quit`) also QUITS with the
+/// keyboard inside a side panel, and honors `[ui] confirm_quit` the same as
+/// from a listing.
 ///
-/// Estaba muerta en los cuatro —árbol, sitios, procesos y registro—: `app.quit`
-/// no figuraba en sus allowlists, así que el panel se la comía. El lector
-/// pulsaba `F10`, no pasaba nada, cerraba la ventana del terminal creyendo que
-/// había salido, y el `ntc` seguía vivo con el lock de la sesión: cada `ntc`
-/// siguiente arrancaba suelto y «no guardaba nada». Solo `Ctrl+C` salía.
+/// It was dead in all four — tree, places, processes and log —: `app.quit`
+/// was not in their allowlists, so the panel ate it. The reader pressed
+/// `F10`, nothing happened, closed the terminal window believing they had
+/// quit, and `ntc` stayed alive holding the session lock: every following
+/// `ntc` started up detached and "saved nothing." Only `Ctrl+C` actually
+/// quit.
 #[test]
 fn salir_funciona_con_el_teclado_dentro_de_un_panel_lateral() {
     for lista in [
@@ -178,7 +180,7 @@ fn salir_funciona_con_el_teclado_dentro_de_un_panel_lateral() {
     ] {
         assert!(
             lista.contains(&"app.quit"),
-            "un panel lateral no puede comerse la tecla de salir"
+            "a side panel cannot eat the quit key"
         );
     }
 
@@ -186,28 +188,28 @@ fn salir_funciona_con_el_teclado_dentro_de_un_panel_lateral() {
     assert_eq!(app.key_owner(), KeyOwner::Tree);
     assert!(
         app.panel_chrome_command("app.quit"),
-        "salir lo atiende el cromo, no el panel"
+        "quitting is handled by the chrome, not the panel"
     );
     assert!(
         app.quit,
-        "y sale: sin tasks y con `confirm_quit = auto` no pregunta"
+        "and it quits: with no tasks and `confirm_quit = auto` it does not ask"
     );
 
-    // Con `[ui] confirm_quit = always` pregunta, como desde un listado.
+    // With `[ui] confirm_quit = always` it asks, same as from a listing.
     let mut app = app_con_arbol();
     app.confirm_quit = norte_config::ConfirmQuit::Always;
     assert!(app.panel_chrome_command("app.quit"));
-    assert!(!app.quit, "no sale a la primera");
+    assert!(!app.quit, "it does not quit on the first try");
     assert!(
         matches!(app.modal, Some(norte_tui::app::Modal::ConfirmQuit)),
-        "abre la confirmación: {:?}",
+        "it opens the confirmation: {:?}",
         app.modal.is_some()
     );
 }
 
-/// Estaba muerta en los tres —árbol, sitios y procesos—: `app.menu` no
-/// figuraba en sus allowlists, así que el panel se la comía y la pantalla se
-/// quedaba igual. Es la misma lección que ya trajo aquí `layout.places`.
+/// It was dead in all three — tree, places and processes —: `app.menu` was
+/// not in their allowlists, so the panel ate it and the screen stayed the
+/// same. It is the same lesson `layout.places` already brought here.
 #[test]
 fn el_menu_se_abre_con_el_teclado_dentro_de_un_panel_lateral() {
     for lista in [
@@ -216,7 +218,7 @@ fn el_menu_se_abre_con_el_teclado_dentro_de_un_panel_lateral() {
     ] {
         assert!(
             lista.contains(&"app.menu"),
-            "un panel lateral no puede comerse la tecla del menú"
+            "a side panel cannot eat the menu key"
         );
     }
 
@@ -224,17 +226,17 @@ fn el_menu_se_abre_con_el_teclado_dentro_de_un_panel_lateral() {
     assert_eq!(
         app.key_owner(),
         KeyOwner::Tree,
-        "el teclado está en el árbol"
+        "the keyboard is in the tree"
     );
     assert!(
         app.panel_chrome_command("app.menu"),
-        "la tecla del menú la atiende el cromo, no el panel"
+        "the menu key is handled by the chrome, not the panel"
     );
-    assert!(app.menu.is_some(), "y el menú se abre");
+    assert!(app.menu.is_some(), "and the menu opens");
     assert!(app.panel_chrome_command("app.menu"));
-    assert!(app.menu.is_none(), "la misma tecla lo cierra");
+    assert!(app.menu.is_none(), "the same key closes it");
     assert!(
         !app.panel_chrome_command("dialog.up"),
-        "lo que no es cromo lo sigue atendiendo el panel"
+        "what is not chrome is still handled by the panel"
     );
 }

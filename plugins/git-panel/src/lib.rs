@@ -1,30 +1,31 @@
-//! `org.norte.git-panel`: el panel oficial de estado del repositorio.
+//! `org.norte.git-panel`: the official repository-status panel.
 //!
-//! El host abre la raíz del repositorio —el ancestro que contiene `.git`, que
-//! es lo que declara el manifiesto como `location-root-marker`— y le pasa a
-//! este guest un token opaco. Desde ahí todo lo que hace es LEER dos ficheros:
-//! `.git/HEAD` y `.git/logs/HEAD`.
+//! The host opens the repository's root —the ancestor containing `.git`,
+//! which is what the manifest declares as `location-root-marker`— and hands
+//! this guest an opaque token. From there, all it does is READ two files:
+//! `.git/HEAD` and `.git/logs/HEAD`.
 //!
-//! Lo que NO hace: escribir, ejecutar `git`, ni saber dónde está nada. No hay
-//! rutas en este código; hay un token y caminos relativos.
+//! What it does NOT do: write, run `git`, or know where anything is. There
+//! are no paths in this code; there is a token and relative paths.
 //!
-//! # Por qué el reflog y no el log
+//! # Why the reflog and not the log
 //!
-//! El log de una rama vive en la base de objetos: los objetos sueltos son
-//! flujos zlib y los empaquetados piden el índice del pack, o sea un lector de
-//! objetos dentro de un guest `no_std`. El reflog (`.git/logs/HEAD`) es texto
-//! plano, una línea por movimiento, y contesta la pregunta que de verdad cuesta
-//! recordar: de dónde vengo. Con lo barato se responde lo útil.
+//! A branch's log lives in the object database: loose objects are zlib
+//! streams and packed ones need the pack index, i.e. an object reader
+//! inside a `no_std` guest. The reflog (`.git/logs/HEAD`) is plain text, one
+//! line per move, and answers the question that is genuinely hard to
+//! remember: where did I come from. The cheap thing answers the useful one.
 //!
-//! # Lo que este panel NO puede decir
+//! # What this panel CANNOT say
 //!
-//! - **Si hay cambios sin guardar.** Eso lo dice `git-status`, que compara el
-//!   árbol contra el índice y ya existe como columna. Repetirlo aquí sería la
-//!   misma cuenta hecha dos veces y dos respuestas que pueden discrepar.
-//! - **Nada, fuera de un repositorio o sobre una ubicación que no sea
-//!   `file://`.** La capacidad de ubicación no acuña token para sftp, s3, mem
-//!   ni el interior de un archivo: el panel lo DICE en una línea, porque un
-//!   hueco vacío no se distingue de uno roto.
+//! - **Whether there are unsaved changes.** `git-status` says that, since it
+//!   compares the tree against the index and already exists as a column.
+//!   Repeating it here would be the same count done twice and two answers
+//!   that can disagree.
+//! - **Nothing, outside a repository or over a location that is not
+//!   `file://`.** The location capability mints no token for sftp, s3, mem
+//!   or the inside of an archive: the panel SAYS so in a line, because an
+//!   empty slot is not distinguishable from a broken one.
 
 #![cfg_attr(target_arch = "wasm32", no_std)]
 
@@ -33,45 +34,45 @@ extern crate alloc;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
-// La capa WASM solo existe cuando se compila COMO componente: los tests del
-// host compilan el mismo crate sin ella, que es lo que permite probar las
-// decisiones sin un runtime wasm por medio.
+// The WASM layer only exists when compiled AS a component: the host's tests
+// compile the same crate without it, which is what allows testing the
+// decisions without a wasm runtime in between.
 #[cfg(target_arch = "wasm32")]
 mod guest;
 
-/// El `kind` del panel que este plugin aporta; el mismo del manifiesto.
+/// The `kind` of the panel this plugin contributes; the same one from the
+/// manifest.
 pub const PANEL_KIND: &str = "status";
 
-/// Cuántos movimientos se enseñan si la configuración no dice otra cosa.
+/// How many moves are shown if the configuration does not say otherwise.
 pub const MOVES_DEFAULT: usize = 5;
 
-/// Lo que se puede leer del repositorio sin abrir la base de objetos.
+/// What can be read from the repository without opening the object database.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct Estado {
-    /// La rama actual, o `None` con `HEAD` desprendido.
+    /// The current branch, or `None` with a detached `HEAD`.
     pub branch: Option<String>,
-    /// El commit al que apunta `HEAD`, abreviado a doce caracteres.
+    /// The commit `HEAD` points to, abbreviated to twelve characters.
     pub commit: Option<String>,
-    /// Los movimientos recientes, del más nuevo al más viejo.
+    /// The recent moves, from newest to oldest.
     pub moves: Vec<Movimiento>,
 }
 
-/// Un movimiento del reflog: a dónde se fue y por qué.
+/// A reflog move: where it went and why.
 #[derive(Debug, PartialEq, Eq)]
 pub struct Movimiento {
-    /// El commit de destino, abreviado.
+    /// The destination commit, abbreviated.
     pub to: String,
-    /// Lo que git escribió como motivo (`checkout: moving from a to b`).
+    /// What git wrote as the reason (`checkout: moving from a to b`).
     pub reason: String,
 }
 
-/// La rama que nombra `.git/HEAD`, si apunta a una.
+/// The branch `.git/HEAD` names, if it points to one.
 ///
-/// `ref: refs/heads/<rama>` es el caso normal; un SHA a secas es `HEAD`
-/// desprendido y no hay rama que nombrar. Se acepta cualquier `refs/…` y se
-/// enseña el último tramo: una rama puede llamarse `feature/x/y`, y quedarse
-/// con todo lo que sigue a `refs/heads/` conserva las barras que el lector
-/// escribió.
+/// `ref: refs/heads/<branch>` is the normal case; a bare SHA is a detached
+/// `HEAD` and there is no branch to name. Any `refs/…` is accepted and the
+/// last segment is shown: a branch can be called `feature/x/y`, and keeping
+/// everything after `refs/heads/` preserves the slashes the reader wrote.
 ///
 /// ```
 /// use git_panel::rama_de_head;
@@ -82,55 +83,55 @@ pub struct Movimiento {
 /// ```
 #[must_use]
 pub fn rama_de_head(raw: &[u8]) -> Option<String> {
-    let texto = core::str::from_utf8(raw).ok()?;
-    let linea = texto.lines().next()?.trim();
-    let referencia = linea.strip_prefix("ref:")?.trim();
-    let rama = referencia.strip_prefix("refs/heads/")?;
-    if rama.is_empty() {
+    let text = core::str::from_utf8(raw).ok()?;
+    let line = text.lines().next()?.trim();
+    let reference = line.strip_prefix("ref:")?.trim();
+    let branch = reference.strip_prefix("refs/heads/")?;
+    if branch.is_empty() {
         return None;
     }
-    Some(rama.to_string())
+    Some(branch.to_string())
 }
 
-/// Un hash abreviado a doce caracteres, que es lo que git enseña por defecto
-/// en un repositorio grande y lo que cabe en un panel estrecho.
-fn abreviar(sha: &str) -> String {
+/// A hash abbreviated to twelve characters, which is what git shows by
+/// default in a large repository and what fits in a narrow panel.
+fn abbreviate(sha: &str) -> String {
     sha.chars().take(12).collect()
 }
 
-/// El estado que describe `.git/logs/HEAD`: el commit de ahora y los últimos
-/// movimientos.
+/// The state `.git/logs/HEAD` describes: the current commit and the last
+/// moves.
 ///
-/// El formato de una línea es `<antes> <después> <autor> <tiempo> <zona>\t<motivo>`.
-/// Se lee del final hacia atrás porque lo último es lo de ahora, y se toman
-/// como mucho `tope` movimientos: un panel no es un histórico.
+/// A line's format is `<before> <after> <author> <time> <zone>\t<reason>`.
+/// It is read from the end backwards because the last one is the current
+/// one, and at most `cap` moves are taken: a panel is not a history.
 ///
-/// Un reflog vacío —un repositorio recién creado, sin commits— no es un error:
-/// devuelve un estado sin commit, y el panel lo dice.
+/// An empty reflog —a freshly created repository, with no commits— is not
+/// an error: it returns a state with no commit, and the panel says so.
 #[must_use]
-pub fn del_reflog(raw: &[u8], tope: usize) -> (Option<String>, Vec<Movimiento>) {
-    let Ok(texto) = core::str::from_utf8(raw) else {
+pub fn del_reflog(raw: &[u8], cap: usize) -> (Option<String>, Vec<Movimiento>) {
+    let Ok(text) = core::str::from_utf8(raw) else {
         return (None, Vec::new());
     };
-    let lineas: Vec<&str> = texto.lines().filter(|l| !l.trim().is_empty()).collect();
-    let commit = lineas.last().and_then(|l| {
-        let mut campos = l.split(' ');
-        let _antes = campos.next()?;
-        let despues = campos.next()?;
-        Some(abreviar(despues))
+    let lines: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
+    let commit = lines.last().and_then(|l| {
+        let mut fields = l.split(' ');
+        let _before = fields.next()?;
+        let after = fields.next()?;
+        Some(abbreviate(after))
     });
     let mut moves = Vec::new();
-    for linea in lineas.iter().rev().take(tope) {
-        let Some((cabeza, motivo)) = linea.split_once('\t') else {
+    for line in lines.iter().rev().take(cap) {
+        let Some((head, reason)) = line.split_once('\t') else {
             continue;
         };
-        let mut campos = cabeza.split(' ');
-        let (Some(_antes), Some(despues)) = (campos.next(), campos.next()) else {
+        let mut fields = head.split(' ');
+        let (Some(_before), Some(after)) = (fields.next(), fields.next()) else {
             continue;
         };
         moves.push(Movimiento {
-            to: abreviar(despues),
-            reason: motivo.trim().to_string(),
+            to: abbreviate(after),
+            reason: reason.trim().to_string(),
         });
     }
     (commit, moves)
@@ -140,52 +141,53 @@ pub fn del_reflog(raw: &[u8], tope: usize) -> (Option<String>, Vec<Movimiento>) 
 mod tests {
     use super::*;
 
-    const REFLOG: &[u8] = b"0000000000000000000000000000000000000000 1111111111111111111111111111111111111111 Oscar <o@x> 1700000000 +0200\tcommit (initial): primero\n\
+    const REFLOG: &[u8] = b"0000000000000000000000000000000000000000 1111111111111111111111111111111111111111 Oscar <o@x> 1700000000 +0200\tcommit (initial): first\n\
 1111111111111111111111111111111111111111 2222222222222222222222222222222222222222 Oscar <o@x> 1700000100 +0200\tcheckout: moving from main to feat/x\n";
 
-    /// `HEAD` desprendido no inventa una rama.
+    /// A detached `HEAD` does not invent a branch.
     #[test]
-    fn head_desprendido_no_tiene_rama() {
+    fn detached_head_has_no_branch() {
         assert!(rama_de_head(b"9f1c2a0e9f1c2a0e\n").is_none());
         assert!(rama_de_head(b"").is_none());
         assert!(rama_de_head(b"ref: refs/tags/v1\n").is_none());
     }
 
-    /// El commit es el DESTINO de la última línea, no el origen.
+    /// The commit is the DESTINATION of the last line, not the origin.
     ///
-    /// Es el error fácil de este formato: cada línea lleva los dos, y quedarse
-    /// con el primero enseña el commit anterior como si fuera el actual.
+    /// It is this format's easy mistake: every line carries both, and
+    /// keeping the first one shows the previous commit as if it were the
+    /// current one.
     #[test]
-    fn el_commit_es_el_destino_de_la_ultima_linea() {
+    fn the_commit_is_the_destination_of_the_last_line() {
         let (commit, _) = del_reflog(REFLOG, 5);
         assert_eq!(commit.as_deref(), Some("222222222222"));
     }
 
-    /// Los movimientos van del más NUEVO al más viejo, y se acotan.
+    /// Moves go from NEWEST to oldest, and are capped.
     #[test]
-    fn los_movimientos_van_del_mas_nuevo_al_mas_viejo() {
+    fn moves_go_from_newest_to_oldest() {
         let (_, moves) = del_reflog(REFLOG, 5);
         assert_eq!(moves.len(), 2);
         assert_eq!(moves[0].reason, "checkout: moving from main to feat/x");
-        assert_eq!(moves[1].reason, "commit (initial): primero");
+        assert_eq!(moves[1].reason, "commit (initial): first");
 
-        let (_, uno) = del_reflog(REFLOG, 1);
-        assert_eq!(uno.len(), 1, "el tope manda");
-        assert_eq!(uno[0].reason, "checkout: moving from main to feat/x");
+        let (_, one) = del_reflog(REFLOG, 1);
+        assert_eq!(one.len(), 1, "the cap rules");
+        assert_eq!(one[0].reason, "checkout: moving from main to feat/x");
     }
 
-    /// Un reflog vacío no es un error: es un repositorio sin commits.
+    /// An empty reflog is not an error: it is a repository with no commits.
     #[test]
-    fn un_reflog_vacio_no_es_un_error() {
+    fn an_empty_reflog_is_not_an_error() {
         let (commit, moves) = del_reflog(b"", 5);
         assert!(commit.is_none());
         assert!(moves.is_empty());
     }
 
-    /// Una línea sin tabulador no es un movimiento, y no tumba el resto.
+    /// A line without a tab is not a move, and does not bring down the rest.
     #[test]
-    fn una_linea_rota_se_salta_sin_tumbar_las_demas() {
-        let mut raw = Vec::from(&b"basura sin tabulador\n"[..]);
+    fn a_broken_line_is_skipped_without_bringing_down_the_rest() {
+        let mut raw = Vec::from(&b"garbage without a tab\n"[..]);
         raw.extend_from_slice(REFLOG);
         let (commit, moves) = del_reflog(&raw, 5);
         assert!(commit.is_some());

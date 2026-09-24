@@ -1,19 +1,20 @@
-//! Cambiar de directorio, y el ritual que eso desencadena.
+//! Changing directory, and the ritual that triggers.
 //!
-//! Un `cd` no es una asignación: lista la primera página ([`first_page`]), abre
-//! un relleno paginado para el resto, cachea capacidades si hacen falta, mueve
-//! el rastro de navegación y deja un [`Cd`] que dice QUÉ pasó — porque el bucle
-//! de eventos tiene que reconciliar su propio estado indexado por pane con lo
-//! que acaba de cambiar de sitio ([`apply_cd`], [`reconcile_swap`]).
+//! A `cd` is not an assignment: it lists the first page ([`first_page`]),
+//! opens a paginated fill for the rest, caches capabilities if needed, moves
+//! the navigation trail and leaves a [`Cd`] that says WHAT happened —
+//! because the event loop has to reconcile its own pane-indexed state with
+//! whatever just changed place ([`apply_cd`], [`reconcile_swap`]).
 //!
-//! Ese `Cd` es la razón de que esto no sea un `App::cd()`: el desenlace lo
-//! consumen cosas que viven FUERA del modelo (los rellenos, las sondas, los
-//! drenadores), y meterlo en `App` obligaría a que `App` los conociera.
+//! That `Cd` is the reason this is not an `App::cd()`: the outcome is
+//! consumed by things that live OUTSIDE the model (the fills, the probes,
+//! the drainers), and putting it in `App` would force `App` to know about
+//! them.
 //!
-//! Vivía en el root del binario `ntc`, un crate DISTINTO de esta lib, en cuatro
-//! trozos separados por diez mil líneas. Sus seis módulos de test se quedan por
-//! ahora en `main.rs`: prueban el ritual completo, así que nombran también las
-//! tareas de búsqueda y el refresco de panes, que todavía no han salido.
+//! It used to live in the `ntc` binary's root, a crate DISTINCT from this
+//! lib, in four pieces separated by ten thousand lines. Its six test modules
+//! stay for now in `main.rs`: they test the whole ritual, so they also name
+//! the search tasks and the pane refresh, which have not come out yet.
 
 use futures::StreamExt as _;
 use norte_core::backend::{Backend, EntryStream};
@@ -29,33 +30,35 @@ use crate::nav;
 use crate::probes::{DecorateFetch, Probed};
 use crate::trail::{rewind_for, rewind_trail};
 
-/// Entradas de la PRIMERA página que un cd pinta antes de rellenar en
-/// background (ADR 0017): con esto el primer render no espera al listado
-/// entero (spec §11: primeras 100 en <16 ms aunque el dir tenga 500k).
+/// Entries of the FIRST page a cd paints before filling in in the
+/// background (ADR 0017): with this the first render does not wait for the
+/// whole listing (spec §11: the first 100 in <16 ms even if the dir has
+/// 500k).
 pub const FIRST_PAGE: usize = 100;
 
-/// Pane que un desenlace de `cd` acaba de ASENTAR (`Filling`/`Replaced`,
-/// listado nuevo YA en `app.panes[pane]`), o `None` si el cd no tocó ningún
-/// pane (`Failed`/`Cancelled`). NO consume `outcome` (préstamo): el llamante
-/// aún necesita pasarlo a [`apply_cd`] justo después.
+/// The pane a `cd` outcome just SETTLED (`Filling`/`Replaced`, new listing
+/// ALREADY in `app.panes[pane]`), or `None` if the cd touched no pane
+/// (`Failed`/`Cancelled`). Does NOT consume `outcome` (borrow): the caller
+/// still needs to pass it to [`apply_cd`] right after.
 #[must_use]
 pub fn cd_landed_pane(outcome: &Cd) -> Option<usize> {
     match outcome {
         Cd::Filling { pane, .. } | Cd::Replaced(pane) => Some(*pane),
-        // Un refresh re-lista IN SITU (mismo dir, orden ya aplicado): no hay
-        // aterrizaje que ordenar ni decoración nueva que pedir — paridad con
-        // el camino de `on_tick`, que tampoco lo hace. Un `Swapped` tampoco
-        // lista nada: los dos listados ya existían, solo cambiaron de lado
-        // (sus decoraciones viajan con ellos en [`reconcile_swap`]).
+        // A refresh re-lists IN PLACE (same dir, order already applied):
+        // there is no landing to sort nor new decoration to request — parity
+        // with `on_tick`'s path, which does not do it either. A `Swapped`
+        // lists nothing either: both listings already existed, they only
+        // changed sides (their decorations travel with them in
+        // [`reconcile_swap`]).
         Cd::Refreshed(..) | Cd::Swapped | Cd::Failed(..) | Cd::Cancelled | Cd::Suspended => None,
-        // El del LECTOR: es el que ordena su listado, pide decoraciones y
-        // arrastra al árbol. El del espejo se asienta por su cuenta en
-        // [`settle_cd`], que desdobla los dos.
+        // The READER's: it is the one that sorts its listing, requests
+        // decorations and drags the tree along. The mirror's settles on its
+        // own in [`settle_cd`], which splits the two apart.
         Cd::Espejado { lector, .. } => cd_landed_pane(lector),
     }
 }
 
-/// Desenlace de un `cd`, para que el run loop actualice el relleno vivo.
+/// A `cd`'s outcome, for the run loop to update the live fill.
 pub enum Cd {
     /// The pane was replaced and the REST of its listing fills in the
     /// background. The pane index rides ALONGSIDE the [`Fill`] and not inside
@@ -67,67 +70,72 @@ pub enum Cd {
         /// The drainer, headed for `fill[pane]`.
         fill: Fill,
     },
-    /// El pane `usize` se reemplazó y ya está completo: un relleno anterior
-    /// de ESE pane queda obsoleto y hay que soltarlo.
+    /// Pane `usize` was replaced and is already complete: an earlier fill
+    /// for THAT pane is now stale and has to be released.
     Replaced(usize),
-    /// El cd del pane `usize` FALLÓ al listar: el pane se quedó donde
-    /// estaba (el error ya salió por la barra) sobre su listado ANTERIOR, así
-    /// que un relleno previo de ese pane SIGUE siendo válido y se conserva
-    /// (#78: soltarlo dejaba el pane colgado en `loading=true` —con
-    /// «(parcial)» en la quick-search— sin drenador que lo apagara). El error
-    /// VIAJA para quien navega desde el popup de historial (spec
-    /// 2026-07-18: `NotFound` retira la entrada). Sin el índice de pane: al no
-    /// tocar ya el relleno (#78) nadie lo consulta.
+    /// Pane `usize`'s cd FAILED to list: the pane stayed where it was (the
+    /// error already went out through the bar) over its PREVIOUS listing, so
+    /// an earlier fill for that pane is STILL valid and is kept (#78:
+    /// releasing it left the pane hanging with `loading=true` — with
+    /// "(partial)" in the quick search — and no drainer to turn it off). The
+    /// error TRAVELS for whoever navigates from the history popup (spec
+    /// 2026-07-18: `NotFound` retires the entry). With no pane index: since
+    /// the fill is no longer touched (#78), nobody consults it.
     Failed(Error),
-    /// El cd se ABANDONÓ y nada lo reanuda: `Esc` durante el listado, `Ctrl-C`,
-    /// o el stream de eventos muriéndose. Nada cambió y el relleno sigue.
+    /// The cd was ABANDONED and nothing resumes it: `Esc` during the
+    /// listing, `Ctrl-C`, or the event stream dying. Nothing changed and the
+    /// fill keeps going.
     ///
-    /// Distinto de [`Cd::Suspended`] a propósito: los dos dejan el pane donde
-    /// estaba, pero solo uno de ellos va a volver. Quien recorre el rastro
-    /// necesita saber cuál, y probar `app.modal` para averiguarlo adivina.
+    /// Different from [`Cd::Suspended`] on purpose: both leave the pane
+    /// where it was, but only one of them is going to come back. Whoever
+    /// walks the trail needs to know which, and probing `app.modal` to find
+    /// out is guessing.
     Cancelled,
-    /// El cd se PARÓ a medias y algo va a reanudar ESTA MISMA navegación: el
-    /// modal TOFU (`Modal::TrustHostKey`), que carga el pane y el modo de
-    /// rastro para que el reintento continúe donde esta se quedó.
+    /// The cd STOPPED halfway and something is going to resume THIS SAME
+    /// navigation: the TOFU modal (`Modal::TrustHostKey`), which loads the
+    /// pane and the trail mode so the retry continues where this one left
+    /// off.
     ///
-    /// Para el relleno y para los panes es idéntico a [`Cd::Cancelled`] (el
-    /// pane no se tocó); la diferencia la lee `rewind_for`, que NO rebobina
-    /// un paso del rastro que el reintento va a terminar.
+    /// For the fill and for the panes it is identical to [`Cd::Cancelled`]
+    /// (the pane was not touched); the difference is read by `rewind_for`,
+    /// which does NOT rewind a trail step the retry is going to finish.
     Suspended,
-    /// #118: `pane.refresh` (Ctrl+R) re-listó estos panes DESDE `dispatch`
-    /// (que no ve `fill`/`last_probed`): el desenlace viaja al run loop para
-    /// que [`apply_cd`] aplique el ritual post-refresh — mismo `[bool; 2]`
-    /// que devuelve `refresh_panes` (`true` = listado completo asentado).
+    /// #118: `pane.refresh` (Ctrl+R) re-listed these panes FROM `dispatch`
+    /// (which does not see `fill`/`last_probed`): the outcome travels to the
+    /// run loop so [`apply_cd`] applies the post-refresh ritual — the same
+    /// `[bool; 2]` `refresh_panes` returns (`true` = complete listing
+    /// settled).
     Refreshed([bool; 2]),
-    /// `pane.swap` cruzó los panes DESDE `dispatch`, que no ve el estado
-    /// indexado por pane que vive en el run loop. El desenlace viaja para que
-    /// [`reconcile_swap`] cruce también esa mitad — mismo patrón que
+    /// `pane.swap` crossed the panes FROM `dispatch`, which does not see the
+    /// pane-indexed state that lives in the run loop. The outcome travels so
+    /// [`reconcile_swap`] crosses that half too — same pattern as
     /// `Refreshed`.
     Swapped,
-    /// DOS aterrizajes de una sola navegación: el que el lector pidió y el que
-    /// la navegación sincronizada (`pane.sync-nav`) repitió en el otro panel.
+    /// TWO landings from a single navigation: the one the reader requested
+    /// and the one synced navigation (`pane.sync-nav`) repeated in the other
+    /// panel.
     ///
-    /// Viajan juntos porque un `cd` devuelve UN desenlace y los doce sitios
-    /// que lo archivan no tienen por qué saber de espejos. Tirar el del espejo
-    /// no era una opción: su `Fill` ES el drenador de ese listado, y sin
-    /// archivarlo el otro panel se queda a medio llenar y con el `loading`
-    /// puesto para siempre (#78).
+    /// They travel together because a `cd` returns ONE outcome and the
+    /// twelve sites that file it away have no reason to know about mirrors.
+    /// Dropping the mirror's was not an option: its `Fill` IS that listing's
+    /// drainer, and without filing it the other panel is left half-filled
+    /// and with `loading` set forever (#78).
     Espejado {
-        /// El del panel que el lector movió.
+        /// The panel's the reader moved.
         lector: Box<Cd>,
-        /// El del panel que lo repitió.
+        /// The panel's that repeated it.
         espejo: Box<Cd>,
     },
 }
 
-/// Pide al backend las decoraciones —iconos, insignias— y las columnas de
-/// plugin del listado que un pane tiene AHORA, con la clase de cada entrada
-/// (ADR 0105), y deja la respuesta en vuelo en `decorate_fetch`.
+/// Asks the backend for the decorations — icons, badges — and the plugin
+/// columns of the listing a pane has NOW, with each entry's class (ADR
+/// 0105), and leaves the response in flight in `decorate_fetch`.
 ///
-/// Lo llama el desenlace de cada `cd` y el ARRANQUE: los dos listados
-/// iniciales se construían sin pedir nada, así que un `ntc` recién abierto
-/// no tenía ni un icono hasta el primer `cd`, y el lector concluía que el
-/// plugin no funcionaba.
+/// Called by every `cd`'s outcome and by STARTUP: the two initial listings
+/// used to be built with no request at all, so a freshly opened `ntc` had
+/// not even one icon until the first `cd`, and the reader concluded the
+/// plugin was not working.
 pub fn request_decorations(
     app: &App,
     backend: &Backend,
@@ -142,8 +150,8 @@ pub fn request_decorations(
         .collect();
     let kinds: Vec<norte_proto::EntryKind> =
         app.panes[pane].entries().iter().map(|e| e.kind).collect();
-    // Las columnas pintadas y las de la barra de estado (ADR 0137): UNA
-    // lista para los dos frontends.
+    // The painted columns and the status bar's (ADR 0137): ONE list for
+    // both frontends.
     let plugin_cols =
         norte_frontend::columns::plugin_requests(&app.columns, &app.status_plugins, dir.scheme());
     decorate_fetch.set(
@@ -159,16 +167,16 @@ pub fn request_decorations(
     );
 }
 
-/// El desenlace COMPLETO de un `cd`: el pane que aterrizó se reordena por el
-/// esquema de su localización, se le piden las decoraciones de plugin y se
-/// aplica el resultado ([`apply_cd`]: relleno paginado y sonda).
+/// A `cd`'s COMPLETE outcome: the pane that landed is re-sorted by its
+/// location's scheme, its plugin decorations are requested, and the result
+/// is applied ([`apply_cd`]: paginated fill and probe).
 ///
-/// Estaba copiado en los NUEVE sitios del bucle de eventos que provocan un
-/// cd —el resolver, la palette, el menú, el ratón, el árbol, el sidebar, el
-/// selector de conexiones, el TOFU—. Lo que de verdad los distingue, y ahora
-/// se lee en el call site porque es lo único que queda ahí, es si además
-/// cosechan la búsqueda viva o lanzan el opener externo que el comando dejó
-/// pendiente.
+/// It used to be copied across the event loop's NINE sites that trigger a
+/// cd — the resolver, the palette, the menu, the mouse, the tree, the
+/// sidebar, the connections selector, TOFU. What really tells them apart,
+/// and is now read at the call site because it is the only thing left
+/// there, is whether they also harvest the live search or launch the
+/// external opener the command left pending.
 pub fn settle_cd(
     app: &mut App,
     backend: &Backend,
@@ -178,10 +186,10 @@ pub fn settle_cd(
     search_run: &mut Option<SearchRun>,
     outcome: Cd,
 ) {
-    // Un espejo son DOS navegaciones que aterrizaron: cada una se asienta
-    // entera —orden, decoraciones, volúmenes— porque las dos reemplazaron un
-    // listado. Asentar solo la del lector dejaba el otro panel sin iconos y
-    // con el orden del esquema anterior.
+    // A mirror is TWO navigations that landed: each settles fully — sort,
+    // decorations, volumes — because both replaced a listing. Settling only
+    // the reader's left the other panel with no icons and the previous
+    // scheme's sort order.
     if let Cd::Espejado { lector, espejo } = outcome {
         settle_cd(
             app,
@@ -206,13 +214,13 @@ pub fn settle_cd(
     if let Some(pane) = cd_landed_pane(&outcome) {
         app.apply_scheme_sort(pane);
         request_decorations(app, backend, decorate_fetch, pane);
-        // El pie del panel dice el espacio libre de DONDE está: un listado
-        // nuevo puede estar en otro volumen.
+        // The panel's footer states the free space of WHERE it is: a new
+        // listing may be on a different volume.
         app.volumes_stale = true;
-        // Y el árbol, si hay uno: este listado es dónde mira el panel ahora, y
-        // el panel de al lado tiene que decir lo mismo. Solo por el ENFOCADO —
-        // un listado del otro lado que termina de cargar no es dónde está
-        // trabajando el lector.
+        // And the tree, if there is one: this listing is where the panel
+        // now looks, and the panel next to it has to say the same thing.
+        // Only for the FOCUSED one — a listing on the other side finishing
+        // loading is not where the reader is working.
         if pane == app.focus() {
             app.follow_tree();
         }
@@ -227,22 +235,22 @@ pub fn settle_cd(
     );
 }
 
-/// Aplica el desenlace de un cd a los rellenos paginados en curso: uno nuevo
-/// ocupa el hueco DE SU PANE (el rx anterior de ESE pane, dropeado, mata su
-/// drenador → suelta el stream, regla 3); un REEMPLAZO del MISMO pane lo
-/// suelta (su drenador drenaría el listado viejo sobre el nuevo); un FALLO o
-/// un cd ABANDONADO no tocan el pane —sigue en su listado anterior, cuyo
-/// relleno continúa siendo válido— así que no tocan el fill (#78). Un
-/// `Refreshed` (#118) delega en [`release_refreshed_fill`]: el mismo ritual
-/// que `after_panes_refresh`.
+/// Applies a cd's outcome to the paginated fills in progress: a new one
+/// takes THAT PANE's slot (that pane's previous rx, dropped, kills its
+/// drainer → releases the stream, rule 3); a REPLACEMENT of the SAME pane
+/// releases it (its drainer would drain the old listing over the new one); a
+/// FAILURE or an ABANDONED cd touch no pane — it stays on its previous
+/// listing, whose fill is still valid — so they do not touch the fill (#78).
+/// A `Refreshed` (#118) delegates to [`release_refreshed_fill`]: the same
+/// ritual as `after_panes_refresh`.
 ///
-/// El hueco es POR PANE ([`Fill`]): un cd de un pane jamás estrangula el
-/// relleno del otro.
+/// The slot is PER PANE ([`Fill`]): a cd on one pane never strangles the
+/// other's fill.
 ///
-/// `search_run` viaja hasta aquí SOLO por el brazo `Swapped`
-/// ([`reconcile_swap`]): también está indexado por pane, y su cruce tiene que
-/// pasar antes del `reap_search_run` que estos mismos call sites hacen a
-/// continuación.
+/// `search_run` travels all the way here ONLY for the `Swapped` arm
+/// ([`reconcile_swap`]): it is also indexed by pane, and crossing it has to
+/// happen before the `reap_search_run` these same call sites do right
+/// after.
 pub fn apply_cd(
     panes: &crate::panel::PaneSlots,
     fill: &mut BySlot<Fill>,
@@ -253,8 +261,8 @@ pub fn apply_cd(
 ) {
     match outcome {
         Cd::Filling { pane, fill: f } => {
-            // Listado nuevo (lazy): la dedup de la sonda #52 caduca — la
-            // misma entrada re-enfocada debe poder re-hidratarse.
+            // New listing (lazy): probe #52's dedup expires — the same
+            // entry, re-focused, must be able to re-hydrate.
             last_probed.clear();
             fill.insert(panes.slot_of(pane), f);
         }
@@ -262,19 +270,20 @@ pub fn apply_cd(
             last_probed.clear();
             fill.remove(panes.slot_of(pane));
         }
-        // El pane no cambió: su relleno (si lo había) sigue drenando el mismo
-        // listado. Soltarlo aquí lo dejaba colgado en `loading=true` (#78).
-        // `Suspended` (TOFU) va aquí por la misma razón que `Cancelled`: el
-        // pane no se tocó, y encima el reintento lo va a re-listar entero.
+        // The pane did not change: its fill (if there was one) keeps
+        // draining the same listing. Releasing it here left it hanging with
+        // `loading=true` (#78). `Suspended` (TOFU) goes here for the same
+        // reason as `Cancelled`: the pane was not touched, and on top of it
+        // the retry is going to re-list it whole.
         Cd::Failed(..) | Cd::Cancelled | Cd::Suspended => {}
-        // #118: Ctrl+R desde `dispatch` — misma semántica que el ritual de
-        // los otros disparadores (`after_panes_refresh`), un solo cuerpo.
-        // `reap_search_run` no hace falta aquí: `refresh_panes` SALTA los
-        // panes virtuales (jamás los saca del modo), así que no hay run de
-        // búsqueda que cosechar por este camino.
+        // #118: Ctrl+R from `dispatch` — same semantics as the other
+        // triggers' ritual (`after_panes_refresh`), a single body.
+        // `reap_search_run` is not needed here: `refresh_panes` SKIPS
+        // virtual panes (never pulls them out of the mode), so there is no
+        // search run to harvest through this path.
         Cd::Refreshed(refreshed) => release_refreshed_fill(panes, &refreshed, fill, last_probed),
-        // `pane.swap`: `App::swap_panes` ya cruzó panes e historiales; aquí
-        // se cruza la mitad que vive en el run loop.
+        // `pane.swap`: `App::swap_panes` already crossed the panes and their
+        // histories; here the half that lives in the run loop is crossed.
         Cd::Swapped => reconcile_swap(
             panes.slot_of(0),
             panes.slot_of(1),
@@ -283,8 +292,8 @@ pub fn apply_cd(
             last_probed,
             search_run,
         ),
-        // Los dos, cada uno contra SU pane. El orden no importa: son panes
-        // distintos, y los huecos de relleno están indexados por pane.
+        // Both, each against ITS OWN pane. The order does not matter: they
+        // are different panes, and the fill slots are indexed by pane.
         Cd::Espejado { lector, espejo } => {
             apply_cd(
                 panes,
@@ -335,63 +344,65 @@ pub fn reconcile_swap(
     last_probed: &mut Probed,
     search_run: &mut Option<SearchRun>,
 ) {
-    // Intercambiar paneles mueve el CONTENIDO entre huecos y deja los ids
-    // donde estaban, así que el trabajo en vuelo tiene que viajar con su
-    // listado. Cruzar los ids EN EL ÁRBOL en vez del contenido haría este
-    // reconciliado innecesario entero — anotado en el plan de P6.
+    // Swapping panels moves the CONTENT between slots and leaves the ids
+    // where they were, so the work in flight has to travel with its
+    // listing. Crossing the ids IN THE TREE instead of the content would
+    // make this whole reconciliation unnecessary — noted in P6's plan.
     fill.swap(slot_a, slot_b);
-    // La búsqueda VIVA guarda su pane virtual como el relleno guardaba el suyo,
-    // y aquí es donde TIENE que voltear: el mismo call site cosecha con
-    // `reap_search_run` justo después de `apply_cd`, y esa cosecha mira
-    // `panes[s.pane].virtual_search` — con el índice sin voltear ve el listado
-    // ordinario que acaba de llegar del otro lado y cancela la Task en
-    // silencio, dejando al otro pane con hits a medias en `Running` para
-    // siempre. A lo sumo hay UN run (el pane virtual es uno), así que voltear
-    // su índice es todo el cruce que necesita.
+    // The LIVE search stores its virtual pane the way the fill stored its
+    // own, and this is where it HAS to flip: the same call site harvests
+    // with `reap_search_run` right after `apply_cd`, and that harvest looks
+    // at `panes[s.pane].virtual_search` — with the index not flipped it sees
+    // the ordinary listing that just arrived from the other side and
+    // silently cancels the Task, leaving the other pane with half-done hits
+    // stuck in `Running` forever. There is at most ONE run (there is one
+    // virtual pane), so flipping its index is the whole crossing it needs.
     if let Some(s) = search_run.as_mut() {
         s.pane ^= 1;
     }
-    // Cada slot lleva su `dir` como guard anti-stale, así que cruzarlos basta:
-    // el fetch sigue correspondiendo al listado que ahora está al otro lado.
+    // Each slot carries its `dir` as an anti-stale guard, so crossing them
+    // is enough: the fetch still corresponds to the listing that is now on
+    // the other side.
     decorate_fetch.swap(slot_a, slot_b);
-    // Es una caché de dedup de `stat`, no estado: traducir sus claves cuesta
-    // más que volver a sondear, y un sondeo de más es invisible.
+    // It is a `stat` dedup cache, not state: translating its keys costs more
+    // than probing again, and one extra probe is invisible.
     last_probed.clear();
 }
 
-/// Listado COMPLETO de `dir` (para `refresh_panes` tras una mutación:
-/// conserva el cursor por índice). Una entrada con error corta el listado —
-/// mejor un error honesto que un listado silenciosamente incompleto. #54: NO
-/// ordena aquí — `refresh_listing`/`PaneState::refill` normalizan
-/// internamente, un sort manual sería trabajo duplicado. `attrs` (#117):
-/// los ids attr configurados del scheme — pedidos en el `fs.list`; un id
-/// no anunciado viene ausente (celda en blanco), jamás es error.
+/// `dir`'s COMPLETE listing (for `refresh_panes` after a mutation: keeps
+/// the cursor by index). An entry with an error cuts the listing short —
+/// an honest error beats a silently incomplete listing. #54: does NOT sort
+/// here — `refresh_listing`/`PaneState::refill` normalize internally, a
+/// manual sort would be duplicated work. `attrs` (#117): the scheme's
+/// configured attr ids — requested in the `fs.list`; an id not announced
+/// comes back absent (a blank cell), never an error.
 /// # Errors
 ///
-/// Lo que devuelva el `Backend`: una entrada con error corta el listado, porque
-/// un listado silenciosamente incompleto es peor que un error honesto.
+/// Whatever the `Backend` returns: an entry with an error cuts the listing
+/// short, because a silently incomplete listing is worse than an honest
+/// error.
 pub async fn listing(
     backend: &Backend,
     dir: &VPath,
     attrs: &[String],
 ) -> Result<(Vec<Entry>, Option<u64>), Error> {
-    let salida = backend.list_with_skipped_attrs(dir, attrs).await?;
-    // Esto SÍ es una pantalla (#301): el ancla de lo que el humano acaba de
-    // ver se retiene aquí y no en el embudo del backend, por donde también
-    // pasan el árbol lateral y el `fs.list` de un script.
+    let out = backend.list_with_skipped_attrs(dir, attrs).await?;
+    // This IS a screen (#301): the anchor for what the human just saw is
+    // retained here and not in the backend's funnel, through which the
+    // side tree and a script's `fs.list` also pass.
     backend.remember_listing_anchor(dir).await;
-    Ok(salida)
+    Ok(out)
 }
 
-/// Cachea en `App` las DOS mitades de una respuesta de `fs.capabilities`
-/// (H3d): el catálogo de attrs (#117) y los flags de capacidad.
+/// Caches in `App` the TWO halves of an `fs.capabilities` response (H3d):
+/// the attrs catalogue (#117) and the capability flags.
 ///
-/// Una función y no dos líneas repetidas en el arranque y en el `cd` a
-/// propósito: la respuesta trae ambas y guardarlas juntas es el punto entero
-/// del cambio — quien tire una mitad aquí paga otra ronda de red por un dato
-/// que ya estaba en el proceso, y ese descuido tiene ahora un test
-/// (`caps_cache_tests`) en vez de vivir dentro del `select!` del run loop,
-/// donde nada lo mira.
+/// One function and not two lines repeated at startup and in the `cd` on
+/// purpose: the response carries both and storing them together is the
+/// whole point of the change — whoever drops one half here pays another
+/// network round trip for data that was already in the process, and that
+/// oversight now has a test (`caps_cache_tests`) instead of living inside
+/// the run loop's `select!`, where nothing looks at it.
 pub fn cache_capabilities(
     app: &mut App,
     dir: &VPath,
@@ -421,11 +432,11 @@ pub fn needs_capabilities(app: &App, dir: &VPath) -> bool {
     app.attr_catalog(dir.scheme()).is_none() || app.caps(dir).is_none()
 }
 
-/// Lo que trae [`first_page`]: las entradas, el stream con el resto, las
-/// omitidas del contenedor y las capacidades.
+/// What [`first_page`] brings: the entries, the stream with the rest, the
+/// container's skipped ones, and the capabilities.
 ///
-/// Tiene nombre desde que la espera es compartida: quien aterriza el resultado
-/// lo recibe por parámetro, y una tupla de cuatro en una firma no se lee.
+/// Named since the wait became shared: whoever lands the result receives it
+/// as a parameter, and a four-tuple in a signature does not read.
 pub type PrimeraPagina = (
     Vec<Entry>,
     Option<EntryStream>,
@@ -433,57 +444,59 @@ pub type PrimeraPagina = (
     Option<(norte_proto::Capabilities, norte_proto::AttrCatalog)>,
 );
 
-/// Primera página de `dir` (hasta [`FIRST_PAGE`]) más el stream con el RESTO
-/// (o `None` si el dir cabía en la primera página) y las omitidas del
-/// contenedor (#93). El primer render no espera al listado entero (ADR 0017).
-/// Regla 7: el TUI no toca el FS. `attrs`/`fetch_caps` (#117): pide los
-/// attrs configurados y, cuando el llamador dice que falta algo por cachear
-/// ([`needs_capabilities`]), la respuesta de `fs.capabilities` (cuarto
-/// elemento de la tupla).
+/// `dir`'s first page (up to [`FIRST_PAGE`]) plus the stream with the REST
+/// (or `None` if the dir fit in the first page) and the container's skipped
+/// ones (#93). The first render does not wait for the whole listing (ADR
+/// 0017). Rule 7: the TUI does not touch the FS. `attrs`/`fetch_caps`
+/// (#117): requests the configured attrs and, when the caller says
+/// something is missing from the cache ([`needs_capabilities`]),
+/// `fs.capabilities`'s response (the tuple's fourth element).
 ///
-/// H3d: ese cuarto elemento son las DOS mitades de `fs.capabilities` —
-/// `Capabilities` y catálogo — porque el wire las trae juntas
-/// (`Backend::capabilities_and_attrs`). La TUI cacheaba solo el catálogo y
-/// luego preguntaba «¿es de solo lectura?» con otra ronda por un dato que ya
-/// había llegado.
+/// H3d: that fourth element is `fs.capabilities`'s TWO halves —
+/// `Capabilities` and the catalogue — because the wire brings them together
+/// (`Backend::capabilities_and_attrs`). The TUI used to cache only the
+/// catalogue and then ask "is it read-only?" with another round trip for
+/// data that had already arrived.
 /// # Errors
 ///
-/// Lo que devuelva el `Backend` al pedir la primera página o las capacidades.
-/// Sin traducir: quien lo pinta necesita el tipo.
+/// Whatever the `Backend` returns when requesting the first page or the
+/// capabilities. Untranslated: whoever paints it needs the type.
 pub async fn first_page(
     backend: &Backend,
     dir: &VPath,
     attrs: &[String],
     fetch_caps: bool,
 ) -> Result<PrimeraPagina, Error> {
-    // Las capacidades ANTES del stream (misma conexión, y solo cuando falta
-    // algo por cachear — `needs_capabilities`); un fallo NO tumba el cd: sin
-    // hints se pinta Opaque y el solo-lectura cae al criterio sintáctico.
+    // Capabilities BEFORE the stream (same connection, and only when
+    // something is missing from the cache — `needs_capabilities`); a
+    // failure does NOT bring down the cd: with no hints it paints Opaque
+    // and read-only falls back to the syntactic criterion.
     let catalog = if fetch_caps {
         backend.capabilities_and_attrs(dir).await.ok()
     } else {
         None
     };
     let (mut stream, skipped) = backend.list_stream_with(dir, attrs).await?;
-    // El cd de un panel es una pantalla: se retiene el ancla (#301).
+    // A panel's cd is a screen: the anchor is retained (#301).
     backend.remember_listing_anchor(dir).await;
     let mut first = Vec::with_capacity(FIRST_PAGE);
     while first.len() < FIRST_PAGE {
         match stream.next().await {
             Some(item) => first.push(item?),
-            // El dir cabía en la primera página: no hay resto que drenar.
+            // The dir fit in the first page: there is no rest to drain.
             None => return Ok((first, None, skipped, catalog)),
         }
     }
     Ok((first, Some(stream), skipped, catalog))
 }
 
-/// cd CANCELABLE (regla 3): el listado corre contra el stream de eventos —
-/// Esc lo abandona (el pane se queda donde estaba) y Ctrl-C sale del TUI
-/// (atajos FIJOS durante un cd: aquí no aplica el keymap — son la salida de
-/// emergencia y no deben ser remapeables a algo que no exista). Soltar el
-/// future del listado detiene al productor del provider (testeado en
-/// vfs-local). El resto de teclas se descartan mientras dura el cd.
+/// CANCELABLE cd (rule 3): the listing runs against the event stream — Esc
+/// abandons it (the pane stays where it was) and Ctrl-C quits the TUI
+/// (FIXED shortcuts during a cd: the keymap does not apply here — they are
+/// the emergency exit and must not be remappable to something that does not
+/// exist). Dropping the listing's future stops the provider's producer
+/// (tested in vfs-local). The rest of the keys are discarded while the cd
+/// lasts.
 pub async fn cd(app: &mut App, backend: &Backend, events: &mut Console<'_>, dir: VPath) -> Cd {
     cd_in(app, backend, events, app.focus(), dir, Trail::Record).await
 }
@@ -517,14 +530,14 @@ pub fn record_step(
     norte_frontend::history::record_visit(h, popular, prev, dir, trail);
 }
 
-/// Navega `pane` — que NO tiene por qué ser el enfocado, porque
-/// `pane.mirror` manda el OTRO pane a un sitio mientras el foco se queda
-/// quieto. `trail` dice si el movimiento se REGISTRA en el rastro del pane o
-/// es el rastro reproduciéndose ([`Trail`]).
+/// Navigates `pane` — which need NOT be the focused one, because
+/// `pane.mirror` sends the OTHER pane somewhere while focus stays put.
+/// `trail` says whether the move is RECORDED in the pane's trail or is the
+/// trail replaying itself ([`Trail`]).
 ///
-/// Todo lo que aquí toca estado de pane va por el PARÁMETRO `pane`
-/// (`app.panes[pane]`), jamás por `app.focused()`: son la misma cosa solo
-/// mientras el llamante sea el envoltorio [`cd`].
+/// Everything here that touches pane state goes through the `pane`
+/// PARAMETER (`app.panes[pane]`), never through `app.focused()`: they are
+/// the same thing only while the caller is the [`cd`] wrapper.
 pub async fn cd_in(
     app: &mut App,
     backend: &Backend,
@@ -533,24 +546,24 @@ pub async fn cd_in(
     dir: VPath,
     trail: Trail,
 ) -> Cd {
-    // Historial (spec 2026-07-18): el dir ANTERIOR se captura AQUÍ y se
-    // empuja solo en el brazo de ÉXITO (el pane se reemplazó de verdad).
-    // Al vivir dentro de `cd_in` cubre TODOS los caminos que navegan —
-    // nav.enter/nav.parent, quick-Enter (dispatch nav.enter), retry TOFU y
-    // los popups de historial/hotlist — sin repetirlo por call-site.
+    // History (spec 2026-07-18): the PREVIOUS dir is captured HERE and
+    // pushed only on the SUCCESS arm (the pane really got replaced). Living
+    // inside `cd_in` covers EVERY path that navigates — nav.enter/nav.parent,
+    // quick-Enter (dispatch nav.enter), the TOFU retry and the
+    // history/hotlist popups — without repeating it per call site.
     let prev = app.panes[pane].dir().clone();
-    // #117: los attrs CONFIGURADOS del scheme de destino se piden en el
-    // listado; el catálogo del provider se trae UNA vez por scheme y sesión
-    // (cache en `App::attr_catalogs` — hints y cabeceras del render), y las
-    // caps una vez por CONEXIÓN (ver `needs_capabilities`).
+    // #117: the destination scheme's CONFIGURED attrs are requested in the
+    // listing; the provider's catalogue is fetched ONCE per scheme and
+    // session (cached in `App::attr_catalogs` — render hints and headers),
+    // and the caps once per CONNECTION (see `needs_capabilities`).
     let attrs = app.columns.attr_ids_for(dir.scheme());
     let fetch_caps = needs_capabilities(app, &dir);
-    // Lo que se está esperando, para que las superficies puedan DECIRLO. Un
-    // destino remoto es `Connecting` y uno local `Listing`: el verbo del
-    // primer contacto con un bucket no es «listando», y el lector que ve
-    // «conectando…» sabe que lo que puede tardar es la red y no su disco.
-    // `Busy` no se pinta hasta cruzar su umbral, así que un cd local —el 99 %—
-    // no llega a enseñar nada (`norte_frontend::busy`).
+    // What is being waited for, so the surfaces can SAY it. A remote
+    // destination is `Connecting` and a local one `Listing`: the verb for
+    // first contact with a bucket is not "listing", and a reader seeing
+    // "connecting…" knows the network is what can be slow, not their disk.
+    // `Busy` is not painted until it crosses its threshold, so a local cd —
+    // 99% of them — never gets to show anything (`norte_frontend::busy`).
     let started = std::time::Instant::now();
     app.busy = Some(Busy::new(
         if is_local(&dir) {
@@ -558,9 +571,9 @@ pub async fn cd_in(
         } else {
             BusyKind::Connecting
         },
-        // El VPath CRUDO: el badge de nombre alterado, la reinterpretación de
-        // codificación del panel y el ancho disponible solo los sabe quien
-        // pinta, y renderizar aquí los perdía los tres a la vez.
+        // The RAW VPath: the altered-name badge, the panel's encoding
+        // reinterpretation and the available width are only known by
+        // whoever paints, and rendering here lost all three at once.
         Some(dir.clone()),
         Some(pane),
     ));
@@ -579,59 +592,62 @@ pub async fn cd_in(
             Cd::Cancelled
         }
     };
-    // La espera acabó, salga como salga: cancelada, fallida o buena. Dejar el
-    // indicador puesto sería el spinner que no avanza nunca. Y por si algún
-    // camino futuro se saltara esta línea, `turn::drain_pending` lo limpia
-    // también en la cabecera de cada vuelta: ninguna espera sobrevive a una.
+    // The wait ended, however it ended: cancelled, failed or good. Leaving
+    // the indicator set would be the spinner that never moves. And in case
+    // some future path skipped this line, `turn::drain_pending` clears it
+    // too in every turn's header: no wait survives one.
     app.busy = None;
-    // Navegación SINCRONIZADA (`pane.sync-nav`): el otro panel repite ESTE
-    // `cd`. Va aquí, en el punto único por el que pasan las once llamadas que
-    // navegan —rastro, popups, teclas, búsqueda semántica—, y no en el
-    // despachador: colgado de allí, moverse por el historial no espejaba y el
-    // modo mentía a medias.
+    // SYNCED navigation (`pane.sync-nav`): the other panel repeats THIS
+    // `cd`. It goes here, at the single point the eleven calls that
+    // navigate all pass through — trail, popups, keys, semantic search —
+    // and not in the dispatcher: hung there, walking the history did not
+    // mirror and the mode half-lied.
     //
-    // El eco viaja como `Trail::Seed` y solo se dispara si ESTE `cd` no lo
-    // era: no es un paso del lector —no entra en su rastro— y es lo que corta
-    // la recursión sin una bandera aparte. Y solo espeja lo que sale del panel
-    // con FOCO: un listado que se coloca solo no arrastra al otro.
+    // The echo travels as `Trail::Seed` and only fires if THIS `cd` was not
+    // one itself: it is not a reader's step — it does not enter their
+    // trail — and it is what cuts the recursion with no separate flag. And
+    // it only mirrors what comes out of the FOCUSED panel: a listing that
+    // settles on its own does not drag the other along.
     if app.sync_nav
         && !matches!(trail, Trail::Seed)
         && pane == app.focus()
         && cd_landed_pane(&out).is_some()
-        && let Some(otro) = app.target_index()
-        && let Some(destino) = norte_frontend::nav::destino_en_espejo(
+        && let Some(other) = app.target_index()
+        && let Some(dest) = norte_frontend::nav::destino_en_espejo(
             app.panes[pane].dir(),
-            app.panes[otro].dir(),
-            app.panes[otro].virtual_search,
+            app.panes[other].dir(),
+            app.panes[other].virtual_search,
         )
     {
-        // `Box::pin` porque es recursión en una `async fn`. Una sola vuelta:
-        // el eco entra con `Seed` y la guarda de arriba lo para.
-        let espejo = Box::pin(cd_in(app, backend, events, otro, destino, Trail::Seed)).await;
+        // `Box::pin` because it is recursion in an `async fn`. A single
+        // round: the echo comes in with `Seed` and the guard above stops
+        // it.
+        let mirror = Box::pin(cd_in(app, backend, events, other, dest, Trail::Seed)).await;
         return Cd::Espejado {
             lector: Box::new(out),
-            espejo: Box::new(espejo),
+            espejo: Box::new(mirror),
         };
     }
     out
 }
 
-/// Lo que NO es local es algo con lo que hay que CONECTAR.
+/// What is NOT local is something you have to CONNECT to.
 ///
-/// La authority y no el scheme: `file://` sin authority es el disco de aquí, y
-/// también lo es un archivo abierto sobre él (`tar+file://…`). Decir
-/// «conectando…» al abrir un zip local sería justo la deshonestidad que este
-/// indicador promete no cometer.
+/// The authority and not the scheme: `file://` with no authority is the
+/// disk right here, and so is an archive opened over it (`tar+file://…`).
+/// Saying "connecting…" when opening a local zip would be exactly the
+/// dishonesty this indicator promises not to commit.
 fn is_local(dir: &VPath) -> bool {
     dir.authority().is_none()
 }
 
-/// Qué hacer con lo que llegó: reemplazar el pane, abrir el modal TOFU, o
-/// dejar el error en la barra.
+/// What to do with what arrived: replace the pane, open the TOFU modal, or
+/// leave the error in the bar.
 ///
-/// Sale del `select!` porque ya no hay `select!`: la espera es
-/// [`crate::console::wait_painting`], compartida con las otras dos esperas
-/// largas del TUI, y esto es lo único que era propio de una navegación.
+/// Split out of the `select!` because there is no `select!` anymore: the
+/// wait is [`crate::console::wait_painting`], shared with the TUI's other
+/// two long waits, and this is the only part that was specific to a
+/// navigation.
 fn aterrizar(
     app: &mut App,
     pane: usize,
@@ -642,19 +658,20 @@ fn aterrizar(
 ) -> Cd {
     match res {
         Ok((first, stream, skipped, catalog)) => {
-            // #117: el catálogo recién llegado se cachea por scheme — los
-            // frames siguientes ya pintan con hints. H3d: y las caps de la
-            // MISMA respuesta, que es lo que responde «¿este pane es de solo
-            // lectura?» sin otra ronda (`App::pane_read_only`).
+            // #117: the newly arrived catalogue is cached by scheme — the
+            // following frames already paint with hints. H3d: and the SAME
+            // response's caps, which is what answers "is this pane
+            // read-only?" with no other round trip (`App::pane_read_only`).
             if let Some(both) = catalog {
                 cache_capabilities(app, &dir, both);
             }
-            // #54: NO ordenamos aquí — `begin_listing` -> `set_listing`
-            // normaliza internamente.
+            // #54: we do NOT sort here — `begin_listing` -> `set_listing`
+            // normalizes internally.
             let more = stream.is_some();
             app.panes[pane].begin_listing(dir.clone(), first, more, skipped);
             record_step(&mut app.history[pane], &mut app.popular, prev, &dir, trail);
-            // Si queda stream, un drenador lo rellena en background.
+            // If there is stream left, a drainer fills it in in the
+            // background.
             match stream {
                 Some(s) => Cd::Filling {
                     pane,
@@ -663,18 +680,18 @@ fn aterrizar(
                 None => Cd::Replaced(pane),
             }
         }
-        // Primer contacto TOFU (#45): en vez de una línea de error con la
-        // huella, abre el modal de confianza — `y` confía y REINTENTA esta
-        // misma navegación.
+        // First TOFU contact (#45): instead of an error line with the
+        // fingerprint, opens the trust modal — `y` trusts and RETRIES this
+        // same navigation.
         Err(Error::HostKeyUnknown {
             host,
             port,
             algo,
             fingerprint,
         }) => {
-            // El modal CARGA `pane` y `trail`: el reintento debe reanudar ESTA
-            // navegación (este pane, este modo de rastro), no una nueva contra
-            // el foco de entonces.
+            // The modal LOADS `pane` and `trail`: the retry has to resume
+            // THIS navigation (this pane, this trail mode), not a new one
+            // against whatever had focus back then.
             app.modal = Some(Modal::TrustHostKey {
                 host,
                 port,
@@ -684,17 +701,18 @@ fn aterrizar(
                 pane,
                 trail,
             });
-            // El pane NO se tocó (solo se abrió el modal): como `Cancelled`,
-            // conserva un relleno en vuelo del listado anterior, que sigue
-            // siendo válido. Pero SUSPENDED y no `Cancelled`: esta navegación
-            // va a CONTINUAR en el retry del modal, y quien recorre el rastro
-            // tiene que distinguirla de un cd abandonado, que no vuelve.
+            // The pane was NOT touched (only the modal opened): like
+            // `Cancelled`, it keeps a fill in flight for the previous
+            // listing, which is still valid. But SUSPENDED and not
+            // `Cancelled`: this navigation is going to CONTINUE in the
+            // modal's retry, and whoever walks the trail has to tell it
+            // apart from an abandoned cd, which does not come back.
             Cd::Suspended
         }
-        // #325: la entrada dice `secret = "prompt"` y ninguna de las tres
-        // fuentes lo tiene. Mismo trato que el TOFU —y por las mismas
-        // razones—: el modal carga `pane` y `trail`, y el Enter reintenta
-        // ESTA navegación.
+        // #325: the entry says `secret = "prompt"` and none of the three
+        // sources has it. Same treatment as TOFU — and for the same
+        // reasons: the modal loads `pane` and `trail`, and Enter retries
+        // THIS navigation.
         Err(Error::SecretNeeded { conn, endpoint }) => {
             app.modal = Some(Modal::AskSecret {
                 conn,
@@ -706,9 +724,9 @@ fn aterrizar(
             });
             Cd::Suspended
         }
-        // Un error de listado NO tumba el TUI: el pane se queda, pero un
-        // relleno previo de ESTE pane ya no aplica. El error se PORTA en el
-        // desenlace (popup de historial).
+        // A listing error does NOT bring down the TUI: the pane stays, but
+        // an earlier fill for THIS pane no longer applies. The error is
+        // CARRIED in the outcome (history popup).
         Err(e) => {
             app.message = Some(error_message(&e));
             Cd::Failed(e)
@@ -716,14 +734,14 @@ fn aterrizar(
     }
 }
 
-/// Confiar en la host key y REINTENTAR la navegación que el TOFU interrumpió
-/// (#45). `Some(cd)` = el desenlace debe volver YA al caller (la pendiente
-/// siguiente ya se gestionó aquí); `None` = confiar falló y el mensaje quedó
-/// en la barra — el caller sigue por su camino común.
+/// Trusts the host key and RETRIES the navigation TOFU interrupted (#45).
+/// `Some(cd)` = the outcome must go back to the caller RIGHT AWAY (the next
+/// pending one was already handled here); `None` = trusting failed and the
+/// message stayed in the bar — the caller continues its usual path.
 ///
-/// Vive fuera de [`crate::mutations::on_dialog_key`] porque el brazo entero (destructurar el
-/// modal + el `trust_host_key` + el reintento) no cabe en el presupuesto de
-/// líneas de esa función.
+/// Lives outside [`crate::mutations::on_dialog_key`] because the whole arm
+/// (destructuring the modal + `trust_host_key` + the retry) does not fit in
+/// that function's line budget.
 pub async fn trust_host_retry(
     app: &mut App,
     backend: &Backend,
@@ -740,7 +758,7 @@ pub async fn trust_host_retry(
         trail,
     } = modal
     else {
-        // El caller solo llama con este modal (brazo `Modal::TrustHostKey`).
+        // The caller only calls with this modal (`Modal::TrustHostKey` arm).
         return None;
     };
     match backend
@@ -748,19 +766,19 @@ pub async fn trust_host_retry(
         .await
     {
         Ok(()) => {
-            // El engine re-verifica el fingerprint contra la clave que el
-            // host presenta AHORA (anti-TOCTOU, ADR 0015 D); si aún falla,
-            // el retry lo mostrará.
+            // The engine re-verifies the fingerprint against the key the
+            // host presents NOW (anti-TOCTOU, ADR 0015 D); if it still
+            // fails, the retry will show it.
             //
-            // `cd_in` (no `cd`): se reanuda la navegación que el TOFU
-            // interrumpió — su pane y su rastro —, que no tiene por qué ser
-            // la del foco actual.
+            // `cd_in` (not `cd`): resumes the navigation TOFU interrupted —
+            // its pane and its trail — which need not be the current
+            // focus's.
             let outcome = cd_in(app, backend, events, pane, dir.clone(), trail).await;
-            // Y si era un paso del rastro, ESTE es el sitio donde se termina:
-            // `walk_trail` lo dejó dado porque contaba con este reintento.
+            // And if it was a trail step, THIS is where it finishes:
+            // `walk_trail` left it taken counting on this retry.
             settle_suspended_trail(app, pane, &dir, trail, &outcome);
-            // Solo abrir la siguiente pendiente si el retry NO dejó un modal
-            // (otro HostKeyUnknown): jamás pisar.
+            // Only open the next pending one if the retry did NOT leave a
+            // modal (another HostKeyUnknown): never step on it.
             if app.modal.is_none() {
                 app.open_next_pending();
             }
@@ -768,23 +786,23 @@ pub async fn trust_host_retry(
         }
         Err(e) => {
             app.message = Some(error_message(&e));
-            // Confiar FALLÓ: no hay reintento, así que la navegación que el
-            // TOFU suspendió muere aquí — para el rastro es idéntica a un cd
-            // abandonado, y el paso tiene que volver.
+            // Trusting FAILED: there is no retry, so the navigation TOFU
+            // suspended dies here — for the trail it is identical to an
+            // abandoned cd, and the step has to come back.
             settle_suspended_trail(app, pane, &dir, trail, &Cd::Cancelled);
             None
         }
     }
 }
 
-/// Entregar el secreto tecleado y REINTENTAR la navegación que
-/// `SecretNeeded` interrumpió (#325). Gemelo de [`trust_host_retry`], con el
-/// mismo contrato de retorno: `Some(cd)` = el desenlace vuelve YA al caller,
-/// `None` = entregarlo falló y el mensaje quedó en la barra.
+/// Hands over the typed secret and RETRIES the navigation `SecretNeeded`
+/// interrupted (#325). [`trust_host_retry`]'s twin, with the same return
+/// contract: `Some(cd)` = the outcome goes back to the caller RIGHT AWAY,
+/// `None` = handing it over failed and the message stayed in the bar.
 ///
-/// Vive aquí por el mismo motivo que su gemelo: destructurar el modal, la
-/// llamada y el reintento no caben en el presupuesto de líneas de
-/// [`crate::mutations::on_dialog_key`].
+/// Lives here for the same reason as its twin: destructuring the modal, the
+/// call and the retry do not fit in
+/// [`crate::mutations::on_dialog_key`]'s line budget.
 pub async fn provide_secret_retry(
     app: &mut App,
     backend: &Backend,
@@ -800,22 +818,23 @@ pub async fn provide_secret_retry(
         ..
     } = modal
     else {
-        // El caller solo llama con este modal (brazo `Modal::AskSecret`).
+        // The caller only calls with this modal (`Modal::AskSecret` arm).
         return None;
     };
-    // El campo vacío ni siquiera llega aquí: `dialog_action` deja INERTE el
-    // confirmar de este modal mientras no haya nada tecleado, así que no hace
-    // falta repetir el guard — y repetirlo escondería que la decisión vive
-    // allí, junto al resto de la semántica de seguridad de los diálogos.
+    // An empty field does not even get here: `dialog_action` leaves this
+    // modal's confirm INERT while nothing has been typed, so the guard does
+    // not need repeating — and repeating it would hide that the decision
+    // lives there, alongside the rest of the dialogs' security semantics.
     match backend.provide_secret(&conn, input.expose()).await {
         Ok(()) => {
-            // El secreto ya está en el core; a partir de aquí es idéntico al
-            // TOFU. `cd_in` (no `cd`): se reanuda la navegación que el error
-            // interrumpió — su pane y su rastro.
+            // The secret is already in the core; from here it is identical
+            // to TOFU. `cd_in` (not `cd`): resumes the navigation the error
+            // interrupted — its pane and its trail.
             let outcome = cd_in(app, backend, events, pane, dir.clone(), trail).await;
             settle_suspended_trail(app, pane, &dir, trail, &outcome);
-            // El reintento puede abrir OTRO modal (un TOFU sobre el mismo
-            // host, o un `SecretNeeded` de otra conexión): jamás pisarlo.
+            // The retry can open ANOTHER modal (a TOFU over the same host,
+            // or a `SecretNeeded` from another connection): never step on
+            // it.
             if app.modal.is_none() {
                 app.open_next_pending();
             }
@@ -823,21 +842,21 @@ pub async fn provide_secret_retry(
         }
         Err(e) => {
             app.message = Some(error_message(&e));
-            // Entregarlo FALLÓ: no hay reintento, así que la navegación que
-            // el error suspendió muere aquí — para el rastro es idéntica a un
-            // cd abandonado, y el paso tiene que volver.
+            // Handing it over FAILED: there is no retry, so the navigation
+            // the error suspended dies here — for the trail it is identical
+            // to an abandoned cd, and the step has to come back.
             settle_suspended_trail(app, pane, &dir, trail, &Cd::Cancelled);
             None
         }
     }
 }
 
-/// Enter sobre un hit del modal semántico (M4-IA-2): cd al PADRE del hit y
-/// deja el cursor sobre él por path (molde [`crate::jobs::on_search_enter`]; si cayó en
-/// una página aún no drenada, el cursor se queda arriba, v1). Devuelve el
-/// `Cd` para que el caller lo aplique (`apply_cd` + decorate);
-/// `Cd::Cancelled` = nada que navegar (hits vacíos defensivo o hit raíz sin
-/// padre).
+/// Enter over a semantic modal hit (M4-IA-2): cd to the hit's PARENT and
+/// leaves the cursor over it by path (a mold of
+/// [`crate::jobs::on_search_enter`]; if it landed on a page not yet
+/// drained, the cursor stays at the top, v1). Returns the `Cd` for the
+/// caller to apply (`apply_cd` + decorate); `Cd::Cancelled` = nothing to
+/// navigate (defensively empty hits or a root hit with no parent).
 pub async fn semantic_hit_cd(
     app: &mut App,
     backend: &Backend,

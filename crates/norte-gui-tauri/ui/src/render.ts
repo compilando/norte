@@ -1,14 +1,13 @@
-// El pintado, y SOLO el pintado.
+// The painting, and ONLY the painting.
 //
-// Lo que entra es lo que el host proyectó; lo que sale son nodos del DOM y
-// acciones semánticas. Aquí no se ordena, no se formatea un tamaño, no se
-// decide si un comando está disponible y no se compone una ruta: todo eso ya
-// vino resuelto (ADR 0066, decisión D14).
+// What comes in is what the host projected; what goes out is DOM nodes and
+// semantic actions. Nothing is sorted here, no size is formatted, no
+// decision is made about whether a command is available, and no path is
+// composed: all of that already arrived resolved (ADR 0066, decision D14).
 //
-// Dos reglas de la frontera se cumplen en cada línea de este fichero:
-// el texto se pone con `textContent` —nunca HTML, porque un nombre de fichero
-// es un dato— y el estilo dinámico se pone por CSSOM, porque la CSP bloquea
-// el atributo `style`.
+// Two boundary rules hold on every line of this file: text is set with
+// `textContent` — never HTML, because a file name is data — and dynamic
+// style is set through CSSOM, because the CSP blocks the `style` attribute.
 
 import type {
   BrowserSlotView,
@@ -58,110 +57,111 @@ import * as menus from "./render/menus";
 import * as places from "./render/places";
 
 /**
- * Cuánto separa dos clics para que sigan siendo UN doble clic, en ms. El
- * intervalo del escritorio no se puede leer desde una webview; 400 ms es lo
- * que usan de fábrica GNOME y KDE.
+ * How far apart two clicks can be and still count as ONE double click, in
+ * ms. The desktop's own interval cannot be read from a webview; 400ms is
+ * what GNOME and KDE use by default.
  */
 const DOBLE_CLIC_MS = 400;
 
 /*
- * Los miembros son públicos a efectos de TypeScript porque los pintores de
- * `render/*` los alcanzan a través de `this: Screen`; fuera de `src/render*`
- * nadie debe tocarlos. La API de la ventana es la que usa `main.ts`.
+ * The members are public for TypeScript's sake because `render/*`'s
+ * painters reach them through `this: Screen`; outside `src/render*` nobody
+ * should touch them. The window's API is the one `main.ts` uses.
  */
 export class Screen {
   readonly slots = new Map<number, SlotDom>();
   placementsKey = "";
-  /** El diálogo cuyo campo de texto ya se sembró. */
+  /** The dialog whose text field has already been seeded. */
   dialogoPintado: number | null = null;
-  /// El campo de texto vivo del diálogo de arriba, para REUSARLO.
+  /// The live text field of the dialog above, to REUSE it.
   dialogoInput: HTMLInputElement | null = null;
-  /** Los nodos VIVOS de un diálogo-formulario, por id de campo (puente 91).
+  /** The LIVE nodes of a form-dialog, by field id (bridge 91).
    *
-   *  La caja del diálogo se rehace entera en cada parche y cada tecla produce
-   *  uno. Reutilizar el nodo —en vez de crear otro y sembrarlo con lo que
-   *  mandó el host— es lo que impide que la PROYECCIÓN enmascarada vuelva al
-   *  host como si fuera lo tecleado, y de paso conserva el caret. Es lo mismo
-   *  que `dialogoInput` hace para el diálogo de un solo campo; con doce
-   *  controles hace falta un mapa. */
+   *  The dialog box is rebuilt whole on every patch and every keystroke
+   *  produces one. Reusing the node — instead of creating another and
+   *  seeding it with what the host sent — is what keeps the masked
+   *  PROJECTION from going back to the host as if it were what was typed,
+   *  and it also keeps the caret. It is the same thing `dialogoInput` does
+   *  for the single-field dialog; with a dozen controls a map is needed. */
   dialogoCampos: Map<string, HTMLInputElement | HTMLButtonElement> = new Map();
   /**
-   * La barra de búsqueda de los ajustes, conservada entre repintados.
+   * Settings' search bar, kept between repaints.
    *
-   * Cada tecla del buscador provoca un parche del host, o sea un repintado:
-   * si el `<input>` se recreara, se destruiría con el primer carácter y el
-   * foco y el caret se irían con él. Es el tercer sitio de esta ventana con
-   * el mismo fallo —el campo de un diálogo y el filtro del registro fueron
-   * los otros dos— y la misma cura: conservar el nodo.
+   * Every keystroke in the search box triggers a host patch, i.e. a repaint:
+   * if the `<input>` were recreated, it would be destroyed on the first
+   * character and the focus and the caret would go with it. It is this
+   * window's third spot with the same bug — a dialog's field and the log's
+   * filter were the other two — and the same cure: keep the node.
    */
   settingsBarra: HTMLElement | null = null;
-  /** Los mandos del registro, conservados entre repintados (#326). */
+  /** The log's controls, kept between repaints (#326). */
   logControles: HTMLElement | null = null;
-  /** El hueco al que pertenecen: otro hueco, otros mandos. */
+  /** The slot they belong to: a different slot, different controls. */
   logPintado: number | null = null;
-  /** Lo ultimo que se le dijo al host sobre cuantas filas caben. */
+  /** The last thing the host was told about how many rows fit. */
   logFilas: number | null = null;
   pendingLogRows: number | null = null;
-  /// La página de ayuda que se pintó, para conservar su scroll.
+  /// The help page that was painted, to keep its scroll.
   helpPintada: string | null = null;
-  /// La última petición de desplazar la ayuda que ya se aplicó (puente 76).
+  /// The last help-scroll request that was already applied (bridge 76).
   helpScrollSeq = 0;
 
   /**
-   * El plazo del modo `brief`, si hay uno armado.
+   * `brief` mode's deadline, if one is armed.
    *
-   * En la clase y no en el módulo: dos `Screen` en el mismo proceso —los dos
-   * ficheros de test montan la suya— compartirían un temporizador y se lo
-   * pisarían. Y se arma UNA vez por aparición, no en cada repintado: el host
-   * manda la vista entera en cada parche, y rearmarlo en cada uno convertía
-   * «1,2 segundos» en «1,2 segundos después del último parche», que durante
-   * el arranque es justo cuando no paran de llegar.
+   * On the class and not the module: two `Screen`s in the same process —
+   * both test files mount their own — would share a timer and step on each
+   * other. And it is armed ONCE per appearance, not on every repaint: the
+   * host sends the whole view on every patch, and re-arming it on each one
+   * turned "1.2 seconds" into "1.2 seconds after the last patch", which
+   * during startup is exactly when they keep arriving nonstop.
    */
   splashPlazo: ReturnType<typeof setTimeout> | null = null;
 
-  /** La pantalla de arranque ya está puesta: el plazo, si lo había, ya corre. */
+  /** The splash screen is already up: its deadline, if there was one, is already running. */
   splashPuesto = false;
-  /// El `blob:` de la imagen que se está enseñando, para REVOCARLO.
+  /// The `blob:` of the image being shown, to REVOKE it.
   ///
-  /// Un object URL sin revocar es un búfer retenido mientras viva el
-  /// documento. La revocación va en el mismo sitio que el cierre, no en un
-  /// `finally` que un refactor futuro pueda soltar (ADR 0069).
+  /// An object URL that is not revoked is a buffer held for as long as the
+  /// document lives. The revocation goes in the same place as the closing,
+  /// not in a `finally` a future refactor could drop (ADR 0069).
   imagenUrl: string | null = null;
-  /// Qué imagen se pidió, para no pedir dos veces la misma ni pintar la
-  /// anterior sobre el visor de ahora.
+  /// Which image was requested, so as not to request the same one twice nor
+  /// paint the previous one over the current viewer.
   imagenDe: string | null = null;
-  /// El visor que está en pantalla y el tamaño de ventana con que se pintó.
-  /// Cada parche repinta la pantalla entera, y el visor se reconstruía con
-  /// cada uno —una tarea que avanza, un aviso— y además forzaba un reflujo
-  /// para medir su cuerpo. La sesión sustituye `viewer` por otro objeto
-  /// cuando cambia, así que el MISMO objeto es el mismo visor.
+  /// The viewer that is on screen and the window size it was painted with.
+  /// Every patch repaints the whole screen, and the viewer used to be
+  /// rebuilt with every one — an advancing task, a notice — and on top of
+  /// that it forced a reflow to measure its body. The session replaces
+  /// `viewer` with a different object when it changes, so the SAME object is
+  /// the same viewer.
   visorPintado: { viewer: ViewerView; firma: string } | null = null;
-  /// Con qué objeto se pintó por última vez cada capa de encima, y con qué
-  /// tamaño de ventana y de celda (`paint`).
+  /// Which object each overlay was last painted with, and with what window
+  /// size and cell size (`paint`).
   capasPintadas = new Map<string, unknown>();
   capasFirma = "";
-  /** Las líneas de visor que ya se declararon. */
+  /** The viewer lines already declared. */
   viewerRows = 0;
-  /** Las columnas del cuerpo del visor que el host ya conoce. */
+  /** The viewer body columns the host already knows. */
   viewerCols = 0;
-  /** La ayuda está abierta con el CUERPO enfocado. */
+  /** Help is open with the BODY focused. */
   helpBodyFocused = false;
   pendingRange = new Map<number, number>();
-  /** La altura que la barra de menús está reservando, ya en CSS. */
+  /** The height the menu bar is reserving, already in CSS. */
   menuBarHeight: string | null = null;
-  /** Lo mismo para la barra de paneles (#324). */
+  /** The same for the panel bar (#324). */
   panelBarHeight: string | null = null;
-  /** Y el ancho que reserva cuando es la barra de actividad (puente 84). */
+  /** And the width it reserves when it is the activity bar (bridge 84). */
   activityWidth: string | null = null;
-  /** La última foto pintada: lo que se repinta cuando cambia algo local. */
+  /** The last frame painted: what gets repainted when something local changes. */
   ultimaVista: ViewSnapshot | null = null;
-  /** Aviso local de una orden rechazada en la frontera (`rejected`). */
+  /** Local notice for a command rejected at the boundary (`rejected`). */
   rechazo: string | null = null;
-  /** El último clic sobre una fila, para contar el doble clic aquí y no
-   *  depender del evento `dblclick` del motor (ver el `mousedown` de una
-   *  fila). `null` = no hay ninguno pendiente de pareja. */
+  /** The last click on a row, to count the double click here instead of
+   *  depending on the engine's `dblclick` event (see a row's `mousedown`).
+   *  `null` = none pending a match. */
   ultimoClic: { slot: number; key: number; at: number } | null = null;
-  /** La reserva cambió: el host tiene que oír el alto nuevo. */
+  /** The reservation changed: the host has to hear the new height. */
   viewportSucio = false;
 
   constructor(
@@ -193,44 +193,45 @@ export class Screen {
     readonly catalog: HostCatalog,
     readonly send: Send,
     /**
-     * Trae los bytes de la imagen abierta. Sin ruta: el renderer no nombra
-     * ficheros, se le sirve la que el host decidió abrir (ADR 0069).
+     * Fetches the open image's bytes. No path: the renderer does not name
+     * files, it is served the one the host decided to open (ADR 0069).
      */
     readonly fetchImage: () => Promise<ArrayBuffer> = () =>
       Promise.resolve(new ArrayBuffer(0)),
-    /** La barra de título propia (ADR 0136): lo que pide a la ventana. */
+    /** The window's own title bar (ADR 0136): what it asks the window for. */
     readonly windowControl: (verb: WindowVerb) => void = () => undefined,
   ) {}
 
   /**
-   * ¿Cambió lo que la barra de menús reserva desde la última vez que se
-   * preguntó? Consulta que CONSUME: quien la hace vuelve a declarar el alto.
+   * Did what the menu bar reserves change since it was last asked? A
+   * consuming query: whoever calls it declares the height again.
    */
   takeViewportDirty(): boolean {
-    const sucio = this.viewportSucio;
+    const dirty = this.viewportSucio;
     this.viewportSucio = false;
-    return sucio;
+    return dirty;
   }
 
-  /** Texto de una clave Fluent, traducido EN RUST. La clave, si no está. */
+  /** A Fluent key's text, translated IN RUST. The key itself, if it is missing. */
   t(key: string): string {
     return this.catalog.strings[key] ?? key;
   }
 
   /**
-   * Una orden que el host rechazó en la frontera (no deserializa, contrato
-   * roto): nunca llegó a su buzón, así que ningún estado del host la puede
-   * contar. Se pinta aquí, en la barra de estado, hasta la primera orden
-   * aceptada. El detalle del error va a la consola: es texto del otro
-   * extremo, y la barra dice qué orden y que no la entendió.
+   * A command the host rejected at the boundary (does not deserialize,
+   * broken contract): it never reached its mailbox, so no host state can
+   * account for it. Painted here, on the status bar, until the first
+   * accepted command. The error's detail goes to the console: it is text
+   * from the other end, and the bar says which command and that it was not
+   * understood.
    */
   rejected(action: UiAction, error: unknown): void {
-    console.error("el host no aceptó la acción:", action.action, error);
+    console.error("the host did not accept the action:", action.action, error);
     this.rechazo = `${this.t("gui-msg-action-rejected")}: ${action.action}`;
     this.repaintStatus();
   }
 
-  /** Una orden aceptada retira el aviso; dice si había uno. */
+  /** An accepted command withdraws the notice; says whether there was one. */
   accepted(): boolean {
     if (this.rechazo === null) {
       return false;
@@ -240,14 +241,14 @@ export class Screen {
     return true;
   }
 
-  /** Vuelve a pintar el hueco de estado con la última foto, si la hay. */
+  /** Repaints the status slot with the last frame, if there is one. */
   repaintStatus(): void {
     if (this.ultimaVista !== null) {
       this.paint(this.ultimaVista);
     }
   }
 
-  /** El tamaño de una celda de layout, en píxeles reales. */
+  /** A layout cell's size, in real pixels. */
   cell(): { w: number; h: number } {
     const cs = getComputedStyle(document.documentElement);
     return {
@@ -266,19 +267,20 @@ export class Screen {
       this.rebuild(view, cell);
       this.placementsKey = key;
     }
-    // Que el rol EXISTA y que se MARQUE son dos preguntas. La segunda llega
-    // CALCULADA del host (`layout.mark_target`): la decide el crate
-    // compartido, y contarla aquí era repetir en TypeScript un número que ya
-    // vive en Rust — la misma decisión en dos sitios.
-    const marcarDestino = view.layout.mark_target ?? false;
+    // Whether the role EXISTS and whether it gets MARKED are two questions.
+    // The second arrives COMPUTED from the host (`layout.mark_target`): it
+    // is decided by the shared crate, and counting it here would repeat in
+    // TypeScript a number that already lives in Rust — the same decision in
+    // two places.
+    const markTarget = view.layout.mark_target ?? false;
     for (const p of view.layout.placements) {
       const dom = this.slots.get(p.slot_id);
       const slot = view.slots.find((s) => s.slot_id === p.slot_id);
       if (dom === undefined || slot === undefined) {
         continue;
       }
-      const rol = p.role === "target" && !marcarDestino ? null : p.role;
-      dom.root.dataset["role"] = rol ?? "";
+      const role = p.role === "target" && !markTarget ? null : p.role;
+      dom.root.dataset["role"] = role ?? "";
       dom.root.setAttribute("aria-current", p.role === "active" ? "true" : "false");
       this.paintTabs(
         dom,
@@ -288,154 +290,154 @@ export class Screen {
     }
     this.paintMenu(view.menu, view.layout_buttons ?? []);
     this.paintPanelBar(view.panel_bar);
-    // Las capas de encima, cada una SOLO si su dato cambió. Cada parche
-    // repinta la pantalla entera y todas ellas reconstruían su DOM con cada
-    // uno: con la ayuda o los ajustes abiertos, una tarea que avanza
-    // rehacía el diálogo varias veces por segundo. La sesión sustituye el
-    // objeto de una capa cuando llega su cambio, así que el MISMO objeto es
-    // la misma capa; y un cambio de tamaño de la ventana o de la celda las
-    // repinta todas, porque varias miden lo que cabe.
-    const firma = `${String(window.innerWidth)}x${String(window.innerHeight)}|${String(cell.w)}x${String(cell.h)}`;
-    if (firma !== this.capasFirma) {
-      this.capasFirma = firma;
+    // The overlays, each ONLY if its data changed. Every patch repaints the
+    // whole screen and all of them used to rebuild their DOM on every one:
+    // with help or settings open, an advancing task redid the dialog several
+    // times a second. The session replaces an overlay's object when its
+    // change arrives, so the SAME object is the same overlay; and a window
+    // or cell size change repaints all of them, because several measure what
+    // fits.
+    const signature = `${String(window.innerWidth)}x${String(window.innerHeight)}|${String(cell.w)}x${String(cell.h)}`;
+    if (signature !== this.capasFirma) {
+      this.capasFirma = signature;
       this.capasPintadas.clear();
     }
-    const capa = <T>(clave: string, valor: T, pintor: (v: T) => void): void => {
-      if (this.capasPintadas.has(clave) && this.capasPintadas.get(clave) === valor) {
+    const layer = <T>(key: string, value: T, painter: (v: T) => void): void => {
+      if (this.capasPintadas.has(key) && this.capasPintadas.get(key) === value) {
         return;
       }
-      this.capasPintadas.set(clave, valor);
-      pintor.call(this, valor);
+      this.capasPintadas.set(key, value);
+      painter.call(this, value);
     };
-    capa("palette", view.palette, this.paintPalette);
-    capa("goto", view.goto ?? null, this.paintGoto);
-    capa("wizard", view.wizard ?? null, this.paintWizard);
-    capa("whichkey", view.whichkey, this.paintWhichKey);
-    capa("help", view.help, this.paintHelp);
-    capa("settings", view.settings, this.paintSettings);
-    capa("extensions", view.extensions, this.paintExtensions);
-    capa("agents", view.agents, this.paintAgents);
-    capa("plugin_output", view.plugin_output, this.paintPluginOutput);
-    capa("program_output", view.program_output, this.paintProgramOutput);
-    capa("theme", view.theme, this.paintTheme);
-    capa("picker", view.picker, this.paintPicker);
-    capa("profiles", view.profiles, this.paintProfiles);
-    capa("layouts", view.layouts, this.paintLayouts);
-    capa("columns", view.columns, this.paintColumns);
-    capa("search", view.search, this.paintSearch);
-    capa("compare", view.compare, this.paintCompare);
-    capa("sync", view.sync, this.paintSync);
+    layer("palette", view.palette, this.paintPalette);
+    layer("goto", view.goto ?? null, this.paintGoto);
+    layer("wizard", view.wizard ?? null, this.paintWizard);
+    layer("whichkey", view.whichkey, this.paintWhichKey);
+    layer("help", view.help, this.paintHelp);
+    layer("settings", view.settings, this.paintSettings);
+    layer("extensions", view.extensions, this.paintExtensions);
+    layer("agents", view.agents, this.paintAgents);
+    layer("plugin_output", view.plugin_output, this.paintPluginOutput);
+    layer("program_output", view.program_output, this.paintProgramOutput);
+    layer("theme", view.theme, this.paintTheme);
+    layer("picker", view.picker, this.paintPicker);
+    layer("profiles", view.profiles, this.paintProfiles);
+    layer("layouts", view.layouts, this.paintLayouts);
+    layer("columns", view.columns, this.paintColumns);
+    layer("search", view.search, this.paintSearch);
+    layer("compare", view.compare, this.paintCompare);
+    layer("sync", view.sync, this.paintSync);
     this.paintViewer(view.viewer);
-    capa("ai_rename", view.ai_rename, this.paintAiRename);
-    capa("organize", view.organize, this.paintOrganize);
-    capa("dialogs", view.dialogs, this.paintDialogs);
-    // LA ÚLTIMA: la pantalla de arranque se pone delante de todo lo demás, y
-    // en esta hoja el apilado es el orden del documento.
+    layer("ai_rename", view.ai_rename, this.paintAiRename);
+    layer("organize", view.organize, this.paintOrganize);
+    layer("dialogs", view.dialogs, this.paintDialogs);
+    // THE LAST ONE: the splash screen goes in front of everything else, and
+    // on this sheet stacking is document order.
     this.paintSplash(view.splash ?? null);
   }
 
-  /** En `render/menus.ts`. */
+  /** In `render/menus.ts`. */
   readonly paintPanelBar = menus.paintPanelBar;
 
-  /** En `render/menus.ts`. */
+  /** In `render/menus.ts`. */
   readonly paintMenu = menus.paintMenu;
 
-  /** En `render/menus.ts`. */
+  /** In `render/menus.ts`. */
   readonly paintPalette = menus.paintPalette;
   readonly paintGoto = menus.paintGoto;
   readonly paintWizard = menus.paintWizard;
 
-  /** En `render/menus.ts`. */
+  /** In `render/menus.ts`. */
   readonly paintWhichKey = menus.paintWhichKey;
 
-  /** En `render/splash.ts`. */
+  /** In `render/splash.ts`. */
   readonly paintSplash = splash.paintSplash;
 
-  /** En `render/help.ts`. */
+  /** In `render/help.ts`. */
   readonly paintHelp = help.paintHelp;
 
-  /** En `render/help.ts`. */
+  /** In `render/help.ts`. */
   readonly desplazarAyuda = help.desplazarAyuda;
 
-  /** En `render/help.ts`. */
+  /** In `render/help.ts`. */
   readonly helpSidebar = help.helpSidebar;
 
-  /** En `render/help.ts`. */
+  /** In `render/help.ts`. */
   readonly helpBody = help.helpBody;
 
-  /** En `render/help.ts`. */
+  /** In `render/help.ts`. */
   readonly helpBlock = help.helpBlock;
 
-  /** En `render/help.ts`. */
+  /** In `render/help.ts`. */
   readonly helpSpan = help.helpSpan;
 
-  /** En `render/settings.ts`. */
+  /** In `render/settings.ts`. */
   readonly paintSettings = settings.paintSettings;
 
-  /** En `render/extensions.ts`. */
+  /** In `render/extensions.ts`. */
   readonly paintExtensions = extensions.paintExtensions;
 
-  /** En `render/extensions.ts`. */
+  /** In `render/extensions.ts`. */
   readonly extensionDetail = extensions.extensionDetail;
 
-  /** En `render/extensions.ts`. */
+  /** In `render/extensions.ts`. */
   readonly extensionPaneHead = extensions.extensionPaneHead;
 
-  /** En `render/extensions.ts`. */
+  /** In `render/extensions.ts`. */
   readonly extensionCommands = extensions.extensionCommands;
 
-  /** En `render/extensions.ts`. */
+  /** In `render/extensions.ts`. */
   readonly paintAgents = extensions.paintAgents;
 
-  /** En `render/extensions.ts`. */
+  /** In `render/extensions.ts`. */
   readonly paintPluginOutput = extensions.paintPluginOutput;
 
-  /** En `render/extensions.ts`. */
+  /** In `render/extensions.ts`. */
   readonly paintProgramOutput = extensions.paintProgramOutput;
 
-  /** En `render/settings.ts`. */
+  /** In `render/settings.ts`. */
   readonly paintTheme = settings.paintTheme;
 
-  /** En `render/sync.ts`. */
+  /** In `render/sync.ts`. */
   readonly paintSync = sync.paintSync;
 
-  /** En `render/sync.ts`. */
+  /** In `render/sync.ts`. */
   readonly syncStep = sync.syncStep;
 
-  /** En `render/sync.ts`. */
+  /** In `render/sync.ts`. */
   readonly paintCompare = sync.paintCompare;
 
-  /** En `render/sync.ts`. */
+  /** In `render/sync.ts`. */
   readonly compareFace = sync.compareFace;
 
-  /** En `render/search.ts`. */
+  /** In `render/search.ts`. */
   readonly paintSearch = search.paintSearch;
 
-  /** En `render/settings.ts`. */
+  /** In `render/settings.ts`. */
   readonly paintColumns = settings.paintColumns;
 
-  /** En `render/settings.ts`. */
+  /** In `render/settings.ts`. */
   readonly paintProfiles = settings.paintProfiles;
 
-  /** En `render/settings.ts`. */
+  /** In `render/settings.ts`. */
   readonly paintLayouts = settings.paintLayouts;
 
-  /** En `render/settings.ts`. */
+  /** In `render/settings.ts`. */
   readonly paintPicker = settings.paintPicker;
 
-  /** En `render/settings.ts`. */
+  /** In `render/settings.ts`. */
   readonly settingsRow = settings.settingsRow;
 
-  /** En `render/viewer.ts`. */
+  /** In `render/viewer.ts`. */
   readonly paintViewer = viewer.paintViewer;
 
-  /** En `render/viewer.ts`. */
+  /** In `render/viewer.ts`. */
   readonly soltarImagen = viewer.soltarImagen;
 
-  /** En `render/viewer.ts`. */
+  /** In `render/viewer.ts`. */
   readonly pintarImagen = viewer.pintarImagen;
 
-  /** El `<img>` con su tamaño declarado, para que no salte al cargar. */
+  /** The `<img>` with its size declared, so it does not jump on load. */
   nodoImagen(
     url: string,
     img: { format: string; width: number; height: number },
@@ -444,46 +446,46 @@ export class Screen {
     const el = document.createElement("img");
     el.className = "viewer-image";
     el.src = url;
-    // El tamaño DECLARADO, que el host ya comparó con el presupuesto: sin
-    // él la caja salta cuando la imagen carga.
+    // The DECLARED size, which the host already compared against the
+    // budget: without it the box jumps when the image loads.
     el.width = img.width;
     el.height = img.height;
     el.alt = img.format;
-    // El ZOOM (puente 80). Es un porcentaje de lo AJUSTADO, y ajustado lo
-    // decide la hoja (`max-width/max-height: 100%`), así que aquí solo se
-    // multiplica el tope: `--zoom: 1.5` deja que la imagen llegue al 150 %
-    // del hueco, y el hueco se encarga de dejarla desbordar y desplazarse.
+    // The ZOOM (bridge 80). It is a percentage of the FITTED size, and
+    // fitted is decided by the sheet (`max-width/max-height: 100%`), so here
+    // only the cap is multiplied: `--zoom: 1.5` lets the image reach 150% of
+    // the slot, and the slot takes care of letting it overflow and scroll.
     //
-    // Como variable y no como `transform: scale()`: escalar deja el hueco
-    // creyendo que la imagen sigue midiendo lo de antes, así que no aparece
-    // barra ninguna y lo que se sale queda inalcanzable.
+    // As a variable and not as `transform: scale()`: scaling leaves the slot
+    // believing the image still measures what it used to, so no scrollbar
+    // appears and whatever spills out is unreachable.
     el.style.setProperty("--zoom", String(zoom / 100));
     if (zoom <= 100) {
       return el;
     }
-    // Ampliada, la imagen no cabe, y sin una caja que desborde lo que se sale
-    // no está en ninguna parte. La caja solo existe cuando hace falta: a
-    // tamaño ajustado es un nodo de más entre el hueco y la foto.
-    const caja = document.createElement("div");
-    caja.className = "viewer-image-box";
-    caja.append(el);
-    return caja;
+    // Enlarged, the image does not fit, and without a box that overflows,
+    // whatever spills out is nowhere. The box only exists when needed: at
+    // fitted size it is one more node between the slot and the picture.
+    const box = document.createElement("div");
+    box.className = "viewer-image-box";
+    box.append(el);
+    return box;
   }
 
   /**
-   * Los TIRADORES de los bordes entre huecos vecinos.
+   * The GRIPS on the borders between neighboring slots.
    *
-   * Se rehacen con el reparto, no con cada frame: mientras el reparto no
-   * cambie, el borde está donde estaba. Y salen del MISMO `placements` que
-   * coloca los huecos — dos cálculos de dónde está un borde son un borde que
-   * se agarra en un sitio y se mueve desde otro.
+   * Rebuilt with the layout, not on every frame: as long as the layout does
+   * not change, the border is where it was. And they come from the SAME
+   * `placements` that positions the slots — two calculations of where a
+   * border is are a border grabbed in one place and moved from another.
    *
-   * Lo que se manda es la posición del PUNTERO en celdas, no un tamaño: qué
-   * pareja se reparte y cuánto le toca a cada uno lo decide el host, que es
-   * quien tiene el reparto y los mínimos (ADR 0069).
+   * What gets sent is the POINTER's position in cells, not a size: which
+   * pair splits and how much each gets is decided by the host, which is the
+   * one that has the layout and the minimums (ADR 0069).
    */
   buildHandles(view: ViewSnapshot, cell: { w: number; h: number }): void {
-    /** Lo que se deja agarrar a cada lado del borde, en píxeles. */
+    /** How much of each side of the border can be grabbed, in pixels. */
     const AGARRE = 6;
     for (const a of view.layout.placements) {
       for (const b of view.layout.placements) {
@@ -524,45 +526,46 @@ export class Screen {
   }
 
   /**
-   * El arrastre de un borde, desde que se agarra hasta que se suelta.
+   * A border's drag, from the moment it is grabbed until it is released.
    *
-   * Por `window` y NO por captura del puntero en el tirador: cada paso del
-   * arrastre cambia el reparto, cada cambio de reparto rehace los huecos y
-   * los tiradores (`rebuild`), y el tirador agarrado desaparecía con su
-   * captura después del PRIMER paso — el borde se movía una celda, o
-   * ninguna, y se quedaba ahí. El hueco se nombra por id, que sobrevive a
-   * cualquier rehacer.
+   * Through `window` and NOT through pointer capture on the grip: every
+   * step of the drag changes the layout, every layout change rebuilds the
+   * slots and the grips (`rebuild`), and the grabbed grip disappeared along
+   * with its capture after the FIRST step — the border moved one cell, or
+   * none, and stayed there. The slot is named by id, which survives any
+   * rebuild.
    */
   arrastrarBorde(slot: number, vertical: boolean, cell: { w: number; h: number }): void {
-    const raiz = document.documentElement;
-    raiz.dataset["dragging"] = vertical ? "border-col" : "border-row";
-    let ultimo = Number.NaN;
-    const mover = (e: PointerEvent): void => {
-      // Contra el ORIGEN del tablero, no contra la ventana. `#screen` baja
-      // lo que midan la barra de menú y la de paneles (`margin-top`), así
-      // que un `clientY` crudo le daba al host una fila de más por cada
-      // fila de cromo: el borde saltaba al empezar a arrastrarlo.
-      const origen = this.root.getBoundingClientRect();
+    const root = document.documentElement;
+    root.dataset["dragging"] = vertical ? "border-col" : "border-row";
+    let last = Number.NaN;
+    const move = (e: PointerEvent): void => {
+      // Against the board's ORIGIN, not the window. `#screen` gets pushed
+      // down by whatever the menu bar and the panel bar measure
+      // (`margin-top`), so a raw `clientY` gave the host one row too many
+      // for every row of chrome: the border jumped the moment you started
+      // dragging it.
+      const origin = this.root.getBoundingClientRect();
       const cells = vertical
-        ? Math.round((e.clientX - origen.left) / cell.w)
-        : Math.round((e.clientY - origen.top) / cell.h);
-      // Una orden por CELDA, no por píxel: el host no ve la diferencia y
-      // el puente no se llena de lo mismo.
-      if (cells === ultimo) {
+        ? Math.round((e.clientX - origin.left) / cell.w)
+        : Math.round((e.clientY - origin.top) / cell.h);
+      // One command per CELL, not per pixel: the host cannot tell the
+      // difference and the bridge does not fill up with duplicates.
+      if (cells === last) {
         return;
       }
-      ultimo = cells;
+      last = cells;
       this.send({ action: "resize_slot", slot_id: slot, cells });
     };
-    const soltar = (): void => {
-      window.removeEventListener("pointermove", mover);
-      window.removeEventListener("pointerup", soltar);
-      window.removeEventListener("pointercancel", soltar);
-      delete raiz.dataset["dragging"];
+    const release = (): void => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", release);
+      window.removeEventListener("pointercancel", release);
+      delete root.dataset["dragging"];
     };
-    window.addEventListener("pointermove", mover);
-    window.addEventListener("pointerup", soltar);
-    window.addEventListener("pointercancel", soltar);
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", release);
+    window.addEventListener("pointercancel", release);
   }
 
   rebuild(view: ViewSnapshot, cell: { w: number; h: number }): void {
@@ -572,13 +575,13 @@ export class Screen {
       const el = document.createElement("section");
       el.className = "slot";
       el.setAttribute("role", "group");
-      // Quién es este hueco, en el DOM. Sin esto la única forma de dar con él
-      // era su POSICIÓN entre hermanos, que es una correspondencia implícita
-      // entre el orden de `placements` y el del DOM.
+      // Who this slot is, in the DOM. Without this the only way to find it
+      // was its POSITION among siblings, an implicit correspondence between
+      // `placements`'s order and the DOM's.
       el.dataset["slotId"] = String(p.slot_id);
       place(el, p, cell);
-      // La barra de PESTAÑAS va encima del título: es lo que dice qué hay
-      // detrás de lo que se está pintando.
+      // The TAB bar goes above the title: it is what says what is behind
+      // what is being painted.
       const tabs = document.createElement("div");
       tabs.className = "slot-tabs";
       tabs.dataset["open"] = "false";
@@ -592,8 +595,9 @@ export class Screen {
       const canvas = document.createElement("div");
       canvas.className = "canvas";
       scroller.append(canvas);
-      // El pie bajo el listado: cuentas, marcado y espacio libre, ya
-      // redactado en Rust. Vacío = `[ui] pane_footer` apagado, y no ocupa.
+      // The footer under the listing: counts, marked and free space, already
+      // worded in Rust. Empty = `[ui] pane_footer` is off, and it takes no
+      // space.
       const footer = document.createElement("footer");
       footer.className = "slot-footer";
       footer.hidden = true;
@@ -618,24 +622,25 @@ export class Screen {
       this.slots.set(p.slot_id, dom);
       this.wire(p.slot_id, dom);
     }
-    // Los tiradores, DESPUÉS de los huecos y por eso al final.
+    // The grips, AFTER the slots, and that is why last.
     //
-    // Esta hoja de estilos no usa `z-index` en ninguna parte a propósito —lo
-    // dice ella misma en el velo del menú—, así que el apilado lo decide el
-    // ORDEN del documento. Se construían primero, y como un hueco también es
-    // `absolute`, cada panel los tapaba: el `pointerdown` no les llegaba
-    // nunca y no se podía redimensionar con el ratón. Un tirador
-    // transparente de seis píxeles debajo de un panel no es un tirador.
+    // This stylesheet does not use `z-index` anywhere on purpose — it says
+    // so itself in the menu's veil — so stacking is decided by document
+    // ORDER. They used to be built first, and since a slot is also
+    // `absolute`, every panel covered them: `pointerdown` never reached
+    // them and resizing with the mouse did not work. A transparent
+    // six-pixel grip under a panel is not a grip.
     this.buildHandles(view, cell);
   }
 
   wire(slotId: number, dom: SlotDom): void {
-    // Pulsar CUALQUIER parte de un panel lo enfoca: la cabecera, el hueco bajo
-    // la última fila, el borde. Estaba solo en las filas, así que un panel sin
-    // ninguna —o el clic en su título— se pintaba con el borde de otro.
+    // Clicking ANY part of a panel focuses it: the header, the gap under the
+    // last row, the border. It used to be only on the rows, so a panel with
+    // none — or a click on its title — painted with another one's border.
     //
-    // En CAPTURA para que el foco viaje antes que lo que haga el clic concreto
-    // (ordenar, seleccionar): es el orden que el host ya ve desde el teclado.
+    // In CAPTURE so focus travels before whatever the specific click does
+    // (sorting, selecting): it is the order the host already sees from the
+    // keyboard.
     dom.root.addEventListener(
       "mousedown",
       () => {
@@ -645,13 +650,13 @@ export class Screen {
       },
       true,
     );
-    // Los botones LATERALES del ratón son atrás y adelante en la historia de
-    // navegación (spec 2026-09-15 D1), la convención de todo gestor de
-    // escritorio. En `mouseup`, porque el `mousedown` de captura de arriba ya
-    // ha enfocado el panel y el host solo acepta el rastro del hueco activo; y
-    // con `preventDefault`, para que el webview no los tome por navegación de
-    // la página.
-    // Arrastrar el panel por su TÍTULO lo mueve (ADR 0138).
+    // The mouse's SIDE buttons are back and forward in navigation history
+    // (spec 2026-09-15 D1), every desktop manager's convention. On
+    // `mouseup`, because the capturing `mousedown` above has already
+    // focused the panel and the host only accepts the active slot's trail;
+    // and with `preventDefault`, so the webview does not mistake them for
+    // page navigation.
+    // Dragging the panel by its TITLE moves it (ADR 0138).
     hacerArrastrable(this, dom.title, slotId);
     dom.root.addEventListener("mouseup", (e) => {
       if (e.button !== 3 && e.button !== 4) {
@@ -665,8 +670,8 @@ export class Screen {
       if (!(target instanceof Element)) {
         return;
       }
-      // El tirador va ANTES que la ordenación: está dentro de la cabecera
-      // que ordena, y un arrastre no es un click.
+      // The grip comes BEFORE sorting: it is inside the header that sorts,
+      // and a drag is not a click.
       const grip = target.closest(".col-grip");
       if (grip instanceof HTMLElement) {
         e.preventDefault();
@@ -682,7 +687,8 @@ export class Screen {
         return;
       }
       e.preventDefault();
-      // Qué hace un click en la MISMA columna —invertir— lo decide el host.
+      // What a click on the SAME column does — reverse — is decided by the
+      // host.
       this.send({ action: "sort_by", slot_id: slotId, column: id });
     });
     dom.scroller.addEventListener("scroll", () => {
@@ -702,9 +708,9 @@ export class Screen {
         return;
       }
       e.preventDefault();
-      // El foco ya lo mandó el listener de captura del panel entero.
-      // La casilla de marca alterna la marca sin modificador: es lo mismo
-      // que Ctrl+click, dicho con el ratón solo.
+      // The focus was already sent by the whole panel's capturing listener.
+      // The mark checkbox toggles the mark with no modifier: it is the same
+      // as Ctrl+click, said with the mouse alone.
       if (target.closest(".row-check") !== null) {
         this.send({
           action: "toggle_mark",
@@ -715,8 +721,9 @@ export class Screen {
         return;
       }
       if (e.shiftKey) {
-        // El rango lo marca el HOST: qué entra y qué no —`..`, por ejemplo—
-        // es una regla de selección compartida, no una del renderer.
+        // The range is marked by the HOST: what is included and what is not
+        // — `..`, for instance — is a shared selection rule, not the
+        // renderer's.
         const from = this.cursorOf(slotId);
         if (from !== null) {
           this.send({
@@ -744,26 +751,28 @@ export class Screen {
         key: rowKey,
         generation: dom.generation,
       });
-      // El DOBLE clic se cuenta AQUÍ, y no se escucha el evento `dblclick`
-      // del motor: ese evento es la única puerta por la que se entraba en un
-      // directorio con el ratón, y depende de cómo el webview interprete una
-      // secuencia de clics sobre una fila que además se repinta entre uno y
-      // otro. Dos `mousedown` sobre la MISMA fila dentro de
-      // `DOBLE_CLIC_MS` son un doble clic, dígalo el motor o no; es lo mismo
-      // que hace el terminal, que también los cuenta él.
+      // The DOUBLE click is counted HERE, and the engine's `dblclick` event
+      // is not listened to: that event is the only door through which a
+      // directory used to be entered with the mouse, and it depends on how
+      // the webview interprets a sequence of clicks on a row that also
+      // repaints in between. Two `mousedown`s on the SAME row within
+      // `DOBLE_CLIC_MS` are a double click, whether the engine says so or
+      // not; it is the same thing the terminal does, which also counts them
+      // itself.
       //
-      // Va después del `select_row` a propósito: el cursor se queda donde se
-      // hizo el doble clic, y el host recibe las dos acciones en orden.
-      const ahora = Date.now();
-      const previo = this.ultimoClic;
-      this.ultimoClic = { slot: slotId, key: rowKey, at: ahora };
+      // Placed after `select_row` on purpose: the cursor stays where the
+      // double click happened, and the host receives the two actions in
+      // order.
+      const now = Date.now();
+      const previous = this.ultimoClic;
+      this.ultimoClic = { slot: slotId, key: rowKey, at: now };
       if (
-        previo !== null &&
-        previo.slot === slotId &&
-        previo.key === rowKey &&
-        ahora - previo.at <= DOBLE_CLIC_MS
+        previous !== null &&
+        previous.slot === slotId &&
+        previous.key === rowKey &&
+        now - previous.at <= DOBLE_CLIC_MS
       ) {
-        // El tercer clic de una ráfaga no vuelve a activar.
+        // A burst's third click does not activate again.
         this.ultimoClic = null;
         this.send({
           action: "activate",
@@ -776,14 +785,14 @@ export class Screen {
   }
 
   /**
-   * Arrastra el borde de una cabecera (puente 64).
+   * Drags a header's border (bridge 64).
    *
-   * Mientras dura, solo se mueve la variable del ancho en la raíz del hueco:
-   * cabecera y celdas la leen y nada se repinta. Al soltar, el ancho en
-   * CELDAS —redondeado sobre `--cell-w`— va al host, que lo acota, lo guarda
-   * en `[ui.columns] spec.width` y devuelve la cabecera de todos los huecos.
-   * El ratón se captura en el documento: un arrastre rápido sale del
-   * tirador de seis píxeles en el primer movimiento.
+   * While it lasts, only the width variable on the slot's root moves: the
+   * header and the cells read it and nothing gets repainted. On release,
+   * the width in CELLS — rounded over `--cell-w` — goes to the host, which
+   * bounds it, saves it in `[ui.columns] spec.width` and returns every
+   * slot's header. The mouse is captured on the document: a fast drag
+   * leaves the six-pixel grip on the very first move.
    */
   dragColumn(slotId: number, dom: SlotDom, grip: HTMLElement, start: MouseEvent): void {
     const id = grip.dataset["grip"];
@@ -793,24 +802,24 @@ export class Screen {
     }
     const v = colVar(id);
     const cellW = this.cell().w;
-    const inicio = col.getBoundingClientRect().width;
+    const start_ = col.getBoundingClientRect().width;
     const x0 = start.clientX;
-    let ancho = inicio;
+    let width = start_;
     col.dataset["resizing"] = "true";
     const doc = dom.root.ownerDocument;
-    const mover = (e: MouseEvent): void => {
-      ancho = Math.max(cellW, inicio + (e.clientX - x0));
-      dom.root.style.setProperty(v, `${String(ancho)}px`);
+    const move = (e: MouseEvent): void => {
+      width = Math.max(cellW, start_ + (e.clientX - x0));
+      dom.root.style.setProperty(v, `${String(width)}px`);
     };
-    const soltar = (): void => {
-      doc.removeEventListener("mousemove", mover);
-      doc.removeEventListener("mouseup", soltar);
+    const release = (): void => {
+      doc.removeEventListener("mousemove", move);
+      doc.removeEventListener("mouseup", release);
       delete col.dataset["resizing"];
-      const cells = Math.max(1, Math.round(ancho / cellW));
+      const cells = Math.max(1, Math.round(width / cellW));
       this.send({ action: "resize_column", slot_id: slotId, column: id, cells });
     };
-    doc.addEventListener("mousemove", mover);
-    doc.addEventListener("mouseup", soltar);
+    doc.addEventListener("mousemove", move);
+    doc.addEventListener("mouseup", release);
   }
 
   cursorOf(slotId: number): number | null {
@@ -826,7 +835,7 @@ export class Screen {
     return null;
   }
 
-  /** El scroll lo pinta el renderer; lo único que cruza es qué filas hacen falta. */
+  /** The scroll is painted by the renderer; the only thing that crosses is which rows are needed. */
   scheduleRange(slotId: number, dom: SlotDom): void {
     const pending = this.pendingRange.get(slotId);
     if (pending !== undefined) {
@@ -846,7 +855,7 @@ export class Screen {
     this.pendingRange.set(slotId, handle);
   }
 
-  /** En `render/menus.ts`. */
+  /** In `render/menus.ts`. */
   readonly paintTabs = menus.paintTabs;
 
   paintSlot(
@@ -855,10 +864,10 @@ export class Screen {
     view: ViewSnapshot,
     cell: { w: number; h: number },
   ): void {
-    // El KIND en el hueco, para la hoja de estilos: la barra de estado y la
-    // franja de tareas son una FILA, sin título ni marco — con el título
-    // encima, la fila entera se la comía el título y la barra no se veía
-    // (captura del 2026-09-21).
+    // The KIND on the slot, for the stylesheet: the status bar and the task
+    // strip are a ROW, with no title nor frame — with the title on top, the
+    // whole row got eaten by the title and the bar was not visible
+    // (2026-09-21 capture).
     dom.root.dataset["kind"] = slot.kind === "unsupported" ? slot.kind_name : slot.kind;
     if (slot.kind === "places") {
       this.paintPlaces(dom, slot);
@@ -901,8 +910,8 @@ export class Screen {
       return;
     }
     if (slot.kind === "unsupported") {
-      // El nombre del kind sale del fichero de disposición del usuario: si el
-      // host lo enmascaró, se dice — el mismo criterio que el resto.
+      // The kind's name comes from the user's layout file: if the host
+      // masked it, it is said — the same criterion as everywhere else.
       this.paintAux(dom, slot.kind_name, view, slot.kind_name_hostile);
       return;
     }
@@ -910,34 +919,35 @@ export class Screen {
       this.paintBrowser(dom, slot, cell);
       return;
     }
-    // Un `kind` que este renderer no conoce se pinta como lo que ES: un hueco
-    // que no sabe pintar. Antes caía al listado por defecto —TypeScript ya
-    // había estrechado el tipo, así que compilaba— y un hueco nuevo del host
-    // se habría pintado como un listado con `rows` a `undefined`, o sea una
-    // tabla vacía indistinguible de un directorio vacío.
+    // A `kind` this renderer does not know is painted as what it IS: a slot
+    // that does not know how to paint. It used to fall back to the default
+    // listing — TypeScript had already narrowed the type, so it compiled —
+    // and a new host kind would have painted as a listing with `rows` set
+    // to `undefined`, i.e. an empty table indistinguishable from an empty
+    // directory.
     this.paintAux(dom, (slot as { kind: string }).kind, view);
   }
 
-  /** En `render/places.ts`. */
+  /** In `render/places.ts`. */
   readonly paintTree = places.paintTree;
 
-  /** En `render/places.ts`. */
+  /** In `render/places.ts`. */
   readonly paintPlaces = places.paintPlaces;
 
-  /** En `render/viewer.ts`. */
+  /** In `render/viewer.ts`. */
   readonly paintMetadata = viewer.paintMetadata;
 
-  /** En `render/viewer.ts`. */
+  /** In `render/viewer.ts`. */
   readonly paintMetadataBody = viewer.paintMetadataBody;
 
-  /** En `render/viewer.ts`. */
+  /** In `render/viewer.ts`. */
   readonly paintPreview = viewer.paintPreview;
 
   /**
-   * El panel de procesos: las MISMAS tareas de la franja, con su cursor.
+   * The process panel: the SAME tasks as the strip, with its cursor.
    *
-   * No hay una segunda lista: dos listas de tareas se separan, y la que se ve
-   * deja de ser la que se cancela.
+   * There is no second list: two task lists drift apart, and the one you
+   * see stops being the one that gets canceled.
    */
   paintProcesses(dom: SlotDom, slot: ProcessesSlotView, view: ViewSnapshot): void {
     dom.root.setAttribute("aria-label", this.t("processes-title"));
@@ -947,44 +957,44 @@ export class Screen {
       dom.scroller.replaceChildren(nota(this.t("processes-empty")));
       return;
     }
-    const lista = document.createElement("ul");
-    lista.className = "processes-rows";
-    lista.setAttribute("role", "listbox");
+    const list = document.createElement("ul");
+    list.className = "processes-rows";
+    list.setAttribute("role", "listbox");
     for (const [i, t] of view.tasks.entries()) {
-      const fila = document.createElement("li");
-      fila.className = "processes-row";
-      fila.id = `process-row-${String(i)}`;
-      fila.setAttribute("role", "option");
-      fila.setAttribute("aria-selected", String(slot.cursor === i));
-      fila.append(taskNode(t, (k) => this.t(k)));
-      lista.append(fila);
+      const row = document.createElement("li");
+      row.className = "processes-row";
+      row.id = `process-row-${String(i)}`;
+      row.setAttribute("role", "option");
+      row.setAttribute("aria-selected", String(slot.cursor === i));
+      row.append(taskNode(t, (k) => this.t(k)));
+      list.append(row);
     }
     if (slot.cursor !== null) {
-      lista.setAttribute("aria-activedescendant", `process-row-${String(slot.cursor)}`);
-      revelar(lista.querySelector(`#process-row-${String(slot.cursor)}`) ?? undefined);
+      list.setAttribute("aria-activedescendant", `process-row-${String(slot.cursor)}`);
+      revelar(list.querySelector(`#process-row-${String(slot.cursor)}`) ?? undefined);
     }
-    dom.scroller.replaceChildren(lista);
+    dom.scroller.replaceChildren(list);
   }
 
-  /** En `render/log.ts`. */
+  /** In `render/log.ts`. */
   readonly paintLog = log.paintLog;
   readonly paintTerminal = terminal.paintTerminal;
 
-  /** En `render/panel.ts`. */
+  /** In `render/panel.ts`. */
   readonly paintPanel = panelPlugin.paintPanel;
 
-  /** En `render/diskmap.ts`. */
+  /** In `render/diskmap.ts`. */
   readonly paintDiskMap = diskMap.paintDiskMap;
-  /** En `render/timeline.ts`. */
+  /** In `render/timeline.ts`. */
   readonly paintTimeline = timeline.paintTimeline;
 
-  /** En `render/log.ts`. */
+  /** In `render/log.ts`. */
   readonly selectorDeFuente = log.selectorDeFuente;
 
-  /** En `render/log.ts`. */
+  /** In `render/log.ts`. */
   readonly crearControlesDeRegistro = log.crearControlesDeRegistro;
 
-  /** En `render/log.ts`. */
+  /** In `render/log.ts`. */
   readonly scheduleLogRows = log.scheduleLogRows;
 
   paintAux(
@@ -1005,9 +1015,9 @@ export class Screen {
       dom.scroller.className = "statusbar";
       dom.scroller.setAttribute("role", "status");
       dom.scroller.setAttribute("aria-live", "polite");
-      // Los elementos de la derecha (ADR 0132) vuelven por ID: el host
-      // resuelve el comando contra su lista de ahora y lo corre por el
-      // mismo despacho que la tecla.
+      // The right-side elements (ADR 0132) come back by ID: the host
+      // resolves the command against its current list and runs it through
+      // the same dispatch as the key.
       dom.scroller.replaceChildren(
         ...statusNodes(
           view.status,
@@ -1039,15 +1049,15 @@ export class Screen {
     slot: BrowserSlotView,
     cell: { w: number; h: number },
   ): void {
-    // La ruta en su propio nodo, y no como texto suelto de la cabecera: es
-    // lo ÚNICO que se puede recortar cuando no cabe. Con la ruta como texto
-    // directo, una larga empujaba fuera de la vista todo lo que viniera
-    // detrás —el △ de hostil y el aviso de entradas omitidas— y desaparecían
-    // en silencio, que es justo lo contrario de lo que existen para hacer.
-    // El título se rehace solo si cambió lo que dice. El aviso de «esperando»
-    // es su último hijo y va aparte (más abajo): tiene su propio umbral y un
-    // nodo que no se recrea.
-    const firmaTitulo = JSON.stringify([
+    // The path in its own node, and not as the header's loose text: it is
+    // the ONLY thing that can be truncated when it does not fit. With the
+    // path as direct text, a long one pushed out of view everything that
+    // came after it — the hostile △ and the skipped-entries notice — and
+    // they disappeared silently, exactly the opposite of what they exist to
+    // do. The title is only rebuilt if what it says changed. The "waiting"
+    // notice is its last child and is handled apart (further below): it has
+    // its own threshold and a node that is not recreated.
+    const titleSignature = JSON.stringify([
       slot.path_display,
       slot.path_segments ?? null,
       slot.path_hostile,
@@ -1059,7 +1069,7 @@ export class Screen {
       slot.hidden_note,
       slot.marked_note ?? "",
     ]);
-    if (!sinCambios(dom.title, firmaTitulo)) {
+    if (!sinCambios(dom.title, titleSignature)) {
       this.paintBrowserTitle(dom, slot);
     }
     dom.root.setAttribute("aria-label", slot.path_display);
@@ -1072,55 +1082,58 @@ export class Screen {
     ) {
       this.paintBrowserFooter(dom, slot);
     }
-    // La línea fina del borde inferior (ADR 0148): dos píxeles que dicen que
-    // algo está llegando AQUÍ, sin texto y sin quitarle una fila al listado.
-    const llegando = slot.progress ?? null;
-    if (llegando === null) {
+    // The thin line on the bottom border (ADR 0148): two pixels that say
+    // something is arriving HERE, with no text and without taking a row
+    // away from the listing.
+    const incoming = slot.progress ?? null;
+    if (incoming === null) {
       delete dom.root.dataset["progress"];
       dom.root.style.removeProperty("--slot-progress");
     } else {
-      dom.root.dataset["progress"] = String(llegando);
-      dom.root.style.setProperty("--slot-progress", `${String(llegando)}%`);
+      dom.root.dataset["progress"] = String(incoming);
+      dom.root.style.setProperty("--slot-progress", `${String(incoming)}%`);
     }
     this.paintBrowserRest(dom, slot, cell);
   }
 
-  /** La ruta con sus migas y los avisos del listado, en el título del hueco. */
+  /** The path with its breadcrumbs and the listing's notices, in the slot's title. */
   paintBrowserTitle(dom: SlotDom, slot: BrowserSlotView): void {
-    const ruta = document.createElement("span");
-    ruta.className = "title-path";
-    const migas = slot.path_segments ?? [];
-    if (migas.length === 0) {
-      ruta.textContent = slot.path_display;
+    const path = document.createElement("span");
+    path.className = "title-path";
+    const crumbs = slot.path_segments ?? [];
+    if (crumbs.length === 0) {
+      path.textContent = slot.path_display;
     } else {
-      // MIGAS (puente 65): un botón por tramo, con separador; el último es
-      // el directorio actual y no navega. La ruta entera sigue en el
-      // `title` del nodo y en el `aria-label` del hueco, para quien la
-      // quiera leer o copiar de una pieza.
-      ruta.title = slot.path_display;
-      for (const [i, tramo] of migas.entries()) {
+      // BREADCRUMBS (bridge 65): one button per segment, with a separator;
+      // the last one is the current directory and does not navigate. The
+      // whole path stays in the node's `title` and in the slot's
+      // `aria-label`, for whoever wants to read or copy it whole.
+      path.title = slot.path_display;
+      for (const [i, segment] of crumbs.entries()) {
         if (i > 0) {
           const sep = document.createElement("span");
           sep.className = "crumb-sep";
           sep.setAttribute("aria-hidden", "true");
           sep.textContent = "›";
-          ruta.append(sep);
+          path.append(sep);
         }
-        const miga = document.createElement("button");
-        miga.type = "button";
-        miga.className = "crumb";
-        miga.textContent = tramo;
-        const actual = i === migas.length - 1;
-        miga.dataset["current"] = String(actual);
-        // La raíz (el esquema, `⟨file⟩`) se pinta atenuada (fase D): dice
-        // de qué provider es la ruta, y es lo que menos cambia de las migas.
-        miga.dataset["root"] = String(i === 0);
-        miga.disabled = actual;
-        if (!actual) {
-          miga.addEventListener("click", () => {
-            // Con la generación del listado que pintó estas migas: si el
-            // hueco navegó mientras tanto, la profundidad hablaba de otra
-            // ruta y el host la rechaza en vez de reinterpretarla.
+        const crumb = document.createElement("button");
+        crumb.type = "button";
+        crumb.className = "crumb";
+        crumb.textContent = segment;
+        const current = i === crumbs.length - 1;
+        crumb.dataset["current"] = String(current);
+        // The root (the scheme, `⟨file⟩`) is painted dimmed (phase D): it
+        // says which provider the path belongs to, and it is the breadcrumb
+        // that changes least.
+        crumb.dataset["root"] = String(i === 0);
+        crumb.disabled = current;
+        if (!current) {
+          crumb.addEventListener("click", () => {
+            // With the listing generation that painted these breadcrumbs: if
+            // the slot navigated meanwhile, the depth talked about a
+            // different path and the host rejects it instead of
+            // reinterpreting it.
             this.send({
               action: "breadcrumb_activate",
               slot_id: slot.slot_id,
@@ -1129,29 +1142,30 @@ export class Screen {
             });
           });
         }
-        ruta.append(miga);
+        path.append(crumb);
       }
     }
-    dom.title.replaceChildren(ruta);
+    dom.title.replaceChildren(path);
     if (slot.path_hostile) {
-      ruta.append(badge(this.t("hostile-name")));
+      path.append(badge(this.t("hostile-name")));
     }
-    // Todo lo que dice que el listado NO es lo que parece, ya redactado en
-    // Rust. Va en la CABECERA y no al final de la lista: lo que falta no
-    // está, así que no hay ninguna fila donde el lector pueda tropezarse con
-    // ello.
+    // Everything that says the listing is NOT what it looks like, already
+    // worded in Rust. Goes in the HEADER and not at the end of the list:
+    // what is missing is not there, so there is no row where the reader
+    // could stumble over it.
     //
-    // El ORDEN es la decisión, y es el mismo que la barra del terminal: los
-    // AVISOS —el listado incompleto, la reinterpretación de nombres, las
-    // marcas que se cayeron— van antes que el CONTADOR de lo marcado. El
-    // sitio se acaba, y un aviso recortado deja de avisar mientras que un
-    // contador recortado solo deja de contar.
+    // The ORDER is the decision, and it is the same as the terminal's bar:
+    // WARNINGS — the incomplete listing, the reinterpretation of names, the
+    // marks that fell off — come before the marked COUNT. Room runs out,
+    // and a truncated warning stops warning while a truncated count only
+    // stops counting.
     //
-    // `role="status"` solo en los AVISOS. Lo marcado y el relleno son
-    // contadores de algo que el lector acaba de hacer o que está pasando a la
-    // vista: anunciarlos por voz en cada tecla convierte la región viva en
-    // ruido, y entonces el aviso que sí importa llega dentro del ruido.
-    const notas: [string, string, boolean][] = [
+    // `role="status"` only on the WARNINGS. The marked and the fill counts
+    // are counters of something the reader just did or that is happening in
+    // view: announcing them by voice on every keystroke turns the live
+    // region into noise, and then the warning that does matter arrives
+    // inside the noise.
+    const notes: [string, string, boolean][] = [
       ["slot-filling", slot.filling_note ?? "", false],
       ["slot-skipped", slot.skipped_note, true],
       ["slot-names", slot.names_note ?? "", true],
@@ -1159,47 +1173,47 @@ export class Screen {
       ["slot-hidden", slot.hidden_note, true],
       ["slot-marked", slot.marked_note ?? "", false],
     ];
-    for (const [clase, texto, esAviso] of notas) {
-      if (texto === "") {
+    for (const [cls, text, isWarning] of notes) {
+      if (text === "") {
         continue;
       }
-      const nota = document.createElement("span");
-      nota.className = clase;
-      if (esAviso) {
-        nota.setAttribute("role", "status");
+      const note = document.createElement("span");
+      note.className = cls;
+      if (isWarning) {
+        note.setAttribute("role", "status");
       }
-      nota.textContent = texto;
-      dom.title.append(nota);
+      note.textContent = text;
+      dom.title.append(note);
     }
     dom.title.append(dom.busy);
   }
 
-  /** El pie del hueco: cuentas y el indicador de espacio. */
+  /** The slot's footer: counts and the space indicator. */
   paintBrowserFooter(dom: SlotDom, slot: BrowserSlotView): void {
-    // El pie (puente 63): vacío = apagado, y entonces no ocupa fila.
-    const pie = slot.footer ?? "";
-    dom.footer.textContent = pie;
-    dom.footer.hidden = pie === "";
-    // El indicador de espacio (puente 65): dos píxeles bajo el texto del
-    // pie, llenos hasta lo ocupado del volumen. Sin dato, sin barra.
-    const ocupado = slot.used_ratio ?? null;
-    if (pie !== "" && ocupado !== null) {
+    // The footer (bridge 63): empty = off, and then it takes no row.
+    const footer = slot.footer ?? "";
+    dom.footer.textContent = footer;
+    dom.footer.hidden = footer === "";
+    // The space indicator (bridge 65): two pixels under the footer's text,
+    // filled up to the volume's used space. No data, no bar.
+    const used = slot.used_ratio ?? null;
+    if (footer !== "" && used !== null) {
       const gauge = document.createElement("span");
       gauge.className = "slot-gauge";
       gauge.setAttribute("role", "progressbar");
       gauge.setAttribute("aria-valuemin", "0");
       gauge.setAttribute("aria-valuemax", "100");
-      const pct = Math.round(Math.min(1, Math.max(0, ocupado)) * 100);
+      const pct = Math.round(Math.min(1, Math.max(0, used)) * 100);
       gauge.setAttribute("aria-valuenow", String(pct));
       gauge.dataset["level"] = pct >= 90 ? "critical" : pct >= 75 ? "high" : "normal";
-      const lleno = document.createElement("i");
-      lleno.style.width = `${String(pct)}%`;
-      gauge.append(lleno);
+      const fill = document.createElement("i");
+      fill.style.width = `${String(pct)}%`;
+      gauge.append(fill);
       dom.footer.append(gauge);
     }
   }
 
-  /** La cabecera de columnas, el estado del listado y las filas. */
+  /** The column header, the listing's state and the rows. */
   paintBrowserRest(
     dom: SlotDom,
     slot: BrowserSlotView,
@@ -1209,13 +1223,13 @@ export class Screen {
 
     const total = slot.total_rows ?? slot.rows.length;
     dom.canvas.style.setProperty("height", `${total * cell.h}px`);
-    // La regla de marcas (ADR 0135): dónde están las que no se ven.
-    const regla = markRulerImage(slot.mark_ruler ?? [], MARK_RULER_SPANS);
-    if (regla === "") {
+    // The mark ruler (ADR 0135): where the ones that are out of view are.
+    const ruler = markRulerImage(slot.mark_ruler ?? [], MARK_RULER_SPANS);
+    if (ruler === "") {
       dom.scroller.style.removeProperty("--mark-ruler");
       delete dom.scroller.dataset["ruler"];
     } else {
-      dom.scroller.style.setProperty("--mark-ruler", regla);
+      dom.scroller.style.setProperty("--mark-ruler", ruler);
       dom.scroller.dataset["ruler"] = "true";
     }
     dom.scroller.setAttribute("role", "grid");
@@ -1225,78 +1239,80 @@ export class Screen {
       "aria-busy",
       slot.state.state === "loading" ? "true" : "false",
     );
-    // Esperando (#323). Hasta aquí solo estaba el `aria-busy`, y NINGUNA
-    // regla que lo pintara: contra un SFTP lento la ventana no daba señal.
+    // Waiting (#323). Until now there was only `aria-busy`, and NO rule that
+    // painted it: against a slow SFTP the window gave no sign.
     //
-    // El nodo es ESTABLE y se esconde con un atributo, no se crea en cada
-    // pintada. El umbral es un `animation-delay`, y una animación que empieza
-    // de cero cada vez que su nodo nace nunca llega a los 250 ms: `paint()`
-    // repinta todos los huecos en CADA actualización, así que con un listado
-    // grande llegando por páginas —o con el otro panel trabajando— el aviso
-    // no habría aparecido jamás, que es justo el caso para el que existe.
+    // The node is STABLE and hidden with an attribute, not created on every
+    // paint. The threshold is an `animation-delay`, and an animation that
+    // starts from zero every time its node is born never reaches 250ms:
+    // `paint()` repaints every slot on EVERY update, so with a large listing
+    // arriving in pages — or with the other pane working — the notice would
+    // never have shown up, which is exactly the case it exists for.
     //
-    // El VERBO viene del host, del vocabulario cerrado que comparte con el
-    // terminal: «conectando…» y «cargando…» no son lo mismo, y el caso que
-    // destapó #323 era el primero.
+    // The VERB comes from the host, from the closed vocabulary it shares
+    // with the terminal: "connecting…" and "loading…" are not the same, and
+    // the case that uncovered #323 was the first.
     //
-    // SIN «Esc cancela». La ventana no tiene camino para abortar un listado
-    // en vuelo —nada limpia `en_vuelo`/`drenando` desde una tecla—, y el repo
-    // tiene esa doctrina escrita tres veces en los `.ftl`: jamás una
-    // affordance falsa. El día que exista el aborto, con su test de
-    // cancelación limpia, la frase vuelve.
-    const cargando = slot.state.state === "loading";
-    dom.busy.hidden = !cargando;
+    // NO "Esc cancels". The window has no way to abort a listing in flight —
+    // nothing clears `en_vuelo`/`drenando` from a key — and the repo has
+    // that doctrine written three times in the `.ftl`s: never a fake
+    // affordance. The day the abort exists, with its clean-cancellation
+    // test, the sentence comes back.
+    const loading = slot.state.state === "loading";
+    dom.busy.hidden = !loading;
     if (slot.state.state === "loading") {
-      const destino = slot.state.target_display ?? "";
-      const verbo = this.t(slot.state.verb_key ?? "busy-listing");
-      if (destino === "") {
-        // Un refresco: no va a ninguna parte, así que no se inventa un sitio.
-        dom.busy.replaceChildren(verbo);
+      const target = slot.state.target_display ?? "";
+      const verb = this.t(slot.state.verb_key ?? "busy-listing");
+      if (target === "") {
+        // A refresh: it is not going anywhere, so no place is made up.
+        dom.busy.replaceChildren(verb);
       } else {
-        const yendo = document.createElement("span");
-        yendo.className = "slot-busy-target";
-        yendo.textContent = destino;
-        dom.busy.replaceChildren(verbo, " ", yendo);
+        const going = document.createElement("span");
+        going.className = "slot-busy-target";
+        going.textContent = target;
+        dom.busy.replaceChildren(verb, " ", going);
         if (slot.state.target_hostile === true) {
-          // La ruta a la que se va se pinta distinta de lo que es. Es la que
-          // el lector está mirando mientras espera, así que va marcada.
+          // The path being navigated to paints different from what it is. It
+          // is what the reader is looking at while they wait, so it is
+          // marked.
           dom.busy.append(badge(this.t("hostile-name")));
         }
       }
     }
 
     if (slot.state.state === "error") {
-      // Con un REINTENTO, y no solo la frase. Un hueco en error es lo que
-      // queda cuando el listado no se pudo hacer, y el caso corriente al
-      // reabrir es una conexión remota que pide su contraseña: sin nada que
-      // pulsar, la única salida era navegar a otro sitio para poder volver.
+      // With a RETRY, and not just the sentence. An error slot is what is
+      // left when the listing could not be built, and the common case on
+      // reopening is a remote connection asking for its password: with
+      // nothing to click, the only way out was navigating somewhere else so
+      // as to be able to come back.
       //
-      // Reintentar es el GESTO que abre la pregunta. El host no la abre solo
-      // al arrancar a propósito —restaurar una sesión no es pedir
-      // conectarse—, así que este botón es la mitad que faltaba.
-      const caja = errorNode(this.t(slot.state.reason_key), slot.state.detail);
-      const reintentar = document.createElement("button");
-      reintentar.type = "button";
-      reintentar.className = "slot-retry";
-      reintentar.textContent = this.t("slot-retry");
-      reintentar.addEventListener("click", () => {
+      // Retrying is the GESTURE that opens the question. The host does not
+      // open it just by starting up on purpose — restoring a session is not
+      // asking to connect — so this button is the missing half.
+      const box = errorNode(this.t(slot.state.reason_key), slot.state.detail);
+      const retry = document.createElement("button");
+      retry.type = "button";
+      retry.className = "slot-retry";
+      retry.textContent = this.t("slot-retry");
+      retry.addEventListener("click", () => {
         this.send({ action: "refresh_slot", slot_id: slot.slot_id });
       });
-      caja.append(reintentar);
-      dom.canvas.replaceChildren(caja);
+      box.append(retry);
+      dom.canvas.replaceChildren(box);
       dom.rows.clear();
       return;
     }
 
-    // El «pijama» (puente 80): lo enciende el CONTENEDOR, no la fila. Cada
-    // fila lleva siempre su paridad, así que una fila reciclada por el
-    // desplazamiento no arrastra la banda del sitio donde estaba.
+    // The row stripes (bridge 80): turned on by the CONTAINER, not the row.
+    // Every row always carries its parity, so a row recycled by scrolling
+    // does not drag along the band from the spot it used to occupy.
     dom.canvas.dataset["stripes"] = String(this.ultimaVista?.row_stripes ?? false);
     const wanted = new Set<number>();
-    // La columna de iconos la abre el HOST para el listado entero (puente
-    // 62): con o sin icono, todas las filas llevan la celda. Deducirlo aquí
-    // de las filas visibles la cerraría al desplazarse a una página sin
-    // iconos, y correría todos los nombres.
+    // The icon column is opened by the HOST for the whole listing (bridge
+    // 62): with or without an icon, every row carries the cell. Deducing it
+    // here from the visible rows would close it when scrolling to a page
+    // with no icons, and it would shift every name.
     for (const [i, row] of slot.rows.entries()) {
       const index = slot.first_visible + i;
       wanted.add(row.key);
@@ -1321,18 +1337,18 @@ export class Screen {
     }
   }
 
-  /** En `render/menus.ts`. */
+  /** In `render/menus.ts`. */
   readonly paintHeader = menus.paintHeader;
 
-  /** En `render/ai.ts`. */
+  /** In `render/ai.ts`. */
   readonly paintAiRename = ai.paintAiRename;
 
-  /** En `render/organize.ts`. */
+  /** In `render/organize.ts`. */
   readonly paintOrganize = organize.paintOrganize;
 
-  /** En `render/dialogs.ts`. */
+  /** In `render/dialogs.ts`. */
   readonly campoDeDialogo = dialogs.campoDeDialogo;
 
-  /** En `render/dialogs.ts`. */
+  /** In `render/dialogs.ts`. */
   readonly paintDialogs = dialogs.paintDialogs;
 }
