@@ -695,6 +695,17 @@ independently through `PROTOCOL_VERSION`.
 
 ### Changed
 
+- **The source code is written in English** (ADR 0154). Comments, rustdoc,
+  identifiers, test and file names, log messages and internal errors moved
+  from Spanish to English, in Rust and in the window's TypeScript. **Nothing
+  a user sees changes in the Spanish locale**, and nothing on the wire,
+  config keys, CLI flags or Fluent ids changes either. What does change:
+  `norte --help` and the CLI's error messages are now English, like
+  `ntc --help` already was; several integration tests and the
+  `just bench` target have English names; in the English catalogue the
+  favorites are "Favorites" everywhere. Contributors: `git blame` runs
+  through the translation commits — pass them to `--ignore-rev`.
+
 - **The command catalogue declares what each command does** (ADR 0126): it
   writes, deletes, launches a program, reads contents or sends data out.
   A read-only window and the menu's colours are derived from it, instead
