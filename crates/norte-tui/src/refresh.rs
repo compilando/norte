@@ -308,6 +308,7 @@ async fn pedir_informe(
 /// use norte_proto::methods::PolicyUndoReportResult;
 /// let informe = |saltadas| PolicyUndoReportResult {
 ///     undone: 2, skipped_irreversible: saltadas, skipped_created_no_trash: 0,
+///     skipped_not_ours: 0,
 ///     blocked: None, batch_stuck: None, compensations_lost: 0,
 ///     denied: Vec::new(), denied_total: 0,
 /// };
