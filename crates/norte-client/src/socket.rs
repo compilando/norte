@@ -1,45 +1,45 @@
-//! Dónde está el daemon, y de quién es.
+//! Where the daemon is, and who it belongs to.
 //!
-//! La dirección del socket la necesitan los DOS extremos: el cliente para
-//! conectar y el servidor para atar. Vive aquí, en el crate que ambos pueden
-//! ver, porque dos definiciones de la misma ruta de seguridad es exactamente
-//! como se divergen (`norte-core` la re-exporta desde `daemon`).
+//! The socket's address is needed by BOTH ends: the client to connect and
+//! the server to bind. It lives here, in the crate both can see, because two
+//! definitions of the same security-relevant path is exactly how they drift
+//! apart (`norte-core` re-exports it from `daemon`).
 
 use std::path::PathBuf;
 
-/// Path por defecto del socket: `$XDG_RUNTIME_DIR/norte/daemon.sock`
-/// (el runtime dir ya es 0700 por usuario); sin `XDG_RUNTIME_DIR`,
-/// `/tmp/norte-<uid>/daemon.sock` — el dir lo crea y VERIFICA el server:
-/// dueño = uid del proceso, modo 0700, jamás symlink.
+/// Default socket path: `$XDG_RUNTIME_DIR/norte/daemon.sock` (the runtime
+/// dir is already 0700 per user); with no `XDG_RUNTIME_DIR`,
+/// `/tmp/norte-<uid>/daemon.sock` — the server creates and VERIFIES the dir:
+/// owner = the process's uid, mode 0700, never a symlink.
 ///
-/// Segundos sin clientes ni tareas tras los que un daemon ARRANCADO POR UN
-/// FRONTEND se apaga solo.
+/// Seconds with no clients or tasks after which a daemon STARTED BY A
+/// FRONTEND shuts itself down.
 ///
-/// Un daemon que lanza `norte daemon run` a mano vive lo que su
-/// `--idle-timeout` (cinco minutos): alguien lo pidió por sí mismo. Uno que
-/// arrancó una ventana o un `ntc --daemon` porque no había ninguno existe
-/// PARA ese cliente, y quedarse cinco minutos después de que el último se
-/// vaya es un proceso que nadie ve y nadie pidió. Dos segundos es lo que
-/// tarda una reconexión o un relevo: el cliente que vuelve en ese margen
-/// encuentra el mismo daemon; el que no, arranca otro (~medio segundo).
-/// Como cuenta clientes, cerrar una ventana con un `ntc --daemon` abierto no
-/// apaga nada.
+/// A daemon a person launches by hand with `norte daemon run` lives as long
+/// as its `--idle-timeout` (five minutes): someone asked for it on its own.
+/// One a window or an `ntc --daemon` started because none existed lives FOR
+/// that client, and staying around five minutes after the last one leaves is
+/// a process nobody sees and nobody asked for. Two seconds is how long a
+/// reconnect or a handoff takes: a client returning within that window finds
+/// the same daemon; one that does not starts another (~half a second). Since
+/// it counts clients, closing a window with an `ntc --daemon` open shuts
+/// nothing down.
 pub const SPAWNED_DAEMON_IDLE_SECS: u64 = 2;
 
-/// El argv con el que un frontend arranca el daemon que no encontró: `norte
+/// The argv a frontend uses to start the daemon it did not find: `norte
 /// daemon run --socket <socket> --idle-timeout 2`.
 ///
-/// UNA sola definición, aquí, en el crate que ven la ventana, el terminal y
-/// la CLI: hasta ahora cada uno montaba el suyo, y una decisión escrita
-/// cuatro veces —cuánto vive lo que arrancaste— es exactamente la que
-/// diverge sin que nada se ponga rojo.
+/// ONE single definition, here, in the crate the window, the terminal and
+/// the CLI all see: until now each one assembled its own, and a decision
+/// written four times — how long what you started lives — is exactly the
+/// kind that drifts with nothing turning red.
 ///
 /// ```
 /// use std::path::Path;
 /// let argv = norte_client::daemon_run_argv("norte", Path::new("/run/u/1/norte/daemon.sock"));
-/// let plano: Vec<String> = argv.iter().map(|a| a.to_string_lossy().into_owned()).collect();
+/// let flat: Vec<String> = argv.iter().map(|a| a.to_string_lossy().into_owned()).collect();
 /// assert_eq!(
-///     plano,
+///     flat,
 ///     ["norte", "daemon", "run", "--socket", "/run/u/1/norte/daemon.sock", "--idle-timeout", "2"]
 /// );
 /// ```
@@ -59,8 +59,8 @@ pub fn daemon_run_argv(
     ]
 }
 
-/// `uid_hint` solo se usa para el fallback de /tmp (el server lo deriva de
-/// su propio socket; los clientes, del dir que encuentran).
+/// `uid_hint` is only used for the /tmp fallback (the server derives it from
+/// its own socket; clients, from the dir they find).
 #[must_use]
 pub fn default_socket_path(uid_hint: Option<u32>) -> PathBuf {
     socket_path_from(
@@ -69,8 +69,9 @@ pub fn default_socket_path(uid_hint: Option<u32>) -> PathBuf {
     )
 }
 
-/// La lógica pura de [`default_socket_path`] (testeable sin tocar el
-/// entorno global — que en edición 2024 exige `unsafe`, prohibido aquí).
+/// [`default_socket_path`]'s pure logic (testable without touching the
+/// global environment — which in edition 2024 requires `unsafe`, forbidden
+/// here).
 fn socket_path_from(xdg: Option<std::ffi::OsString>, uid: u32) -> PathBuf {
     if let Some(runtime) = xdg.filter(|v| !v.is_empty()) {
         return PathBuf::from(runtime).join("norte").join("daemon.sock");
@@ -78,10 +79,10 @@ fn socket_path_from(xdg: Option<std::ffi::OsString>, uid: u32) -> PathBuf {
     PathBuf::from(format!("/tmp/norte-{uid}")).join("daemon.sock")
 }
 
-/// uid del proceso SIN unsafe (regla 5): el dueño de un archivo temporal
-/// recién creado por nosotros ES nuestro euid. Solo se usa para NOMBRAR el
-/// dir de /tmp y para comparar con el peer del socket; la seguridad real la
-/// dan las verificaciones del server sobre dueño y modo.
+/// The process's uid with NO unsafe (rule 5): the owner of a temp file we
+/// just created IS our euid. Only used to NAME the /tmp dir and to compare
+/// against the socket's peer; the real security comes from the server's
+/// checks on owner and mode.
 #[must_use]
 pub fn process_uid_best_effort() -> u32 {
     use std::os::unix::fs::MetadataExt;
@@ -99,8 +100,8 @@ pub fn process_uid_best_effort() -> u32 {
         .and_then(|f| f.metadata())
         .map(|m| m.uid());
     let _ = std::fs::remove_file(&probe);
-    // Fallback imposible en la práctica (temp_dir no escribible): 0 hará
-    // que el chequeo anti-root de bind() rechace, fail-safe.
+    // Fallback impossible in practice (temp_dir not writable): 0 will make
+    // bind()'s anti-root check refuse, fail-safe.
     uid.unwrap_or(0)
 }
 
@@ -109,18 +110,18 @@ mod tests {
     use super::{process_uid_best_effort, socket_path_from};
 
     #[test]
-    fn socket_path_usa_xdg_si_esta() {
+    fn socket_path_uses_xdg_if_present() {
         let p = socket_path_from(Some("/run/user/4242".into()), 1000);
         assert_eq!(p, std::path::Path::new("/run/user/4242/norte/daemon.sock"));
     }
 
     #[test]
-    fn socket_path_cae_a_tmp_sin_xdg() {
+    fn socket_path_falls_back_to_tmp_without_xdg() {
         assert_eq!(
             socket_path_from(None, 1000),
             std::path::Path::new("/tmp/norte-1000/daemon.sock")
         );
-        // XDG vacío = como ausente.
+        // Empty XDG = same as absent.
         assert_eq!(
             socket_path_from(Some(String::new().into()), 7),
             std::path::Path::new("/tmp/norte-7/daemon.sock")
@@ -128,11 +129,11 @@ mod tests {
     }
 
     #[test]
-    fn uid_best_effort_es_nuestro_euid() {
+    fn uid_best_effort_is_our_euid() {
         use std::os::unix::fs::MetadataExt;
-        // El dueño de un archivo que acabamos de crear ES nuestro euid.
+        // The owner of a file we just created IS our euid.
         let probe = std::env::temp_dir().join(format!(".norte-uid-test-{}", std::process::id()));
-        let f = std::fs::File::create(&probe).expect("crear sonda");
+        let f = std::fs::File::create(&probe).expect("create probe");
         let expected = f.metadata().expect("metadata").uid();
         drop(f);
         let _ = std::fs::remove_file(&probe);

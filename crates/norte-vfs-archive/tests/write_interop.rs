@@ -1,210 +1,212 @@
-//! Lo que este crate escribe, leído por HERRAMIENTAS AJENAS (#250).
+//! What this crate writes, read by FOREIGN TOOLS (#250).
 //!
-//! `write_roundtrip.rs` lee lo escrito con nuestro propio índice, que es una
-//! buena comprobación de consistencia codificador↔decodificador y CIEGA a
-//! todo sitio donde el resto del mundo y nosotros discrepamos — que es
-//! justamente donde vivieron los dos bloqueantes de formato de la rama de
-//! #132. Durante el desarrollo el escritor de zip se validó a mano contra el
-//! `zipfile` de Python, y así salió el fallo de la disposición del directorio
-//! central. Esto convierte aquel ratón en un test.
+//! `write_roundtrip.rs` reads what was written with our own index, which
+//! is a good encoder↔decoder consistency check and BLIND to every place
+//! where the rest of the world and we disagree — which is exactly where
+//! the two format blockers of the #132 branch lived. During development
+//! the zip writer was validated by hand against Python's `zipfile`, and
+//! that's how the central directory layout bug came out. This turns that
+//! manual check into a test.
 //!
-//! **Se SALTA con un mensaje cuando la herramienta no está** (misma convención
-//! que los e2e de wasm): una máquina sin `unzip` no puede decir nada sobre
-//! interoperabilidad, y fallar ahí sería llamar defecto a lo que no lo es.
-//! Lo que no hace es pasar en silencio.
+//! **It SKIPS with a message when the tool isn't there** (the same
+//! convention as the wasm e2e tests): a machine without `unzip` can't say
+//! anything about interoperability, and failing there would be calling a
+//! defect something that isn't one. What it doesn't do is pass silently.
 
 use std::io::Write as _;
 use std::process::Command;
 
 use norte_vfs_archive::write::{ArchiveWriter, PackEntry, PackFormat};
 
-/// Empaqueta `entradas` y devuelve los bytes del archivo.
-fn empaqueta(format: PackFormat, entradas: &[(Vec<u8>, Vec<u8>)]) -> Vec<u8> {
+/// Packs `entries` and returns the archive's bytes.
+fn pack(format: PackFormat, entries: &[(Vec<u8>, Vec<u8>)]) -> Vec<u8> {
     let mut w = ArchiveWriter::new(format, 6);
     let mut out = Vec::new();
-    for (nombre, datos) in entradas {
-        let mut e = PackEntry::file(nombre.clone(), datos.len() as u64);
+    for (name, data) in entries {
+        let mut e = PackEntry::file(name.clone(), data.len() as u64);
         e.mtime_ms = Some(1_700_000_000_000);
-        w.begin(&e).expect("abre");
-        for trozo in datos.chunks(7) {
-            w.data(trozo).expect("datos");
+        w.begin(&e).expect("opens");
+        for chunk in data.chunks(7) {
+            w.data(chunk).expect("data");
             out.extend(w.take());
         }
-        w.end().expect("cierra");
+        w.end().expect("closes");
         out.extend(w.take());
     }
-    w.finish().expect("termina");
+    w.finish().expect("finishes");
     out.extend(w.take());
     out
 }
 
-/// `true` si la herramienta está en el PATH. Cuando no, se DICE.
-fn hay(programa: &str) -> bool {
-    let ok = Command::new(programa)
+/// `true` if the tool is on the PATH. When it isn't, it's SAID.
+fn has_tool(program: &str) -> bool {
+    let ok = Command::new(program)
         .arg("--help")
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .status()
         .is_ok();
     if !ok {
-        eprintln!("saltado: `{programa}` no está en el PATH");
+        eprintln!("skipped: `{program}` is not on the PATH");
     }
     ok
 }
 
-/// Escribe `bytes` en un fichero temporal y devuelve su ruta.
-fn en_disco(dir: &std::path::Path, nombre: &str, bytes: &[u8]) -> std::path::PathBuf {
-    let p = dir.join(nombre);
-    let mut f = std::fs::File::create(&p).expect("crea");
-    f.write_all(bytes).expect("escribe");
+/// Writes `bytes` to a temp file and returns its path.
+fn to_disk(dir: &std::path::Path, name: &str, bytes: &[u8]) -> std::path::PathBuf {
+    let p = dir.join(name);
+    let mut f = std::fs::File::create(&p).expect("create");
+    f.write_all(bytes).expect("write");
     p
 }
 
-/// Un zip nuestro lo VERIFICA `unzip -t`, que es quien tiene la última palabra
-/// sobre si el directorio central está donde el resto del mundo lo busca.
+/// One of our zips is VERIFIED by `unzip -t`, which has the final word on
+/// whether the central directory is where the rest of the world looks for it.
 #[test]
-fn un_zip_nuestro_lo_verifica_unzip() {
-    if !hay("unzip") {
+fn our_zip_is_verified_by_unzip() {
+    if !has_tool("unzip") {
         return;
     }
     let dir = tempfile::tempdir().expect("tmp");
-    let bytes = empaqueta(
+    let bytes = pack(
         PackFormat::Zip,
         &[
-            (b"uno.txt".to_vec(), b"contenido uno".to_vec()),
-            (b"dos/tres.txt".to_vec(), b"y el de dentro".to_vec()),
-            // Un nombre no-ASCII: el bit 11 dice que va en UTF-8, y quien lo
-            // lee de fuera es el único que puede confirmar que se lo cree.
+            (b"one.txt".to_vec(), b"content one".to_vec()),
+            (b"two/three.txt".to_vec(), b"and the one inside".to_vec()),
+            // A non-ASCII name: bit 11 says it's in UTF-8, and whoever
+            // reads it from outside is the only one who can confirm it
+            // believes it.
             ("cafe\u{301}.txt".as_bytes().to_vec(), b"nfd".to_vec()),
         ],
     );
-    let zip = en_disco(dir.path(), "n.zip", &bytes);
+    let zip = to_disk(dir.path(), "n.zip", &bytes);
 
-    let salida = Command::new("unzip")
+    let output = Command::new("unzip")
         .arg("-t")
         .arg(&zip)
         .output()
-        .expect("unzip corre");
+        .expect("unzip runs");
     assert!(
-        salida.status.success(),
-        "unzip -t rechaza nuestro zip:\n{}\n{}",
-        String::from_utf8_lossy(&salida.stdout),
-        String::from_utf8_lossy(&salida.stderr)
+        output.status.success(),
+        "unzip -t rejects our zip:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
     );
 
-    // Y que lo EXTRAE con los mismos bytes dentro, que es la pregunta de
-    // verdad: `-t` valida las sumas, no que el contenido sea el nuestro.
-    let fuera = dir.path().join("fuera");
-    let salida = Command::new("unzip")
+    // And that it EXTRACTS with the same bytes inside, which is the real
+    // question: `-t` validates the checksums, not that the content is ours.
+    let outside = dir.path().join("outside");
+    let output = Command::new("unzip")
         .arg("-q")
         .arg(&zip)
         .arg("-d")
-        .arg(&fuera)
+        .arg(&outside)
         .output()
-        .expect("unzip corre");
-    assert!(salida.status.success(), "unzip no extrae");
+        .expect("unzip runs");
+    assert!(output.status.success(), "unzip does not extract");
     assert_eq!(
-        std::fs::read(fuera.join("uno.txt")).expect("uno"),
-        b"contenido uno"
+        std::fs::read(outside.join("one.txt")).expect("one"),
+        b"content one"
     );
     assert_eq!(
-        std::fs::read(fuera.join("dos/tres.txt")).expect("tres"),
-        b"y el de dentro"
+        std::fs::read(outside.join("two/three.txt")).expect("three"),
+        b"and the one inside"
     );
 }
 
-/// Un tar nuestro lo lista `tar -tvf`, y lo extrae con los mismos bytes.
+/// One of our tars is listed by `tar -tvf`, and extracted with the same
+/// bytes inside.
 ///
-/// Incluye un nombre de MÁS de 100 bytes: es la frontera del `ustar` clásico,
-/// donde el escritor tiene que emitir una cabecera GNU `L` — y nuestro lector
-/// la entiende porque la escribimos nosotros, que es exactamente el argumento
-/// circular que este fichero existe para romper.
+/// Includes a name OVER 100 bytes: it's classic `ustar`'s boundary, where
+/// the writer has to emit a GNU `L` header — and our reader understands it
+/// because we wrote it ourselves, which is exactly the circular argument
+/// this file exists to break.
 #[test]
-fn un_tar_nuestro_lo_lee_gnu_tar() {
-    if !hay("tar") {
+fn our_tar_is_read_by_gnu_tar() {
+    if !has_tool("tar") {
         return;
     }
     let dir = tempfile::tempdir().expect("tmp");
-    let largo = format!("{}.txt", "a".repeat(120));
-    let bytes = empaqueta(
+    let long_name = format!("{}.txt", "a".repeat(120));
+    let bytes = pack(
         PackFormat::Tar,
         &[
-            (b"uno.txt".to_vec(), b"contenido uno".to_vec()),
-            (largo.as_bytes().to_vec(), b"cabecera larga".to_vec()),
+            (b"one.txt".to_vec(), b"content one".to_vec()),
+            (long_name.as_bytes().to_vec(), b"long header".to_vec()),
         ],
     );
-    let tar = en_disco(dir.path(), "n.tar", &bytes);
+    let tar = to_disk(dir.path(), "n.tar", &bytes);
 
-    let salida = Command::new("tar")
+    let output = Command::new("tar")
         .arg("-tvf")
         .arg(&tar)
         .output()
-        .expect("tar corre");
+        .expect("tar runs");
     assert!(
-        salida.status.success(),
-        "tar -tvf rechaza nuestro tar:\n{}",
-        String::from_utf8_lossy(&salida.stderr)
+        output.status.success(),
+        "tar -tvf rejects our tar:\n{}",
+        String::from_utf8_lossy(&output.stderr)
     );
-    let listado = String::from_utf8_lossy(&salida.stdout).into_owned();
-    assert!(listado.contains("uno.txt"), "lo lista: {listado}");
+    let listing = String::from_utf8_lossy(&output.stdout).into_owned();
+    assert!(listing.contains("one.txt"), "lists it: {listing}");
     assert!(
-        listado.contains(&largo),
-        "y el nombre largo entero, no truncado a 100: {listado}"
+        listing.contains(&long_name),
+        "and the whole long name, not truncated to 100: {listing}"
     );
 
-    let fuera = dir.path().join("fuera");
-    std::fs::create_dir_all(&fuera).expect("mkdir");
-    let salida = Command::new("tar")
+    let outside = dir.path().join("outside");
+    std::fs::create_dir_all(&outside).expect("mkdir");
+    let output = Command::new("tar")
         .arg("-xf")
         .arg(&tar)
         .arg("-C")
-        .arg(&fuera)
+        .arg(&outside)
         .output()
-        .expect("tar corre");
+        .expect("tar runs");
     assert!(
-        salida.status.success(),
-        "tar no extrae:\n{}",
-        String::from_utf8_lossy(&salida.stderr)
+        output.status.success(),
+        "tar does not extract:\n{}",
+        String::from_utf8_lossy(&output.stderr)
     );
     assert_eq!(
-        std::fs::read(fuera.join("uno.txt")).expect("uno"),
-        b"contenido uno"
+        std::fs::read(outside.join("one.txt")).expect("one"),
+        b"content one"
     );
     assert_eq!(
-        std::fs::read(fuera.join(&largo)).expect("el largo"),
-        b"cabecera larga"
+        std::fs::read(outside.join(&long_name)).expect("the long one"),
+        b"long header"
     );
 }
 
-/// Y un `.tar.gz` nuestro, que añade una capa que `gzip` tiene que reconocer.
+/// And one of our `.tar.gz`, which adds a layer `gzip` has to recognize.
 #[test]
-fn un_targz_nuestro_lo_lee_gnu_tar() {
-    if !hay("tar") {
+fn our_targz_is_read_by_gnu_tar() {
+    if !has_tool("tar") {
         return;
     }
     let dir = tempfile::tempdir().expect("tmp");
-    let bytes = empaqueta(
+    let bytes = pack(
         PackFormat::TarGz,
-        &[(b"uno.txt".to_vec(), b"comprimido".to_vec())],
+        &[(b"one.txt".to_vec(), b"compressed".to_vec())],
     );
-    let tgz = en_disco(dir.path(), "n.tar.gz", &bytes);
+    let tgz = to_disk(dir.path(), "n.tar.gz", &bytes);
 
-    let fuera = dir.path().join("fuera");
-    std::fs::create_dir_all(&fuera).expect("mkdir");
-    let salida = Command::new("tar")
+    let outside = dir.path().join("outside");
+    std::fs::create_dir_all(&outside).expect("mkdir");
+    let output = Command::new("tar")
         .arg("-xzf")
         .arg(&tgz)
         .arg("-C")
-        .arg(&fuera)
+        .arg(&outside)
         .output()
-        .expect("tar corre");
+        .expect("tar runs");
     assert!(
-        salida.status.success(),
-        "tar -xzf rechaza nuestro tar.gz:\n{}",
-        String::from_utf8_lossy(&salida.stderr)
+        output.status.success(),
+        "tar -xzf rejects our tar.gz:\n{}",
+        String::from_utf8_lossy(&output.stderr)
     );
     assert_eq!(
-        std::fs::read(fuera.join("uno.txt")).expect("uno"),
-        b"comprimido"
+        std::fs::read(outside.join("one.txt")).expect("one"),
+        b"compressed"
     );
 }

@@ -1,7 +1,8 @@
-//! Proveedor Anthropic (Messages API, SSE streaming — ADR 0031). Chat en
-//! deltas; SIN embeddings (Anthropic no ofrece esa API: la capability queda
-//! ausente, honesta). La api key se INYECTA como [`norte_connect::Secret`]
-//! (zeroizing, `Debug` redactado) y jamás se loguea (regla 10).
+//! Anthropic provider (Messages API, SSE streaming — ADR 0031). Chat in
+//! deltas; NO embeddings (Anthropic does not offer that API: the capability
+//! stays absent, honestly). The api key is INJECTED as a
+//! [`norte_connect::Secret`] (zeroizing, redacted `Debug`) and is never
+//! logged (rule 10).
 
 use async_trait::async_trait;
 use norte_connect::Secret;
@@ -10,36 +11,40 @@ use serde_json::{Value, json};
 use crate::http::{self, WireEvent};
 use crate::provider::{AiCaps, AiError, AiProvider, ChatRequest, ChatRole, ChatStream, ModelInfo};
 
-/// URL base por defecto de la API pública de Anthropic.
+/// Default base URL of Anthropic's public API.
 const DEFAULT_BASE_URL: &str = "https://api.anthropic.com";
-/// Header `anthropic-version` (obligatorio en la Messages API).
+/// `anthropic-version` header (mandatory in the Messages API).
 const API_VERSION: &str = "2023-06-01";
-/// Tope de tokens de salida cuando la request no lo fija (la Messages API lo
-/// exige siempre en el body).
+/// Output token cap when the request does not set one (the Messages API
+/// always requires it in the body).
 const DEFAULT_MAX_TOKENS: u32 = 4096;
 
-/// Las familias de modelo cuya salida estructurada (`output_config.format`)
-/// está soportada.
+/// The model families whose structured output (`output_config.format`) is
+/// supported.
 ///
-/// Se comprueba por PREFIJO porque los ids llevan variantes y fechas, y se
-/// declara la capability sólo si casa: `JSON_OUTPUT` era una capacidad
-/// declarada que nadie atendía —el cuerpo nunca llevaba el schema—, y la
-/// forma de que no vuelva a serlo es que la declaración dependa de lo que de
-/// verdad se manda. Un modelo que no está aquí NO declara la capability y cae
-/// al camino del prompt, que es donde el proyecto ya sabía estar.
+/// Checked by PREFIX because ids carry variants and dates, and the
+/// capability is only declared if it matches: `JSON_OUTPUT` used to be a
+/// declared capability nobody honored —the body never carried the schema—,
+/// and the way it stays that way is for the declaration to depend on what is
+/// genuinely sent. A model not in this list does NOT declare the capability
+/// and falls back to the prompt path, which is where the project already
+/// knew how to be.
 ///
-/// **Fuente y fecha, porque esta lista CADUCA**: la sección «Compatibility»
-/// de `platform.claude.com/docs/en/build-with-claude/structured-outputs`,
-/// consultada el 2026-09-01. Equivocarse por defecto es barato —se cae al
-/// prompt, que funciona— y por exceso es un 400: ante la duda, fuera.
+/// **Source and date, because this list EXPIRES**: the "Compatibility"
+/// section of
+/// `platform.claude.com/docs/en/build-with-claude/structured-outputs`,
+/// consulted on 2026-09-01. Erring on the side of missing is cheap —it
+/// falls back to the prompt, which works— and erring on the side of
+/// including is a 400: when in doubt, leave it out.
 ///
-/// `claude-sonnet-4-5` va con FECHA a propósito: la documentación lista
-/// `claude-sonnet-4-5-20250929` y no el alias corto, así que un
-/// `claude-sonnet-4-5` a secas cae al prompt. Los demás llevan el prefijo
-/// corto porque el alias ES el id actual del modelo.
+/// `claude-sonnet-4-5` carries a DATE on purpose: the documentation lists
+/// `claude-sonnet-4-5-20250929` and not the short alias, so a bare
+/// `claude-sonnet-4-5` falls back to the prompt. The rest carry the short
+/// prefix because the alias IS the model's current id.
 ///
-/// `claude-opus-4-1` estuvo aquí y no debía: no aparece en la lista.
-const MODELOS_CON_SALIDA_ESTRUCTURADA: &[&str] = &[
+/// `claude-opus-4-1` was here and should not have been: it does not appear
+/// in the list.
+const STRUCTURED_OUTPUT_MODELS: &[&str] = &[
     "claude-fable-5",
     "claude-mythos-5",
     "claude-mythos-preview",
@@ -54,24 +59,24 @@ const MODELOS_CON_SALIDA_ESTRUCTURADA: &[&str] = &[
     "claude-haiku-4-5",
 ];
 
-/// ¿Este modelo admite `output_config.format`?
-fn admite_salida_estructurada(modelo: &str) -> bool {
-    MODELOS_CON_SALIDA_ESTRUCTURADA
+/// Does this model support `output_config.format`?
+fn supports_structured_output(model: &str) -> bool {
+    STRUCTURED_OUTPUT_MODELS
         .iter()
-        .any(|m| modelo.starts_with(m))
+        .any(|m| model.starts_with(m))
 }
 
-/// Cliente de la Messages API de Anthropic (`POST /v1/messages`, SSE).
+/// Client for Anthropic's Messages API (`POST /v1/messages`, SSE).
 ///
-/// - `capabilities()` = `STREAMING`, más `JSON_OUTPUT` **si el modelo
-///   configurado admite salida estructurada** (sin `EMBEDDINGS`, que
-///   Anthropic no ofrece). Declararla siempre era prometer un formato que un
-///   modelo viejo no da (ADR 0088).
-/// - Remoto: `is_local()` es `false`; el gate `local_only` del core lo veta.
-/// - Sin secreto configurado, `chat` devuelve [`AiError::Auth`] (nunca manda
-///   una petición sin credencial).
+/// - `capabilities()` = `STREAMING`, plus `JSON_OUTPUT` **if the configured
+///   model supports structured output** (no `EMBEDDINGS`, which Anthropic
+///   does not offer). Declaring it unconditionally used to promise a format
+///   an old model does not give (ADR 0088).
+/// - Remote: `is_local()` is `false`; the core's `local_only` gate vetoes it.
+/// - With no secret configured, `chat` returns [`AiError::Auth`] (it never
+///   sends a request without a credential).
 ///
-/// # Ejemplos
+/// # Examples
 /// ```
 /// use norte_ai::AiProvider as _;
 /// use norte_ai::anthropic::AnthropicProvider;
@@ -84,15 +89,15 @@ fn admite_salida_estructurada(modelo: &str) -> bool {
 pub struct AnthropicProvider {
     base_url: String,
     model: String,
-    // El Debug derivado es seguro: `Secret` redacta su contenido (regla 10).
+    // The derived Debug is safe: `Secret` redacts its content (rule 10).
     secret: Option<Secret>,
     client: reqwest::Client,
 }
 
 impl AnthropicProvider {
-    /// Construye el proveedor. `base_url` `None` = la API pública
-    /// (`https://api.anthropic.com`); el secreto viene INYECTADO por el core
-    /// (resolución env → keyring → age en `norte-connect`, jamás aquí).
+    /// Builds the provider. `base_url` `None` = the public API
+    /// (`https://api.anthropic.com`); the secret arrives INJECTED by the
+    /// core (env → keyring → age resolution in `norte-connect`, never here).
     #[must_use]
     pub fn new(base_url: Option<String>, model: String, secret: Option<Secret>) -> Self {
         Self {
@@ -102,15 +107,16 @@ impl AnthropicProvider {
                 .to_string(),
             model,
             secret,
-            // Client::new() solo panica si la pila TLS no inicializa; con
-            // rustls compilado estático es un invariante del build.
+            // Client::new() only panics if the TLS stack fails to init; with
+            // rustls compiled statically that is a build invariant.
             client: reqwest::Client::new(),
         }
     }
 
-    /// Body de `/v1/messages`: los turnos `System` de `req.messages` se
-    /// funden (junto con `req.system`, unidos por `\n`) en el campo
-    /// `system` top-level — la Messages API no acepta rol `system` inline.
+    /// `/v1/messages` body: `req.messages`'s `System` turns are merged
+    /// (together with `req.system`, joined by `\n`) into the top-level
+    /// `system` field — the Messages API does not accept an inline `system`
+    /// role.
     fn build_body(&self, req: &ChatRequest) -> Result<Value, AiError> {
         http::validate_turns(req)?;
         let mut system_parts: Vec<&str> = Vec::new();
@@ -136,24 +142,25 @@ impl AnthropicProvider {
         if !system_parts.is_empty() {
             body["system"] = Value::String(system_parts.join("\n"));
         }
-        // El contrato de salida tipada, si lo hay Y este modelo lo atiende.
-        // La Messages API lo lee de `output_config.format`; el nombre del
-        // contrato no viaja porque aquí no se usa.
+        // The typed-output contract, if there is one AND this model honors
+        // it. The Messages API reads it from `output_config.format`; the
+        // contract's name does not travel because it is not used here.
         //
-        // La RESPUESTA sigue siendo un bloque de texto: `output_config.format`
-        // restringe el contenido de ese bloque, no introduce un tipo de bloque
-        // nuevo, así que `parse_line` la lee por el mismo `text_delta` que
-        // todo lo demás. Está documentado y NO observado contra la API viva —
-        // aquí no se llama a la red (ADR 0031). Si esa suposición fuera falsa,
-        // el síntoma sería un `reply` vacío exactamente en los modelos que
-        // activan este camino; es lo primero que hay que mirar.
-        if let Some(contrato) = &req.json_schema
-            && admite_salida_estructurada(&self.model)
+        // The RESPONSE is still a text block: `output_config.format`
+        // restricts that block's content, it does not introduce a new block
+        // type, so `parse_line` reads it through the same `text_delta` as
+        // everything else. This is documented and NOT observed against the
+        // live API — no network call happens here (ADR 0031). If that
+        // assumption were false, the symptom would be an empty `reply`
+        // exactly in the models that activate this path; that is the first
+        // thing to look at.
+        if let Some(contract) = &req.json_schema
+            && supports_structured_output(&self.model)
         {
             body["output_config"] = json!({
                 "format": {
                     "type": "json_schema",
-                    "schema": contrato.schema,
+                    "schema": contract.schema,
                 }
             });
         }
@@ -161,15 +168,15 @@ impl AnthropicProvider {
     }
 }
 
-/// Interpreta UNA línea SSE de la Messages API: `text_delta` → delta,
-/// `message_stop` → fin, evento `error` → [`AiError::Protocol`]; el resto
-/// (`message_start`, `ping`, `event:`…) se ignora.
+/// Interprets ONE SSE line from the Messages API: `text_delta` → delta,
+/// `message_stop` → end, `error` event → [`AiError::Protocol`]; the rest
+/// (`message_start`, `ping`, `event:`…) is ignored.
 fn parse_line(line: &str) -> Result<WireEvent, AiError> {
     let Some(payload) = http::sse_data(line) else {
         return Ok(WireEvent::Skip);
     };
     let v: Value = serde_json::from_str(payload)
-        .map_err(|e| AiError::Protocol(format!("SSE data inválido: {e}")))?;
+        .map_err(|e| AiError::Protocol(format!("invalid SSE data: {e}")))?;
     match v.get("type").and_then(Value::as_str) {
         Some("content_block_delta") => {
             let delta = v.get("delta");
@@ -177,7 +184,7 @@ fn parse_line(line: &str) -> Result<WireEvent, AiError> {
                 let text = delta
                     .and_then(|d| d.get("text"))
                     .and_then(Value::as_str)
-                    .ok_or_else(|| AiError::Protocol("text_delta sin campo `text`".into()))?;
+                    .ok_or_else(|| AiError::Protocol("text_delta with no `text` field".into()))?;
                 Ok(WireEvent::Delta(text.to_string()))
             } else {
                 Ok(WireEvent::Skip)
@@ -188,7 +195,7 @@ fn parse_line(line: &str) -> Result<WireEvent, AiError> {
             let msg = v
                 .pointer("/error/message")
                 .and_then(Value::as_str)
-                .unwrap_or("error del proveedor sin mensaje");
+                .unwrap_or("provider error with no message");
             Err(AiError::Protocol(msg.to_string()))
         }
         _ => Ok(WireEvent::Skip),
@@ -203,10 +210,10 @@ impl AiProvider for AnthropicProvider {
 
     fn capabilities(&self) -> AiCaps {
         let mut caps = AiCaps::STREAMING;
-        // Se declara sólo si el MODELO configurado la tiene. Declararla
-        // siempre era decir que el core puede confiar en el formato cuando
-        // con un modelo viejo no puede.
-        if admite_salida_estructurada(&self.model) {
+        // Only declared if the CONFIGURED model has it. Declaring it
+        // unconditionally used to tell the core it can trust the format when
+        // with an old model it cannot.
+        if supports_structured_output(&self.model) {
             caps |= AiCaps::JSON_OUTPUT;
         }
         caps
@@ -218,7 +225,7 @@ impl AiProvider for AnthropicProvider {
 
     #[tracing::instrument(level = "debug", skip_all, fields(provider = "anthropic"))]
     async fn chat(&self, req: ChatRequest) -> Result<ChatStream, AiError> {
-        // Sin credencial no se manda NADA (fail-closed).
+        // With no credential, NOTHING gets sent (fail-closed).
         let Some(secret) = &self.secret else {
             return Err(AiError::Auth);
         };
@@ -234,14 +241,14 @@ impl AiProvider for AnthropicProvider {
             .await
             .map_err(|e| http::transport(&e))?;
         let resp = http::check_status(resp)?;
-        // El stream devuelto posee el body: dropearlo aborta la petición
-        // HTTP (regla 3, cancelación drop-based).
+        // The returned stream owns the body: dropping it aborts the HTTP
+        // request (rule 3, drop-based cancellation).
         Ok(http::delta_stream(resp, parse_line))
     }
 
-    /// El modelo configurado, sin tocar la red. Existe un endpoint vivo
-    /// (`GET /v1/models`) pero v1 se mantiene offline-testable (ADR 0031:
-    /// los detalles del cliente se fijan con fixtures, no con llamadas).
+    /// The configured model, without touching the network. A live endpoint
+    /// exists (`GET /v1/models`) but v1 stays offline-testable (ADR 0031:
+    /// client details are pinned with fixtures, not with live calls).
     async fn list_models(&self) -> Result<Vec<ModelInfo>, AiError> {
         Ok(vec![ModelInfo {
             id: self.model.clone(),
@@ -258,11 +265,11 @@ mod tests {
     use crate::http::testutil::{response, serve_once};
     use crate::provider::ChatMessage;
 
-    /// `chat()` debe fallar en el establecimiento (el `ChatStream` no es
-    /// `Debug`, así que `unwrap_err` no aplica).
+    /// `chat()` must fail at setup time (`ChatStream` is not `Debug`, so
+    /// `unwrap_err` does not apply).
     async fn chat_err(p: &AnthropicProvider, req: ChatRequest) -> AiError {
         match p.chat(req).await {
-            Ok(_) => panic!("esperaba un error de establecimiento"),
+            Ok(_) => panic!("expected a setup error"),
             Err(e) => e,
         }
     }
@@ -284,9 +291,9 @@ mod tests {
             "",
             r#"data: {"type":"ping"}"#,
             "",
-            r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hola "}}"#,
+            r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello "}}"#,
             "",
-            r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"mundo"}}"#,
+            r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"world"}}"#,
             "",
             r#"data: {"type":"message_delta","delta":{"stop_reason":"end_turn"}}"#,
             "",
@@ -296,10 +303,10 @@ mod tests {
         .join("\n")
     }
 
-    /// SSE feliz: la concatenación de los deltas es el texto completo, y la
-    /// petición lleva la api key, la versión y el system fundido.
+    /// Happy SSE: concatenating the deltas is the full text, and the
+    /// request carries the api key, the version and the merged system.
     #[tokio::test]
-    async fn chat_concatena_deltas_y_manda_headers() {
+    async fn chat_concatenates_deltas_and_sends_headers() {
         let srv = serve_once(response(
             200,
             "OK",
@@ -309,33 +316,33 @@ mod tests {
         .await;
         let p = provider(&srv.base_url, Some("sk-test-123"));
         let req = ChatRequest::new(vec![
-            ChatMessage::system("tono seco"),
-            ChatMessage::user("hola"),
+            ChatMessage::system("dry tone"),
+            ChatMessage::user("hello"),
         ]);
         let stream = p.chat(req).await.unwrap();
         let parts: Vec<String> = stream.map(Result::unwrap).collect().await;
-        assert_eq!(parts.concat(), "Hola mundo");
+        assert_eq!(parts.concat(), "Hello world");
 
         let raw = srv.request().await;
         assert!(raw.contains("POST /v1/messages"), "{raw}");
         assert!(raw.contains("x-api-key: sk-test-123"), "{raw}");
         assert!(raw.contains("anthropic-version: 2023-06-01"), "{raw}");
-        // El turno System inline sube al campo `system` top-level.
-        assert!(raw.contains(r#""system":"tono seco""#), "{raw}");
+        // The inline System turn rolls up into the top-level `system` field.
+        assert!(raw.contains(r#""system":"dry tone""#), "{raw}");
         assert!(raw.contains(r#""max_tokens":4096"#), "{raw}");
-        // Sin contrato no se inventa uno.
+        // With no contract, none is invented.
         assert!(!raw.contains("output_config"), "{raw}");
     }
 
-    /// **El contrato de salida tipada VIAJA en el cuerpo** (ADR 0088).
+    /// **The typed-output contract TRAVELS in the body** (ADR 0088).
     ///
-    /// Es el test que faltaba: `AiCaps::JSON_OUTPUT` se declaraba y
-    /// `ChatRequest::json_schema` existía, pero el constructor del cuerpo no
-    /// lo leía nunca. Una capacidad declarada y no efectiva no se ve en
-    /// ningún test de comportamiento — se ve mirando lo que sale por el
-    /// socket, que es lo que esto hace.
+    /// The test that was missing: `AiCaps::JSON_OUTPUT` was declared and
+    /// `ChatRequest::json_schema` existed, but the body constructor never
+    /// read it. A capability declared and not effective does not show up in
+    /// any behavior test — it shows up by looking at what goes out over the
+    /// socket, which is what this does.
     #[tokio::test]
-    async fn el_contrato_viaja_en_output_config() {
+    async fn the_contract_travels_in_output_config() {
         let srv = serve_once(response(
             200,
             "OK",
@@ -348,7 +355,7 @@ mod tests {
             "claude-opus-5".to_string(),
             Some(Secret::new("sk-test-123".to_string())),
         );
-        let mut req = ChatRequest::new(vec![ChatMessage::user("hola")]);
+        let mut req = ChatRequest::new(vec![ChatMessage::user("hello")]);
         req.json_schema = Some(crate::provider::JsonContract::new(
             "plan",
             json!({
@@ -368,14 +375,15 @@ mod tests {
         assert!(raw.contains(r#""required":["renames"]"#), "{raw}");
     }
 
-    /// Y con un modelo que NO la soporta, no viaja — ni se declara.
+    /// And with a model that does NOT support it, it does not travel — nor
+    /// is it declared.
     ///
-    /// Mandar `output_config` a un modelo que no lo entiende es un 400, y
-    /// declarar la capability sería decirle al core que puede confiar en un
-    /// formato que nadie le garantiza. Las dos mitades tienen que decir lo
-    /// mismo, y por eso se comprueban juntas.
+    /// Sending `output_config` to a model that does not understand it is a
+    /// 400, and declaring the capability would be telling the core it can
+    /// trust a format nobody guarantees it. Both halves have to say the same
+    /// thing, which is why they are checked together.
     #[tokio::test]
-    async fn un_modelo_sin_soporte_ni_lo_declara_ni_lo_manda() {
+    async fn an_unsupported_model_neither_declares_nor_sends_it() {
         let srv = serve_once(response(
             200,
             "OK",
@@ -390,9 +398,9 @@ mod tests {
         );
         assert!(
             !p.capabilities().contains(AiCaps::JSON_OUTPUT),
-            "un modelo viejo no promete salida estructurada"
+            "an old model does not promise structured output"
         );
-        let mut req = ChatRequest::new(vec![ChatMessage::user("hola")]);
+        let mut req = ChatRequest::new(vec![ChatMessage::user("hello")]);
         req.json_schema = Some(crate::provider::JsonContract::new("plan", json!({})));
         let stream = p.chat(req).await.unwrap();
         let _: Vec<_> = stream.collect().await;
@@ -401,15 +409,15 @@ mod tests {
         assert!(!raw.contains("output_config"), "{raw}");
     }
 
-    /// La capability y la lista de modelos no se pueden separar.
+    /// The capability and the model list cannot be pulled apart.
     ///
-    /// Parametrizado con la lista ENTERA de la documentación (2026-09-01), no
-    /// con una muestra: la primera versión traía cuatro modelos de menos y uno
-    /// retirado, y una muestra no lo habría enseñado.
+    /// Parametrized with the FULL documentation list (2026-09-01), not with
+    /// a sample: the first version was missing four models and carried a
+    /// retired one, and a sample would not have shown it.
     #[test]
-    fn la_capability_sigue_al_modelo() {
-        for (modelo, espera) in [
-            // Los que la documentación lista como soportados.
+    fn the_capability_follows_the_model() {
+        for (model, expect) in [
+            // The ones the documentation lists as supported.
             ("claude-fable-5", true),
             ("claude-mythos-5", true),
             ("claude-mythos-preview", true),
@@ -422,32 +430,32 @@ mod tests {
             ("claude-sonnet-4-6", true),
             ("claude-sonnet-4-5-20250929", true),
             ("claude-haiku-4-5-20251001", true),
-            // El alias CORTO de sonnet 4.5 no está en la lista: cae al prompt.
+            // Sonnet 4.5's SHORT alias is not in the list: falls back to the prompt.
             ("claude-sonnet-4-5", false),
-            // Retirado, y nunca estuvo en la lista de salida estructurada.
+            // Retired, and never was in the structured-output list.
             ("claude-opus-4-1", false),
             ("claude-3-opus-20240229", false),
-            ("un-modelo-que-no-existe", false),
+            ("a-model-that-does-not-exist", false),
         ] {
-            let p = AnthropicProvider::new(None, modelo.to_string(), None);
+            let p = AnthropicProvider::new(None, model.to_string(), None);
             assert_eq!(
                 p.capabilities().contains(AiCaps::JSON_OUTPUT),
-                espera,
-                "{modelo}"
+                expect,
+                "{model}"
             );
         }
     }
 
     #[tokio::test]
-    async fn un_401_es_auth() {
+    async fn a_401_is_auth() {
         let srv = serve_once(response(401, "Unauthorized", &[], "{}")).await;
-        let p = provider(&srv.base_url, Some("sk-mala"));
+        let p = provider(&srv.base_url, Some("sk-bad"));
         let err = chat_err(&p, ChatRequest::new(vec![ChatMessage::user("x")])).await;
         assert!(matches!(err, AiError::Auth), "{err:?}");
     }
 
     #[tokio::test]
-    async fn un_429_lleva_retry_after() {
+    async fn a_429_carries_retry_after() {
         let srv = serve_once(response(
             429,
             "Too Many Requests",
@@ -468,10 +476,10 @@ mod tests {
         );
     }
 
-    /// Un evento `error` a mitad de stream sale como `Err(Protocol)` con el
-    /// mensaje del proveedor, y el stream termina ahí.
+    /// An `error` event mid-stream comes out as `Err(Protocol)` with the
+    /// provider's message, and the stream ends there.
     #[tokio::test]
-    async fn error_a_mitad_de_stream_es_protocol() {
+    async fn an_error_mid_stream_is_protocol() {
         let body = [
             r#"data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"a"}}"#,
             "",
@@ -494,9 +502,9 @@ mod tests {
         assert!(stream.next().await.is_none());
     }
 
-    /// Una línea `data:` con JSON roto (truncado) es `Protocol`.
+    /// A `data:` line with broken (truncated) JSON is `Protocol`.
     #[tokio::test]
-    async fn data_truncado_es_protocol() {
+    async fn truncated_data_is_protocol() {
         let body = "data: {\"type\":\"content_block_delta\",\"delta\":{\"ty\n";
         let srv = serve_once(response(200, "OK", &[], body)).await;
         let p = provider(&srv.base_url, Some("sk"));
@@ -508,24 +516,24 @@ mod tests {
         assert!(matches!(err, AiError::Protocol(_)), "{err:?}");
     }
 
-    /// Sin secreto no se manda nada: `Auth` inmediato.
+    /// With no secret, nothing gets sent: immediate `Auth`.
     #[tokio::test]
-    async fn sin_secreto_es_auth() {
+    async fn no_secret_is_auth() {
         let p = provider("http://127.0.0.1:9", None);
         let err = chat_err(&p, ChatRequest::new(vec![ChatMessage::user("x")])).await;
         assert!(matches!(err, AiError::Auth), "{err:?}");
     }
 
-    /// El contrato de `ChatRequest`: primer turno no-system debe ser `user`.
+    /// `ChatRequest`'s contract: the first non-system turn must be `user`.
     #[tokio::test]
-    async fn primer_turno_no_user_es_protocol() {
+    async fn a_non_user_first_turn_is_protocol() {
         let p = provider("http://127.0.0.1:9", Some("sk"));
         let err = chat_err(&p, ChatRequest::new(vec![ChatMessage::assistant("x")])).await;
         assert!(matches!(err, AiError::Protocol(_)), "{err:?}");
     }
 
     #[tokio::test]
-    async fn embed_no_soportado_y_list_models_offline() {
+    async fn embed_unsupported_and_list_models_offline() {
         let p = provider("http://127.0.0.1:9", Some("sk"));
         assert!(matches!(
             p.embed(&["x".to_string()]).await.unwrap_err(),
@@ -536,11 +544,11 @@ mod tests {
         assert_eq!(models[0].id, "claude-test");
     }
 
-    /// El Debug del proveedor jamás filtra la api key (regla 10).
+    /// The provider's Debug never leaks the api key (rule 10).
     #[test]
-    fn debug_redacta_el_secreto() {
-        let p = provider("http://x", Some("sk-super-secreta"));
+    fn debug_redacts_the_secret() {
+        let p = provider("http://x", Some("sk-super-secret"));
         let dbg = format!("{p:?}");
-        assert!(!dbg.contains("sk-super-secreta"), "{dbg}");
+        assert!(!dbg.contains("sk-super-secret"), "{dbg}");
     }
 }

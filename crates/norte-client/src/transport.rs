@@ -1,3 +1,4 @@
-//! Cómo se llega al daemon. Hoy solo hay una forma; el enmarcado no lo sabe.
+//! How the daemon is reached. Today there is only one way; the framing does
+//! not know it.
 
 pub(crate) mod unix;

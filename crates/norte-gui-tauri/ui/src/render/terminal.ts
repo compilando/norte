@@ -82,11 +82,7 @@ function paintRow(
   return line;
 }
 
-function paintSpan(
-  span: TerminalSpanView,
-  text: string,
-  isCursor: boolean,
-): HTMLElement {
+function paintSpan(span: TerminalSpanView, text: string, isCursor: boolean): HTMLElement {
   const el = document.createElement("span");
   // `textContent` and never `innerHTML`: this was written by another program.
   el.textContent = text;

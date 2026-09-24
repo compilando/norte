@@ -1,21 +1,21 @@
-//! La clave de emparejamiento: qué nombre de un lado se mide contra qué nombre
-//! del otro, y qué dos nombres de UN MISMO lado colapsan en uno.
+//! The pairing key: which name on one side is measured against which name
+//! on the other, and which two names on the SAME side collapse into one.
 //!
-//! La clave existe SOLO para emparejar. Jamás se pinta, jamás se opera con
-//! ella, jamás sustituye a los bytes del nombre: cada [`Entry`] viaja en su
-//! fila con sus bytes originales intactos (regla dura 1). Aquí no hay ni una
-//! conversión con pérdida — un nombre que no es UTF-8 no es texto, y se
-//! empareja por sus bytes.
+//! The key exists ONLY to pair. It is never painted, never operated on,
+//! never replaces the name's bytes: each [`Entry`] travels in its row with
+//! its original bytes intact (hard rule 1). There is not a single lossy
+//! conversion here — a name that is not UTF-8 is not text, and it is paired
+//! by its bytes.
 //!
-//! El propio plegado — el delta de `fold_delta`, el orden plegar-y-DESPUÉS-
-//! normalizar, y qué pasa con un nombre que no es UTF-8 — vive en
-//! [`norte_encoding::name_key`] (ADR 0051, #151): este módulo era una segunda
-//! copia de esa función, y la copia llegó a divertir una vez (`key_for` envió
-//! la clave pre-#129 durante todo un ciclo de release, sin nada que lo
-//! comparase). Lo que este módulo aporta por encima es lo que es DE la
-//! comparación y no del texto: [`Sides`] decide si la pareja pliega a partir
-//! de las [`Capabilities`] de los dos lados, y [`SideIndex`] indexa un
-//! listado por su clave y separa lo que empareja de lo que colisiona.
+//! The folding itself — `fold_delta`'s delta, the fold-and-THEN-normalize
+//! order, and what happens to a name that is not UTF-8 — lives in
+//! [`norte_encoding::name_key`] (ADR 0051, #151): this module was once a
+//! second copy of that function, and the copy did manage to cause trouble
+//! once (`key_for` shipped the pre-#129 key for a whole release cycle, with
+//! nothing to compare it against). What this module adds on top is what
+//! belongs to the COMPARISON and not to the text: [`Sides`] decides whether
+//! the pair folds based on the two sides' [`Capabilities`], and [`SideIndex`]
+//! indexes a listing by its key and separates what pairs from what collides.
 use std::borrow::Cow;
 use std::collections::BTreeMap;
 
@@ -24,15 +24,16 @@ use norte_proto::Segment;
 use norte_proto::methods::{CompareReason, PairTransform};
 use norte_vfs::{Capabilities, Entry};
 
-/// Cómo empareja LA PAREJA de lados, que no es lo mismo que cómo es cada uno.
+/// How THE PAIR of sides folds, which is not the same as how each one folds
+/// on its own.
 ///
-/// El plegado de caja es propiedad del par y no de un lado: basta con que uno
-/// de los dos no distinga caja para que la comparación entera tenga que
-/// plegar, porque ese lado no puede sostener las dos grafías. Y lo mismo con
-/// la fuerza del pliegue: si un lado **expande** al plegar (ext4/f2fs `+F`,
-/// #145), ahí `straße.txt` y `strasse.txt` son un solo fichero, así que la
-/// pareja entera tiene que expandir o la comparación diría que no colisionan
-/// dos nombres que el destino no puede sostener a la vez.
+/// Case folding is a property of the pair, not of one side: it is enough
+/// for one of the two to be case-insensitive for the whole comparison to
+/// have to fold, because that side cannot hold both spellings. And the same
+/// with the strength of the fold: if one side **expands** on folding
+/// (ext4/f2fs `+F`, #145), there `straße.txt` and `strasse.txt` are a single
+/// file, so the whole pair has to expand, or the comparison would say that
+/// two names the destination cannot hold at once do not collide.
 ///
 /// ```
 /// use norte_compare::Sides;
@@ -41,7 +42,7 @@ use norte_vfs::{Capabilities, Entry};
 /// let ext4 = Capabilities { flags: CapabilityFlags::CASE_SENSITIVE, max_path: None };
 /// let apfs = Capabilities { flags: CapabilityFlags::CASE_PRESERVING, max_path: None };
 /// assert!(!Sides::from_capabilities(ext4, ext4).folds_case());
-/// assert!(Sides::from_capabilities(ext4, apfs).folds_case(), "basta con UN lado");
+/// assert!(Sides::from_capabilities(ext4, apfs).folds_case(), "ONE side is enough");
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Sides {
@@ -50,7 +51,7 @@ pub struct Sides {
 }
 
 impl Sides {
-    /// A partir del modo de plegado de cada lado.
+    /// From each side's fold mode.
     ///
     /// ```
     /// use norte_compare::Sides;
@@ -63,21 +64,21 @@ impl Sides {
         Self { left, right }
     }
 
-    /// A partir de las [`Capabilities`] que responden los dos lados **para sus
-    /// raíces** (`Provider::capabilities_at`, ADR 0054 — no `capabilities()`,
-    /// que responde por el mount del provider y no por el que se compara).
+    /// From the [`Capabilities`] the two sides answer **for their roots**
+    /// (`Provider::capabilities_at`, ADR 0054 — not `capabilities()`, which
+    /// answers for the provider's mount and not for what is being compared).
     #[must_use]
     pub fn from_capabilities(left: Capabilities, right: Capabilities) -> Self {
         Self::new(Self::mode_of(left), Self::mode_of(right))
     }
 
-    /// El modo de plegado que declaran unas capabilities de UBICACIÓN.
+    /// The fold mode a LOCATION's capabilities declare.
     ///
-    /// Es público porque es la ÚNICA copia: `norte_core::rename::plan::NameCaps`
-    /// hace la misma pregunta sobre las mismas flags y llama aquí en vez de
-    /// transcribirla. Transcribir esta clase de mapeo es exactamente lo que
-    /// costó el #151 (la clave de plegado copiada, divergiendo un ciclo entero
-    /// de release sin que nada las comparase).
+    /// It is public because it is the ONLY copy: `norte_core::rename::plan::NameCaps`
+    /// asks the same question over the same flags and calls here instead of
+    /// transcribing it. Transcribing this kind of mapping is exactly what
+    /// #151 cost (the fold key copied, diverging for a whole release cycle
+    /// with nothing comparing them).
     ///
     /// ```
     /// use norte_compare::Sides;
@@ -91,37 +92,37 @@ impl Sides {
     /// ```
     #[must_use]
     pub fn mode_of(c: Capabilities) -> FoldMode {
-        // La regla vive en `norte-vfs`, que es dueño del contrato del
-        // `Provider` cuyas banderas se están leyendo. Aquí solo se reenvía:
-        // la preguntan tres capas que no se ven entre sí —este motor, el core
-        // y la ventana (#268)— y tres copias de tres líneas es como se
-        // separan.
+        // The rule lives in `norte-vfs`, which owns the contract of the
+        // `Provider` whose flags are being read. Here it is only forwarded:
+        // three layers that cannot see each other ask it —this engine, the
+        // core, and the window (#268)— and three copies of three lines is
+        // how they would drift apart.
         norte_vfs::fold_mode_of(c)
     }
 
-    /// Los dos lados distinguen caja (ext4 contra ext4): NO se pliega.
+    /// Both sides are case-sensitive (ext4 against ext4): NO folding.
     #[must_use]
     pub fn both_case_sensitive() -> Self {
         Self::new(FoldMode::None, FoldMode::None)
     }
 
-    /// El lado izquierdo no distingue caja: se pliega (simple).
+    /// The left side is case-insensitive: it folds (simple).
     #[must_use]
     pub fn left_case_insensitive() -> Self {
         Self::new(FoldMode::Simple, FoldMode::None)
     }
 
-    /// El lado derecho no distingue caja: se pliega (simple).
+    /// The right side is case-insensitive: it folds (simple).
     #[must_use]
     pub fn right_case_insensitive() -> Self {
         Self::new(FoldMode::None, FoldMode::Simple)
     }
 
-    /// Cómo pliega LA PAREJA: el modo más fuerte de los dos lados.
+    /// How THE PAIR folds: the stronger mode of the two sides.
     ///
-    /// «Más fuerte» es el orden en que cada modo junta más nombres —
-    /// `None` < `Simple` < `Full`— y el criterio es el mismo de siempre: el
-    /// lado que no puede sostener dos grafías decide por los dos.
+    /// "Stronger" is the order in which each mode groups more names
+    /// together — `None` < `Simple` < `Full`— and the criterion is the usual
+    /// one: the side that cannot hold two spellings decides for both.
     #[must_use]
     pub fn fold(self) -> FoldMode {
         match (self.left, self.right) {
@@ -131,21 +132,21 @@ impl Sides {
         }
     }
 
-    /// ¿Pliega caja este emparejamiento? (Sea simple o completo.)
+    /// Does this pairing fold case? (Whether simple or full.)
     #[must_use]
     pub fn folds_case(self) -> bool {
         !matches!(self.fold(), FoldMode::None)
     }
 }
 
-/// La clave por la que dos nombres emparejan.
+/// The key two names pair under.
 ///
-/// Presta los bytes del nombre mientras la transformación no cambia nada — el
-/// caso abrumadoramente común (ASCII en minúsculas, ya-NFC, no-UTF8) — y solo
-/// materializa cuando sí cambia.
+/// Borrows the name's bytes while the transformation changes nothing — the
+/// overwhelmingly common case (lowercase ASCII, already-NFC, non-UTF8) —
+/// and only materializes when it does change.
 ///
-/// `PartialEq`/`Ord`/`Hash` van por los BYTES, así que una clave prestada y una
-/// propia con el mismo contenido son la misma clave.
+/// `PartialEq`/`Ord`/`Hash` go by the BYTES, so a borrowed key and an owned
+/// one with the same content are the same key.
 ///
 /// ```
 /// use norte_compare::{Sides, key_for};
@@ -156,94 +157,95 @@ impl Sides {
 pub struct PairKey<'a>(Cow<'a, [u8]>);
 
 impl PairKey<'_> {
-    /// Los bytes de la clave. NO son el nombre: no se pintan ni se operan.
+    /// The key's bytes. They are NOT the name: they are neither painted nor
+    /// operated on.
     #[must_use]
     pub fn as_bytes(&self) -> &[u8] {
         &self.0
     }
 
-    /// Suelta el préstamo del nombre, copiando si hacía falta.
+    /// Releases the borrow on the name, copying if needed.
     #[must_use]
     pub fn into_owned(self) -> PairKey<'static> {
         PairKey(Cow::Owned(self.0.into_owned()))
     }
 }
 
-/// La clave de emparejamiento de un nombre bajo unos [`Sides`].
+/// The pairing key of a name under some [`Sides`].
 ///
-/// Delega en [`norte_encoding::name_key`] (ADR 0051, #151): esta función SOLO
-/// traslada el [`FoldMode`] de la pareja ([`Sides::fold`]), que desde ADR 0054
-/// puede ser [`FoldMode::Full`] — lo enciende un lado que declare
-/// `FULL_FOLD` para su raíz, jamás una suposición sobre el filesystem.
+/// Delegates to [`norte_encoding::name_key`] (ADR 0051, #151): this function
+/// ONLY forwards the pair's [`FoldMode`] ([`Sides::fold`]), which since
+/// ADR 0054 can be [`FoldMode::Full`] — turned on by a side declaring
+/// `FULL_FOLD` for its root, never by an assumption about the filesystem.
 ///
-/// Los bytes de entrada no se tocan: lo que sale es una clave, y el nombre
-/// sigue siendo el nombre. Un nombre que NO es UTF-8 se empareja por sus
-/// bytes; ver el rustdoc de [`norte_encoding::name_key`] para qué pasa con un
-/// byte inválido que no es TODO el nombre (#154) y por qué un byte de cola
-/// Shift-JIS nunca se pliega como si fuera ASCII.
+/// The input bytes are not touched: what comes out is a key, and the name
+/// stays the name. A name that is NOT UTF-8 is paired by its bytes; see
+/// [`norte_encoding::name_key`]'s rustdoc for what happens with an invalid
+/// byte that is not the WHOLE name (#154) and why a Shift-JIS trailing byte
+/// is never folded as if it were ASCII.
 ///
 /// ```
 /// use norte_compare::{Sides, key_for};
-/// // NFD y NFC del mismo nombre emparejan...
-/// let sensible = Sides::both_case_sensitive();
-/// assert_eq!(key_for("café".as_bytes(), sensible), key_for(b"cafe\xcc\x81", sensible));
-/// // ...y los bytes que no son texto pasan tal cual.
-/// assert_eq!(key_for(b"roto\xff\xfe", sensible).as_bytes(), b"roto\xff\xfe");
+/// // NFD and NFC of the same name pair...
+/// let sensitive = Sides::both_case_sensitive();
+/// assert_eq!(key_for("café".as_bytes(), sensitive), key_for(b"cafe\xcc\x81", sensitive));
+/// // ...and bytes that are not text pass through as is.
+/// assert_eq!(key_for(b"roto\xff\xfe", sensitive).as_bytes(), b"roto\xff\xfe");
 /// ```
 #[must_use]
 pub fn key_for(name: &[u8], sides: Sides) -> PairKey<'_> {
     PairKey(norte_encoding::name_key(name, sides.fold()))
 }
 
-/// Bajo qué transformación emparejaron dos nombres, cuando NO son los mismos
+/// Under which transformation two names paired, when they are NOT the same
 /// bytes (#152).
 ///
-/// **PRECONDICIÓN: los dos nombres emparejaron** — son las dos mitades de una
-/// pareja que [`index_side`] y el merge-join juntaron. Con dos nombres que no
-/// emparejan la respuesta es `None`, igual que con dos nombres idénticos: no
-/// hay transformación que nombrar, y decir una sería inventarla.
+/// **PRECONDITION: the two names paired** — they are the two halves of a
+/// pair that [`index_side`] and the merge-join put together. With two names
+/// that do not pair, the answer is `None`, same as with two identical names:
+/// there is no transformation to name, and saying one would be inventing it.
 ///
-/// El orden de las preguntas ES el contrato, y el singleton gana:
+/// The order of the questions IS the contract, and the singleton wins:
 ///
-/// 1. **Bytes iguales** → `None`. El caso corriente, y por eso
+/// 1. **Equal bytes** → `None`. The ordinary case, and why
 ///    [`CompareRow::paired_under`](norte_proto::methods::CompareRow::paired_under)
-///    se omite en el wire.
-/// 2. **Alguno de los dos nombres lleva un carácter con descomposición
-///    singleton** ([`norte_encoding::has_canonical_singleton`]) →
-///    [`PairTransform::NormalizationSingleton`], aunque además pliegue caja.
-///    Es la única de las tres que puede estar juntando dos ficheros DISTINTOS,
-///    así que un consumidor que solo mire esa variante tiene que verla.
-/// 3. **Emparejan SIN plegar** → [`PairTransform::Normalization`]: son el mismo
-///    texto en NFC y en NFD.
-/// 4. **Si no, hizo falta el pliegue** → [`PairTransform::CaseFold`].
+///    is omitted on the wire.
+/// 2. **Either of the two names carries a character with a singleton
+///    decomposition** ([`norte_encoding::has_canonical_singleton`]) →
+///    [`PairTransform::NormalizationSingleton`], even if it also folds case.
+///    It is the only one of the three that can be joining two DIFFERENT
+///    files, so a consumer that only looks at that variant has to see it.
+/// 3. **They pair WITHOUT folding** → [`PairTransform::Normalization`]: they
+///    are the same text in NFC and in NFD.
+/// 4. **Otherwise, folding was needed** → [`PairTransform::CaseFold`].
 ///
-/// El paso 2 se equivoca hacia el lado seguro a propósito: mira si el nombre
-/// CONTIENE un singleton, no si ese carácter es exactamente el que separa a los
-/// dos. Una pareja NFC/NFD que llevara además un OHM SIGN idéntico en los dos
-/// lados sale marcada como singleton. El conjunto de caracteres es diminuto y
-/// ninguno aparece en un nombre corriente, así que ese falso positivo cuesta un
-/// aviso de más — y el falso negativo costaría un fichero.
+/// Step 2 errs to the safe side on purpose: it looks at whether the name
+/// CONTAINS a singleton, not whether that character is exactly the one that
+/// separates the two. A NFC/NFD pair that also carried an identical OHM SIGN
+/// on both sides comes out marked as singleton. The character set is tiny
+/// and none of them appears in an ordinary name, so that false positive
+/// costs one extra warning — and the false negative would cost a file.
 ///
 /// ```
 /// use norte_compare::pair_transform;
 /// use norte_proto::methods::PairTransform;
 ///
-/// // Lo corriente: los mismos bytes, nada que decir.
+/// // The ordinary case: the same bytes, nothing to say.
 /// assert_eq!(pair_transform(b"a.txt", b"a.txt"), None);
-/// // NFC contra NFD del mismo texto.
+/// // NFC against NFD of the same text.
 /// assert_eq!(
 ///     pair_transform("café".as_bytes(), b"cafe\xcc\x81"),
 ///     Some(PairTransform::Normalization)
 /// );
-/// // Caja: emparejan porque un lado no puede sostener las dos grafías.
+/// // Case: they pair because one side cannot hold both spellings.
 /// assert_eq!(pair_transform(b"README", b"readme"), Some(PairTransform::CaseFold));
-/// // #152: U+212A KELVIN SIGN contra la `K` ASCII — dos ficheros que
-/// // coexisten en ext4 y que NFC junta.
+/// // #152: U+212A KELVIN SIGN against the ASCII `K` — two files that
+/// // coexist on ext4 and that NFC joins.
 /// assert_eq!(
 ///     pair_transform("\u{212a}.txt".as_bytes(), b"K.txt"),
 ///     Some(PairTransform::NormalizationSingleton)
 /// );
-/// // Dos nombres que no emparejan no tienen transformación que nombrar.
+/// // Two names that do not pair have no transformation to name.
 /// assert_eq!(pair_transform(b"a.txt", b"b.txt"), None);
 /// ```
 #[must_use]
@@ -251,20 +253,20 @@ pub fn pair_transform(left: &[u8], right: &[u8]) -> Option<PairTransform> {
     if left == right {
         return None;
     }
-    let sin_plegar = Sides::both_case_sensitive();
-    let normaliza = key_for(left, sin_plegar) == key_for(right, sin_plegar);
-    // Se pregunta por los DOS pliegues, y la diferencia entre ellos no es un
-    // matiz: una pareja que solo empareja EXPANDIENDO (`straße`/`strasse` en un
-    // ext4 `+F`, #145) no nombra un mismo texto — son dos textos que ese
-    // volumen no puede sostener a la vez, y el otro lado sí puede tener los dos
-    // ficheros, distintos. Contestar `CaseFold` ahí sería decir que son el
-    // mismo nombre, y quien lee esa respuesta (`names_one_text`, y con ella la
-    // puerta de ADR 0053 en `norte-sync`) sobrescribiría sobre ella.
+    let unfolded = Sides::both_case_sensitive();
+    let normalizes = key_for(left, unfolded) == key_for(right, unfolded);
+    // Both folds are asked about, and the difference between them is not a
+    // nuance: a pair that only pairs by EXPANDING (`straße`/`strasse` on an
+    // ext4 `+F`, #145) does not name the same text — they are two texts that
+    // volume cannot hold at once, and the other side CAN have both files,
+    // distinct. Answering `CaseFold` there would be saying they are the same
+    // name, and whoever reads that answer (`names_one_text`, and with it
+    // ADR 0053's gate in `norte-sync`) would overwrite over it.
     let simple = Sides::new(FoldMode::Simple, FoldMode::None);
-    let completo = Sides::new(FoldMode::Full, FoldMode::None);
-    let pliega_simple = key_for(left, simple) == key_for(right, simple);
-    let pliega_completo = pliega_simple || key_for(left, completo) == key_for(right, completo);
-    if !normaliza && !pliega_completo {
+    let full = Sides::new(FoldMode::Full, FoldMode::None);
+    let folds_simple = key_for(left, simple) == key_for(right, simple);
+    let folds_full = folds_simple || key_for(left, full) == key_for(right, full);
+    if !normalizes && !folds_full {
         return None;
     }
     if norte_encoding::has_canonical_singleton(left)
@@ -272,23 +274,22 @@ pub fn pair_transform(left: &[u8], right: &[u8]) -> Option<PairTransform> {
     {
         return Some(PairTransform::NormalizationSingleton);
     }
-    if normaliza {
+    if normalizes {
         return Some(PairTransform::Normalization);
     }
-    Some(if pliega_simple {
+    Some(if folds_simple {
         PairTransform::CaseFold
     } else {
         PairTransform::FullFold
     })
 }
 
-/// Lo que [`index_side`] necesita de una entrada: los BYTES de su nombre.
+/// What [`index_side`] needs from an entry: its name's BYTES.
 ///
-/// Existe para que los tests del emparejamiento puedan hablar de nombres
-/// sueltos (`&[u8]`) y el walk de [`Entry`], sin dos copias de la misma
-/// lógica.
+/// Exists so the pairing tests can talk about loose names (`&[u8]`) and the
+/// walk about [`Entry`], without two copies of the same logic.
 pub trait PairName {
-    /// Los bytes del nombre, tal y como los dio el provider.
+    /// The name's bytes, exactly as the provider gave them.
     fn pair_name(&self) -> &[u8];
 }
 
@@ -305,51 +306,51 @@ impl PairName for Vec<u8> {
 }
 
 impl PairName for Entry {
-    /// El último segmento del `VPath`, en bytes. La raíz — que no tiene
-    /// nombre — empareja por el nombre vacío; el walk nunca la mete en un
-    /// listado.
+    /// The `VPath`'s last segment, in bytes. The root — which has no name —
+    /// pairs by the empty name; the walk never puts it into a listing.
     fn pair_name(&self) -> &[u8] {
         self.path.file_name().map_or(&[][..], Segment::as_bytes)
     }
 }
 
-/// Un lado listo para emparejar: las entradas indexadas por su clave, y qué
-/// entradas colisionan con cuáles.
+/// One side ready to pair: its entries indexed by their key, and which
+/// entries collide with which.
 ///
-/// Presta el listado; no lo copia ni lo reordena.
+/// Borrows the listing; it neither copies nor reorders it.
 #[derive(Debug, Clone)]
 pub struct SideIndex<'a, T> {
     entries: &'a [T],
-    /// Clave → índices en `entries`, en orden de listado. `BTreeMap` porque el
-    /// merge-join quiere las claves ORDENADAS y el listado de un provider no
-    /// garantiza orden alguno.
+    /// Key → indices into `entries`, in listing order. `BTreeMap` because the
+    /// merge-join wants the keys SORTED and a provider's listing guarantees
+    /// no order at all.
     by_key: BTreeMap<PairKey<'a>, Vec<usize>>,
-    /// Motivo por entrada. `None` = esta entrada no colisiona con ninguna.
+    /// Reason per entry. `None` = this entry does not collide with any
+    /// other.
     reasons: Vec<Option<CompareReason>>,
 }
 
-/// Indexa UN lado por su clave de emparejamiento.
+/// Indexes ONE side by its pairing key.
 ///
-/// Las entradas que colisionan **no se emparejan y no se deduplican jamás**:
-/// se conservan TODAS, una por una, porque cada una es un fichero real sobre el
-/// que una sincronización posterior podría escribir. Perder un nombre aquí es
-/// perder exactamente ese fichero. Salen por [`SideIndex::collisions`], una por
-/// entrada, que es la forma normativa de una fila
-/// [`CompareVerdict::Ambiguous`](norte_proto::methods::CompareVerdict::Ambiguous):
-/// una fila por entrada implicada, el otro lado en `None`.
+/// Entries that collide are **never paired and never deduplicated**: ALL of
+/// them are kept, one by one, because each one is a real file that a later
+/// synchronization could write over. Losing a name here is losing exactly
+/// that file. They come out via [`SideIndex::collisions`], one per entry,
+/// which is the normative shape of a
+/// [`CompareVerdict::Ambiguous`](norte_proto::methods::CompareVerdict::Ambiguous)
+/// row: one row per involved entry, the other side as `None`.
 ///
 /// ```
 /// use norte_compare::{CompareReason, Sides, index_side};
-/// let listado: Vec<&[u8]> = vec![b"README", b"readme", b"NOTES"];
-/// let lado = index_side(&listado, Sides::right_case_insensitive());
+/// let listing: Vec<&[u8]> = vec![b"README", b"readme", b"NOTES"];
+/// let side = index_side(&listing, Sides::right_case_insensitive());
 ///
-/// // Dos colisiones: DOS filas, ninguna deduplicada.
-/// let chocan: Vec<_> = lado.collisions().collect();
-/// assert_eq!(chocan.len(), 2);
-/// assert!(chocan.iter().all(|(_, r)| *r == CompareReason::CaseFold));
+/// // Two collisions: TWO rows, neither deduplicated.
+/// let colliding: Vec<_> = side.collisions().collect();
+/// assert_eq!(colliding.len(), 2);
+/// assert!(colliding.iter().all(|(_, r)| *r == CompareReason::CaseFold));
 ///
-/// // Y lo que no colisiona sí empareja.
-/// assert_eq!(lado.unique().count(), 1);
+/// // And what does not collide does pair.
+/// assert_eq!(side.unique().count(), 1);
 /// ```
 #[must_use]
 pub fn index_side<T: PairName>(entries: &[T], sides: Sides) -> SideIndex<'_, T> {
@@ -362,25 +363,26 @@ pub fn index_side<T: PairName>(entries: &[T], sides: Sides) -> SideIndex<'_, T> 
     }
 
     let mut reasons = vec![None; entries.len()];
-    // El motivo de CADA entrada colisionada: ¿la colisión sobrevive sin
-    // plegar? Entonces la causó normalizar. ¿Se deshace al no plegar? Entonces
-    // la causó el plegado. Se calcula por entrada y no por grupo porque un
-    // grupo de tres puede tener una causa distinta para cada par.
-    let sin_plegar = Sides::both_case_sensitive();
+    // The reason for EACH colliding entry: does the collision survive
+    // without folding? Then normalization caused it. Does it go away
+    // without folding? Then folding caused it. Computed per entry and not
+    // per group because a group of three can have a different cause for
+    // each pair.
+    let unfolded = Sides::both_case_sensitive();
     for idxs in by_key.values() {
         if idxs.len() < 2 {
             continue;
         }
-        let crudas: Vec<PairKey<'_>> = idxs
+        let raw: Vec<PairKey<'_>> = idxs
             .iter()
-            .map(|&i| key_for(entries[i].pair_name(), sin_plegar))
+            .map(|&i| key_for(entries[i].pair_name(), unfolded))
             .collect();
         for (pos, &i) in idxs.iter().enumerate() {
-            let gemela = crudas
+            let twin = raw
                 .iter()
                 .enumerate()
-                .any(|(otra, k)| otra != pos && *k == crudas[pos]);
-            reasons[i] = Some(if gemela {
+                .any(|(other, k)| other != pos && *k == raw[pos]);
+            reasons[i] = Some(if twin {
                 CompareReason::Normalization
             } else {
                 CompareReason::CaseFold
@@ -396,29 +398,29 @@ pub fn index_side<T: PairName>(entries: &[T], sides: Sides) -> SideIndex<'_, T> 
 }
 
 impl<'a, T: PairName> SideIndex<'a, T> {
-    /// El listado que se indexó, en su orden original.
+    /// The listing that was indexed, in its original order.
     #[must_use]
     pub fn entries(&self) -> &'a [T] {
         self.entries
     }
 
-    /// Cuántas entradas trae el listado (colisionadas incluidas).
+    /// How many entries the listing carries (colliding ones included).
     #[must_use]
     pub fn len(&self) -> usize {
         self.entries.len()
     }
 
-    /// ¿Listado vacío?
+    /// Empty listing?
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
 
-    /// Las entradas EMPAREJABLES, por clave y en orden de clave: las que no
-    /// comparten la suya con ninguna otra de su lado.
+    /// The PAIRABLE entries, by key and in key order: the ones that do not
+    /// share theirs with any other on their side.
     ///
-    /// Es la mitad del merge-join. Lo que falta —lo colisionado— sale por
-    /// [`SideIndex::collisions`] y no empareja con nada.
+    /// It is half of the merge-join. What is missing —the collided ones—
+    /// comes out via [`SideIndex::collisions`] and pairs with nothing.
     pub fn unique(&self) -> impl Iterator<Item = (&PairKey<'a>, &'a T)> {
         self.by_key.iter().filter_map(|(k, idxs)| match idxs[..] {
             [i] => Some((k, &self.entries[i])),
@@ -426,8 +428,8 @@ impl<'a, T: PairName> SideIndex<'a, T> {
         })
     }
 
-    /// Busca una entrada emparejable por su clave. `None` si no está o si su
-    /// clave colisiona (una clave ambigua NO empareja).
+    /// Looks up a pairable entry by its key. `None` if it is not there or if
+    /// its key collides (an ambiguous key does NOT pair).
     #[must_use]
     pub fn get(&self, key: &PairKey<'a>) -> Option<&'a T> {
         match self.by_key.get(key)?[..] {
@@ -436,9 +438,9 @@ impl<'a, T: PairName> SideIndex<'a, T> {
         }
     }
 
-    /// TODAS las entradas colisionadas, en orden de listado, con su motivo.
-    /// Una por entrada: dos nombres que colapsan son DOS, jamás una fusión y
-    /// jamás una deduplicación.
+    /// ALL collided entries, in listing order, with their reason. One per
+    /// entry: two names that collapse are TWO, never a merge and never a
+    /// deduplication.
     pub fn collisions(&self) -> impl Iterator<Item = (&'a T, CompareReason)> {
         self.entries
             .iter()
@@ -446,11 +448,11 @@ impl<'a, T: PairName> SideIndex<'a, T> {
             .filter_map(|(e, r)| r.map(|r| (e, r)))
     }
 
-    /// Por qué colisiona la entrada cuyos bytes de nombre son `name`, o `None`
-    /// si no colisiona (o si no está en el listado).
+    /// Why the entry whose name bytes are `name` collides, or `None` if it
+    /// does not collide (or is not in the listing).
     ///
-    /// Recorre el listado: es una consulta de test y de diagnóstico. El walk
-    /// usa [`SideIndex::collisions`], que va en una pasada.
+    /// Walks the listing: it is a test and diagnostic query. The walk uses
+    /// [`SideIndex::collisions`], which runs in one pass.
     #[must_use]
     pub fn ambiguous_reason(&self, name: &[u8]) -> Option<CompareReason> {
         let i = self.entries.iter().position(|e| e.pair_name() == name)?;
@@ -464,81 +466,82 @@ mod tests {
 
     use super::*;
 
-    /// Los bytes de una fixture del corpus canónico de `norte-testkit`.
+    /// The bytes of a fixture from `norte-testkit`'s canonical corpus.
     ///
-    /// Los nombres hostiles se toman de ahí y no se escriben a mano: la mitad
-    /// de este módulo prueba cosas que solo se ven con el byte exacto, y el
-    /// corpus ya trae —con su porqué escrito— las parejas que costaron el
-    /// #129.
+    /// Hostile names are taken from there and never written by hand: half of
+    /// this module tests things that only show up with the exact byte, and
+    /// the corpus already carries —with its reason written down— the pairs
+    /// that cost #129.
     fn corpus(id: &str) -> Vec<u8> {
         norte_testkit::corpus::hostile_names()
             .into_iter()
             .find(|n| n.id == id)
-            .unwrap_or_else(|| panic!("fixture {id} en el corpus"))
+            .unwrap_or_else(|| panic!("fixture {id} in the corpus"))
             .bytes
     }
 
-    /// #152 en una línea: los dos nombres del corpus emparejan —la clave es la
-    /// misma, sin plegar caja— y NO son el mismo texto.
+    /// #152 in one line: the corpus's two names pair —the key is the same,
+    /// without case folding— and they are NOT the same text.
     #[test]
-    fn el_singleton_de_nfc_empareja_dos_ficheros_distintos() {
+    fn the_nfc_singleton_pairs_two_different_files() {
         let kelvin = corpus("singleton_kelvin_sign");
         let ascii = corpus("ascii_capital_k");
-        let sensible = Sides::both_case_sensitive();
-        assert_ne!(kelvin, ascii, "son dos ficheros, y coexisten en ext4");
+        let sensitive = Sides::both_case_sensitive();
+        assert_ne!(kelvin, ascii, "they are two files, and coexist on ext4");
         assert_eq!(
-            key_for(&kelvin, sensible),
-            key_for(&ascii, sensible),
-            "y aun así emparejan: NFC no es inyectiva"
+            key_for(&kelvin, sensitive),
+            key_for(&ascii, sensitive),
+            "and they still pair: NFC is not injective"
         );
         assert_eq!(
             pair_transform(&kelvin, &ascii),
             Some(PairTransform::NormalizationSingleton),
-            "y la fila tiene que poder decirlo"
+            "and the row has to be able to say so"
         );
     }
 
-    /// Todo par de gemelos del corpus se clasifica como lo que el corpus dice
-    /// que es. Es el cruce que impide que las dos listas —el vocabulario del
-    /// wire y el índice de fixtures— se separen sin que nada avise.
+    /// Every twin pair in the corpus is classified as what the corpus says
+    /// it is. It is the crossing that keeps the two lists —the wire's
+    /// vocabulary and the fixture index— from drifting apart with nothing
+    /// to warn about it.
     ///
-    /// El par de pliegue COMPLETO entra desde ADR 0054 con variante PROPIA: un
-    /// lado que declare `FULL_FOLD` para su raíz lo empareja, y la respuesta
-    /// dice que fue el pliegue COMPLETO — que es lo que permite a
-    /// `names_one_text` contestar `false` sobre él.
+    /// The FULL fold pair comes in from ADR 0054 with its OWN variant: a
+    /// side that declares `FULL_FOLD` for its root pairs it, and the answer
+    /// says it was the FULL fold — which is what lets `names_one_text`
+    /// answer `false` about it.
     #[test]
-    fn los_gemelos_del_corpus_se_clasifican_como_el_corpus_dice() {
+    fn the_corpus_twins_are_classified_as_the_corpus_says() {
         use norte_testkit::corpus::TwinKind;
-        for gemelo in norte_testkit::corpus::spelling_twins() {
-            let left = corpus(gemelo.left);
-            let right = corpus(gemelo.right);
-            let esperado = match gemelo.kind {
+        for twin in norte_testkit::corpus::spelling_twins() {
+            let left = corpus(twin.left);
+            let right = corpus(twin.right);
+            let expected = match twin.kind {
                 TwinKind::Normalization => Some(PairTransform::Normalization),
                 TwinKind::CaseFold => Some(PairTransform::CaseFold),
-                // El pliegue COMPLETO tiene variante PROPIA (0.45.0): junta dos
-                // nombres que pueden ser dos ficheros, así que no puede
-                // contestar lo mismo que el pliegue simple, que sí nombra un
-                // solo texto. Antes de ADR 0054 esto era `None` porque el motor
-                // no sabía expandir en ningún caso.
+                // The FULL fold has its OWN variant (0.45.0): it joins two
+                // names that can be two files, so it cannot answer the same
+                // as the simple fold, which does name a single text. Before
+                // ADR 0054 this was `None` because the engine did not know
+                // how to expand in any case.
                 TwinKind::CaseFoldFull => Some(PairTransform::FullFold),
                 TwinKind::NormalizationSingleton => Some(PairTransform::NormalizationSingleton),
             };
             assert_eq!(
                 pair_transform(&left, &right),
-                esperado,
+                expected,
                 "[{} / {}] {:?}",
-                gemelo.left,
-                gemelo.right,
-                gemelo.kind
+                twin.left,
+                twin.right,
+                twin.kind
             );
         }
     }
 
-    /// #145: en un directorio que pliega COMPLETO (ext4/f2fs `+F`) `straße.txt`
-    /// y `strasse.txt` son UN fichero, y la clave tiene que decir lo mismo —
-    /// mientras que en uno que pliega simple (APFS, NTFS) siguen siendo dos.
+    /// #145: on a directory that folds FULLY (ext4/f2fs `+F`) `straße.txt`
+    /// and `strasse.txt` are ONE file, and the key has to say the same —
+    /// while on one that folds simply (APFS, NTFS) they are still two.
     #[test]
-    fn un_lado_que_expande_hace_expandir_a_la_pareja() {
+    fn a_side_that_expands_makes_the_pair_expand() {
         let zett = corpus("ext4_full_fold_es_zett");
         let ss = corpus("ext4_full_fold_ss");
 
@@ -555,25 +558,25 @@ mod tests {
             max_path: None,
         };
 
-        let con_mas_f = Sides::from_capabilities(ext4, ext4_f);
+        let with_full_fold = Sides::from_capabilities(ext4, ext4_f);
         assert_eq!(
-            key_for(&zett, con_mas_f),
-            key_for(&ss, con_mas_f),
-            "basta con que UN lado expanda"
+            key_for(&zett, with_full_fold),
+            key_for(&ss, with_full_fold),
+            "ONE side expanding is enough"
         );
 
-        let sin_mas_f = Sides::from_capabilities(ext4, apfs);
+        let without_full_fold = Sides::from_capabilities(ext4, apfs);
         assert_ne!(
-            key_for(&zett, sin_mas_f),
-            key_for(&ss, sin_mas_f),
-            "el pliegue simple no expande"
+            key_for(&zett, without_full_fold),
+            key_for(&ss, without_full_fold),
+            "the simple fold does not expand"
         );
     }
 
-    /// El modo de la pareja es el MÁS fuerte de los dos lados, y `folds_case`
-    /// sigue significando lo que significaba.
+    /// The pair's mode is the STRONGER of the two sides, and `folds_case`
+    /// still means what it meant.
     #[test]
-    fn el_modo_de_la_pareja_es_el_mas_fuerte_de_los_dos() {
+    fn the_pairs_mode_is_the_stronger_of_the_two() {
         use norte_encoding::FoldMode;
         assert_eq!(
             Sides::new(FoldMode::None, FoldMode::None).fold(),
@@ -591,15 +594,16 @@ mod tests {
         assert!(Sides::new(FoldMode::Full, FoldMode::None).folds_case());
     }
 
-    /// Dos nombres que NO emparejan no tienen transformación que nombrar, y
-    /// contestar una sería peor que callar: quien la lea creerá que la pareja
-    /// existe.
+    /// Two names that do NOT pair carry no transformation to name, and
+    /// answering one would be worse than staying silent: whoever reads it
+    /// will believe the pair exists.
     #[test]
-    fn dos_nombres_que_no_emparejan_no_llevan_transformacion() {
+    fn two_names_that_do_not_pair_carry_no_transformation() {
         assert_eq!(pair_transform(b"a.txt", b"b.txt"), None);
-        assert_eq!(pair_transform(b"a.txt", b"a.txt"), None, "mismos bytes");
-        // Ni siquiera cuando uno de los dos lleva un singleton: el singleton
-        // gana ENTRE las tres respuestas, no sobre la pregunta de si emparejan.
+        assert_eq!(pair_transform(b"a.txt", b"a.txt"), None, "same bytes");
+        // Not even when one of the two carries a singleton: the singleton
+        // wins AMONG the three answers, not over the question of whether
+        // they pair.
         let kelvin = corpus("singleton_kelvin_sign");
         assert_eq!(pair_transform(&kelvin, b"otra.txt"), None);
     }
@@ -659,218 +663,221 @@ mod tests {
         );
     }
 
-    // ---- lo que los cuatro de arriba no fijan ----
+    // ---- what the four above do not fix ----
 
-    /// La clave nunca muta los bytes de ENTRADA (regla 1): `key_for` presta o
-    /// copia para construir la clave, pero `nombre` sigue siendo el que era.
-    /// Esto es lo que hace legítimo emparejar por clave y pintar por bytes.
+    /// The key never mutates the INPUT bytes (rule 1): `key_for` borrows or
+    /// copies to build the key, but `name` stays what it was. This is what
+    /// makes pairing by key and painting by bytes legitimate.
     ///
-    /// La CLAVE en sí, en cambio, sí pliega y normaliza el prefijo válido —
-    /// `CAFE`+U+0301 es texto UTF-8 de verdad, y el `\xff` que sigue no lo
-    /// invalida (#154): antes de la corrección, un solo byte roto al final
-    /// desactivaba el plegado del resto entero.
+    /// The KEY itself, on the other hand, does fold and normalize the valid
+    /// prefix — `CAFE`+U+0301 is real UTF-8 text, and the `\xff` that
+    /// follows does not invalidate it (#154): before the fix, a single
+    /// broken byte at the end disabled folding for the whole rest of it.
     #[test]
-    fn la_clave_no_toca_los_bytes_del_nombre() {
-        let nombre = b"CAFE\xcc\x81\xff";
-        let clave = key_for(nombre, Sides::right_case_insensitive());
+    fn the_key_does_not_touch_the_names_bytes() {
+        let name = b"CAFE\xcc\x81\xff";
+        let key = key_for(name, Sides::right_case_insensitive());
         assert_eq!(
-            clave.as_bytes(),
+            key.as_bytes(),
             "café"
                 .as_bytes()
                 .iter()
                 .chain(b"\xff")
                 .copied()
                 .collect::<Vec<u8>>(),
-            "el prefijo válido pliega y normaliza; el byte roto pasa tal cual",
+            "the valid prefix folds and normalizes; the broken byte passes through as is",
         );
         assert_eq!(
-            nombre, b"CAFE\xcc\x81\xff",
-            "el nombre de ENTRADA no se ha tocado"
+            name, b"CAFE\xcc\x81\xff",
+            "the INPUT name has not been touched"
         );
     }
 
-    /// Un nombre que no es UTF-8 EN NINGÚN PREFIJO no se pliega, ni siquiera
-    /// en ASCII — `ROTO\xff` sí pliega desde #154, porque `ROTO` es un
-    /// prefijo válido; ver `la_clave_no_toca_los_bytes_del_nombre` para esa
-    /// mitad. Esta prueba es la otra: cuando NO hay ni un byte de prefijo
-    /// válido, plegar sería el bug que #129 cerró.
+    /// A name that is not UTF-8 in ANY prefix does not fold, not even in
+    /// ASCII — `ROTO\xff` does fold since #154, because `ROTO` is a valid
+    /// prefix; see `the_key_does_not_touch_the_names_bytes` for that half.
+    /// This test is the other one: when there is not even one byte of valid
+    /// prefix, folding would be the bug #129 closed.
     ///
-    /// Parece inofensivo y no lo es: en los encodings legacy de doble byte el
-    /// byte de cola cae donde viven `A`–`Z`. `shift_jis_tesuto` (テスト) es
-    /// `83 65 83 58 83 67` y ese `58` es una `X`; plegarlo convierte ス en ベ,
-    /// que es otro carácter. Y `norte_core::rename::plan::name_key` tampoco lo
-    /// pliega: las dos respuestas a «¿colisionan estos dos nombres?» tienen que
-    /// ser la misma (#151).
+    /// It looks harmless and it is not: in legacy double-byte encodings the
+    /// trailing byte lands where `A`–`Z` live. `shift_jis_tesuto` (テスト)
+    /// is `83 65 83 58 83 67` and that `58` is an `X`; folding it turns ス
+    /// into ベ, which is a different character. And
+    /// `norte_core::rename::plan::name_key` does not fold it either: the two
+    /// answers to "do these two names collide?" have to be the same (#151).
     #[test]
-    fn los_bytes_no_utf8_no_se_pliegan() {
-        let mixto = Sides::left_case_insensitive();
-        // Prefijo válido: pliega. Ver #154 — un byte roto al final ya no
-        // desactiva el plegado del texto que sí lo es.
-        assert_eq!(key_for(b"ROTO\xff", mixto), key_for(b"roto\xff", mixto));
+    fn non_utf8_bytes_are_not_folded() {
+        let mixed = Sides::left_case_insensitive();
+        // Valid prefix: it folds. See #154 — a broken byte at the end no
+        // longer disables folding for the text that IS valid.
+        assert_eq!(key_for(b"ROTO\xff", mixed), key_for(b"roto\xff", mixed));
 
         let tesuto = corpus("shift_jis_tesuto");
         assert_eq!(
-            key_for(&tesuto, mixto).as_bytes(),
+            key_for(&tesuto, mixed).as_bytes(),
             &tesuto[..],
-            "el byte de cola `58` de ス es una `X` en ASCII"
+            "ス's trailing byte `58` is an `X` in ASCII"
         );
 
-        // Y el par que lo demuestra de verdad: ア y ヂ solo se diferencian en
-        // su byte de cola, `41` contra `61`. Plegar los declararía el mismo
-        // fichero.
-        assert_ne!(key_for(b"\x83\x41", mixto), key_for(b"\x83\x61", mixto));
+        // And the pair that really proves it: ア and ヂ differ only in their
+        // trailing byte, `41` against `61`. Folding would declare them the
+        // same file.
+        assert_ne!(key_for(b"\x83\x41", mixed), key_for(b"\x83\x61", mixed));
     }
 
-    /// El plegado es plegado de CAJA, no `to_lowercase`, y el corpus ya traía
-    /// las parejas que lo distinguen (#129, revisión de C2–C5).
+    /// Folding is CASE folding, not `to_lowercase`, and the corpus already
+    /// carried the pairs that tell them apart (#129, C2–C5 review).
     ///
-    /// Cada pareja es UN fichero en APFS, NTFS y en un directorio ext4 `+F`.
-    /// Con `to_lowercase` a secas salían dos claves — o sea, dos filas
-    /// `OnlyLeft`/`OnlyRight` que un plan de sincronización copiaría una encima
-    /// de la otra.
+    /// Each pair is ONE file on APFS, NTFS and on an ext4 `+F` directory.
+    /// With plain `to_lowercase` two keys came out — i.e. two `OnlyLeft`/
+    /// `OnlyRight` rows that a synchronization plan would copy one on top of
+    /// the other.
     #[test]
-    fn el_plegado_es_case_folding_y_no_el_mapeo_a_minusculas() {
-        let mixto = Sides::right_case_insensitive();
-        for (izq, der) in [
-            // ΟΔΟΣ / οδοσ: `str::to_lowercase` aplica Final_Sigma y produce ς.
+    fn folding_is_case_folding_and_not_lowercase_mapping() {
+        let mixed = Sides::right_case_insensitive();
+        for (left, right) in [
+            // ΟΔΟΣ / οδοσ: `str::to_lowercase` applies Final_Sigma and
+            // produces ς.
             ("greek_uppercase_final_sigma", "greek_medial_sigma_twin"),
-            // µm.txt (U+00B5) / μm.txt (U+03BC): Unicode ya llama minúscula al
-            // signo micro, así que `to_lowercase` no lo mueve.
+            // µm.txt (U+00B5) / μm.txt (U+03BC): Unicode already calls the
+            // micro sign lowercase, so `to_lowercase` does not move it.
             ("micro_sign_mu", "greek_mu_twin"),
-            // ﬅ.txt / ﬆ.txt: la única ligadura con pliegue simple.
+            // ﬅ.txt / ﬆ.txt: the only ligature with a simple fold.
             ("ligature_long_st", "ligature_st"),
-            // J+◌̌ / ǰ: plegar RECOMPONE, así que el NFC va después.
+            // J+◌̌ / ǰ: folding RECOMPOSES, so NFC comes afterward.
             (
                 "nfd_uppercase_composed_only_lowercase",
                 "precomposed_lowercase_j_caron",
             ),
         ] {
-            let (a, b) = (corpus(izq), corpus(der));
-            assert_eq!(key_for(&a, mixto), key_for(&b, mixto), "{izq}");
+            let (a, b) = (corpus(left), corpus(right));
+            assert_eq!(key_for(&a, mixed), key_for(&b, mixed), "{left}");
         }
 
-        // Y el hueco ACEPTADO, que sigue siéndolo: `ß` solo tiene pliegue
-        // COMPLETO (a `ss`), que expande, y esta clave es `char → char`. En
-        // APFS/NTFS son dos ficheros y aquí también; en ext4 `+F` no, y eso es
-        // el #145.
+        // And the ACCEPTED gap, which still is one: `ß` only has a FULL
+        // fold (to `ss`), which expands, and this key is `char → char`. On
+        // APFS/NTFS they are two files and here too; on ext4 `+F` they are
+        // not, and that is #145.
         let (zett, ss) = (
             corpus("ext4_full_fold_es_zett"),
             corpus("ext4_full_fold_ss"),
         );
-        assert_ne!(key_for(&zett, mixto), key_for(&ss, mixto), "#145");
+        assert_ne!(key_for(&zett, mixed), key_for(&ss, mixed), "#145");
     }
 
-    /// Plegar y normalizar CONMUTAN en la clave: `É` (NFC) y `E`+`◌́` (NFD)
-    /// llegan al mismo sitio, plegando o sin plegar.
+    /// Folding and normalizing COMMUTE in the key: `É` (NFC) and `E`+`◌́`
+    /// (NFD) land in the same place, folding or not.
     #[test]
-    fn plegado_y_nfc_se_componen_en_los_dos_ordenes() {
-        let mixto = Sides::right_case_insensitive();
-        let nfc_mayus = "CAFÉ".as_bytes();
-        let nfd_minus = b"cafe\xcc\x81";
-        assert_eq!(key_for(nfc_mayus, mixto), key_for(nfd_minus, mixto));
-        // Sin plegar NO emparejan: la mayúscula es una diferencia real en ext4.
-        let sensible = Sides::both_case_sensitive();
-        assert_ne!(key_for(nfc_mayus, sensible), key_for(nfd_minus, sensible));
+    fn folding_and_nfc_compose_in_both_orders() {
+        let mixed = Sides::right_case_insensitive();
+        let nfc_upper = "CAFÉ".as_bytes();
+        let nfd_lower = b"cafe\xcc\x81";
+        assert_eq!(key_for(nfc_upper, mixed), key_for(nfd_lower, mixed));
+        // Without folding they do NOT pair: the uppercase is a real
+        // difference on ext4.
+        let sensitive = Sides::both_case_sensitive();
+        assert_ne!(key_for(nfc_upper, sensitive), key_for(nfd_lower, sensitive));
     }
 
-    /// El plegado Unicode no se queda en ASCII.
+    /// Unicode folding does not stop at ASCII.
     #[test]
-    fn el_plegado_cubre_mas_que_ascii() {
-        let mixto = Sides::left_case_insensitive();
+    fn folding_covers_more_than_ascii() {
+        let mixed = Sides::left_case_insensitive();
         assert_eq!(
-            key_for("AÑO".as_bytes(), mixto),
-            key_for("año".as_bytes(), mixto)
+            key_for("AÑO".as_bytes(), mixed),
+            key_for("año".as_bytes(), mixed)
         );
-        // Titlecase: `char::is_uppercase` diría que no, y sí pliega.
+        // Titlecase: `char::is_uppercase` would say no, and it does fold.
         assert_eq!(
-            key_for("ǅ".as_bytes(), mixto),
-            key_for("ǆ".as_bytes(), mixto)
+            key_for("ǅ".as_bytes(), mixed),
+            key_for("ǆ".as_bytes(), mixed)
         );
     }
 
-    /// Una entrada colisionada NO empareja: ni por `unique`, ni por `get`.
-    /// Emparejarla sería elegir a ciegas cuál de los dos ficheros es «el» par.
+    /// A collided entry does NOT pair: neither via `unique`, nor via `get`.
+    /// Pairing it would be blindly choosing which of the two files is "the"
+    /// match.
     #[test]
-    fn una_clave_colisionada_no_empareja_con_nadie() {
+    fn a_collided_key_pairs_with_nobody() {
         let names: Vec<&[u8]> = vec![b"README", b"readme", b"NOTES"];
-        let lado = index_side(&names, Sides::right_case_insensitive());
+        let side = index_side(&names, Sides::right_case_insensitive());
 
-        let emparejables: Vec<&[u8]> = lado.unique().map(|(_, e)| *e).collect();
-        assert_eq!(emparejables, vec![&b"NOTES"[..]]);
+        let pairable: Vec<&[u8]> = side.unique().map(|(_, e)| *e).collect();
+        assert_eq!(pairable, vec![&b"NOTES"[..]]);
         assert!(
-            lado.get(&key_for(b"readme", Sides::both_case_sensitive()))
+            side.get(&key_for(b"readme", Sides::both_case_sensitive()))
                 .is_none()
         );
         assert!(
-            lado.get(&key_for(b"NOTES", Sides::right_case_insensitive()))
+            side.get(&key_for(b"NOTES", Sides::right_case_insensitive()))
                 .is_some()
         );
     }
 
-    /// Tres nombres que colapsan son TRES filas. Ninguna se funde y ninguna se
-    /// pierde: cada una es un fichero sobre el que la spec 2 podría escribir.
+    /// Three names that collapse are THREE rows. None is merged and none is
+    /// lost: each is a file that spec 2 could write to.
     #[test]
-    fn cada_entrada_colisionada_sale_una_vez() {
+    fn each_collided_entry_comes_out_once() {
         let names: Vec<&[u8]> = vec![b"A", b"a", b"A", b"b"];
-        let lado = index_side(&names, Sides::right_case_insensitive());
-        let chocan: Vec<&[u8]> = lado.collisions().map(|(e, _)| *e).collect();
-        assert_eq!(chocan, vec![&b"A"[..], &b"a"[..], &b"A"[..]]);
-        assert_eq!(lado.unique().count(), 1, "solo `b` empareja");
-        assert_eq!(lado.len(), 4, "el listado no se ha deduplicado");
+        let side = index_side(&names, Sides::right_case_insensitive());
+        let colliding: Vec<&[u8]> = side.collisions().map(|(e, _)| *e).collect();
+        assert_eq!(colliding, vec![&b"A"[..], &b"a"[..], &b"A"[..]]);
+        assert_eq!(side.unique().count(), 1, "only `b` pairs");
+        assert_eq!(side.len(), 4, "the listing has not been deduplicated");
     }
 
-    /// El motivo es por ENTRADA, no por grupo: en un grupo mixto, quien tiene
-    /// gemelo por normalización dice `Normalization` y quien solo colapsó al
-    /// plegar dice `CaseFold`.
+    /// The reason is PER ENTRY, not per group: in a mixed group, whoever has
+    /// a twin by normalization says `Normalization` and whoever only
+    /// collapsed by folding says `CaseFold`.
     #[test]
-    fn el_motivo_lo_da_la_transformacion_que_colapso_esa_entrada() {
-        let compuesto = "café".as_bytes();
-        let descompuesto = b"cafe\xcc\x81";
-        let mayusculas = "CAFÉ".as_bytes();
-        let names: Vec<&[u8]> = vec![compuesto, descompuesto, mayusculas];
-        let lado = index_side(&names, Sides::right_case_insensitive());
+    fn the_reason_is_given_by_the_transformation_that_collapsed_that_entry() {
+        let composed = "café".as_bytes();
+        let decomposed = b"cafe\xcc\x81";
+        let uppercase = "CAFÉ".as_bytes();
+        let names: Vec<&[u8]> = vec![composed, decomposed, uppercase];
+        let side = index_side(&names, Sides::right_case_insensitive());
 
         assert_eq!(
-            lado.ambiguous_reason(compuesto),
+            side.ambiguous_reason(composed),
             Some(CompareReason::Normalization),
-            "tiene gemelo sin plegar"
+            "has a twin without folding"
         );
         assert_eq!(
-            lado.ambiguous_reason(descompuesto),
+            side.ambiguous_reason(decomposed),
             Some(CompareReason::Normalization)
         );
         assert_eq!(
-            lado.ambiguous_reason(mayusculas),
+            side.ambiguous_reason(uppercase),
             Some(CompareReason::CaseFold),
-            "sin plegar no chocaba con nadie"
+            "without folding it collided with nobody"
         );
     }
 
-    /// Sin plegado no hay `CaseFold`: dos grafías distintas son dos ficheros
-    /// distintos y emparejan cada uno por su lado.
+    /// Without folding there is no `CaseFold`: two different spellings are
+    /// two different files and each pairs on its own.
     #[test]
-    fn sin_plegado_las_dos_grafias_son_dos_entradas() {
+    fn without_folding_the_two_spellings_are_two_entries() {
         let names: Vec<&[u8]> = vec![b"README", b"readme"];
-        let lado = index_side(&names, Sides::both_case_sensitive());
-        assert_eq!(lado.collisions().count(), 0);
-        assert_eq!(lado.unique().count(), 2);
+        let side = index_side(&names, Sides::both_case_sensitive());
+        assert_eq!(side.collisions().count(), 0);
+        assert_eq!(side.unique().count(), 2);
     }
 
-    /// Un listado vacío no colisiona ni empareja, y no revienta.
+    /// An empty listing neither collides nor pairs, and does not blow up.
     #[test]
-    fn un_lado_vacio_es_un_lado() {
+    fn an_empty_side_is_a_side() {
         let names: Vec<&[u8]> = vec![];
-        let lado = index_side(&names, Sides::both_case_sensitive());
-        assert!(lado.is_empty());
-        assert_eq!(lado.unique().count(), 0);
-        assert_eq!(lado.collisions().count(), 0);
-        assert_eq!(lado.ambiguous_reason(b"nada"), None);
+        let side = index_side(&names, Sides::both_case_sensitive());
+        assert!(side.is_empty());
+        assert_eq!(side.unique().count(), 0);
+        assert_eq!(side.collisions().count(), 0);
+        assert_eq!(side.ambiguous_reason(b"nada"), None);
     }
 
-    /// `Entry` empareja por el ÚLTIMO segmento de su `VPath`, con sus bytes
-    /// crudos: es lo que el walk le va a pasar.
+    /// `Entry` pairs by its `VPath`'s LAST segment, with its raw bytes: it
+    /// is what the walk is going to pass it.
     #[test]
-    fn una_entry_empareja_por_los_bytes_de_su_ultimo_segmento() {
+    fn an_entry_pairs_by_its_last_segments_bytes() {
         use norte_proto::{EntryKind, VPath};
 
         let entry = |wire: &str| Entry {
@@ -880,46 +887,43 @@ mod tests {
             mtime_ms: None,
             attrs: std::collections::BTreeMap::default(),
         };
-        // `informe\xff.dat` percent-encoded: los bytes vuelven exactos.
-        let crudo = entry("file:///a/informe%FF.dat");
-        assert_eq!(crudo.pair_name(), b"informe\xff.dat");
+        // `informe\xff.dat` percent-encoded: the bytes come back exact.
+        let raw = entry("file:///a/informe%FF.dat");
+        assert_eq!(raw.pair_name(), b"informe\xff.dat");
 
         let nfd = entry("file:///a/cafe%CC%81");
         let nfc = entry("file:///b/caf%C3%A9");
-        let sensible = Sides::both_case_sensitive();
+        let sensitive = Sides::both_case_sensitive();
         assert_eq!(
-            key_for(nfd.pair_name(), sensible),
-            key_for(nfc.pair_name(), sensible)
+            key_for(nfd.pair_name(), sensitive),
+            key_for(nfc.pair_name(), sensitive)
         );
-        assert_ne!(
-            nfd.pair_name(),
-            nfc.pair_name(),
-            "los bytes siguen siendo dos"
-        );
+        assert_ne!(nfd.pair_name(), nfc.pair_name(), "the bytes are still two");
     }
 
-    /// El orden de las claves es el del merge-join, y no el del listado (que
-    /// no garantiza ninguno).
+    /// The order of the keys is the merge-join's, not the listing's (which
+    /// guarantees none at all).
     #[test]
-    fn las_claves_salen_ordenadas() {
+    fn the_keys_come_out_sorted() {
         let names: Vec<&[u8]> = vec![b"zeta", b"alfa", b"Mu"];
-        let lado = index_side(&names, Sides::right_case_insensitive());
-        let claves: Vec<Vec<u8>> = lado.unique().map(|(k, _)| k.as_bytes().to_vec()).collect();
+        let side = index_side(&names, Sides::right_case_insensitive());
+        let keys: Vec<Vec<u8>> = side.unique().map(|(k, _)| k.as_bytes().to_vec()).collect();
         assert_eq!(
-            claves,
+            keys,
             vec![b"alfa".to_vec(), b"mu".to_vec(), b"zeta".to_vec()]
         );
     }
 
-    /// Una clave prestada y una copiada con los mismos bytes son LA MISMA
-    /// clave: si no, un lado que normalizó no encontraría al otro que no.
+    /// A borrowed key and a copied one with the same bytes are THE SAME
+    /// key: otherwise, a side that normalized would not find the other one
+    /// that did not.
     #[test]
-    fn prestada_y_propia_son_la_misma_clave() {
-        let sensible = Sides::both_case_sensitive();
-        let prestada = key_for(b"cafe", sensible);
-        let propia = key_for(b"cafe\xcc\x81", sensible).into_owned();
-        assert_ne!(prestada, propia);
-        assert_eq!(prestada.clone().into_owned(), prestada);
-        assert_eq!(propia.as_bytes(), "café".as_bytes());
+    fn borrowed_and_owned_are_the_same_key() {
+        let sensitive = Sides::both_case_sensitive();
+        let borrowed = key_for(b"cafe", sensitive);
+        let owned = key_for(b"cafe\xcc\x81", sensitive).into_owned();
+        assert_ne!(borrowed, owned);
+        assert_eq!(borrowed.clone().into_owned(), borrowed);
+        assert_eq!(owned.as_bytes(), "café".as_bytes());
     }
 }

@@ -1,11 +1,11 @@
-# El plugin oficial de PANEL: el estado del repositorio en un hueco entero
-# (fase 3 del programa 2026-09-15, ADR 0116).
+# The official PANEL plugin: the repository's status in a whole slot
+# (phase 3 of the 2026-09-15 program, ADR 0116).
 #
-# NO es miembro del workspace, igual que el resto de `plugins/`: compila a
-# `wasm32-wasip2` con su propio lockfile y perfil. Como `git-status`, sí tiene
-# tests propios que corren en el HOST — leer `.git/HEAD` y la última línea de
-# `.git/logs/HEAD` es código puro, y probarlo dentro de un wasm sería pagar un
-# runtime para no ganar nada.
+# It is NOT a workspace member, like the rest of `plugins/`: it compiles to
+# `wasm32-wasip2` with its own lockfile and profile. Like `git-status`, it
+# does have its own tests that run on the HOST — reading `.git/HEAD` and the
+# last line of `.git/logs/HEAD` is pure code, and testing it inside a wasm
+# would pay for a runtime for no gain.
 [workspace]
 
 [package]
@@ -14,15 +14,15 @@ edition = "2021"
 version = "0.1.0"
 publish = false
 license = "AGPL-3.0-only"
-description = "Panel de estado del repositorio para norte, como plugin WASM"
+description = "Repository status panel for norte, as a WASM plugin"
 
 [lib]
-# `cdylib` es lo que hace un componente; `rlib` es lo que hace testeable el
-# parser desde el host.
+# `cdylib` is what makes a component; `rlib` is what makes the parser
+# testable from the host.
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-# wit-bindgen GUEST-side: los bindings salen del MISMO WIT que el host
+# wit-bindgen GUEST-side: the bindings come from the SAME WIT as the host
 # (symlink `wit` -> ../../crates/norte-plugin-host/wit).
 wit-bindgen = "0.46"
 

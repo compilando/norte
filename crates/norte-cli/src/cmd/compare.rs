@@ -1,6 +1,5 @@
-//! `norte compare`: `fs.compare` y su veredicto en el código de salida, más
-//! los helpers de presentación (`marcado`, códigos de salida) que
-//! `sync`/`ai` comparten.
+//! `norte compare`: `fs.compare` and its verdict in the exit code, plus the
+//! presentation helpers (`masked`, exit codes) that `sync`/`ai` share.
 
 use std::process::ExitCode;
 
@@ -10,72 +9,72 @@ use norte_proto::TaskState;
 
 use crate::cmd::connect::vpath;
 
-/// El texto ya enmascarado, MARCADO con `!` si hubo que enmascararlo.
+/// The already-masked text, MARKED with `!` if it had to be masked.
 ///
-/// Una función y no las tres copias que había (`ai_cmd`, `compare_cmd`,
-/// `sync_cmd`). El `!` es un marcador de SEGURIDAD: dice que lo que se lee no
-/// es literalmente lo que hay en el disco, que es exactamente lo que un nombre
-/// con una RLO dentro usaría para spoofear una confirmación. Tres copias de un
-/// marcador de seguridad en un binario es como una de ellas deja de aplicarse
-/// sin que nadie se entere.
+/// One function and not the three copies there used to be (`ai_cmd`,
+/// `compare_cmd`, `sync_cmd`). The `!` is a SECURITY marker: it says what
+/// is being read is not literally what is on disk, which is exactly what
+/// a name with an RLO inside would use to spoof a confirmation. Three
+/// copies of a security marker in one binary is how one of them stops
+/// applying without anyone noticing.
 ///
-/// Aquí y no en `norte-frontend` a propósito: el `lib.rs` de esa crate dice
-/// que el enmascarado es suyo y el BADGE de la capa de pintado de cada
-/// frontend — la TUI lo pinta con color y una tubería no tiene color que dar.
-pub(crate) fn marcado(texto: &str, hostil: bool) -> String {
-    format!("{}{texto}", if hostil { "!" } else { "" })
+/// Here and not in `norte-frontend` on purpose: that crate's `lib.rs` says
+/// masking is its job and the BADGE is each frontend's paint layer's — the
+/// TUI paints it with color and a pipe has no color to give.
+pub(crate) fn masked(text: &str, hostile: bool) -> String {
+    format!("{}{text}", if hostile { "!" } else { "" })
 }
 
-/// El `rel` de un paso (o de un fallo) de sincronización, listo para una
-/// terminal. `render_step`/`rel_display` ya enmascararon (regla 1); esto solo
-/// pone el [`marcado`] sobre el `hostile` que esa llamada ya calculó.
-pub(crate) fn rel_marcado(d: &norte_frontend::sync::RelDisplay) -> String {
-    marcado(&d.text, d.hostile)
+/// A sync step's (or failure's) `rel`, ready for a terminal.
+/// `render_step`/`rel_display` already masked (rule 1); this only puts
+/// [`masked`]'s marker over the `hostile` flag that call already computed.
+pub(crate) fn rel_marked(d: &norte_frontend::sync::RelDisplay) -> String {
+    masked(&d.text, d.hostile)
 }
 
-/// stdout se cerró o falló mientras se imprimía: código 2, jamás un panic.
+/// stdout closed or failed while printing: code 2, never a panic.
 ///
-/// `println!` hace **panic** con `EPIPE`, y `norte compare a b | head -20` —la
-/// forma obvia de asomarse a un diff que streamea— es exactamente eso: el
-/// lector se va en cuanto tiene sus veinte líneas. Un 101 de pánico no está en
-/// la tabla que estos dos comandos documentan, y además ensucia stderr en el
-/// uso NORMAL de una tubería. El 2 sí está, y encima es verdad: lo que no se
-/// pudo terminar de escribir tampoco se pudo contestar entero. `ls --json` ya
-/// esquiva lo mismo con `serde_json::to_writer` + `?`.
-pub(crate) fn codigo_por_escritura(e: &std::io::Error) -> ExitCode {
-    // `EPIPE` es el lector que se fue: callar es lo correcto, no hay nada roto.
-    // Cualquier otro fallo de escritura (un `> fichero` que llenó el disco) SÍ
-    // se dice, o el 2 no tendría explicación en ninguna parte.
+/// `println!` **panics** on `EPIPE`, and `norte compare a b | head -20` —
+/// the obvious way to peek at a streaming diff — is exactly that: the
+/// reader leaves as soon as it has its twenty lines. A panic's 101 is not
+/// in the table these two commands document, and it also dirties stderr
+/// in NORMAL pipe use. The 2 is in the table, and it is also true: what
+/// could not finish being written could not be fully answered either.
+/// `ls --json` already dodges the same thing with `serde_json::to_writer`
+/// + `?`.
+pub(crate) fn write_error_code(e: &std::io::Error) -> ExitCode {
+    // `EPIPE` is the reader leaving: staying silent is correct, nothing is
+    // broken. Any other write failure (a `> file` that filled the disk)
+    // IS reported, or the 2 would have no explanation anywhere.
     if e.kind() != std::io::ErrorKind::BrokenPipe {
         eprintln!("norte: {e}");
     }
     ExitCode::from(2)
 }
 
-/// Un `Err` de `norte compare`/`norte sync` es un **2**, nunca el 1 de
-/// `ExitCode::FAILURE`.
+/// An `Err` from `norte compare`/`norte sync` is a **2**, never
+/// `ExitCode::FAILURE`'s 1.
 ///
-/// Estos dos comandos contestan en el código de salida, así que el 1 ya
-/// significa algo: «difieren» en uno y «se aplicó» en el otro. El `match` de
-/// `main` convierte cualquier `anyhow::Error` en `FAILURE`, o sea en ese mismo
-/// 1 — de modo que un `--criteria` mal escrito, una ruta ilegible o un
-/// `sync.apply` que se negó saldrían por la misma puerta que un éxito. Se
-/// traducen aquí, en el despacho, para que **ningún** camino de error pueda
-/// llegar al `match` de `main`: sólo un recorrido que TERMINÓ puede contestar
-/// 0 o 1.
-pub(crate) fn codigo_de_no_se_pudo(e: &anyhow::Error) -> ExitCode {
+/// These two commands answer through the exit code, so 1 already means
+/// something: "differ" in one and "applied" in the other. `main`'s `match`
+/// turns any `anyhow::Error` into `FAILURE`, i.e. that same 1 — so a
+/// misspelled `--criteria`, an unreadable path or a refused `sync.apply`
+/// would exit through the same door as a success. They are translated
+/// here, at dispatch, so that **no** error path can reach `main`'s
+/// `match`: only a run that FINISHED can answer 0 or 1.
+pub(crate) fn code_for_could_not(e: &anyhow::Error) -> ExitCode {
     eprintln!("norte: {e:#}");
     ExitCode::from(2)
 }
 
-/// Traduce `--criteria` a un [`norte_proto::methods::CompareCriteria`].
+/// Translates `--criteria` to a [`norte_proto::methods::CompareCriteria`].
 ///
-/// Vacío = el default del wire (tamaño y fecha, sin hash — ver el doctest de
-/// `FsCompareParams`). No vacío = EXACTAMENTE la lista pedida: `--criteria
-/// hash` a secas enciende solo `hash` y apaga `size`/`mtime`, para que "quiero
-/// nada más que el hash" tenga el efecto obvio en la petición aunque el core
-/// (ADR 0048) solo lo corra sobre las parejas que los rungs baratos ya dieron
-/// por iguales.
+/// Empty = the wire default (size and date, no hash — see
+/// `FsCompareParams`'s doctest). Not empty = EXACTLY the requested list:
+/// `--criteria hash` alone turns on only `hash` and turns off
+/// `size`/`mtime`, so that "I want nothing but the hash" has the obvious
+/// effect on the request even though the core (ADR 0048) only runs it over
+/// the pairs the cheap rungs already called equal.
 pub(crate) fn parse_compare_criteria(
     names: &[String],
 ) -> anyhow::Result<norte_proto::methods::CompareCriteria> {
@@ -101,70 +100,73 @@ pub(crate) fn parse_compare_criteria(
     Ok(criteria)
 }
 
-/// Lo que una comparación puede contestar, **en orden de precedencia**: el de
-/// más abajo gana al de más arriba.
+/// What a comparison can answer, **in precedence order**: the one further
+/// down wins over the one above it.
 ///
-/// Tres y no dos, y con `Ord` derivado en vez de un `bool` acumulado, porque
-/// la respuesta importante es la del medio: «no se pudo saber» tiene que ganar
-/// a las otras dos, y un `bool` no tiene sitio donde guardarla. Es la misma
-/// razón por la que el comando tiene tres códigos de salida.
+/// Three and not two, and with a derived `Ord` instead of an accumulated
+/// `bool`, because the important answer is the middle one: "could not
+/// tell" has to win over the other two, and a `bool` has nowhere to keep
+/// it. It is the same reason the command has three exit codes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-enum Veredicto {
-    /// Todas las filas dijeron «iguales», y todas con confianza.
-    Coinciden,
-    /// Alguna fila difiere, y ninguna se quedó sin contestar.
-    Difieren,
-    /// Alguna fila no se pudo contestar, o se contestó sin poder respaldarlo.
-    NoSeSabe,
+enum Verdict {
+    /// Every row said "same", and all of them with confidence.
+    Match,
+    /// Some row differs, and none was left unanswered.
+    Differ,
+    /// Some row could not be answered, or was answered without being able
+    /// to back it up.
+    Unknown,
 }
 
-impl Veredicto {
-    /// Lo que UNA fila aporta al veredicto de la comparación entera.
+impl Verdict {
+    /// What ONE row contributes to the whole comparison's verdict.
     ///
-    /// La confianza va primero y no de adorno. `CompareVerdict::Same` con
-    /// `CompareConfidence::Unknown` es lo que `cascade.rs` contesta cuando no
-    /// pudo comparar nada —dos symlinks cuyos destinos no se leyeron, un lado
-    /// sin tamaño, un socket— y es una respuesta honesta SOLO mientras quien
-    /// la lee vea el glifo de confianza, como en la TUI. Colapsada a un código
-    /// de salida sin ese matiz se convertiría en «los árboles coinciden», que
-    /// es justamente lo que nadie comprobó.
-    fn de_fila(row: &norte_proto::methods::CompareRow) -> Self {
+    /// Confidence goes first, and not as decoration.
+    /// `CompareVerdict::Same` with `CompareConfidence::Unknown` is what
+    /// `cascade.rs` answers when it could not compare anything — two
+    /// symlinks whose targets were not read, a side with no size, a
+    /// socket — and it is an honest answer ONLY as long as whoever reads
+    /// it sees the confidence glyph, as in the TUI. Collapsed to an exit
+    /// code without that nuance it would become "the trees match", which
+    /// is exactly what nobody checked.
+    fn from_row(row: &norte_proto::methods::CompareRow) -> Self {
         use norte_proto::methods::{CompareConfidence as Conf, CompareVerdict as V};
         match (row.verdict, row.confidence) {
-            // Antes que el veredicto: una conclusión que el criterio no
-            // respalda no se puede resumir, diga lo que diga.
-            // `Unrecognised` es la confianza de un core N+1, y tampoco.
-            (_, Conf::Unknown | Conf::Unrecognised) => Self::NoSeSabe,
-            (V::Same, _) => Self::Coinciden,
-            (V::Different | V::OnlyLeft | V::OnlyRight | V::TypeMismatch, _) => Self::Difieren,
-            // `Error` (listado ilegible, directorio por encima del tope),
-            // `Ambiguous` (una colisión de caja o de NFC — justo lo que una
-            // sincronización posterior tiene que ver ANTES de escribir), y el
-            // veredicto de un core N+1 que este binario no sabe leer. Ninguno
-            // de los tres es «difieren»: es que no se sabe.
-            _ => Self::NoSeSabe,
+            // Before the verdict: a conclusion the criterion does not back
+            // up cannot be summarized, whatever it says. `Unrecognised` is
+            // an N+1 core's confidence, and neither can that.
+            (_, Conf::Unknown | Conf::Unrecognised) => Self::Unknown,
+            (V::Same, _) => Self::Match,
+            (V::Different | V::OnlyLeft | V::OnlyRight | V::TypeMismatch, _) => Self::Differ,
+            // `Error` (unreadable listing, directory above the cap),
+            // `Ambiguous` (a case or NFC collision — exactly what a later
+            // sync has to see BEFORE writing), and an N+1 core's verdict
+            // this binary cannot read. None of the three is "differ": it
+            // is that it is not known.
+            _ => Self::Unknown,
         }
     }
 
-    /// El código de salida, que es toda la respuesta que un script lee.
-    fn codigo(self) -> ExitCode {
+    /// The exit code, which is the whole answer a script reads.
+    fn code(self) -> ExitCode {
         ExitCode::from(match self {
-            Self::Coinciden => 0,
-            Self::Difieren => 1,
-            Self::NoSeSabe => 2,
+            Self::Match => 0,
+            Self::Differ => 1,
+            Self::Unknown => 2,
         })
     }
 }
 
-/// `norte compare`: `fs.compare` y su veredicto en el código de salida.
+/// `norte compare`: `fs.compare` and its verdict in the exit code.
 ///
-/// # Por qué el veredicto va en el código
-/// Es la pregunta «¿funcionó la copia?», y quien la hace suele ser un script.
-/// `diff` contesta así desde siempre y no hay nada que mejorar en esa
-/// convención: 0 iguales, 1 difieren, y un tercer código para «no se pudo
-/// saber» que es el que de verdad importa aquí — una comparación INCOMPLETA
-/// que contestara 0 sería exactamente el fallo que este comando existe para
-/// no cometer. La precedencia entre los tres está en [`Veredicto`].
+/// # Why the verdict goes in the code
+/// It is the question "did the copy work?", and whoever asks it is
+/// usually a script. `diff` has answered this way forever and there is
+/// nothing to improve in that convention: 0 same, 1 differ, and a third
+/// code for "could not tell" which is the one that really matters here —
+/// an INCOMPLETE comparison answering 0 would be exactly the mistake this
+/// command exists not to make. The precedence among the three is in
+/// [`Verdict`].
 pub(crate) async fn compare_cmd(
     backend: &Backend,
     a: &std::path::Path,
@@ -183,14 +185,15 @@ pub(crate) async fn compare_cmd(
         right,
         criteria: parse_compare_criteria(criteria)?,
         max_depth,
-        // 2000 ms es el default declarado por `FsCompareParams` (la regla
-        // FAT, ADR 0048; ver su doctest: `mtime_tolerance_ms == 2000`). Se
-        // repite el número aquí porque el tipo no deriva `Default` y la
-        // constante que lo fija en el proto es privada — no hay un
-        // `FsCompareParams::default()` que reutilizar.
+        // 2000 ms is the default `FsCompareParams` declares (the FAT
+        // rule, ADR 0048; see its doctest: `mtime_tolerance_ms == 2000`).
+        // The number is repeated here because the type does not derive
+        // `Default` and the constant that fixes it in the proto is
+        // private — there is no `FsCompareParams::default()` to reuse.
         mtime_tolerance_ms: mtime_tolerance_ms.unwrap_or(2000),
-        // `Backend::compare` rechaza `follow_symlinks: true`, y este comando
-        // no tiene motivo para diferir de `sync_plan`, que rechaza los dos.
+        // `Backend::compare` rejects `follow_symlinks: true`, and this
+        // command has no reason to diverge from `sync_plan`, which
+        // rejects both.
         follow_symlinks: false,
         descend_orphans: None,
     };
@@ -201,60 +204,63 @@ pub(crate) async fn compare_cmd(
         .map_err(|e| anyhow::anyhow!("{e}"))
         .context(norte_i18n::t("cli-compare-failed"))?;
 
-    // Nombres del árbol del OTRO lado, que este proceso no controla: MARCAR
-    // el enmascarado, igual que `ai_cmd` — un nombre remoto puede traer RLO y
-    // spoofear la salida. `cells_for` ya enmascaró `RowFace::name` con
-    // `display_name_with` (rule 1); esto solo añade el `!` de [`marcado`] sobre
-    // el `hostile` que esa llamada ya calculó — no un segundo enmascarado por
-    // separado, que divergiría el día que este comando gane una
-    // reinterpretación (#57) y alguien olvide threadearla también aquí.
-    let cara = |face: &norte_frontend::compare::RowFace| marcado(&face.name, face.hostile);
+    // Names from the OTHER side's tree, which this process does not
+    // control: MARK the masked one, like `ai_cmd` — a remote name can
+    // carry an RLO and spoof the output. `cells_for` already masked
+    // `RowFace::name` with `display_name_with` (rule 1); this only adds
+    // [`masked`]'s `!` over the `hostile` flag that call already
+    // computed — not a second, separate masking, which would diverge the
+    // day this command gains a reinterpretation (#57) and someone forgets
+    // to thread it here too.
+    let face_name = |face: &norte_frontend::compare::RowFace| masked(&face.name, face.hostile);
 
-    // Una tubería que se cierra no puede hacer `panic!`: ver
-    // [`codigo_por_escritura`]. Bufferizado además porque una fila por
-    // `write` syscall sobre un árbol grande es un peaje que no hace falta.
+    // A pipe that closes must not `panic!`: see [`write_error_code`].
+    // Buffered also because one `write` syscall per row over a large tree
+    // is a toll that is not needed.
     let mut out = std::io::BufWriter::new(std::io::stdout().lock());
 
-    // Se decide fila a fila mientras se drena — jamás se coleccionan (la
-    // rustdoc de `ComparePane` explica lo que cuesta retener un millón de
-    // filas, y este comando no tiene motivo para retener ninguna).
-    let mut veredicto = Veredicto::Coinciden;
+    // Decided row by row while draining — they are NEVER collected (the
+    // `ComparePane` rustdoc explains what retaining a million rows costs,
+    // and this command has no reason to retain any).
+    let mut verdict = Verdict::Match;
     while let Some(batch) = rx.recv().await {
         for row in &batch.rows {
-            veredicto = veredicto.max(Veredicto::de_fila(row));
-            let escrito = if json {
-                // Forma wire (lossless); --json no traduce ni enmascara —
-                // un consumidor de script decodifica con el mismo códec que
-                // `norte ls --json`.
+            verdict = verdict.max(Verdict::from_row(row));
+            let written = if json {
+                // Wire form (lossless); --json neither translates nor
+                // masks — a script consumer decodes with the same codec
+                // as `norte ls --json`.
                 writeln!(out, "{}", serde_json::to_string(row)?)
             } else {
                 let cells = norte_frontend::compare::cells_for(row, None, None);
-                let left_name = cells.left.as_ref().map_or_else(String::new, cara);
-                let right_name = cells.right.as_ref().map_or_else(String::new, cara);
-                // LOS DOS glifos, como la TUI. `Same` no es una respuesta por
-                // sí solo (ver la rustdoc de `compare::Glyphs`): `Same`/`!`
-                // salió de un hash o de un tamaño distinto y `Same`/`?` de un
-                // provider que no pudo contestar, y enseñar uno sin el otro es
-                // la deriva que este comando existe para no tener.
+                let left_name = cells.left.as_ref().map_or_else(String::new, face_name);
+                let right_name = cells.right.as_ref().map_or_else(String::new, face_name);
+                // BOTH glyphs, like the TUI. `Same` is not an answer by
+                // itself (see `compare::Glyphs`'s rustdoc): `Same`/`!`
+                // came from a hash or a different size and `Same`/`?`
+                // from a provider that could not answer, and showing one
+                // without the other is the drift this command exists not
+                // to have.
                 writeln!(
                     out,
                     "{}{} {left_name}\t{right_name}",
                     cells.glyphs.verdict, cells.glyphs.confidence
                 )
             };
-            if let Err(e) = escrito {
-                return Ok(codigo_por_escritura(&e));
+            if let Err(e) = written {
+                return Ok(write_error_code(&e));
             }
         }
     }
     if let Err(e) = out.flush() {
-        return Ok(codigo_por_escritura(&e));
+        return Ok(write_error_code(&e));
     }
-    // El lock de stdout se suelta AQUÍ: lo que quede por decir va a stderr.
+    // stdout's lock is released HERE: whatever is left to say goes to
+    // stderr.
     drop(out);
 
     match task.join().await {
-        TaskState::Completed => Ok(veredicto.codigo()),
+        TaskState::Completed => Ok(verdict.code()),
         other => {
             eprintln!(
                 "norte: {}",

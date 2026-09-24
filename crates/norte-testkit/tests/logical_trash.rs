@@ -1,7 +1,7 @@
-//! `MemProvider` papelera LÓGICA (#99, cierra deuda H2): destino recuperable
-//! `.norte-trash/<id>/payload` + idempotencia bajo fallo transitorio (el
-//! efecto ya aplicó y aun así devuelve error), que es lo que el engine
-//! `trash_retrying` explota para conservar el `reversal_ref` del undo.
+//! `MemProvider` LOGICAL trash (#99, closes debt H2): recoverable destination
+//! `.norte-trash/<id>/payload` + idempotency under transient failure (the
+//! effect already applied and it still returns an error), which is what the
+//! engine's `trash_retrying` exploits to keep undo's `reversal_ref`.
 
 use bytes::Bytes;
 use norte_proto::{Error, VPath};
@@ -10,7 +10,7 @@ use norte_vfs::Provider;
 use norte_vfs::trash::TrashId;
 
 fn vp(w: &str) -> VPath {
-    VPath::parse(w).expect("wire de test válido")
+    VPath::parse(w).expect("valid test wire")
 }
 
 async fn seed_file(p: &MemProvider, wire: &str, body: &[u8]) {
@@ -34,7 +34,7 @@ async fn logical_trash_moves_victim_and_returns_the_recoverable_payload() {
         p.stat(&vp("mem:///victim.txt")).await,
         Err(Error::NotFound)
     ));
-    assert!(p.stat(&dest.unwrap()).await.is_ok(), "payload recuperable");
+    assert!(p.stat(&dest.unwrap()).await.is_ok(), "recoverable payload");
 }
 
 #[tokio::test]
@@ -43,29 +43,29 @@ async fn logical_trash_recovers_the_payload_after_a_transient_post_move_failure(
     seed_file(&p, "mem:///victim.txt", b"data").await;
     let id = TrashId::new(2000, 3);
 
-    // El movimiento aplica y AUN ASÍ devuelve transitorio (#17): la víctima ya
-    // no está pero el `reversal_ref` se perdería sin idempotencia.
+    // The move applies and STILL returns transient (#17): the victim is
+    // already gone but the `reversal_ref` would be lost without idempotency.
     p.faults().ambiguous_mutations(1);
     let first = p.trash(&vp("mem:///victim.txt"), &id).await;
     assert!(
         matches!(first, Err(Error::ProviderUnavailable { retryable: true })),
-        "transitorio tras el efecto: {first:?}"
+        "transient after the effect: {first:?}"
     );
     assert!(
         matches!(p.stat(&vp("mem:///victim.txt")).await, Err(Error::NotFound)),
-        "el efecto YA se aplicó (víctima movida)"
+        "the effect has ALREADY been applied (victim moved)"
     );
 
-    // Reintento con el MISMO id determinista: recupera el payload en vez de
-    // dar `NotFound` y perder el destino recuperable.
+    // Retry with the SAME deterministic id: recovers the payload instead of
+    // giving `NotFound` and losing the recoverable destination.
     let second = p
         .trash(&vp("mem:///victim.txt"), &id)
         .await
-        .expect("el reintento recupera");
+        .expect("the retry recovers");
     assert_eq!(
         second,
         Some(vp("mem:///.norte-trash/2000-3/victim.txt")),
-        "reversal_ref preservado"
+        "reversal_ref preserved"
     );
 }
 
@@ -74,17 +74,18 @@ async fn logical_trash_preserves_a_hostile_non_utf8_basename_through_recovery() 
     use futures::StreamExt as _;
     use norte_proto::Segment;
 
-    // Nombre CRUDO no-UTF8 del corpus canónico (surrogate suelto WTF-8): el
-    // único codepath que mueve bytes hostiles por el re-key + la recuperación
-    // idempotente es `trash_logical` (sftp/S3 son UTF-8-only). Regla CLAUDE.md:
-    // las regresiones de path necesitan fixture del corpus canónico.
+    // A RAW non-UTF8 name from the canonical corpus (a lone WTF-8
+    // surrogate): the only codepath that moves hostile bytes through the
+    // re-key + idempotent recovery is `trash_logical` (sftp/S3 are
+    // UTF-8-only). CLAUDE.md rule: path regressions need a canonical
+    // corpus fixture.
     let hostile = norte_testkit::corpus::hostile_names()
         .into_iter()
         .find(|n| n.id == "lone_surrogate")
         .expect("corpus lone_surrogate")
         .bytes;
     let p = MemProvider::new().with_logical_trash();
-    let victim = MemProvider::root().join(Segment::new(hostile.clone()).expect("segmento"));
+    let victim = MemProvider::root().join(Segment::new(hostile.clone()).expect("segment"));
     {
         let mut sink = p.write(&victim).await.expect("write");
         sink.write(Bytes::from_static(b"payload"))
@@ -93,24 +94,24 @@ async fn logical_trash_preserves_a_hostile_non_utf8_basename_through_recovery() 
         sink.commit().await.expect("commit");
     }
 
-    // Transitorio tras el movimiento + reintento: la recuperación compara el
-    // payload determinista con bytes hostiles.
+    // Transient after the move + retry: recovery compares the deterministic
+    // payload with hostile bytes.
     let id = TrashId::new(4000, 9);
     p.faults().ambiguous_mutations(1);
-    assert!(p.trash(&victim, &id).await.is_err(), "transitorio");
+    assert!(p.trash(&victim, &id).await.is_err(), "transient");
     let dest = p
         .trash(&victim, &id)
         .await
-        .expect("recupera")
-        .expect("papelera lógica => Some");
+        .expect("recovers")
+        .expect("logical trash => Some");
 
-    // El basename del payload conserva los bytes hostiles byte-exactos.
+    // The payload's basename keeps the hostile bytes byte-exact.
     assert_eq!(
         dest.file_name().map(Segment::as_bytes),
         Some(&hostile[..]),
-        "basename hostil byte-exacto"
+        "byte-exact hostile basename"
     );
-    // Y el contenido sobrevivió el re-key del subárbol.
+    // And the content survived the subtree's re-key.
     let mut stream = p.read(&dest, None).await.expect("read payload");
     let mut buf = Vec::new();
     while let Some(chunk) = stream.next().await {
@@ -123,7 +124,7 @@ async fn logical_trash_preserves_a_hostile_non_utf8_basename_through_recovery() 
 async fn logical_trash_of_a_never_existing_victim_is_not_found() {
     let p = MemProvider::new().with_logical_trash();
     let id = TrashId::new(3000, 1);
-    // Sin víctima ni payload: `NotFound` genuino, la idempotencia no lo enmascara.
+    // No victim and no payload: genuine `NotFound`, idempotency does not mask it.
     assert!(matches!(
         p.trash(&vp("mem:///ghost.txt"), &id).await,
         Err(Error::NotFound)

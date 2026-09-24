@@ -57,7 +57,7 @@
     },
     "dialog": {
       "$ref": "#/$defs/RawSection",
-      "description": "Contexto `dialog` (H1, issue #24): teclas de modales/overlays\n(confirmación, aprobación, popups de navegación…) como keymap de\ndatos en vez de handlers ad hoc — la ayuda generada nunca puede\ndesincronizarse de un rebind. Se fusiona con `global` igual que\n`pane`/`viewer` (ver [`Screen::Dialog`])."
+      "description": "`dialog` context (H1, issue #24): modal/overlay keys (confirmation,\napproval, navigation popups…) as data keymap instead of ad hoc\nhandlers — the generated help can never fall out of sync with a\nrebind. Merges with `global` the same as `pane`/`viewer` (see\n[`Screen::Dialog`])."
     },
     "dialog_from": {
       "description": "The preset whose `[dialog]` section this one adopts. norte's dialogs are\nnorte's, not the imitated program's: a Total Commander user expects TC's\npanel keys, not a TC confirmation dialog that TC never had. Only legal in\na PRESET (a user layer that set it would silently redefine every overlay\nkey — the same reason `counts` is refused there), only one level deep, and\nonly naming a bundled preset. Declaring it together with a `[dialog]`\nsection of your own is an error rather than a precedence puzzle.",

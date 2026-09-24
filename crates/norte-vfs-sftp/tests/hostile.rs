@@ -153,9 +153,9 @@ async fn resume_over_sftp_resumes() {
     // The final destination does not exist yet.
     assert_eq!(p.stat(&vp("/big.bin")).await.unwrap_err(), Error::NotFound);
 
-    // Second leg: resumes from 4 bytes.
+    // Second leg: resumes from 5 bytes.
     let (mut sink, already) = p.open_resumable(&vp("/big.bin")).await.expect("open 2");
-    assert_eq!(already, 4, "resumes after what was preserved");
+    assert_eq!(already, 5, "resumes after what was preserved");
     sink.write(Bytes::from_static(b"world")).await.unwrap();
     sink.commit().await.expect("commit");
     // The content is the concatenation.

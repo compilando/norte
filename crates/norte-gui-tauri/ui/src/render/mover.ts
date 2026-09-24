@@ -109,7 +109,11 @@ function pintarVelo(
  * it without the key reaching the host, and the click the browser fires on
  * release over the handle is swallowed: a drag is not choosing the tab.
  */
-export function hacerArrastrable(screen: Screen, handle: HTMLElement, slotId: number): void {
+export function hacerArrastrable(
+  screen: Screen,
+  handle: HTMLElement,
+  slotId: number,
+): void {
   handle.addEventListener("pointerdown", (e: PointerEvent) => {
     if (e.button !== 0) {
       return;

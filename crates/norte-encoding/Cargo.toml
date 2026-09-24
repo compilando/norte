@@ -1,6 +1,6 @@
 [package]
 name = "norte-encoding"
-description = "Detección y decodificación de encodings de texto (BOM → chardetng → heurística NUL)"
+description = "Text-encoding detection and decoding (BOM → chardetng → NUL heuristic)"
 license = "MIT OR Apache-2.0"
 version.workspace = true
 edition.workspace = true
@@ -11,9 +11,9 @@ authors.workspace = true
 [dependencies]
 chardetng.workspace = true
 encoding_rs.workspace = true
-# La normalización NFC del emparejamiento de nombres (ADR 0051, #151): YA en
-# el workspace (norte-compare, norte-core, norte-vfs-local, norte-testkit),
-# así que la regla dura 8 no pide justificación.
+# NFC normalization for name pairing (ADR 0051, #151): ALREADY in the
+# workspace (norte-compare, norte-core, norte-vfs-local, norte-testkit), so
+# hard rule 8 asks for no further justification.
 unicode-normalization.workspace = true
 
 [dev-dependencies]

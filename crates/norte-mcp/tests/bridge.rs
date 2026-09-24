@@ -1,7 +1,7 @@
-//! Integración del puente MCP (M3-4 T5) contra un daemon REAL en tempdir:
-//! handshake, tools/list, y cada tool reenviada con la gobernanza del daemon
-//! (scope + policy) puesta. El puente se conduce por `handle_line` — sin
-//! subprocesos ni stdio.
+//! MCP bridge integration (M3-4 T5) against a REAL daemon in a tempdir:
+//! handshake, tools/list, and every tool forwarded with the daemon's
+//! governance (scope + policy) in place. The bridge is driven via
+//! `handle_line` — no subprocesses or stdio.
 #![cfg(unix)]
 
 use std::path::PathBuf;
@@ -19,15 +19,15 @@ use norte_testkit::MemProvider;
 use norte_vfs::Provider;
 
 fn vp(wire: &str) -> VPath {
-    VPath::parse(wire).expect("wire válido de test")
+    VPath::parse(wire).expect("valid test wire")
 }
 
 async fn write_file(mem: &MemProvider, wire: &str, content: &[u8]) {
-    let mut sink = mem.write(&vp(wire)).await.expect("write abre");
+    let mut sink = mem.write(&vp(wire)).await.expect("write opens");
     sink.write(Bytes::copy_from_slice(content))
         .await
-        .expect("chunk entra");
-    sink.commit().await.expect("commit publica");
+        .expect("chunk goes in");
+    sink.commit().await.expect("commit publishes");
 }
 
 struct TestDaemon {
@@ -35,15 +35,15 @@ struct TestDaemon {
     _run: tokio::task::JoinHandle<Result<(), DaemonError>>,
     _dir: tempfile::TempDir,
     mem: Arc<MemProvider>,
-    /// El MISMO registro que consulta el gate: los tests conceden directo
-    /// (el round-trip request+grant por wire ya lo cubren los tests del
-    /// daemon y el E2E de T7).
+    /// The SAME registry the gate queries: tests grant directly (the
+    /// request+grant round trip over the wire is already covered by the
+    /// daemon's own tests and T7's E2E).
     scopes: ScopeRegistry,
 }
 
-/// Daemon con journal in-memory + regla `allow` + scopes compartidos (patrón
-/// de `norte-core/tests/daemon.rs`, copiado — un crate no importa helpers de
-/// los tests de otro).
+/// Daemon with an in-memory journal + an `allow` rule + shared scopes
+/// (`norte-core/tests/daemon.rs`'s pattern, copied — a crate does not import
+/// test helpers from another's tests).
 async fn spawn_daemon_allow() -> TestDaemon {
     let dir = tempfile::tempdir().expect("tempdir");
     let socket = dir.path().join("d.sock");
@@ -82,7 +82,7 @@ async fn spawn_daemon_allow() -> TestDaemon {
     }
 }
 
-/// Concede a `session` todo `mem:///proj` (directo al registro compartido).
+/// Grants `session` all of `mem:///proj` (directly into the shared registry).
 fn grant_proj(d: &TestDaemon, session: &str) {
     d.scopes.grant(
         session,
@@ -90,7 +90,8 @@ fn grant_proj(d: &TestDaemon, session: &str) {
     );
 }
 
-/// `tools/call` por el puente; devuelve `(texto, is_error)` del content MCP.
+/// `tools/call` through the bridge; returns `(text, is_error)` from the MCP
+/// content.
 async fn call_tool(b: &Bridge, name: &str, args: serde_json::Value) -> (String, bool) {
     let req = serde_json::json!({
         "jsonrpc": "2.0",
@@ -101,14 +102,14 @@ async fn call_tool(b: &Bridge, name: &str, args: serde_json::Value) -> (String, 
     let out = b
         .handle_line(&req.to_string())
         .await
-        .expect("una respuesta por request");
-    let v: serde_json::Value = serde_json::from_str(&out).expect("respuesta JSON");
-    assert_eq!(v["id"], 42, "el id se ecoa verbatim");
+        .expect("one response per request");
+    let v: serde_json::Value = serde_json::from_str(&out).expect("JSON response");
+    assert_eq!(v["id"], 42, "the id is echoed verbatim");
     let content = v["result"]["content"][0]["text"]
         .as_str()
-        .expect("content de texto")
+        .expect("text content")
         .to_owned();
-    let is_error = v["result"]["isError"].as_bool().expect("isError presente");
+    let is_error = v["result"]["isError"].as_bool().expect("isError present");
     (content, is_error)
 }
 
@@ -120,12 +121,12 @@ async fn initialize_ping_y_tools_list() {
     let out = b
         .handle_line(r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"t","version":"0"}}}"#)
         .await
-        .expect("respuesta");
+        .expect("response");
     let v: serde_json::Value = serde_json::from_str(&out).expect("json");
     assert_eq!(v["result"]["protocolVersion"], "2025-06-18");
     assert_eq!(v["result"]["serverInfo"]["name"], "norte-mcp");
 
-    // Las notificaciones (sin id) JAMÁS producen respuesta (JSON-RPC).
+    // Notifications (no id) NEVER produce a response (JSON-RPC).
     assert!(
         b.handle_line(r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#)
             .await
@@ -135,14 +136,14 @@ async fn initialize_ping_y_tools_list() {
     let out = b
         .handle_line(r#"{"jsonrpc":"2.0","id":2,"method":"ping"}"#)
         .await
-        .expect("respuesta");
+        .expect("response");
     let v: serde_json::Value = serde_json::from_str(&out).expect("json");
     assert_eq!(v["result"], serde_json::json!({}));
 
     let out = b
         .handle_line(r#"{"jsonrpc":"2.0","id":3,"method":"tools/list"}"#)
         .await
-        .expect("respuesta");
+        .expect("response");
     let v: serde_json::Value = serde_json::from_str(&out).expect("json");
     let names: Vec<&str> = v["result"]["tools"]
         .as_array()
@@ -150,7 +151,7 @@ async fn initialize_ping_y_tools_list() {
         .iter()
         .map(|t| t["name"].as_str().expect("name"))
         .collect();
-    for esperado in [
+    for expected in [
         "list_dir",
         "stat",
         "read_file",
@@ -160,17 +161,17 @@ async fn initialize_ping_y_tools_list() {
         "task_status",
         "request_scope",
     ] {
-        assert!(names.contains(&esperado), "falta tool {esperado}");
+        assert!(names.contains(&expected), "missing tool {expected}");
     }
 
-    // Método desconocido → error JSON-RPC -32601; JSON roto → -32700.
+    // Unknown method → JSON-RPC error -32601; broken JSON → -32700.
     let out = b
         .handle_line(r#"{"jsonrpc":"2.0","id":4,"method":"resources/list"}"#)
         .await
-        .expect("respuesta");
+        .expect("response");
     let v: serde_json::Value = serde_json::from_str(&out).expect("json");
     assert_eq!(v["error"]["code"], -32601);
-    let out = b.handle_line("{esto no es json").await.expect("respuesta");
+    let out = b.handle_line("{this is not json").await.expect("response");
     let v: serde_json::Value = serde_json::from_str(&out).expect("json");
     assert_eq!(v["error"]["code"], -32700);
     assert_eq!(v["id"], serde_json::Value::Null);
@@ -178,8 +179,8 @@ async fn initialize_ping_y_tools_list() {
 
 #[tokio::test]
 async fn list_dir_y_stat_leen_bajo_scope() {
-    // Las LECTURAS pasan por el gate de scope igual que las mutaciones (#80):
-    // un agente lee SOLO bajo un scope concedido. Aquí se concede antes.
+    // READS go through the scope gate just like mutations do (#80): an agent
+    // reads ONLY under a granted scope. Granted here beforehand.
     let d = spawn_daemon_allow().await;
     d.mem.mkdir(&vp("mem:///proj")).await.expect("mkdir");
     write_file(&d.mem, "mem:///proj/a.txt", b"hola").await;
@@ -198,8 +199,8 @@ async fn list_dir_y_stat_leen_bajo_scope() {
     assert_eq!(v["size"], 4);
 }
 
-/// #80: un agente SIN scope recibe la denegación ACCIONABLE (menciona
-/// `request_scope`) en las lecturas, igual que ya la recibe en `copy`.
+/// #80: an agent WITHOUT scope receives the ACTIONABLE denial (mentions
+/// `request_scope`) on reads, just as it already does on `copy`.
 #[tokio::test]
 async fn lecturas_sin_scope_son_accionables() {
     let d = spawn_daemon_allow().await;
@@ -216,10 +217,10 @@ async fn lecturas_sin_scope_son_accionables() {
         ),
     ] {
         let (out, err) = call_tool(&b, tool, args).await;
-        assert!(err, "{tool}: sin scope debe fallar");
+        assert!(err, "{tool}: must fail without scope");
         assert!(
             out.contains("out-of-scope") && out.contains("request_scope"),
-            "{tool}: error accionable, fue: {out}"
+            "{tool}: actionable error, was: {out}"
         );
     }
 }
@@ -242,7 +243,7 @@ async fn read_file_texto_y_binario_fiel() {
     assert!(!err, "{out}");
     let v: serde_json::Value = serde_json::from_str(&out).expect("payload");
     assert_eq!(v["text"], "hola ñ");
-    assert!(v.get("base64").is_none(), "UTF-8 válido: sin base64");
+    assert!(v.get("base64").is_none(), "valid UTF-8: no base64");
     assert_eq!(v["eof"], true);
 
     let (out, err) = call_tool(
@@ -253,10 +254,10 @@ async fn read_file_texto_y_binario_fiel() {
     .await;
     assert!(!err, "{out}");
     let v: serde_json::Value = serde_json::from_str(&out).expect("payload");
-    let fieles = base64::engine::general_purpose::STANDARD
-        .decode(v["base64"].as_str().expect("base64 presente"))
-        .expect("base64 válido");
-    assert_eq!(fieles, vec![0x68, 0xE9, 0x00, 0xFF], "bytes exactos");
+    let faithful = base64::engine::general_purpose::STANDARD
+        .decode(v["base64"].as_str().expect("base64 present"))
+        .expect("valid base64");
+    assert_eq!(faithful, vec![0x68, 0xE9, 0x00, 0xFF], "exact bytes");
     assert!(v["text"].as_str().expect("text").contains('\u{FFFD}'));
 }
 
@@ -267,20 +268,20 @@ async fn copy_con_scope_completa_y_fuera_de_scope_es_accionable() {
     write_file(&d.mem, "mem:///proj/src.txt", b"hola").await;
     let b = Bridge::connect(&d.socket, "claude").await.expect("connect");
 
-    // Sin scope: el error de tool es ACCIONABLE (menciona request_scope).
+    // No scope: the tool error is ACTIONABLE (mentions request_scope).
     let (out, err) = call_tool(
         &b,
         "copy",
         serde_json::json!({"from": "mem:///proj/src.txt", "to": "mem:///proj/dst.txt"}),
     )
     .await;
-    assert!(err, "sin scope debe fallar");
+    assert!(err, "must fail without scope");
     assert!(
         out.contains("out-of-scope") && out.contains("request_scope"),
-        "accionable para el agente: {out}"
+        "actionable for the agent: {out}"
     );
 
-    // Con scope: completa y el archivo existe.
+    // With scope: completes and the file exists.
     grant_proj(&d, "claude");
     let (out, err) = call_tool(
         &b,
@@ -293,7 +294,7 @@ async fn copy_con_scope_completa_y_fuera_de_scope_es_accionable() {
     assert_eq!(v["state"], "completed");
     assert!(d.mem.stat(&vp("mem:///proj/dst.txt")).await.is_ok());
 
-    // task_status del task recién terminado (retenido en recientes).
+    // task_status for the task that just finished (retained among recents).
     let task_id = v["task_id"].as_u64().expect("task_id");
     let (out, err) = call_tool(&b, "task_status", serde_json::json!({"task_id": task_id})).await;
     assert!(!err, "{out}");
@@ -309,9 +310,9 @@ async fn delete_default_trash_y_permanent_explicito() {
     grant_proj(&d, "claude");
     let b = Bridge::connect(&d.socket, "claude").await.expect("connect");
 
-    // Default trash: la papelera lógica del testkit lo acepta — completa y
-    // la víctima desaparece de la vista (RECUPERABLE: el journal registra
-    // Trashed con destino; el undo de M3-2 restaura desde ahí).
+    // Default trash: the testkit's logical trash accepts it — completes and
+    // the victim disappears from view (RECOVERABLE: the journal records a
+    // Trashed with a destination; M3-2's undo restores from there).
     let (out, err) = call_tool(
         &b,
         "delete",
@@ -326,8 +327,8 @@ async fn delete_default_trash_y_permanent_explicito() {
         Err(norte_proto::Error::NotFound)
     ));
 
-    // Permanent explícito: borra (la policy allow del harness lo permite;
-    // con la policy de ejemplo esto sería un ask/deny).
+    // Explicit permanent: deletes (the harness's allow policy permits it;
+    // with the example policy this would be an ask/deny).
     write_file(&d.mem, "mem:///proj/victima2.txt", b"x").await;
     let (out, err) = call_tool(
         &b,
@@ -343,7 +344,7 @@ async fn delete_default_trash_y_permanent_explicito() {
         Err(norte_proto::Error::NotFound)
     ));
 
-    // Modo inventado → error de tool, sin llamar al daemon.
+    // Made-up mode → tool error, without calling the daemon.
     let (out, err) = call_tool(
         &b,
         "delete",
@@ -372,7 +373,7 @@ async fn request_scope_devuelve_id_y_hint_humano() {
             .as_str()
             .expect("hint")
             .contains("norte policy grant"),
-        "el agente sabe qué pedirle al humano: {out}"
+        "the agent knows what to ask the human: {out}"
     );
 }
 
@@ -383,7 +384,7 @@ async fn vpath_invalido_es_error_de_tool_local() {
     let (out, err) = call_tool(&b, "stat", serde_json::json!({"path": "no-es-un-vpath"})).await;
     assert!(err);
     assert!(out.contains("invalid VPath"), "{out}");
-    // Tool desconocida → error de tool (no de protocolo).
+    // Unknown tool → tool error (not protocol error).
     let (out, err) = call_tool(&b, "write_file", serde_json::json!({})).await;
     assert!(err);
     assert!(out.contains("unknown tool"), "{out}");
@@ -393,13 +394,14 @@ async fn vpath_invalido_es_error_de_tool_local() {
 async fn sesion_ilegal_rechazada_en_connect() {
     let d = spawn_daemon_allow().await;
     let Err(err) = Bridge::connect(&d.socket, "con espacios").await else {
-        panic!("el daemon valida el charset en el handshake");
+        panic!("the daemon validates the charset in the handshake");
     };
     assert!(matches!(err, norte_mcp::bridge::BridgeError::Daemon(_)));
 }
 
-/// La tool `move` (rust M3: única sin cobertura, y ahora serializa SU
-/// `FsMoveParams`): mueve dentro del scope y el origen desaparece.
+/// The `move` tool (rust M3: the only one without coverage, and now
+/// serializes ITS OWN `FsMoveParams`): moves within scope and the source
+/// disappears.
 #[tokio::test]
 async fn move_renombra_dentro_del_scope() {
     let d = spawn_daemon_allow().await;
@@ -424,10 +426,10 @@ async fn move_renombra_dentro_del_scope() {
     ));
 }
 
-/// Regla 1 en la superficie NUEVA (encoding H1): un nombre hostil que NACE
-/// como bytes en el provider viaja al agente como wire form (%XX, jamás
-/// lossy); el agente lo ECOA en copy y el destino tiene LOS MISMOS bytes.
-/// Corpus completo de norte-testkit.
+/// Rule 1 on the NEW surface (encoding H1): a hostile name that IS BORN as
+/// bytes in the provider travels to the agent as wire form (%XX, never
+/// lossy); the agent ECHOES it in copy and the destination has THE SAME
+/// bytes. Full norte-testkit corpus.
 #[tokio::test]
 async fn nombre_hostil_round_trip_byte_fiel_por_el_puente() {
     let d = spawn_daemon_allow().await;
@@ -440,8 +442,8 @@ async fn nombre_hostil_round_trip_byte_fiel_por_el_puente() {
     let b = Bridge::connect(&d.socket, "claude").await.expect("connect");
 
     for n in norte_testkit::corpus::hostile_names() {
-        // Origen = BYTES, sin pasar por String en ningún momento.
-        let seg = norte_proto::Segment::new(n.bytes.clone()).expect("segmento del corpus");
+        // Source = BYTES, never going through a String at any point.
+        let seg = norte_proto::Segment::new(n.bytes.clone()).expect("corpus segment");
         let src = vp("mem:///proj").join(seg);
         let mut sink = d.mem.write(&src).await.expect("write");
         sink.write(Bytes::from_static(b"payload"))
@@ -449,7 +451,7 @@ async fn nombre_hostil_round_trip_byte_fiel_por_el_puente() {
             .expect("chunk");
         sink.commit().await.expect("commit");
 
-        // 1) list_dir emite el wire form fiel (nunca U+FFFD).
+        // 1) list_dir emits the faithful wire form (never U+FFFD).
         let (out, err) =
             call_tool(&b, "list_dir", serde_json::json!({"path": "mem:///proj"})).await;
         assert!(!err, "{}: {out}", n.id);
@@ -460,18 +462,18 @@ async fn nombre_hostil_round_trip_byte_fiel_por_el_puente() {
             .iter()
             .filter_map(|e| e["path"].as_str())
             .find(|w| VPath::parse(w).is_ok_and(|p| p == src))
-            .unwrap_or_else(|| panic!("{}: el listado no trae el wire fiel", n.id))
+            .unwrap_or_else(|| panic!("{}: the listing does not carry the faithful wire", n.id))
             .to_owned();
         assert!(
             !wire.contains('\u{FFFD}'),
-            "{}: lossy en el wire: {wire}",
+            "{}: lossy on the wire: {wire}",
             n.id
         );
 
-        // 2) El agente ECOA ese string en copy → mismos bytes en el destino.
+        // 2) The agent ECHOES that string in copy → same bytes at the destination.
         let dst_wire = format!(
             "mem:///dst/{}",
-            wire.strip_prefix("mem:///proj/").expect("hijo de proj")
+            wire.strip_prefix("mem:///proj/").expect("child of proj")
         );
         let (out, err) = call_tool(
             &b,
@@ -485,28 +487,28 @@ async fn nombre_hostil_round_trip_byte_fiel_por_el_puente() {
             .mem
             .stat(&dst)
             .await
-            .unwrap_or_else(|e| panic!("{}: destino no existe: {e}", n.id));
+            .unwrap_or_else(|e| panic!("{}: destination does not exist: {e}", n.id));
         assert_eq!(
-            entry.path.file_name().expect("nombre").as_bytes(),
+            entry.path.file_name().expect("name").as_bytes(),
             n.bytes.as_slice(),
-            "{}: los bytes del nombre difieren tras el round-trip",
+            "{}: the name's bytes differ after the round trip",
             n.id
         );
-        d.mem.remove(&src).await.expect("limpia src");
-        d.mem.remove(&dst).await.expect("limpia dst");
+        d.mem.remove(&src).await.expect("clean up src");
+        d.mem.remove(&dst).await.expect("clean up dst");
     }
 }
 
-/// Encoding H2: un rango que PARTE un carácter multibyte hace parecer
-/// binario un texto — el chunk cae a lossy MARCADO + base64 byte-exacto
-/// (jamás pérdida; la description de la tool manda reensamblar por base64).
+/// Encoding H2: a range that SPLITS a multibyte character makes text look
+/// binary — the chunk falls to lossy MARKED + byte-exact base64 (never a
+/// loss; the tool's description says to reassemble via base64).
 #[tokio::test]
 async fn read_file_frontera_multibyte_cae_a_base64_fiel() {
     let d = spawn_daemon_allow().await;
     d.mem.mkdir(&vp("mem:///proj")).await.expect("mkdir");
-    // "año…": offset=1,len=1 corta la ñ (0xC3 0xB1) → chunk [0xC3].
+    // "año…": offset=1,len=1 cuts the ñ (0xC3 0xB1) → chunk [0xC3].
     write_file(&d.mem, "mem:///proj/texto.txt", "año 2026\n".as_bytes()).await;
-    grant_proj(&d, "claude"); // #80: leer exige scope
+    grant_proj(&d, "claude"); // #80: reading requires scope
     let b = Bridge::connect(&d.socket, "claude").await.expect("connect");
     let (out, err) = call_tool(
         &b,
@@ -516,15 +518,15 @@ async fn read_file_frontera_multibyte_cae_a_base64_fiel() {
     .await;
     assert!(!err, "{out}");
     let v: serde_json::Value = serde_json::from_str(&out).expect("payload");
-    let fieles = base64::engine::general_purpose::STANDARD
-        .decode(v["base64"].as_str().expect("base64 presente"))
-        .expect("base64 válido");
-    assert_eq!(fieles, [0xC3], "byte exacto de la ñ partida");
+    let faithful = base64::engine::general_purpose::STANDARD
+        .decode(v["base64"].as_str().expect("base64 present"))
+        .expect("valid base64");
+    assert_eq!(faithful, [0xC3], "exact byte of the split ñ");
     assert_eq!(v["text"], "\u{FFFD}");
 }
 
-/// Criterio único de args (sec MINOR-1 / enc H3): un argumento PRESENTE con
-/// tipo ilegal es error de tool — jamás degradación silenciosa.
+/// Single criterion for args (sec MINOR-1 / enc H3): an argument PRESENT
+/// with an illegal type is a tool error — never a silent degradation.
 #[tokio::test]
 async fn args_mal_tipados_son_error_no_degradacion() {
     let d = spawn_daemon_allow().await;
@@ -533,7 +535,7 @@ async fn args_mal_tipados_son_error_no_degradacion() {
     grant_proj(&d, "claude");
     let b = Bridge::connect(&d.socket, "claude").await.expect("connect");
 
-    // mode numérico: NO cae a trash en silencio.
+    // Numeric mode: does NOT silently fall back to trash.
     let (out, err) = call_tool(
         &b,
         "delete",
@@ -542,12 +544,9 @@ async fn args_mal_tipados_son_error_no_degradacion() {
     .await;
     assert!(err);
     assert!(out.contains("invalid mode"), "{out}");
-    assert!(
-        d.mem.stat(&vp("mem:///proj/f.txt")).await.is_ok(),
-        "intacto"
-    );
+    assert!(d.mem.stat(&vp("mem:///proj/f.txt")).await.is_ok(), "intact");
 
-    // offset float: NO lee desde 0 fingiendo aplicarlo.
+    // Float offset: does NOT read from 0 pretending to apply it.
     let (out, err) = call_tool(
         &b,
         "read_file",
@@ -557,7 +556,7 @@ async fn args_mal_tipados_son_error_no_degradacion() {
     assert!(err);
     assert!(out.contains("offset"), "{out}");
 
-    // limit string: error, no ignorado.
+    // String limit: error, not ignored.
     let (out, err) = call_tool(
         &b,
         "list_dir",

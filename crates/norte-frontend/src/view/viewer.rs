@@ -468,7 +468,7 @@ pub struct Viewer {
     /// Measured once on decoding and not per window. Measuring only what is
     /// visible would make the cap change when scrolling down, and the text
     /// would jump sideways without anyone pressing anything.
-    max_cols_texto: usize,
+    max_cols_text: usize,
     /// The IMAGE's zoom, as a percentage of what it would take up fitted.
     /// `None` = fit, and that is how it always opens: the first thing wanted
     /// from an image is to see it whole.
@@ -501,9 +501,9 @@ impl Viewer {
             forced: None,
             scroll: 0,
             hscroll: 0,
-            max_cols_texto: 0,
-            // Una imagen se abre AJUSTADA: lo primero que se quiere de ella
-            // es verla entera.
+            max_cols_text: 0,
+            // An image opens FITTED: the first thing wanted from it is to
+            // see it whole.
             zoom: None,
             plugin_preview: None,
             text: String::new(),
@@ -514,24 +514,24 @@ impl Viewer {
         }
     }
 
-    /// Viewer sobre `bytes` (ya leídos): detecta encoding y binario.
+    /// A viewer over `bytes` (already read): detects encoding and binary.
     #[must_use]
     pub fn new(path: VPath, bytes: Vec<u8>, truncated: bool) -> Self {
         let mut v = Self::base(path, bytes, truncated);
         v.recompute();
-        // Se fija UNA vez, aquí: `recompute` vuelve a correr al forzar un
-        // encoding y entonces apaga `image`, pero los bytes del fichero son
-        // los mismos y su clase también.
+        // Set ONCE, here: `recompute` runs again when forcing an encoding
+        // and then turns `image` off, but the file's bytes are the same and
+        // so is its class.
         v.image_bytes = v.image.is_some();
         v
     }
 
-    /// Viewer en modo preview de plugin (M4-P5): pinta la salida del plugin en
-    /// vez de la vista cruda. El `output` es texto de un TERCERO: se pasa por el
-    /// saneador ANSI-SGR (#29 — [`crate::ansi::parse_sgr`]: descarta escapes
-    /// peligrosos, deja solo color de primer plano) y CADA tramo se enmascara
-    /// con [`crate::display_name`] (controles/bidi/invisibles → `�`); el
-    /// `plugin_name` igual.
+    /// A viewer in plugin preview mode (M4-P5): paints the plugin's output
+    /// instead of the raw view. `output` is THIRD-PARTY text: it goes
+    /// through the ANSI-SGR sanitiser (#29 — [`crate::ansi::parse_sgr`]:
+    /// discards dangerous escapes, keeps only foreground color) and EVERY
+    /// span is masked with [`crate::display_name`] (controls/bidi/invisibles
+    /// → `�`); `plugin_name` the same way.
     #[must_use]
     pub fn with_plugin_preview(
         path: VPath,
@@ -545,7 +545,7 @@ impl Viewer {
                 line.into_iter()
                     .map(|span| crate::ansi::StyledSpan {
                         text: crate::display_name(span.text.as_bytes()).0,
-                        role: None, // ANSI-SGR no tiene concepto de rol (G3a, ver ansi.rs)
+                        role: None, // ANSI-SGR has no concept of role (G3a, see ansi.rs)
                         fg: span.fg,
                         bg: None,
                     })
@@ -554,7 +554,7 @@ impl Viewer {
             .collect();
         let plugin_name = crate::display_name(&plugin_name.into_bytes()).0;
         let mut v = Self::base(path, Vec::new(), false);
-        v.max_cols_texto = ancho_de_estilo(&styled);
+        v.max_cols_text = styled_width(&styled);
         v.plugin_preview = Some(PluginPreviewView {
             plugin_name,
             lossy,
@@ -563,24 +563,24 @@ impl Viewer {
         v
     }
 
-    /// Viewer en modo preview de plugin CON ESTILO (G3a, ADR 0037): gemelo
-    /// de [`Self::with_plugin_preview`] que consume `lines` YA
-    /// ESTRUCTURADAS (`SpanWire`, del wire `plugin.preview_styled`) en vez
-    /// de una salida ANSI-SGR que sanear. Cada `text` de span es texto de un
-    /// TERCERO — se enmascara IGUAL que la ruta ANSI (`crate::display_name`,
-    /// mismo saneado, no una copia paralela); cada `role` es un nombre de
-    /// `norte_theme::Role` que llega SIN VALIDAR por el wire (`norte-core`
-    /// no depende de `norte-theme` — ver el rustdoc de
-    /// `Backend::plugin_preview_styled`) y se valida AQUÍ, la frontera
-    /// donde el frontend por fin conoce el tema
-    /// (`norte_theme::Role::from_kebab_requestable`): un nombre desconocido
-    /// —o uno del CROMO o del ESTADO de la ventana, que desde la spec
-    /// 2026-09-11 (F2) no son pedibles por un plugin— colapsa a
-    /// `None` — jamás un panic ni una cadena libre que otra capa deba
-    /// re-interpretar (ADR 0037, mismo criterio que un tema con datos
-    /// parciales, ADR 0020). `fg` es el fallback RGB crudo, ya acotado por
-    /// el wire (`[u8; 3]` siempre representable) — se copia tal cual; `bg`
-    /// (0.66.0) igual, y no hay rol que le gane: un fondo es un fondo.
+    /// A viewer in STYLED plugin preview mode (G3a, ADR 0037): twin of
+    /// [`Self::with_plugin_preview`] that consumes ALREADY STRUCTURED
+    /// `lines` (`SpanWire`, from the `plugin.preview_styled` wire) instead
+    /// of an ANSI-SGR output to sanitise. Every span's `text` is
+    /// THIRD-PARTY text — masked the SAME WAY as the ANSI path
+    /// (`crate::display_name`, same sanitisation, not a parallel copy);
+    /// every `role` is a `norte_theme::Role` name that arrives UNVALIDATED
+    /// over the wire (`norte-core` does not depend on `norte-theme` — see
+    /// `Backend::plugin_preview_styled`'s rustdoc) and is validated HERE, the
+    /// boundary where the frontend finally knows the theme
+    /// (`norte_theme::Role::from_kebab_requestable`): an unknown name —or one
+    /// from the window's CHROME or STATE, which since the 2026-09-11 spec
+    /// (F2) a plugin cannot request— collapses to `None` — never a panic
+    /// nor a free string another layer would have to re-interpret (ADR
+    /// 0037, same criterion as a theme with partial data, ADR 0020). `fg` is
+    /// the raw RGB fallback, already bounded by the wire (`[u8; 3]` always
+    /// representable) — copied as-is; `bg` (0.66.0) the same, and no role
+    /// beats it: a background is a background.
     #[must_use]
     pub fn with_plugin_preview_styled(
         path: VPath,
@@ -594,7 +594,7 @@ impl Viewer {
             .collect();
         let plugin_name = crate::display_name(&plugin_name.into_bytes()).0;
         let mut v = Self::base(path, Vec::new(), false);
-        v.max_cols_texto = ancho_de_estilo(&styled);
+        v.max_cols_text = styled_width(&styled);
         v.plugin_preview = Some(PluginPreviewView {
             plugin_name,
             lossy,
@@ -603,15 +603,15 @@ impl Viewer {
         v
     }
 
-    /// Las filas visibles del preview de plugin CON estilo (#29), desde
-    /// `scroll` y desde [`Self::hscroll`]; `None` si el viewer no está en modo
-    /// preview de plugin. El frontend traduce [`crate::ansi::Rgb`] a su tipo de
-    /// color y las pinta.
+    /// The visible rows of the STYLED plugin preview (#29), from `scroll`
+    /// and from [`Self::hscroll`]; `None` if the viewer is not in plugin
+    /// preview mode. The frontend translates [`crate::ansi::Rgb`] to its own
+    /// color type and paints them.
     ///
-    /// Devuelve líneas PROPIAS y no referencias porque el desplazamiento
-    /// horizontal parte tramos: la salida de un plugin se desplaza igual que
-    /// el texto crudo — un previewer de CSV o de JSON produce líneas largas por
-    /// el mismo motivo que el fichero.
+    /// Returns OWNED lines and not references because the horizontal scroll
+    /// splits spans: a plugin's output scrolls the same way as raw text — a
+    /// CSV or JSON previewer produces long lines for the same reason the
+    /// file does.
     #[must_use]
     pub fn plugin_styled_rows(&self, height: usize) -> Option<Vec<crate::ansi::StyledLine>> {
         self.plugin_preview.as_ref().map(|p| {
@@ -619,36 +619,36 @@ impl Viewer {
                 .iter()
                 .skip(self.scroll)
                 .take(height)
-                .map(|l| desplazar_estilo(l, self.hscroll))
+                .map(|l| scroll_styled(l, self.hscroll))
                 .collect()
         })
     }
 
-    /// El nombre del plugin si el viewer está en modo preview (para el
-    /// indicador «via …» de la cabecera), o `None` si es la vista cruda.
+    /// The plugin's name if the viewer is in preview mode (for the header's
+    /// "via …" indicator), or `None` if it is the raw view.
     #[must_use]
     pub fn preview_plugin(&self) -> Option<&str> {
         self.plugin_preview.as_ref().map(|p| p.plugin_name.as_str())
     }
 
-    /// `true` si el viewer está en modo preview de plugin Y la decodificación
-    /// host-side del fichero fue LOSSY (#101): el frontend pinta un aviso junto
-    /// al indicador «via …». `false` para la vista cruda (que marca su propio
-    /// [`Self::had_errors`]) o para un preview no-lossy.
+    /// `true` if the viewer is in plugin preview mode AND the file's
+    /// host-side decoding was LOSSY (#101): the frontend paints a warning
+    /// next to the "via …" indicator. `false` for the raw view (which flags
+    /// its own [`Self::had_errors`]) or for a non-lossy preview.
     #[must_use]
     pub fn preview_lossy(&self) -> bool {
         self.plugin_preview.as_ref().is_some_and(|p| p.lossy)
     }
 
-    /// Re-decodifica los bytes y pone al día lo derivado.
+    /// Re-decodes the bytes and updates everything derived.
     ///
-    /// Con un preview de plugin delante NO HACE NADA, y eso es un arreglo: en
-    /// ese modo `bytes` está vacío, así que la detección decía «texto vacío» y
-    /// se llevaba por delante el ancho medido de la salida del plugin —o sea
-    /// que pulsar «recargar como…» sobre un preview de un CSV ancho apagaba su
-    /// barra horizontal y topaba el desplazamiento en cero, en silencio.
-    /// `total_rows` y `rows` ya preguntaban primero por el preview; esto es lo
-    /// que faltaba de la misma regla.
+    /// With a plugin preview in front it DOES NOTHING, and that is a fix: in
+    /// that mode `bytes` is empty, so detection said "empty text" and swept
+    /// away the width measured from the plugin's output —meaning that
+    /// pressing "reload as…" over a wide CSV's preview turned off its
+    /// horizontal bar and capped the scroll at zero, silently. `total_rows`
+    /// and `rows` already asked about the preview first; this was what was
+    /// missing from the same rule.
     fn recompute(&mut self) {
         if self.plugin_preview.is_some() {
             return;
@@ -658,8 +658,8 @@ impl Viewer {
             Detection::Binary => None,
         });
         if let Some(enc) = encoding {
-            // Forzado = sin BOM-sniffing (el usuario MANDA, spec §6.2);
-            // truncado = la cola partida queda pendiente, no es pérdida.
+            // Forced = no BOM-sniffing (the user RULES, spec §6.2);
+            // truncated = the split tail is left pending, it is not a loss.
             let Decoded {
                 text,
                 encoding,
@@ -670,13 +670,13 @@ impl Viewer {
                 norte_encoding::decode(&self.bytes, enc, !self.truncated)
             };
             self.eol = norte_encoding::detect_eol(&text);
-            // Para PINTAR: todo EOL (incl. CR de Mac clásico) parte línea.
+            // For PAINTING: every EOL (incl. classic Mac CR) splits a line.
             let text = text.replace("\r\n", "\n").replace('\r', "\n");
             self.lines = text.lines().count();
-            // La más ancha YA renderizada: los tabs se expanden antes de
-            // pintar, así que medir el texto crudo daría un tope corto y
-            // dejaría la cola de una línea con tabulaciones inalcanzable.
-            self.max_cols_texto = text
+            // The widest ALREADY rendered: tabs are expanded before
+            // painting, so measuring the raw text would give a short cap and
+            // leave the tail of a line with tabs unreachable.
+            self.max_cols_text = text
                 .lines()
                 .map(|l| crate::display::cells(&render_line(l)))
                 .max()
@@ -685,13 +685,14 @@ impl Viewer {
             self.encoding_name = encoding.name();
             self.had_errors = had_errors;
             self.hex = false;
-            // Texto (o forzado a texto): no es una imagen a mostrar como tal.
+            // Text (or forced to text): not an image to show as one.
             self.image = None;
         } else {
-            // Binario: jamás decodificar a ciegas (spec §6) — hexview. Además
-            // reconocemos si es una imagen (bytes mágicos) para que la GUI la
-            // PINTE ([`Viewer::is_image`]); el hexview sigue activo como fallback
-            // de los frontends sin render de imagen (TUI) — `rows` no cambia.
+            // Binary: never decode blindly (spec §6) — hexview. It also
+            // recognises whether it is an image (magic bytes) so the GUI can
+            // PAINT it ([`Viewer::is_image`]); the hexview stays active as a
+            // fallback for frontends with no image render (TUI) — `rows`
+            // does not change.
             self.image = image_format(&self.bytes);
             self.hex = true;
             self.encoding_name = "";
@@ -699,16 +700,17 @@ impl Viewer {
             self.had_errors = false;
             self.text = String::new();
             self.lines = 0;
-            // Sin texto no hay línea de texto que medir; el tope de la vista
-            // hexadecimal lo pone `max_cols`, que sabe de su ancho fijo.
-            self.max_cols_texto = 0;
+            // With no text there is no text line to measure; the
+            // hexadecimal view's cap is set by `max_cols`, which knows its
+            // fixed width.
+            self.max_cols_text = 0;
         }
         self.scroll = 0;
         self.hscroll = 0;
     }
 
-    /// «Recargar como…»: siguiente encoding del ciclo (spec §6). En un
-    /// binario fuerza la PRIMERA decodificación de texto del ciclo.
+    /// "Reload as…": next encoding in the cycle (spec §6). On a binary it
+    /// forces the cycle's FIRST text decoding.
     pub fn cycle_encoding(&mut self) {
         let cycle = norte_encoding::reload_cycle();
         let next = match self.forced {
@@ -722,24 +724,24 @@ impl Viewer {
         self.recompute();
     }
 
-    /// Vuelve a la detección automática (y al hexview si era binario).
+    /// Goes back to automatic detection (and to hexview if it was binary).
     pub fn reset_encoding(&mut self) {
         self.forced = None;
         self.recompute();
     }
 
-    /// Alterna el hexview manualmente (el texto decodificado se conserva).
-    /// El scroll se reclampa: los totales de fila difieren entre modos.
+    /// Toggles the hexview manually (the decoded text is kept). The scroll
+    /// gets re-clamped: row totals differ between modes.
     pub fn toggle_hex(&mut self) {
         self.hex = !self.hex;
         self.scroll = self.scroll.min(self.total_rows().saturating_sub(1));
-        // Y el horizontal a cero: las dos vistas tienen anchos distintos, así
-        // que la columna 40 del texto no es la columna 40 del volcado, y
-        // conservarla enseñaría una que el lector no eligió.
+        // And the horizontal one to zero: the two views have different
+        // widths, so text column 40 is not dump column 40, and keeping it
+        // would show one the reader did not choose.
         self.hscroll = 0;
     }
 
-    /// Total de filas visibles en el modo actual.
+    /// Total visible rows in the current mode.
     #[must_use]
     pub fn total_rows(&self) -> usize {
         if let Some(p) = &self.plugin_preview {
@@ -751,88 +753,87 @@ impl Viewer {
         }
     }
 
-    /// Baja `n` filas (con tope).
+    /// Scrolls down `n` rows (clamped).
     pub fn scroll_down(&mut self, n: usize) {
         self.scroll = (self.scroll + n).min(self.total_rows().saturating_sub(1));
     }
 
-    /// Sube `n` filas.
+    /// Scrolls up `n` rows.
     pub fn scroll_up(&mut self, n: usize) {
         self.scroll = self.scroll.saturating_sub(n);
     }
 
-    /// Al principio.
+    /// To the top.
     pub fn scroll_top(&mut self) {
         self.scroll = 0;
     }
 
-    /// Al final.
+    /// To the bottom.
     pub fn scroll_bottom(&mut self) {
         self.scroll = self.total_rows().saturating_sub(1);
     }
 
-    /// La primera columna visible, en celdas.
+    /// The first visible column, in cells.
     #[must_use]
     pub const fn hscroll(&self) -> usize {
         self.hscroll
     }
 
-    /// La línea más ancha, en celdas: cuánto hay a lo ancho.
+    /// The widest line, in cells: how much there is sideways.
     ///
-    /// El frontend lo compara con el ancho de su ventana para decidir si dibuja
-    /// barra horizontal.
+    /// The frontend compares it against its window's width to decide whether
+    /// to draw a horizontal bar.
     ///
-    /// **Depende del MODO, igual que [`Self::total_rows`].** El hexadecimal
-    /// tiene su propio ancho —77 celdas: offset, dieciséis bytes y su
-    /// columna ASCII— que en un hueco partido o en un terminal estrecho no
-    /// cabe, y negarle el eje horizontal dejaba esa columna ASCII
-    /// inalcanzable. Leer el ancho del TEXTO en modo hexadecimal era además
-    /// una barra que se movía sobre un contenido que no se movía.
+    /// **Depends on the MODE, same as [`Self::total_rows`].** The
+    /// hexadecimal view has its own width —77 cells: offset, sixteen bytes,
+    /// and its ASCII column— which does not fit in a split slot or a narrow
+    /// terminal, and denying it the horizontal axis left that ASCII column
+    /// unreachable. Reading the TEXT's width in hexadecimal mode was also a
+    /// bar that moved over content that did not move.
     #[must_use]
     pub const fn max_cols(&self) -> usize {
         if self.hex {
             HEX_ROW_CELLS
         } else {
-            self.max_cols_texto
+            self.max_cols_text
         }
     }
 
-    /// Izquierda `n` columnas.
+    /// Left `n` columns.
     pub const fn scroll_left(&mut self, n: usize) {
         self.hscroll = self.hscroll.saturating_sub(n);
     }
 
-    /// Derecha `n` columnas, sin pasarse del final de la línea más larga.
+    /// Right `n` columns, without overshooting the longest line's end.
     ///
-    /// El tope deja SIEMPRE una columna a la vista: un visor desplazado más
-    /// allá de todo su contenido es una pantalla en blanco de la que solo se
-    /// sale a ciegas.
+    /// The cap ALWAYS leaves one column in view: a viewer scrolled past all
+    /// of its content is a blank screen from which the only way out is
+    /// blind.
     pub fn scroll_right(&mut self, n: usize) {
         self.hscroll = (self.hscroll + n).min(self.max_cols().saturating_sub(1));
     }
 
-    /// Las filas visibles desde `scroll`, ya formateadas para el terminal:
-    /// tabs EXPANDIDOS (ratatui los borraría: columnas colapsadas en
-    /// silencio) y el resto de controles enmascarados a `�` (un `.ans` con
-    /// ESC se ve alterado, jamás sin marca) — misma política que los
-    /// nombres (spec §6).
+    /// The visible rows from `scroll`, already formatted for the terminal:
+    /// tabs EXPANDED (ratatui would delete them: columns collapsed silently)
+    /// and the rest of the controls masked to `�` (a `.ans` with an ESC
+    /// shows altered, never unmarked) — same policy as names (spec §6).
     ///
-    /// Y recortadas por la IZQUIERDA a [`Self::hscroll`], en los TRES modos —
-    /// texto, hexadecimal y preview de plugin. El recorte se hace aquí, sobre
-    /// la línea ya renderizada, y no en cada frontend: dos recortes son dos
-    /// formas de contar columnas que un día no coinciden.
+    /// And truncated on the LEFT to [`Self::hscroll`], in all THREE modes —
+    /// text, hexadecimal, and plugin preview. The truncation happens here,
+    /// over the already-rendered line, and not in each frontend: two
+    /// truncations are two ways of counting columns that disagree some day.
     #[must_use]
     pub fn rows(&self, height: usize) -> Vec<String> {
         if let Some(p) = &self.plugin_preview {
-            // Texto plano PROYECTADO del recorte con estilo, no un segundo
-            // recorte: la misma línea no puede pintarse distinta con color y
-            // sin él.
+            // Plain text PROJECTED from the styled truncation, not a second
+            // truncation: the same line cannot paint differently with and
+            // without color.
             p.styled
                 .iter()
                 .skip(self.scroll)
                 .take(height)
                 .map(|line| {
-                    desplazar_estilo(line, self.hscroll)
+                    scroll_styled(line, self.hscroll)
                         .iter()
                         .map(|s| s.text.as_str())
                         .collect()
@@ -841,169 +842,169 @@ impl Viewer {
         } else if self.hex {
             hex_rows(&self.bytes, self.scroll, height)
                 .into_iter()
-                .map(|f| self.recortada(f))
+                .map(|f| self.truncated_row(f))
                 .collect()
         } else {
             self.text
                 .lines()
                 .skip(self.scroll)
                 .take(height)
-                .map(|l| self.recortada(render_line(l)))
+                .map(|l| self.truncated_row(render_line(l)))
                 .collect()
         }
     }
 
-    /// Una fila ya renderizada, desplazada a [`Self::hscroll`].
-    fn recortada(&self, fila: String) -> String {
+    /// An already-rendered row, scrolled to [`Self::hscroll`].
+    fn truncated_row(&self, row: String) -> String {
         if self.hscroll == 0 {
-            return fila;
+            return row;
         }
-        crate::display::skip_cells(&fila, self.hscroll)
+        crate::display::skip_cells(&row, self.hscroll)
     }
 
-    /// Nombre del encoding decodificado (`"UTF-8"`…), o `""` si es binario.
+    /// The decoded encoding's name (`"UTF-8"`…), or `""` if binary.
     #[must_use]
     pub fn encoding_name(&self) -> &str {
         self.encoding_name
     }
 
-    /// El fin de línea detectado (solo significativo en modo texto).
+    /// The detected line ending (only meaningful in text mode).
     #[must_use]
     pub fn eol(&self) -> norte_encoding::Eol {
         self.eol
     }
 
-    /// Hubo pérdidas al decodificar (bytes inválidos → `�`).
+    /// There were losses while decoding (invalid bytes → `�`).
     #[must_use]
     pub fn had_errors(&self) -> bool {
         self.had_errors
     }
 
-    /// El encoding está FORZADO por «recargar como…» (no es la detección).
+    /// The encoding is FORCED by "reload as…" (not the detection).
     #[must_use]
     pub fn is_forced(&self) -> bool {
         self.forced.is_some()
     }
 
-    /// `true` si el contenido es una imagen reconocida (bytes mágicos) y no se
-    /// ha forzado una decodificación de texto («recargar como…»). El frontend
-    /// con render de imagen (GUI) PINTA la imagen a través de éste. El core NO
-    /// decodifica: solo reconoce. Nota: NO depende de `hex` — un frontend
-    /// gráfico muestra siempre la imagen; el hexview crudo sigue disponible
-    /// por `rows` para quien no sepa pintarla.
+    /// `true` if the content is a recognised image (magic bytes) and no text
+    /// decoding has been forced ("reload as…"). The frontend with image
+    /// render (GUI) PAINTS the image through this. The core does NOT decode:
+    /// it only recognises. Note: it does NOT depend on `hex` — a graphical
+    /// frontend always shows the image; the raw hexview stays available
+    /// through `rows` for whoever cannot paint it.
     ///
-    /// La TUI NO usa este getter para decidir si pide píxeles por el
-    /// protocolo de kitty (fase 5 WOW): es `false` en cuanto un previewer de
-    /// plugin sustituye la vista cruda por su propio `PluginPreview`, y esa
-    /// decisión necesita saber si el FICHERO es una imagen con independencia
-    /// de qué previewer ganó — mira los bytes por su cuenta con
-    /// [`image_format`] antes de que la cadena de preview tenga oportunidad
-    /// de esconder el formato (`norte-tui::viewer_open`). Cuando no pinta
-    /// píxeles, cae a `rows` (hexview) igual que siempre.
+    /// The TUI does NOT use this getter to decide whether to request pixels
+    /// through the kitty protocol (phase 5 WOW): it becomes `false` the
+    /// moment a plugin previewer replaces the raw view with its own
+    /// `PluginPreview`, and that decision needs to know whether the FILE is
+    /// an image regardless of which previewer won — it looks at the bytes on
+    /// its own with [`image_format`] before the preview chain gets a chance
+    /// to hide the format (`norte-tui::viewer_open`). When it does not paint
+    /// pixels, it falls back to `rows` (hexview) as always.
     #[must_use]
     pub fn is_image(&self) -> bool {
         self.plugin_preview.is_none() && self.image.is_some()
     }
 
-    /// Si los BYTES que se leyeron son los de una imagen, gane quien gane la
-    /// cadena de preview.
+    /// Whether the BYTES that were read are an image's, whoever wins the
+    /// preview chain.
     ///
-    /// Es la pregunta distinta que [`Viewer::is_image`] no contesta: aquél
-    /// dice «este visor está PINTANDO una imagen» y se vuelve `false` en
-    /// cuanto un previewer de plugin sustituye la vista cruda. Para decidir
-    /// la clase de una hermana ([`hermana`]) hace falta saber qué es el
-    /// FICHERO, que no cambia porque un plugin haya ganado — es la misma
-    /// distinción que la TUI ya hacía a mano llamando a [`image_format`]
-    /// sobre los bytes antes de dejar actuar a los previewers.
+    /// It is the different question [`Viewer::is_image`] does not answer:
+    /// that one says "this viewer is PAINTING an image" and turns `false`
+    /// the moment a plugin previewer replaces the raw view. To decide a
+    /// sibling's class ([`hermana`]), it is necessary to know what the FILE
+    /// is, which does not change because a plugin won — it is the same
+    /// distinction the TUI already made by hand, calling [`image_format`]
+    /// over the bytes before letting the previewers act.
     #[must_use]
     pub fn is_image_by_bytes(&self) -> bool {
         self.image_bytes
     }
 
-    /// Traslada el veredicto por bytes a un visor construido SIN ellos.
+    /// Carries the byte-based verdict over to a viewer built WITHOUT them.
     ///
-    /// Los constructores de preview de plugin reciben la salida del plugin y
-    /// nunca el fichero, así que no pueden averiguarlo por su cuenta: quien
-    /// los llama sí tiene los bytes (o el visor anterior) a mano y lo dice
-    /// aquí. Sin esto, abrir una foto con un previewer de imágenes aprobado
-    /// la dejaba clasificada como «no es una imagen», y el carrete de
-    /// [`hermana`] pasaba de largo TODAS las fotos.
+    /// The plugin preview constructors receive the plugin's output and never
+    /// the file, so they cannot find it out on their own: whoever calls them
+    /// does have the bytes (or the previous viewer) at hand and says so
+    /// here. Without this, opening a photo with an approved image previewer
+    /// left it classified as "not an image", and [`hermana`]'s reel skipped
+    /// right past EVERY photo.
     pub fn set_image_by_bytes(&mut self, si: bool) {
         self.image_bytes = si;
     }
 
-    /// El formato de imagen reconocido (para la barra de estado), o `None` si
-    /// no está en modo imagen. Solo `Some` cuando [`Viewer::is_image`].
+    /// The recognised image format (for the status bar), or `None` if not in
+    /// image mode. Only `Some` when [`Viewer::is_image`].
     #[must_use]
     pub fn image_kind(&self) -> Option<ImageFmt> {
         self.is_image().then_some(self.image).flatten()
     }
 
-    /// Los bytes crudos de la imagen para que el frontend los decodifique
-    /// (regla 7: el core no decodifica), o `None` si no está en modo imagen.
-    /// Pueden estar TRUNCADOS (`self.truncated`): el decodificador del frontend
-    /// debe tolerar un decode fallido y caer a un estado de error, no romper.
+    /// The image's raw bytes for the frontend to decode (rule 7: the core
+    /// does not decode), or `None` if not in image mode. They can be
+    /// TRUNCATED (`self.truncated`): the frontend's decoder must tolerate a
+    /// failed decode and fall back to an error state, not break.
     #[must_use]
     pub fn image_bytes(&self) -> Option<&[u8]> {
         self.is_image().then_some(self.bytes.as_slice())
     }
 
-    /// El zoom de la imagen: `None` = AJUSTAR, que es como se abre.
+    /// The image's zoom: `None` = FIT, which is how it opens.
     ///
-    /// Un porcentaje y no un factor porque es lo que se enseña en la barra de
-    /// estado, y porque el ciclo de peldaños se escribe en porcentajes.
+    /// A percentage and not a factor because that is what shows on the
+    /// status bar, and because the step cycle is written in percentages.
     #[must_use]
     pub fn zoom(&self) -> Option<u16> {
         self.zoom
     }
 
-    /// El zoom en porcentaje contra el tamaño AJUSTADO, ya resuelto: lo que
-    /// multiplica el sitio que la imagen ocuparía sola.
+    /// The zoom as a percentage against the FITTED size, already resolved:
+    /// what multiplies the space the image would occupy alone.
     ///
-    /// Ajustar es el 100 %, así que quien pinta multiplica siempre y no tiene
-    /// que saber que `None` significa algo.
+    /// Fitting is 100%, so whoever paints always multiplies and does not
+    /// have to know that `None` means anything.
     #[must_use]
     pub fn zoom_pct(&self) -> u16 {
         self.zoom.unwrap_or(100)
     }
 
-    /// Acercar un peldaño.
+    /// Zooms in one step.
     pub fn zoom_in(&mut self) {
-        self.zoom = Some(Self::escalon_arriba(self.zoom_pct()));
+        self.zoom = Some(Self::step_up(self.zoom_pct()));
     }
 
-    /// Alejar un peldaño.
+    /// Zooms out one step.
     pub fn zoom_out(&mut self) {
-        self.zoom = Some(Self::escalon_abajo(self.zoom_pct()));
+        self.zoom = Some(Self::step_down(self.zoom_pct()));
     }
 
-    /// Volver a AJUSTAR: la imagen entera dentro de lo que hay.
+    /// Goes back to FIT: the whole image within what there is.
     pub fn zoom_fit(&mut self) {
         self.zoom = None;
         self.scroll = 0;
         self.hscroll = 0;
     }
 
-    /// Cota de acercamiento, en porcentaje del ajustado.
+    /// Zoom-in cap, as a percentage of the fitted size.
     pub const ZOOM_MAX: u16 = 800;
-    /// Cota de alejamiento. Por debajo, la imagen deja de decir nada.
+    /// Zoom-out cap. Below it, the image stops saying anything.
     pub const ZOOM_MIN: u16 = 25;
 
-    /// Los peldaños. Se sube y se baja por ellos y no multiplicando, para que
-    /// acercar y alejar la misma cantidad de veces devuelva al MISMO sitio:
-    /// con un factor, `100 × 1.25 ÷ 1.25` es 99 o 101 según redondeo, y el
-    /// lector acaba en un zoom que no pidió y del que no puede salir.
-    const ESCALONES: [u16; 9] = [25, 50, 75, 100, 150, 200, 300, 400, 800];
+    /// The steps. Moved up and down through, not by multiplying, so zooming
+    /// in and out the same number of times returns to the SAME spot: with a
+    /// factor, `100 × 1.25 ÷ 1.25` is 99 or 101 depending on rounding, and
+    /// the reader ends up at a zoom they did not ask for and cannot leave.
+    const STEPS: [u16; 9] = [25, 50, 75, 100, 150, 200, 300, 400, 800];
 
-    fn escalon_arriba(pct: u16) -> u16 {
-        Self::ESCALONES
+    fn step_up(pct: u16) -> u16 {
+        Self::STEPS
             .into_iter()
             .find(|&e| e > pct)
             .unwrap_or(Self::ZOOM_MAX)
     }
 
-    fn escalon_abajo(pct: u16) -> u16 {
-        Self::ESCALONES
+    fn step_down(pct: u16) -> u16 {
+        Self::STEPS
             .into_iter()
             .rev()
             .find(|&e| e < pct)
@@ -1011,20 +1012,21 @@ impl Viewer {
     }
 }
 
-/// Ancho de tab del viewer (fijo en M1).
+/// The viewer's tab width (fixed in M1).
 const TAB_WIDTH: usize = 8;
 
-/// Prepara una línea para el terminal: tabs a espacios (tab stops de
-/// [`TAB_WIDTH`]) y el resto de HAZARDS enmascarados a `�` — MISMA política que
-/// los nombres (`is_terminal_hazard`: controles C0/C1, overrides/aislantes bidi,
-/// invisibles, separadores Zl/Zp, TAG chars). `is_control()` a secas dejaba
-/// pasar bidi (U+202E) e invisibles (ZWSP) crudos: un `.txt` con RLO falsificaba
-/// el orden visual (Trojan Source, CVE-2021-42574) en la GUI GPUI —que reordena
-/// bidi en el shaping— y en terminales que honran bidi (encoding-auditor GUI-d).
+/// Prepares a line for the terminal: tabs to spaces ([`TAB_WIDTH`] tab
+/// stops) and the rest of the HAZARDS masked to `�` — SAME policy as names
+/// (`is_terminal_hazard`: C0/C1 controls, bidi overrides/isolates,
+/// invisibles, Zl/Zp separators, TAG chars). A plain `is_control()` let raw
+/// bidi (U+202E) and invisibles (ZWSP) through: a `.txt` with an RLO forged
+/// the visual order (Trojan Source, CVE-2021-42574) in the GPUI GUI —which
+/// reorders bidi during shaping— and in terminals that honour bidi
+/// (encoding-auditor GUI-d).
 ///
-/// El tab stop se cuenta por CELDAS, no por caracteres: con `col += 1` por
-/// carácter, un ideograma antes de un tab movía el stop una columna y el resto
-/// de la línea quedaba desalineado respecto a sus vecinas.
+/// The tab stop is counted in CELLS, not characters: with `col += 1` per
+/// character, an ideogram before a tab moved the stop by one column and the
+/// rest of the line ended up misaligned relative to its neighbours.
 fn render_line(line: &str) -> String {
     use unicode_width::UnicodeWidthChar;
     let mut out = String::with_capacity(line.len());
@@ -1041,16 +1043,16 @@ fn render_line(line: &str) -> String {
             col += 1;
         } else {
             out.push(c);
-            // `unwrap_or(1)`: `None` es un CONTROL, y los controles ya se
-            // fueron por la rama de arriba. Uno se pinta ocupando algo.
+            // `unwrap_or(1)`: `None` is a CONTROL, and controls already went
+            // through the branch above. One is painted taking up something.
             col += UnicodeWidthChar::width(c).unwrap_or(1);
         }
     }
     out
 }
 
-/// La línea con estilo más ancha, en celdas.
-fn ancho_de_estilo(styled: &[crate::ansi::StyledLine]) -> usize {
+/// The widest styled line, in cells.
+fn styled_width(styled: &[crate::ansi::StyledLine]) -> usize {
     styled
         .iter()
         .map(|l| l.iter().map(|s| crate::display::cells(&s.text)).sum())
@@ -1058,61 +1060,62 @@ fn ancho_de_estilo(styled: &[crate::ansi::StyledLine]) -> usize {
         .unwrap_or(0)
 }
 
-/// Una línea con estilo desplazada `n` celdas a la izquierda.
+/// A styled line scrolled `n` cells to the left.
 ///
-/// **Es la ÚNICA implementación del corte por la izquierda de una fila.** La
-/// versión de texto plano ([`Viewer::rows`] en modo preview) es su proyección,
-/// no una segunda cuenta: cuando eran dos, el corte que caía justo en el borde
-/// de un tramo limpiaba las marcas huérfanas por una ruta y no por la otra, o
-/// sea que la misma línea se pintaba distinta con color y sin él.
+/// **This is the ONLY implementation of a row's left-side cut.** The plain
+/// text version ([`Viewer::rows`] in preview mode) is its projection, not a
+/// second count: when there were two, a cut landing right on a span's edge
+/// cleaned the orphaned marks through one path and not the other, meaning
+/// the same line painted differently with and without color.
 ///
-/// Los tramos que quedan enteros a la izquierda del corte se van; el que lo
-/// cruza se recorta CONSERVANDO su color, que es lo que distingue esta función
-/// de recortar la cadena entera y perder los tramos. Los tramos que se quedan
-/// vacíos no se emiten: un `<span>` sin texto no pinta nada y sí ensucia el DOM.
-fn desplazar_estilo(linea: &crate::ansi::StyledLine, n: usize) -> crate::ansi::StyledLine {
+/// Spans that stay whole to the left of the cut are dropped; the one that
+/// crosses it is truncated while KEEPING its color, which is what tells
+/// this function apart from truncating the whole string and losing the
+/// spans. Spans left empty are not emitted: a `<span>` with no text paints
+/// nothing and does dirty the DOM.
+fn scroll_styled(line: &crate::ansi::StyledLine, n: usize) -> crate::ansi::StyledLine {
     if n == 0 {
-        return linea.clone();
+        return line.clone();
     }
-    let mut resto = n;
-    let mut cortado = false;
+    let mut remaining = n;
+    let mut cut = false;
     let mut out: crate::ansi::StyledLine = Vec::new();
-    for span in linea {
-        let texto = if cortado {
+    for span in line {
+        let text = if cut {
             span.text.clone()
         } else {
-            let ancho = crate::display::cells(&span.text);
-            if resto > 0 && ancho <= resto {
-                // Este tramo entero se queda a la izquierda del corte.
-                resto -= ancho;
+            let width = crate::display::cells(&span.text);
+            if remaining > 0 && width <= remaining {
+                // This whole span stays to the left of the cut.
+                remaining -= width;
                 continue;
             }
-            cortado = true;
-            crate::display::skip_cells(&span.text, resto)
+            cut = true;
+            crate::display::skip_cells(&span.text, remaining)
         };
-        if texto.is_empty() {
+        if text.is_empty() {
             continue;
         }
         out.push(crate::ansi::StyledSpan {
-            text: texto,
+            text,
             ..span.clone()
         });
     }
-    // El corte pudo caer EXACTO en el borde de un tramo, y entonces
-    // `skip_cells` no tuvo nada que saltar y no limpió nada. La marca huérfana
-    // se tira igual: quién la pinta no puede depender de dónde el plugin puso
-    // sus fronteras de color.
-    if let Some(primero) = out.first_mut() {
-        let limpio = crate::display::strip_leading_marks(&primero.text);
-        if limpio.len() != primero.text.len() {
-            primero.text = limpio.to_owned();
+    // The cut could have landed EXACTLY on a span's edge, and then
+    // `skip_cells` had nothing to skip and cleaned nothing. The orphaned
+    // mark is dropped all the same: who paints it cannot depend on where
+    // the plugin put its color boundaries.
+    if let Some(first) = out.first_mut() {
+        let clean = crate::display::strip_leading_marks(&first.text);
+        if clean.len() != first.text.len() {
+            first.text = clean.to_owned();
         }
     }
     out.retain(|s| !s.text.is_empty());
     out
 }
 
-/// Filas del hexview: `offset  hex×16  ascii`.
+/// Hex view rows: `offset  hex×16  ascii`.
 fn hex_rows(bytes: &[u8], scroll: usize, height: usize) -> Vec<String> {
     use std::fmt::Write;
     let mut out = Vec::new();
@@ -1153,8 +1156,8 @@ mod tests {
     };
     use norte_proto::{Entry, EntryKind, VPath};
 
-    /// Una fila de listado con el nombre y la clase que se le piden.
-    fn fila(wire: &str, kind: EntryKind) -> Entry {
+    /// A listing row with the name and kind asked for.
+    fn row_entry(wire: &str, kind: EntryKind) -> Entry {
         Entry {
             attrs: std::collections::BTreeMap::new(),
             path: VPath::parse(wire).unwrap(),
@@ -1164,11 +1167,11 @@ mod tests {
         }
     }
 
-    /// Un listado de ficheros, en el orden en que se escriben.
-    fn listado(nombres: &[&str]) -> Vec<Entry> {
-        nombres
+    /// A file listing, in the order they are written.
+    fn listing(names: &[&str]) -> Vec<Entry> {
+        names
             .iter()
-            .map(|n| fila(&format!("mem:///{n}"), EntryKind::File))
+            .map(|n| row_entry(&format!("mem:///{n}"), EntryKind::File))
             .collect()
     }
 
@@ -1176,29 +1179,29 @@ mod tests {
         VPath::parse("file:///f").unwrap()
     }
 
-    /// **El visor se desplaza a lo ANCHO.**
+    /// **The viewer scrolls WIDTH-wise.**
     ///
-    /// El visor no envuelve, así que sin esto la cola de una línea larga —un
-    /// HTML minificado, un CSV, un log— no estaba en ninguna parte: se pintaba
-    /// recortada y no había forma de llegar a ella.
+    /// The viewer does not wrap, so without this the tail of a long line —a
+    /// minified HTML, a CSV, a log— was nowhere: it was painted truncated and
+    /// there was no way to reach it.
     #[test]
-    fn el_visor_se_desplaza_a_lo_ancho_con_tope() {
-        let texto = b"0123456789\ncorta\n".to_vec();
-        let mut v = Viewer::new(vp(), texto, false);
-        assert_eq!(v.max_cols(), 10, "la línea más ancha manda");
+    fn the_viewer_scrolls_horizontally_with_a_cap() {
+        let text = b"0123456789\nshort\n".to_vec();
+        let mut v = Viewer::new(vp(), text, false);
+        assert_eq!(v.max_cols(), 10, "the widest line rules");
         assert_eq!(v.hscroll(), 0);
-        assert_eq!(v.rows(2), vec!["0123456789", "corta"]);
+        assert_eq!(v.rows(2), vec!["0123456789", "short"]);
 
         v.scroll_right(4);
         assert_eq!(v.hscroll(), 4);
         assert_eq!(
             v.rows(2),
-            vec!["456789", "a"],
-            "cada fila se recorta por la misma columna"
+            vec!["456789", "t"],
+            "every row is truncated at the same column"
         );
 
-        // El tope deja SIEMPRE una columna: desplazarse más allá de todo el
-        // contenido es una pantalla en blanco de la que se sale a ciegas.
+        // The cap ALWAYS leaves one column: scrolling past all the content
+        // would be a blank screen from which the only way out is blind.
         v.scroll_right(1000);
         assert_eq!(v.hscroll(), 9);
         assert_eq!(v.rows(1), vec!["9"]);
@@ -1208,47 +1211,46 @@ mod tests {
         assert_eq!(v.rows(1), vec!["0123456789"]);
     }
 
-    /// El tope se mide sobre la línea YA renderizada: los tabs se expanden
-    /// antes de pintar, así que medir el texto crudo dejaría su cola
-    /// inalcanzable.
+    /// The cap is measured on the ALREADY rendered line: tabs are expanded
+    /// before painting, so measuring the raw text would leave its tail out
+    /// of reach.
     #[test]
-    fn el_tope_horizontal_cuenta_los_tabs_expandidos() {
+    fn the_horizontal_cap_counts_expanded_tabs() {
         let v = Viewer::new(vp(), b"\tab\n".to_vec(), false);
-        assert_eq!(v.max_cols(), 10, "un tab son 8 columnas, y luego `ab`");
+        assert_eq!(v.max_cols(), 10, "a tab is 8 columns, then `ab`");
     }
 
-    /// **El hexadecimal tiene su PROPIO ancho, y se desplaza.**
+    /// **Hex has its OWN width, and it scrolls.**
     ///
-    /// Sus filas son de 77 celdas: en un hueco partido o en un terminal
-    /// estrecho la columna ASCII de la derecha no cabe, y negarle el eje
-    /// horizontal la dejaba inalcanzable — exactamente la avería que este
-    /// trabajo arregla en el texto.
+    /// Its rows are 77 cells wide: in a split pane or a narrow terminal the
+    /// ASCII column on the right does not fit, and denying it the
+    /// horizontal axis left it out of reach — exactly the fault this work
+    /// fixes for text.
     ///
-    /// Y el tope depende del MODO, no del texto. Leer el ancho del texto en
-    /// hexadecimal era además una barra que se movía sobre un contenido que
-    /// no se movía: un fichero de texto con líneas de 200 columnas, puesto en
-    /// hexadecimal, dibujaba barra y movía el pulgar sin que las filas
-    /// cambiaran.
+    /// And the cap depends on the MODE, not the text. Reading the text's
+    /// width while in hex was also a scrollbar moving over content that did
+    /// not move: a text file with 200-column lines, switched to hex, drew a
+    /// scrollbar and moved the thumb without the rows changing.
     #[test]
-    fn el_hexadecimal_tiene_su_propio_ancho_y_se_desplaza() {
+    fn hex_has_its_own_width_and_scrolls() {
         let mut v = Viewer::new(vp(), b"\x00\x01payload".to_vec(), false);
         assert!(v.hex);
-        assert_eq!(v.max_cols(), 77, "offset + 16 bytes + su columna ASCII");
-        let entera = v.rows(1)[0].clone();
-        assert!(entera.starts_with("00000000"));
+        assert_eq!(v.max_cols(), 77, "offset + 16 bytes + their ASCII column");
+        let whole = v.rows(1)[0].clone();
+        assert!(whole.starts_with("00000000"));
         v.scroll_right(10);
         assert_eq!(v.hscroll(), 10);
         assert_eq!(
             v.rows(1)[0],
-            entera[10..],
-            "el volcado también se recorta por la izquierda"
+            whole[10..],
+            "the dump is also truncated from the left"
         );
 
-        // Un fichero de TEXTO ancho puesto en hexadecimal declara el ancho del
-        // VOLCADO, no el del texto: si no, la barra prometía 200 columnas
-        // sobre unas filas de 77.
-        let ancho = format!("{}\n", "x".repeat(200)).into_bytes();
-        let mut v = Viewer::new(vp(), ancho, false);
+        // A wide TEXT file switched to hex declares the DUMP's width, not
+        // the text's: otherwise the scrollbar promised 200 columns over
+        // rows that are 77.
+        let wide = format!("{}\n", "x".repeat(200)).into_bytes();
+        let mut v = Viewer::new(vp(), wide, false);
         assert_eq!(v.max_cols(), 200);
         v.scroll_right(40);
         v.toggle_hex();
@@ -1256,71 +1258,72 @@ mod tests {
         assert_eq!(
             v.hscroll(),
             0,
-            "y la columna 40 del texto no es la 40 del volcado"
+            "and column 40 of the text is not column 40 of the dump"
         );
     }
 
-    /// **Un carácter ancho partido por el corte deja su hueco en blanco.**
+    /// **A wide character split by the cut leaves its gap blank.**
     ///
-    /// Media celda no se puede pintar, así que el carácter se va entero — pero
-    /// tirarlo sin más corre esa fila una columna respecto a sus vecinas, y la
-    /// rejilla es justo lo que un CSV o un log alineado necesitan del
-    /// desplazamiento horizontal.
+    /// Half a cell cannot be painted, so the character goes away whole — but
+    /// simply dropping it shifts that row one column relative to its
+    /// neighbours, and the grid is exactly what an aligned CSV or log needs
+    /// from horizontal scrolling.
     #[test]
-    fn un_caracter_ancho_partido_por_el_corte_deja_su_hueco() {
+    fn a_wide_character_split_by_the_cut_leaves_its_gap() {
         let mut v = Viewer::new(vp(), "漢字x\nabcde\n".as_bytes().to_vec(), false);
-        assert_eq!(v.max_cols(), 5, "dos ideogramas de dos celdas y una `x`");
+        assert_eq!(v.max_cols(), 5, "two two-cell ideographs and an `x`");
         v.scroll_right(1);
         assert_eq!(
             v.rows(2),
             vec![" 字x", "bcde"],
-            "el hueco del ideograma perdido mantiene las columnas enfrentadas"
+            "the lost ideograph's gap keeps the columns lined up"
         );
         v.scroll_right(1);
         assert_eq!(v.rows(2), vec!["字x", "cde"]);
     }
 
-    /// Y con un tab por delante, el stop se cuenta por CELDAS: con `col += 1`
-    /// por carácter, un ideograma antes de un tab movía el stop una columna y
-    /// desalineaba el resto de la línea.
+    /// And with a tab ahead of it, the stop is counted in CELLS: with
+    /// `col += 1` per character, an ideograph before a tab moved the stop by
+    /// one column and misaligned the rest of the line.
     #[test]
-    fn el_tab_stop_se_cuenta_en_celdas_no_en_caracteres() {
+    fn the_tab_stop_is_counted_in_cells_not_characters() {
         let v = Viewer::new(vp(), "漢\tx\n".as_bytes().to_vec(), false);
         assert_eq!(
             v.rows(1),
             vec!["漢      x"],
-            "el ideograma ocupa DOS, así que faltan seis espacios hasta el 8"
+            "the ideograph takes up TWO, so six spaces are missing to reach 8"
         );
         assert_eq!(v.max_cols(), 9);
     }
 
     #[test]
-    fn binario_no_imagen_cae_a_hexview_y_el_toggle_vuelve() {
-        // Binario que NO es ninguna imagen reconocida → hexview automático.
+    fn binary_non_image_falls_to_hexview_and_the_toggle_comes_back() {
+        // Binary that is NOT a recognised image → automatic hexview.
         let bin = b"\x00\x01\x02\x03NUL\x00\x00payload".to_vec();
         let mut v = Viewer::new(vp(), bin, false);
-        assert!(v.hex, "NUL sin BOM = hexview automático (spec §6)");
-        assert!(!v.is_image(), "no es una imagen reconocida");
+        assert!(v.hex, "NUL with no BOM = automatic hexview (spec §6)");
+        assert!(!v.is_image(), "not a recognised image");
         let rows = v.rows(4);
         assert!(rows[0].starts_with("00000000"), "offset: {}", rows[0]);
         assert!(rows[0].contains("00 01 02 03"), "hex: {}", rows[0]);
-        // Toggle manual: sale del hex (texto vacío en binario, pero es SU
-        // decisión); x de nuevo vuelve.
+        // Manual toggle: leaves hex (empty text on binary, but it is ITS
+        // decision); x again brings it back.
         v.toggle_hex();
         assert!(!v.hex);
         v.toggle_hex();
         assert!(v.hex);
     }
 
-    /// La cabecera declara el tamaño, y una que no se entiende se NIEGA.
+    /// The header declares the size, and one that is not understood is
+    /// REFUSED.
     ///
-    /// Negarse ante lo que no se entiende es la mitad del valor: el llamante
-    /// usa esto para decidir si le da los bytes a un decodificador, y un
-    /// `None` tratado como «adelante» sería la bomba de descompresión
-    /// entrando por la puerta que existe para pararla.
+    /// Refusing what is not understood is half the value: the caller uses
+    /// this to decide whether to hand the bytes to a decoder, and a `None`
+    /// treated as "go ahead" would be the decompression bomb walking in
+    /// through the door that exists to stop it.
     #[test]
-    fn image_dimensions_lee_la_cabecera_y_niega_lo_que_no_entiende() {
-        // PNG: IHDR en offset fijo.
+    fn image_dimensions_reads_the_header_and_refuses_what_it_does_not_understand() {
+        // PNG: IHDR at a fixed offset.
         let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
         png.extend_from_slice(&[0, 0, 0, 13]);
         png.extend_from_slice(b"IHDR");
@@ -1328,23 +1331,23 @@ mod tests {
         png.extend_from_slice(&1080u32.to_be_bytes());
         assert_eq!(image_dimensions(&png), Some((1920, 1080)));
 
-        // GIF: little-endian tras la firma.
+        // GIF: little-endian after the signature.
         let mut gif = b"GIF89a".to_vec();
         gif.extend_from_slice(&640u16.to_le_bytes());
         gif.extend_from_slice(&480u16.to_le_bytes());
         gif.extend_from_slice(&[0, 0]);
         assert_eq!(image_dimensions(&gif), Some((640, 480)));
 
-        // BMP: alto NEGATIVO = filas de arriba abajo, no tamaño negativo.
+        // BMP: NEGATIVE height = top-down rows, not a negative size.
         let mut bmp = b"BM".to_vec();
         bmp.resize(18, 0);
         bmp.extend_from_slice(&300i32.to_le_bytes());
         bmp.extend_from_slice(&(-200i32).to_le_bytes());
         assert_eq!(image_dimensions(&bmp), Some((300, 200)));
 
-        // JPEG: hay que recorrer hasta el SOF0.
+        // JPEG: has to walk forward to the SOF0.
         let mut jpg = vec![0xFF, 0xD8];
-        // Un APP0 que hay que saltar.
+        // An APP0 that has to be skipped.
         jpg.extend_from_slice(&[0xFF, 0xE0, 0x00, 0x04, 0x00, 0x00]);
         jpg.extend_from_slice(&[0xFF, 0xC0, 0x00, 0x11, 0x08]);
         jpg.extend_from_slice(&768u16.to_be_bytes());
@@ -1352,50 +1355,49 @@ mod tests {
         jpg.extend_from_slice(&[0; 8]);
         assert_eq!(image_dimensions(&jpg), Some((1024, 768)));
 
-        // Lo que no se entiende se NIEGA, en vez de adivinar.
-        assert_eq!(image_dimensions(b"no soy una imagen"), None);
+        // What is not understood is REFUSED, instead of guessed.
+        assert_eq!(image_dimensions(b"not an image"), None);
         assert_eq!(
             image_dimensions(b"\x89PNG\r\n\x1a\n"),
             None,
-            "una cabecera PNG incompleta no promete nada"
+            "an incomplete PNG header promises nothing"
         );
-        let mut sin_ihdr = b"\x89PNG\r\n\x1a\n".to_vec();
-        sin_ihdr.extend_from_slice(&[0, 0, 0, 13]);
-        sin_ihdr.extend_from_slice(b"iTXt");
-        sin_ihdr.resize(32, 0);
+        let mut no_ihdr = b"\x89PNG\r\n\x1a\n".to_vec();
+        no_ihdr.extend_from_slice(&[0, 0, 0, 13]);
+        no_ihdr.extend_from_slice(b"iTXt");
+        no_ihdr.resize(32, 0);
         assert_eq!(
-            image_dimensions(&sin_ihdr),
+            image_dimensions(&no_ihdr),
             None,
-            "un PNG cuyo primer chunk no es IHDR no es uno que sepamos leer"
+            "a PNG whose first chunk is not IHDR is not one we know how to read"
         );
-        // Un JPEG cuyos segmentos no encajan: se abandona, no se da vueltas.
+        // A JPEG whose segments do not fit: it gives up, it does not loop.
         assert_eq!(
             image_dimensions(&[0xFF, 0xD8, 0x00, 0x00, 0, 0, 0, 0, 0, 0, 0, 0]),
             None
         );
     }
 
-    /// Una cabecera puede DECLARAR una imagen imposible, y eso es el ataque.
+    /// A header can DECLARE an impossible image, and that is the attack.
     #[test]
-    fn una_cabecera_puede_declarar_una_bomba() {
+    fn a_header_can_declare_a_bomb() {
         let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
         png.extend_from_slice(&[0, 0, 0, 13]);
         png.extend_from_slice(b"IHDR");
         png.extend_from_slice(&60000u32.to_be_bytes());
         png.extend_from_slice(&60000u32.to_be_bytes());
-        let (w, h) = image_dimensions(&png).expect("la cabecera se lee");
+        let (w, h) = image_dimensions(&png).expect("the header is read");
         assert!(
             u64::from(w) * u64::from(h) > PIXEL_BUDGET,
-            "36 gigapíxeles en 24 bytes de cabecera: es la bomba de \
-             descompresión, y el presupuesto existe para verla antes de que \
-             nadie decodifique"
+            "36 gigapixels in 24 bytes of header: it is the decompression \
+             bomb, and the budget exists to see it before anyone decodes"
         );
     }
 
-    /// `image_format` reconoce cada formato soportado por bytes MÁGICOS y
-    /// devuelve `None` en no-imágenes y en cabeceras truncadas.
+    /// `image_format` recognises each supported format by MAGIC bytes and
+    /// returns `None` for non-images and truncated headers.
     #[test]
-    fn image_format_reconoce_por_bytes_magicos() {
+    fn image_format_recognises_by_magic_bytes() {
         use super::{ImageFmt, image_format};
         assert_eq!(
             image_format(b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"),
@@ -1412,48 +1414,49 @@ mod tests {
             image_format(b"RIFF\x24\x00\x00\x00WEBPVP8 "),
             Some(ImageFmt::Webp)
         );
-        // No-imagen (texto plano) → None.
-        assert_eq!(image_format(b"hola mundo\n"), None);
-        // RIFF sin marca WEBP (p. ej. WAV) → None.
+        // Non-image (plain text) → None.
+        assert_eq!(image_format(b"hello world\n"), None);
+        // RIFF without a WEBP mark (e.g. WAV) → None.
         assert_eq!(image_format(b"RIFF\x24\x00\x00\x00WAVEfmt "), None);
-        // Cabecera PNG truncada (solo 4 bytes) → None: el prefijo no completa.
+        // Truncated PNG header (only 4 bytes) → None: the prefix is incomplete.
         assert_eq!(image_format(b"\x89PNG"), None);
-        // RIFF truncado (<12 bytes) → None sin panic por slicing.
+        // Truncated RIFF (<12 bytes) → None with no panic from slicing.
         assert_eq!(image_format(b"RIFF\x24\x00\x00\x00"), None);
     }
 
-    /// Una imagen reconocida se marca como imagen (`is_image`/`image_kind`/
-    /// `image_bytes` la exponen para que la GUI la pinte) SIN dejar de tener el
-    /// hexview crudo disponible en `rows` (fallback de la TUI, que no pinta
-    /// imágenes). «recargar como…» fuerza texto y sale del modo imagen.
+    /// A recognised image is flagged as an image (`is_image`/`image_kind`/
+    /// `image_bytes` expose it for the GUI to paint) WITHOUT losing the raw
+    /// hexview available in `rows` (the TUI's fallback, which does not paint
+    /// images). "reload as…" forces text and leaves image mode.
     #[test]
-    fn imagen_reconocida_se_marca_y_conserva_el_hex_de_fallback() {
+    fn a_recognised_image_is_flagged_and_keeps_the_fallback_hex() {
         use super::ImageFmt;
         let png = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR".to_vec();
         let mut v = Viewer::new(vp(), png.clone(), false);
-        assert!(v.is_image(), "PNG → imagen");
+        assert!(v.is_image(), "PNG → image");
         assert_eq!(v.image_kind(), Some(ImageFmt::Png));
         assert_eq!(v.image_bytes(), Some(png.as_slice()));
-        // El hexview crudo sigue disponible para frontends sin render (TUI).
-        assert!(v.hex, "hexview de fallback activo");
+        // The raw hexview stays available for frontends with no render (TUI).
+        assert!(v.hex, "fallback hexview active");
         assert!(
             v.rows(1)[0].contains("89 50 4e 47"),
-            "fallback hex disponible"
+            "fallback hex available"
         );
-        // «recargar como…» fuerza texto: sale del modo imagen.
+        // "reload as…" forces text: leaves image mode.
         v.cycle_encoding();
-        assert!(!v.is_image(), "forzado a texto → no imagen");
+        assert!(!v.is_image(), "forced to text → not an image");
         assert_eq!(v.image_kind(), None);
         assert_eq!(v.image_bytes(), None);
         v.reset_encoding();
-        assert!(v.is_image(), "reset vuelve a detección → imagen");
+        assert!(v.is_image(), "reset goes back to detection → image");
     }
 
-    /// Una imagen TRUNCADA sigue reconociéndose por su cabecera (los bytes
-    /// mágicos van al principio): `is_image` y `truncated` a la vez — la GUI
-    /// decide si el decode parcial sale o cae a «imagen ilegible».
+    /// A TRUNCATED image is still recognised by its header (the magic bytes
+    /// go at the start): `is_image` and `truncated` at the same time — the
+    /// GUI decides whether the partial decode works or falls back to
+    /// "unreadable image".
     #[test]
-    fn imagen_truncada_se_reconoce_por_la_cabecera() {
+    fn a_truncated_image_is_recognised_by_the_header() {
         let png_head = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00".to_vec();
         let v = Viewer::new(vp(), png_head, true);
         assert!(v.is_image());
@@ -1461,117 +1464,114 @@ mod tests {
         assert!(v.image_bytes().is_some());
     }
 
-    /// H4/H5 de la auditoría: tabs EXPANDIDOS (ratatui los borraría) y ESC
-    /// enmascarado — jamás alteración sin marca.
+    /// Audit H4/H5: EXPANDED tabs (ratatui would erase them) and masked
+    /// ESC — never an unmarked alteration.
     #[test]
-    fn tabs_expandidos_y_controles_enmascarados() {
+    fn expanded_tabs_and_masked_controls() {
         let v = Viewer::new(vp(), b"all:\n\tcc -o x x.c\n".to_vec(), false);
         let rows = v.rows(3);
         assert_eq!(rows[0], "all:");
-        assert_eq!(rows[1], "        cc -o x x.c", "tab → 8 espacios");
-        let v = Viewer::new(vp(), b"rojo:\x1b[31mX\n".to_vec(), false);
-        assert_eq!(
-            v.rows(2)[0],
-            "rojo:\u{FFFD}[31mX",
-            "ESC visible como \u{FFFD}"
-        );
+        assert_eq!(rows[1], "        cc -o x x.c", "tab → 8 spaces");
+        let v = Viewer::new(vp(), b"red:\x1b[31mX\n".to_vec(), false);
+        assert_eq!(v.rows(2)[0], "red:\u{FFFD}[31mX", "ESC shown as \u{FFFD}");
     }
 
-    /// Trojan Source (CVE-2021-42574): un archivo de TEXTO UTF-8 válido con RLO
-    /// (U+202E), isolate (U+2066), ZWSP (U+200B) y separador Zl (U+2028) — el
-    /// viewer de texto debe enmascararlos a `�`, no dejarlos pasar (`is_control`
-    /// solo cubría C0/C1; ahora `is_terminal_hazard`). GPUI reordena bidi.
+    /// Trojan Source (CVE-2021-42574): a valid UTF-8 TEXT file with RLO
+    /// (U+202E), an isolate (U+2066), ZWSP (U+200B) and a Zl separator
+    /// (U+2028) — the text viewer must mask them to `�`, not let them
+    /// through (`is_control` only covered C0/C1; now `is_terminal_hazard`).
+    /// GPUI reorders bidi.
     #[test]
-    fn viewer_de_texto_no_pinta_bidi_ni_invisibles_crudos() {
-        let hostile = "aguja \u{202E}reovni\u{2066} z\u{200B}w\u{2028}fin"
+    fn the_text_viewer_does_not_paint_raw_bidi_or_invisibles() {
+        let hostile = "needle \u{202E}elttahs\u{2066} z\u{200B}w\u{2028}end"
             .as_bytes()
             .to_vec();
         let v = Viewer::new(vp(), hostile, false);
-        assert!(!v.hex, "es texto UTF-8, no binario");
+        assert!(!v.hex, "it is UTF-8 text, not binary");
         assert!(
             !v.rows(8)
                 .iter()
                 .flat_map(|r| r.chars())
                 .any(norte_encoding::is_terminal_hazard),
-            "el viewer de texto no puede pintar bidi/invisibles crudos"
+            "the text viewer must not paint raw bidi/invisibles"
         );
     }
 
-    /// H7: togglear a hex con scroll alto reclampa (jamás pantalla en
-    /// blanco).
+    /// H7: toggling to hex with a high scroll re-clamps it (never a blank
+    /// screen).
     #[test]
-    fn toggle_hex_reclampa_el_scroll() {
+    fn toggle_hex_reclamps_the_scroll() {
         use std::fmt::Write;
-        let mut texto = String::new();
+        let mut text = String::new();
         for i in 0..100 {
-            let _ = writeln!(texto, "{i}");
+            let _ = writeln!(text, "{i}");
         }
-        let mut v = Viewer::new(vp(), texto.into_bytes(), false);
+        let mut v = Viewer::new(vp(), text.into_bytes(), false);
         v.scroll_bottom();
         assert_eq!(v.scroll, 99);
         v.toggle_hex();
-        assert!(v.scroll < v.total_rows(), "reclampado: {}", v.scroll);
-        assert!(!v.rows(5).is_empty(), "el hexview pinta algo");
+        assert!(v.scroll < v.total_rows(), "re-clamped: {}", v.scroll);
+        assert!(!v.rows(5).is_empty(), "the hexview paints something");
     }
 
-    /// M4-P5: en modo preview de plugin, `rows()` pinta la salida del plugin
-    /// (no la vista cruda), `preview_plugin()` da el nombre, y el output
-    /// —texto de un TERCERO— sale ENMASCARADO (controles → `�`, jamás byte
-    /// crudo).
+    /// M4-P5: in plugin preview mode, `rows()` paints the plugin's output
+    /// (not the raw view), `preview_plugin()` gives the name, and the
+    /// output —a THIRD PARTY's text— comes out MASKED (controls → `�`,
+    /// never a raw byte).
     #[test]
-    fn preview_de_plugin_reemplaza_la_vista_y_enmascara() {
+    fn plugin_preview_replaces_the_view_and_masks() {
         let v = Viewer::with_plugin_preview(
             vp(),
             "Markdown".to_owned(),
-            "linea uno\nlinea\u{7}dos\nlinea tres",
+            "line one\nline\u{7}two\nline three",
             false,
         );
         assert_eq!(v.preview_plugin(), Some("Markdown"));
-        assert!(!v.preview_lossy(), "no lossy");
-        assert_eq!(v.total_rows(), 3, "3 líneas partidas por \\n");
+        assert!(!v.preview_lossy(), "not lossy");
+        assert_eq!(v.total_rows(), 3, "3 lines split on \\n");
         let rows = v.rows(10);
-        assert_eq!(rows[0], "linea uno");
-        assert_eq!(rows[2], "linea tres");
+        assert_eq!(rows[0], "line one");
+        assert_eq!(rows[2], "line three");
         assert_eq!(
-            rows[1], "linea\u{FFFD}dos",
-            "el control \\u{{7}} del plugin sale enmascarado, no crudo"
+            rows[1], "line\u{FFFD}two",
+            "the plugin's \\u{{7}} control comes out masked, not raw"
         );
         assert!(
             !rows[1].contains('\u{7}'),
-            "jamás el byte de control crudo: {:?}",
+            "never the raw control byte: {:?}",
             rows[1]
         );
     }
 
-    /// #101: el flag `lossy` del wire llega a `preview_lossy()` en ambos
-    /// constructores (plano y con estilo), para que el frontend pinte el aviso.
+    /// #101: the wire's `lossy` flag reaches `preview_lossy()` in both
+    /// constructors (plain and styled), so the frontend paints the warning.
     #[test]
-    fn preview_lossy_se_propaga_desde_el_wire() {
-        let plano = Viewer::with_plugin_preview(vp(), "P".to_owned(), "a\u{FFFD}b", true);
-        assert!(plano.preview_lossy(), "plano lossy");
+    fn preview_lossy_propagates_from_the_wire() {
+        let plain = Viewer::with_plugin_preview(vp(), "P".to_owned(), "a\u{FFFD}b", true);
+        assert!(plain.preview_lossy(), "plain lossy");
         let styled = Viewer::with_plugin_preview_styled(vp(), "P".to_owned(), &[], true);
         assert!(styled.preview_lossy(), "styled lossy");
-        // La vista cruda (sin preview) jamás reporta lossy por esta vía.
-        let crudo = Viewer::new(vp(), b"hola".to_vec(), false);
-        assert!(!crudo.preview_lossy(), "vista cruda: preview_lossy = false");
+        // The raw view (no preview) never reports lossy through this path.
+        let raw = Viewer::new(vp(), b"hello".to_vec(), false);
+        assert!(!raw.preview_lossy(), "raw view: preview_lossy = false");
     }
 
-    /// G3a (ADR 0037): `with_plugin_preview_styled` enmascara el `text` de
-    /// CADA span igual que la ruta ANSI (mismo `crate::display_name`, sin
-    /// una copia paralela), incluidos hostiles bidi (RLO) — jamás el byte
-    /// crudo llega a `plugin_styled_rows`.
+    /// G3a (ADR 0037): `with_plugin_preview_styled` masks the `text` of
+    /// EVERY span the same way the ANSI path does (same
+    /// `crate::display_name`, no parallel copy), including hostile bidi
+    /// (RLO) — the raw byte never reaches `plugin_styled_rows`.
     #[test]
-    fn preview_styled_enmascara_cada_span_bidi_incluido() {
+    fn preview_styled_masks_every_span_bidi_included() {
         use norte_proto::methods::SpanWire;
         let lines = vec![
             vec![SpanWire {
-                text: "buen\u{7}o".to_owned(), // BEL crudo
+                text: "goo\u{7}d".to_owned(), // raw BEL
                 role: None,
                 fg: None,
                 bg: None,
             }],
             vec![SpanWire {
-                text: "a\u{202E}b".to_owned(), // RLO (bidi hostil)
+                text: "a\u{202E}b".to_owned(), // RLO (hostile bidi)
                 role: None,
                 fg: None,
                 bg: None,
@@ -1579,70 +1579,66 @@ mod tests {
         ];
         let v = Viewer::with_plugin_preview_styled(vp(), "Demo".to_owned(), &lines, false);
         assert_eq!(v.preview_plugin(), Some("Demo"));
-        let rows = v.plugin_styled_rows(10).expect("modo preview con estilo");
+        let rows = v.plugin_styled_rows(10).expect("styled preview mode");
         assert_eq!(rows.len(), 2);
-        assert_eq!(rows[0][0].text, "buen\u{FFFD}o", "BEL enmascarado");
-        assert!(!rows[0][0].text.contains('\u{7}'), "jamás el BEL crudo");
+        assert_eq!(rows[0][0].text, "goo\u{FFFD}d", "BEL masked");
+        assert!(!rows[0][0].text.contains('\u{7}'), "never the raw BEL");
         assert!(
             !rows[1][0].text.contains('\u{202E}'),
-            "jamás el RLO crudo: {:?}",
+            "never the raw RLO: {:?}",
             rows[1][0].text
         );
     }
 
-    /// G3a: `role` YA VALIDADO contra `norte_theme::Role` en la conversión.
-    /// Un nombre reconocido (kebab-case) resuelve al `Role`; uno DESCONOCIDO
-    /// (p. ej. el `"number"`/`"keyword"` del mini-highlighter de
-    /// `previewer-demo`, que NO son `Role`s válidos a propósito — ver su
-    /// rustdoc) colapsa a `None`, nunca panica ni deja pasar la cadena
-    /// cruda. `fg` viaja SIEMPRE tal cual (es el fallback crudo, no algo
-    /// que validar contra un conjunto cerrado).
+    /// G3a: `role` is ALREADY VALIDATED against `norte_theme::Role` in the
+    /// conversion. A recognised name (kebab-case) resolves to the `Role`;
+    /// an UNKNOWN one (e.g. the `"number"`/`"keyword"` from
+    /// `previewer-demo`'s mini-highlighter, which are deliberately NOT valid
+    /// `Role`s — see its rustdoc) collapses to `None`, never panics nor lets
+    /// the raw string through. `fg` ALWAYS travels as-is (it is the raw
+    /// fallback, not something to validate against a closed set).
     #[test]
-    fn preview_styled_valida_role_desconocido_a_none() {
+    fn preview_styled_validates_an_unknown_role_to_none() {
         use norte_proto::methods::SpanWire;
         let lines = vec![vec![
             SpanWire {
                 text: "42".to_owned(),
-                role: Some("number".to_owned()), // no es un Role válido
+                role: Some("number".to_owned()), // not a valid Role
                 fg: None,
                 bg: None,
             },
             SpanWire {
                 text: "TODO".to_owned(),
-                role: Some("keyword".to_owned()), // tampoco
+                role: Some("keyword".to_owned()), // neither is this
                 fg: Some([255, 200, 0]),
                 bg: Some([0, 0, 64]),
             },
             SpanWire {
                 text: "err".to_owned(),
-                role: Some("hostile-badge".to_owned()), // SÍ es un Role válido
+                role: Some("hostile-badge".to_owned()), // this IS a valid Role
                 fg: None,
                 bg: None,
             },
         ]];
         let v = Viewer::with_plugin_preview_styled(vp(), "Demo".to_owned(), &lines, false);
-        let rows = v.plugin_styled_rows(10).expect("modo preview con estilo");
-        assert_eq!(
-            rows[0][0].role, None,
-            "role desconocido → None, jamás panic"
-        );
-        assert_eq!(rows[0][1].role, None, "role desconocido → None");
+        let rows = v.plugin_styled_rows(10).expect("styled preview mode");
+        assert_eq!(rows[0][0].role, None, "unknown role → None, never a panic");
+        assert_eq!(rows[0][1].role, None, "unknown role → None");
         assert_eq!(
             rows[0][1].fg,
             Some((255, 200, 0)),
-            "fg viaja tal cual, sin validar (no es un Role)"
+            "fg travels as-is, unvalidated (it is not a Role)"
         );
         assert_eq!(
             rows[0][2].role,
             Some(norte_theme::Role::HostileBadge),
-            "role reconocido resuelve al Role"
+            "a recognised role resolves to the Role"
         );
     }
 
-    /// M4-P5: el scroll opera sobre las líneas del preview (topes
-    /// incluidos).
+    /// M4-P5: scrolling operates on the preview's lines (caps included).
     #[test]
-    fn preview_de_plugin_scrollea_sobre_sus_lineas() {
+    fn plugin_preview_scrolls_over_its_lines() {
         use std::fmt::Write;
         let mut out = String::new();
         for i in 0..20 {
@@ -1653,28 +1649,28 @@ mod tests {
         v.scroll_bottom();
         assert_eq!(v.scroll, 19);
         v.scroll_down(5);
-        assert_eq!(v.scroll, 19, "tope inferior en el preview");
+        assert_eq!(v.scroll, 19, "lower cap in the preview");
         v.scroll_top();
         assert_eq!(v.rows(2), vec!["l0", "l1"]);
     }
 
     #[test]
-    fn cycle_y_reset_marcan_forzado_round_trip() {
+    fn cycle_and_reset_do_a_forced_round_trip() {
         let mut v = Viewer::new(
             VPath::parse("mem:///a.txt").unwrap(),
-            b"hola\n".to_vec(),
+            b"hello\n".to_vec(),
             false,
         );
         assert!(!v.is_forced());
-        v.cycle_encoding(); // «recargar como…» → encoding forzado
+        v.cycle_encoding(); // "reload as…" → forced encoding
         assert!(v.is_forced());
-        v.reset_encoding(); // vuelve a detección automática
+        v.reset_encoding(); // back to automatic detection
         assert!(!v.is_forced());
     }
 
     #[test]
-    fn cr_de_mac_clasico_parte_lineas() {
-        // CR solo (Mac clásico) parte línea igual que LF: 3 líneas → 3 filas.
+    fn classic_mac_cr_splits_lines() {
+        // Bare CR (classic Mac) splits a line just like LF: 3 lines → 3 rows.
         let v = Viewer::new(
             VPath::parse("mem:///a.txt").unwrap(),
             b"a\rb\rc".to_vec(),
@@ -1685,10 +1681,10 @@ mod tests {
     }
 
     #[test]
-    fn getters_exponen_el_estado_para_el_status_del_frontend() {
+    fn getters_expose_the_state_for_the_frontends_status_bar() {
         let v = Viewer::new(
             VPath::parse("mem:///a.txt").unwrap(),
-            b"hola\n".to_vec(),
+            b"hello\n".to_vec(),
             false,
         );
         assert_eq!(v.encoding_name(), "UTF-8");
@@ -1697,96 +1693,98 @@ mod tests {
         assert!(!v.hex);
     }
 
-    /// **Pasar fotos pasa fotos.**
+    /// **Flipping through photos flips through photos.**
     ///
-    /// Lo que se echaba en falta no era «abrir el siguiente fichero», era no
-    /// tener que salir del visor entre una foto y la siguiente. Un README en
-    /// medio de un carrete no puede interrumpir eso.
+    /// What was missing was not "open the next file", it was not having to
+    /// leave the viewer between one photo and the next. A README in the
+    /// middle of a roll must not interrupt that.
     #[test]
-    fn la_hermana_siguiente_salta_lo_que_no_es_de_su_clase() {
-        let l = listado(&["a.jpg", "notas.md", "b.png", "c.webp"]);
+    fn the_next_sibling_skips_what_is_not_its_class() {
+        let l = listing(&["a.jpg", "notes.md", "b.png", "c.webp"]);
         assert_eq!(hermana(&l, None, 0, true, Clase::Imagen), Some(2));
         assert_eq!(hermana(&l, None, 2, true, Clase::Imagen), Some(3));
-        // Y al revés, con la misma regla.
+        // And the other way round, by the same rule.
         assert_eq!(hermana(&l, None, 3, false, Clase::Imagen), Some(2));
         assert_eq!(hermana(&l, None, 2, false, Clase::Imagen), Some(0));
-        // Leyendo texto se busca texto, y entonces las fotos son lo que sobra.
+        // Reading text looks for text, and then the photos are what's left over.
         assert_eq!(hermana(&l, None, 1, true, Clase::Otro), None);
         assert_eq!(hermana(&l, None, 3, false, Clase::Otro), Some(1));
     }
 
-    /// **No envuelve**: al final se dice que no hay más, en vez de volver a la
-    /// primera y parecer que la tecla no hizo nada.
+    /// **It does not wrap**: at the end it says there is no more, instead of
+    /// going back to the first and looking like the key did nothing.
     #[test]
-    fn no_envuelve_en_ninguno_de_los_dos_extremos() {
-        let l = listado(&["a.png", "b.png"]);
+    fn it_does_not_wrap_at_either_end() {
+        let l = listing(&["a.png", "b.png"]);
         assert_eq!(
             hermana(&l, None, 1, true, Clase::Imagen),
             None,
-            "no da la vuelta"
+            "does not wrap around"
         );
         assert_eq!(
             hermana(&l, None, 0, false, Clase::Imagen),
             None,
-            "ni hacia atrás"
+            "nor backward"
         );
-        // Y un índice fuera del listado no es un panic, es «no hay».
+        // And an index outside the listing is not a panic, it is "there is none".
         assert_eq!(hermana(&l, None, 99, true, Clase::Imagen), None);
         assert_eq!(hermana(&l, None, 99, false, Clase::Imagen), None);
         assert_eq!(hermana(&[], None, 0, true, Clase::Imagen), None);
     }
 
-    /// **Un directorio no es una hermana**, y eso incluye la fila `..` que el
-    /// listado lleva delante: entrar en una carpeta tiene su tecla, y no es
-    /// esta.
+    /// **A directory is not a sibling**, and that includes the `..` row the
+    /// listing carries in front: entering a folder has its own key, and
+    /// this is not it.
     #[test]
-    fn los_directorios_no_son_hermanas_y_eso_incluye_la_fila_padre() {
+    fn directories_are_not_siblings_and_that_includes_the_parent_row() {
         let l = vec![
-            fila("mem:///casa", EntryKind::Dir), // la fila `..`
-            fila("mem:///casa/a.png", EntryKind::File),
-            fila("mem:///casa/fotos", EntryKind::Dir),
-            // Un enlace o un fifo con nombre de foto TAMPOCO: el visor se
-            // niega a leer «lo que sea», y una escalera que avanza sola no
-            // puede llevar a un dispositivo de bloque llamado `dump.png`.
-            fila("mem:///casa/enlace.png", EntryKind::Symlink),
-            fila("mem:///casa/tuberia.png", EntryKind::Other),
-            fila("mem:///casa/b.png", EntryKind::File),
+            row_entry("mem:///casa", EntryKind::Dir), // the `..` row
+            row_entry("mem:///casa/a.png", EntryKind::File),
+            row_entry("mem:///casa/fotos", EntryKind::Dir),
+            // A symlink or a fifo with a photo's name doesn't count EITHER:
+            // the viewer refuses to read "whatever it is", and a ladder that
+            // steps on its own cannot lead into a block device named
+            // `dump.png`.
+            row_entry("mem:///casa/link.png", EntryKind::Symlink),
+            row_entry("mem:///casa/pipe.png", EntryKind::Other),
+            row_entry("mem:///casa/b.png", EntryKind::File),
         ];
         assert_eq!(
             hermana(&l, None, 1, true, Clase::Imagen),
             Some(5),
-            "salta la carpeta, el enlace y el fifo"
+            "skips the folder, the symlink and the fifo"
         );
         assert_eq!(
             hermana(&l, None, 1, false, Clase::Imagen),
             None,
-            "y hacia atrás solo queda la fila `..`, que no es una hermana"
+            "and backward there is only the `..` row, which is not a sibling"
         );
     }
 
-    /// **La clase la pide quien llama**, que es lo que hace que una foto
-    /// guardada con la extensión equivocada siga llevando a la siguiente foto:
-    /// el visor sabe por sus BYTES que lo que tiene abierto es una imagen,
-    /// aunque el nombre no lo diga.
+    /// **The class is what the caller asks for**, which is what makes a
+    /// photo saved with the wrong extension still lead to the next photo:
+    /// the viewer knows from its BYTES that what it has open is an image,
+    /// even if the name does not say so.
     #[test]
-    fn la_clase_la_pide_quien_llama_no_la_extension_de_la_de_partida() {
-        let l = listado(&["carrete.dat", "b.png"]);
+    fn the_class_is_what_the_caller_asks_for_not_the_starting_extension() {
+        let l = listing(&["roll.dat", "b.png"]);
         assert_eq!(
             hermana(&l, None, 0, true, Clase::Imagen),
             Some(1),
-            "abierta como imagen por sus bytes, busca imágenes"
+            "opened as an image by its bytes, looks for images"
         );
         assert_eq!(
             hermana(&l, None, 0, true, Clase::Otro),
             None,
-            "y la misma fila, leída como texto, no tiene hermanas de texto"
+            "and the same row, read as text, has no text siblings"
         );
     }
 
-    /// La extensión se lee sin distinguir mayúsculas y sobre BYTES (regla 1):
-    /// un stem no-UTF8 con extensión ASCII se clasifica igual que cualquiera.
+    /// The extension is read case-insensitively and over BYTES (rule 1): a
+    /// non-UTF-8 stem with an ASCII extension is classified just like any
+    /// other.
     #[test]
-    fn la_extension_manda_en_cualquier_caja_y_sobre_bytes_crudos() {
+    fn the_extension_rules_in_any_case_and_over_raw_bytes() {
         assert_eq!(clase_por_nombre(b"FOTO.JPG"), Clase::Imagen);
         assert_eq!(clase_por_nombre(b"foto.JpEg"), Clase::Imagen);
         assert_eq!(clase_por_nombre(b"caf\xe9\xff.png"), Clase::Imagen);
@@ -1795,19 +1793,19 @@ mod tests {
         assert_eq!(
             clase_por_nombre(b".png"),
             Clase::Imagen,
-            "oculto, pero imagen"
+            "hidden, but an image"
         );
-        // Una extensión que no es UTF-8 no casa nada.
+        // An extension that is not UTF-8 matches nothing.
         assert_eq!(image_format_by_name(b"x.p\xffg"), None);
     }
 
-    /// Los cinco formatos que el visor sabe pintar tienen su extensión, y los
-    /// dos reconocedores —bytes y nombre— nombran exactamente el mismo
-    /// conjunto.
+    /// The five formats the viewer knows how to paint each have their
+    /// extension, and the two recognisers —bytes and name— name exactly the
+    /// same set.
     #[test]
-    fn el_gemelo_por_nombre_cubre_los_cinco_formatos() {
+    fn the_by_name_twin_covers_the_five_formats() {
         use super::ImageFmt;
-        for (nombre, fmt) in [
+        for (name, fmt) in [
             (&b"a.png"[..], ImageFmt::Png),
             (b"a.jpg", ImageFmt::Jpeg),
             (b"a.jpeg", ImageFmt::Jpeg),
@@ -1815,7 +1813,7 @@ mod tests {
             (b"a.bmp", ImageFmt::Bmp),
             (b"a.webp", ImageFmt::Webp),
         ] {
-            assert_eq!(image_format_by_name(nombre), Some(fmt), "{nombre:?}");
+            assert_eq!(image_format_by_name(name), Some(fmt), "{name:?}");
         }
     }
 }

@@ -1,9 +1,9 @@
-//! `provider_contract!` verde sobre `MemProvider` en tres configuraciones:
-//! el contrato completo con capabilities distintas ejercita también los
-//! auto-skips (case-sensitive vs insensitive, con y sin `SERVER_COPY`).
+//! `provider_contract!` green against `MemProvider` in three configurations:
+//! the full contract with different capabilities also exercises the
+//! auto-skips (case-sensitive vs insensitive, with and without `SERVER_COPY`).
 
-// `CapabilityFlags` llega al scope de cada invocación vía los imports del
-// módulo generado (norte_proto re-exportado por la macro).
+// `CapabilityFlags` reaches each invocation's scope via the generated
+// module's imports (norte_proto re-exported by the macro).
 use norte_testkit::MemProvider;
 
 fn hostile() -> Vec<Vec<u8>> {
@@ -38,9 +38,9 @@ norte_vfs::provider_contract! {
     hostile_names: hostile(),
 }
 
-// Simulación APFS (issue #7): normalización insensible preservando bytes.
-// El roundtrip hostil ejercita el camino skip ante colisiones de
-// normalización (nfc_e_acute/nfd_e_acute) — lo que pasa en macOS real.
+// APFS simulation (issue #7): byte-preserving insensitive normalization.
+// The hostile roundtrip exercises the skip path on normalization
+// collisions (nfc_e_acute/nfd_e_acute) — what happens on real macOS.
 norte_vfs::provider_contract! {
     mod mem_apfs_like,
     factory: MemProvider::with_flags(
@@ -53,11 +53,11 @@ norte_vfs::provider_contract! {
     hostile_names: hostile(),
 }
 
-// Papelera LÓGICA: es la única configuración del testkit en la que `trash()`
-// devuelve `Some(dest)`, así que sin ella la rama del contrato que comprueba
-// «el destino recuperable existe y restaura» no la ejercita NADIE (MAJOR-4 del
-// encoding-auditor: el provider de object storage devolvía `Some` sin prometer
-// `trash_restorable`, y ningún contrato lo veía).
+// LOGICAL trash: it is the only testkit configuration where `trash()`
+// returns `Some(dest)`, so without it the contract branch that checks "the
+// recoverable destination exists and restores" is exercised by NOBODY
+// (encoding-auditor MAJOR-4: the object storage provider returned `Some`
+// without promising `trash_restorable`, and no contract saw it).
 norte_vfs::provider_contract! {
     mod mem_logical_trash,
     factory: MemProvider::with_flags(
@@ -68,8 +68,8 @@ norte_vfs::provider_contract! {
     hostile_names: hostile(),
 }
 
-// Attrs sintéticos hostiles (#108 bloque 2): el contrato de attrs deja de
-// auto-skipearse y ejercita valores reales (Bytes no-UTF-8, RTL, ZWJ).
+// Hostile synthetic attrs (#108 block 2): the attrs contract stops
+// auto-skipping and exercises real values (non-UTF-8 Bytes, RTL, ZWJ).
 norte_vfs::provider_contract! {
     mod mem_attrs,
     factory: MemProvider::new().with_synthetic_attrs(),

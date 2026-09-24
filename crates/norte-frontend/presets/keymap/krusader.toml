@@ -67,28 +67,29 @@
 # source does not attest it, and it lives on the `[/]` layout button, the
 # Panels menu and the palette.
 
-# `pane.compare-files` (#312) se queda SIN ATAR aquí, y en los otros tres
-# presets importados, por la misma regla que ya deja fuera a `pane.compare-dirs`
-# en `far.toml` y en `norton.toml`: Krusader tiene la función —«Compare by
-# Content», en su menú File— y la fuente de la que se transcribió este fichero
-# no le atribuye acorde. Inventarle uno a una transcripción es peor que una
-# hoja de referencia que imprime `—`, que al menos dice la verdad. Los tres
-# presets nativos sí lo llevan, en `alt+C`.
+# `pane.compare-files` (#312) is left UNBOUND here, and in the other three
+# imported presets, by the same rule that already leaves out
+# `pane.compare-dirs` in `far.toml` and `norton.toml`: Krusader has the
+# feature —"Compare by Content", in its File menu— and the source this file
+# was transcribed from does not attribute a chord to it. Inventing one for a
+# transcription is worse than a reference sheet that prints `—`, which at
+# least tells the truth. The three native presets do carry it, on `alt+C`.
 #
-# `app.goto` («ir a cualquier sitio», fase 6) NO se ata aquí. Es una
-# pantalla propia de norte: junta historia, populares, favoritos,
-# conexiones, comandos y una ruta tecleada en una sola lista, y Krusader no
-# tiene nada equivalente a lo que copiarle un atajo. `ctrl+g` está libre en
-# los siete presets y es el que llevan orthodox, cua y vim; inventárselo
-# aquí sería exactamente lo que este fichero existe para no hacer. Está el
-# primero del menú Ir (F9), que es preset-independiente, así que no es una
-# capacidad que falte: es un atajo que no se atribuye a una fuente que no lo
-# dice.
+# `app.goto` ("go anywhere", phase 6) is NOT bound here. It is a screen of
+# norte's own: it brings history, favourites, bookmarks, connections,
+# commands and a typed path together into one list, and Krusader has
+# nothing equivalent to copy a shortcut from. `ctrl+g` is free in all seven
+# presets and is the one orthodox, cua and vim carry; inventing it here
+# would be exactly what this file exists not to do. It is first in the Go
+# menu (F9), which is preset-independent, so it is not a missing
+# capability: it is a shortcut not attributed to a source that does not
+# state it.
 #
-# `task.pause` (ADR 0147), `task.retry` (ADR 0148) y los tres de la cola
-# (`task.queue`, `task.up`, `task.down`, ADR 0149) se quedan SIN ATAR aquí,
-# igual que `task.cancel`:
-# Krusader pausa desde su JobMan (el botón de la barra de herramientas), no desde una tecla que su documentación nombre. Los dos se alcanzan desde la paleta.
+# `task.pause` (ADR 0147), `task.retry` (ADR 0148) and the three queue ones
+# (`task.queue`, `task.up`, `task.down`, ADR 0149) are left UNBOUND here,
+# just like `task.cancel`:
+# Krusader pauses from its JobMan (the toolbar button), not from a key its
+# documentation names. Both are reached from the palette.
 
 dialog_from = "orthodox"
 
@@ -99,70 +100,73 @@ keymap = [
     { on = ["f9"], run = "app.terminal" },
     { on = ["f10"], run = "app.quit" },
     { on = ["ctrl+q"], run = "app.quit" },
-    # Las superficies PROPIAS de norte, que este gestor no tenía y por
-    # tanto no hay nada que transcribir: ajustes, extensiones y paleta.
-    # Sin ellas la configuración no se alcanza desde el teclado, que es
-    # lo que pasaba hasta ahora en este preset. F11/F12 están libres
-    # aquí y son lo que usan orthodox/vim/cua; para la paleta, `alt+p`.
+    # Surfaces of norte's OWN, which this manager did not have and so there
+    # is nothing to transcribe: settings, extensions and the palette.
+    # Without them, configuration cannot be reached from the keyboard,
+    # which is what happened in this preset until now. F11/F12 are free
+    # here and are what orthodox/vim/cua use; for the palette, `alt+p`.
     #
-    # Fue `ctrl+P`, con el razonamiento de que la mayúscula ES el shift. Lo es
-    # en la gramática de acordes y NO en el cable: un terminal manda el mismo
-    # byte (0x10) para Ctrl+P y para Ctrl+Shift+P, y distinguirlos exige el
-    # protocolo de teclado de Kitty, que norte no activa. Así que la paleta
-    # era inalcanzable desde el teclado en este preset, y quien la buscaba se
-    # encontraba el diálogo de partir ficheros — `ctrl+p` en minúscula, que sí
-    # es `pane.split-file` en Krusader. Hay test.
+    # It used to be `ctrl+P`, on the reasoning that the uppercase letter IS
+    # the shift. It is, in the chord grammar, and NOT on the wire: a
+    # terminal sends the same byte (0x10) for Ctrl+P and for Ctrl+Shift+P,
+    # and telling them apart requires Kitty's keyboard protocol, which norte
+    # does not enable. So the palette was unreachable from the keyboard in
+    # this preset, and whoever looked for it found the split-file dialog
+    # instead — lowercase `ctrl+p`, which is indeed `pane.split-file` in
+    # Krusader. There is a test.
     { on = ["f11"], run = "app.settings" },
     { on = ["f12"], run = "app.extensions" },
-    # El tema. `alt+9` y no `f9` porque F9 aquí es abrir terminal, que es lo
-    # que F9 hace en Krusader; en FAR y en Norton es el menú del programa.
-    # Los tres presets nativos lo tienen en F9, así que el 9 hace eco de ellos
-    # sin robarle a nadie una tecla que ya significa algo. Estaba SIN ATAR en
-    # los cuatro presets importados —el único de las superficies propias de
-    # norte que se quedó fuera— y hay test.
+    # The theme. `alt+9` and not `f9` because F9 here opens a terminal, which
+    # is what F9 does in Krusader; in FAR and in Norton it is the program's
+    # menu. The three native presets have it on F9, so the 9 echoes them
+    # without stealing a key that already means something from anyone. It
+    # was UNBOUND in the four imported presets —the only one of norte's own
+    # surfaces left out— and there is a test.
     { on = ["alt+9"], run = "app.theme" },
     { on = ["alt+p"], run = "app.palette" },
     { on = ["alt+m"], run = "app.menu" },
     { on = ["alt+b"], run = "layout.places" },
     { on = ["alt+q"], run = "layout.preview" },
-    # El anillo de paneles y el panel de procesos. Ver la nota larga en
-    # orthodox.toml: son superficies propias de norte y no hay nada que
-    # transcribir de Krusader sobre ellas.
+    # The pane ring and the process panel. See the long note in
+    # orthodox.toml: these are surfaces of norte's own and there is nothing
+    # to transcribe from Krusader about them.
     #
-    # `layout.focus-prev` se queda SIN ATAR aquí, y solo aquí: su tecla en los
-    # otros seis es `alt+O`, que en Krusader es «Sync panels» (el Equals
-    # Button) y está atada a `pane.mirror`. Un `[global]` con ese acorde
-    # quedaría ensombrecido dentro de los listados y activo fuera, que es peor
-    # que no estar: la misma tecla haría dos cosas según dónde estuviera el
-    # teclado. El anillo da la vuelta, así que hacia delante se llega igual.
+    # `layout.focus-prev` is left UNBOUND here, and only here: its key in
+    # the other six is `alt+O`, which in Krusader is "Sync panels" (the
+    # Equals Button) and is bound to `pane.mirror`. A `[global]` with that
+    # chord would end up shadowed inside the listings and active outside
+    # them, which is worse than not being there: the same key would do two
+    # things depending on where the keyboard focus was. The ring wraps
+    # around, so forward still reaches the same place.
     { on = ["alt+o"], run = "layout.focus-next" },
     { on = ["alt+j"], run = "layout.processes" },
-    # El registro (#323): NO lo atesta Krusader —no tiene un panel así—, se
-    # ata igual porque es de norte y `alt+l` está libre. Ver el bloque de
-    # divergencias de la cabecera.
+    # The log (#323): Krusader does NOT attest it —it has no panel like
+    # this—, it is bound anyway because it is norte's own and `alt+l` is
+    # free. See the header's divergences block.
     { on = ["alt+l"], run = "layout.log" },
-    # El mapa de disco (fase 4). Krusader NO atestigua ningún acorde para esto
-    # —no tiene un panel así—, así que no se transcribe nada: se ata `alt+z`,
-    # que es la única letra libre en los siete presets. Ver orthodox.toml.
+    # The disk map (phase 4). Krusader attests NO chord for this —it has no
+    # panel like this—, so nothing is transcribed: `alt+z` is bound, the one
+    # letter free across all seven presets. See orthodox.toml.
     { on = ["alt+z"], run = "layout.disk-map" },
-    # El panel de terminal (#362). **Krusader SÍ tiene este panel** —es el
-    # emulador de terminal acoplado, y buena parte de por qué norte lo añade—,
-    # así que aquí tocaría transcribir su acorde y no inventarlo.
+    # The terminal panel (#362). **Krusader DOES have this panel** —it is
+    # the docked terminal emulator, and a good part of why norte adds it—,
+    # so here its chord should be transcribed rather than invented.
     #
-    # No se transcribe, y el motivo se escribe en vez de callarlo: el acorde
-    # que Krusader atestigua no se ha podido comprobar contra su documentación
-    # desde donde se hizo este cambio, y transcribir de memoria es exactamente
-    # cómo se cuela un acorde que el gestor de referencia nunca tuvo. Va el
-    # acorde común de norte (`ctrl+alt+s`, ver orthodox.toml) y queda anotado:
-    # si la documentación de Krusader dice otro, este binding cambia y el
-    # cambio es una línea.
+    # It is not transcribed, and the reason is written down instead of left
+    # silent: the chord Krusader attests could not be checked against its
+    # documentation from where this change was made, and transcribing from
+    # memory is exactly how a chord the reference manager never had sneaks
+    # in. norte's common chord (`ctrl+alt+s`, see orthodox.toml) goes here,
+    # and it is noted: if Krusader's documentation says another one, this
+    # binding changes and the change is one line.
     { on = ["ctrl+alt+s"], run = "layout.terminal" },
-    # El resto de la familia `layout.*`, con los mismos acordes que en los
-    # otros seis presets: ver la nota larga en `orthodox.toml`. Krusader tiene
-    # lo suyo para el reparto (`Ctrl+Alt+R` orientación, `Ctrl+Alt+=` igualar),
-    # pero está entre lo omitido a sabiendas por ser de su ventana y no de un
-    # gestor ortodoxo, y una familia que cambia de tecla según el preset es
-    # justo lo que estas cinco vienen a evitar.
+    # The rest of the `layout.*` family, with the same chords as in the
+    # other six presets: see the long note in `orthodox.toml`. Krusader has
+    # its own for panel layout (`Ctrl+Alt+R` orientation, `Ctrl+Alt+=`
+    # equalize), but it is among what was knowingly omitted for belonging to
+    # its window and not to an orthodox manager, and a family that changes
+    # key depending on the preset is exactly what these five exist to
+    # avoid.
     { on = ["alt+x"], run = "layout.close-slot" },
     { on = ["alt+["], run = "layout.shrink" },
     { on = ["alt+]"], run = "layout.grow" },
@@ -172,9 +176,9 @@ keymap = [
 
 [pane]
 keymap = [
-    # Krusader TIENE esto («Synchron Browse»), pero como botón de la barra: su
-    # documentación no le asigna acorde, así que aquí no hay nada que
-    # transcribir y se usa el nuestro, igual en los siete (ver `orthodox`).
+    # Krusader HAS this ("Synchron Browse"), but as a toolbar button: its
+    # documentation assigns it no chord, so there is nothing to transcribe
+    # here and ours is used, the same in all seven (see `orthodox`).
     { on = ["ctrl+e"], run = "pane.sync-nav" },
     { on = ["up"], run = "cursor.up" },
     { on = ["down"], run = "cursor.down" },
@@ -187,9 +191,10 @@ keymap = [
     { on = ["ctrl+pgup"], run = "nav.parent" },
     { on = ["ctrl+="], run = "pane.pull" },
     { on = ["f2"], run = "pane.rename" },
-    # `Shift+F2` es Krename, el renombrado en lote de la fuente. Estaba entre
-    # las omisiones («the Multi-Rename tool (Shift+F2, Krename…)») porque norte
-    # no tenía a qué atarlo; con #310 sí, y la tecla atestiguada vuelve.
+    # `Shift+F2` is Krename, the source's batch rename. It was among the
+    # omissions ("the Multi-Rename tool (Shift+F2, Krename…)") because norte
+    # had nothing to bind it to; with #310 it does, and the attested key
+    # comes back.
     { on = ["shift+f2"], run = "pane.rename-batch" },
     { on = ["f3"], run = "pane.view" },
     { on = ["f4"], run = "pane.edit" },
@@ -202,13 +207,13 @@ keymap = [
     { on = ["ctrl+r"], run = "pane.refresh" },
     { on = ["ctrl+s"], run = "pane.search" },
     { on = ["ctrl+f"], run = "pane.quick-search" },
-    # La historia (spec 2026-09-15), transcrita del CÓDIGO de Krusader
-    # (`listpanelactions.cpp`, `kractions.cpp`) y no de la tabla de
-    # docs.kde.org. Esa tabla dice que Alt+←/→ abren los marcadores de cada
-    # panel, y esta cabecera lo copió: en el código esas dos acciones no tienen
-    # tecla, y Alt+←/→ son `KStandardAction::Back/Forward`. Ctrl+Alt+←/→ son la
-    # historia del panel izquierdo/derecho, Ctrl+J vuelve al punto de salto y
-    # Ctrl+Z abre las «Popular URLs».
+    # History (spec 2026-09-15), transcribed from Krusader's CODE
+    # (`listpanelactions.cpp`, `kractions.cpp`) and not from the
+    # docs.kde.org table. That table says Alt+←/→ open each panel's
+    # bookmarks, and this header used to copy that: in the code those two
+    # actions have no key, and Alt+←/→ are `KStandardAction::Back/Forward`.
+    # Ctrl+Alt+←/→ are the left/right pane's history, Ctrl+J goes back to the
+    # jump point and Ctrl+Z opens the "Popular URLs".
     { on = ["alt+left"], run = "nav.back" },
     { on = ["alt+right"], run = "nav.forward" },
     { on = ["ctrl+alt+left"], run = "pane.history-left" },
@@ -217,7 +222,7 @@ keymap = [
     { on = ["ctrl+z"], run = "pane.popular" },
     { on = ["ctrl+h"], run = "pane.history" },
     { on = ["ctrl+d"], run = "pane.hotlist" },
-    # `alt+d`: `ctrl+D` no llega (mismo byte que `ctrl+d`, que es la hotlist).
+    # `alt+d`: `ctrl+D` does not arrive (same byte as `ctrl+d`, which is the hotlist).
     { on = ["alt+d"], run = "pane.disconnect" },
     { on = ["ctrl+n"], run = "pane.connect" },
     { on = ["ctrl+p"], run = "pane.split-file" },
@@ -269,24 +274,25 @@ keymap = [
     { on = ["alt+*"], run = "mark.invert" },
     { on = ["ctrl+plus"], run = "mark.pattern-add" },
     { on = ["ctrl+-"], run = "mark.pattern-remove" },
-    # Marcar MOVIÉNDOSE. `Shift+Home`/`Shift+End` son literales de la fuente
-    # («Selecting», basic-functions): «selects everything above the cursor
-    # (and deselects everything below the cursor, if selected)» y su espejo —
-    # de ahí que `mark.to-top`/`mark.to-bottom` limpien el otro lado en vez de
-    # limitarse a añadir un tramo. `Shift`+flechas y `Shift`+página NO están
-    # itemizados en la fuente, igual que el movimiento del cursor del panel
-    # (ver las divergencias de la cabecera): se atan como los ata orthodox,
-    # que es la misma regla que ya se aplicó a las flechas y a PgUp/PgDn.
+    # Marking WHILE MOVING. `Shift+Home`/`Shift+End` are literal from the
+    # source ("Selecting", basic-functions): "selects everything above the
+    # cursor (and deselects everything below the cursor, if selected)" and
+    # its mirror — hence why `mark.to-top`/`mark.to-bottom` clear the other
+    # side instead of only adding a range. `Shift`+arrows and `Shift`+page
+    # are NOT itemised in the source, same as the pane cursor's movement
+    # (see the header's divergences): they are bound the way orthodox binds
+    # them, the same rule already applied to the arrows and to PgUp/PgDn.
     { on = ["shift+down"], run = "mark.toggle" },
     { on = ["shift+up"], run = "mark.toggle-up" },
     { on = ["shift+pgdn"], run = "mark.toggle-page-down" },
     { on = ["shift+pgup"], run = "mark.toggle-page-up" },
     { on = ["shift+home"], run = "mark.to-top" },
     { on = ["shift+end"], run = "mark.to-bottom" },
-    # Las sumas (#311). Krusader las tiene en su menú File y ninguno de los
-    # cuatro importados les da acorde, así que la tecla se ELIGE: `alt+k`
-    # calcula y `alt+K` comprueba — libre en los siete, y la mayúscula
-    # para la variante, como `alt+o`/`alt+O` en el anillo de paneles.
+    # Checksums (#311). Krusader has them in its File menu and none of the
+    # four imported managers gives them a chord, so the key is CHOSEN:
+    # `alt+k` computes and `alt+K` verifies — free in all seven, and the
+    # uppercase letter for the variant, as with `alt+o`/`alt+O` in the pane
+    # ring.
     { on = ["alt+k"], run = "pane.checksum" },
     { on = ["alt+K"], run = "pane.checksum-verify" },
     { on = ["alt+h"], run = "layout.split-h" },
@@ -305,9 +311,9 @@ keymap = [
     { on = ["end"], run = "viewer.bottom" },
     { on = ["left"], run = "viewer.left" },
     { on = ["right"], run = "viewer.right" },
-    # Superficie propia de norte: Krusader no atesta un zoom en su visor, así
-    # que estas tres son elección nuestra y van igual en los siete presets
-    # (ver `orthodox.toml`).
+    # A surface of norte's own: Krusader attests no zoom in its viewer, so
+    # these three are our own choice and are the same across all seven
+    # presets (see `orthodox.toml`).
     { on = ["f5"], run = "viewer.zoom-out" },
     { on = ["f6"], run = "viewer.zoom-in" },
     { on = ["f7"], run = "viewer.zoom-fit" },

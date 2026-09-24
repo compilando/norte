@@ -1,10 +1,11 @@
-//! Lo que envuelve a UNA llamada: su plazo y su cancelación.
+//! What wraps ONE call: its deadline and its cancellation.
 //!
-//! Dos cosas que no son del protocolo pero sí del cliente. El plazo, porque
-//! un daemon vivo-pero-atascado —un `stat` sobre un NFS muerto— jamás debe
-//! congelar un frontend. Y la cancelación al ABANDONAR: si el future de una
-//! llamada se dropea (el usuario pulsó Esc, el `select!` eligió otra rama),
-//! el daemon tiene que enterarse, o seguiría trabajando para nadie.
+//! Two things that are not the protocol's but are the client's. The
+//! deadline, because a daemon that is alive-but-stuck — a `stat` over a dead
+//! NFS — must never freeze a frontend. And cancellation on ABANDONMENT: if a
+//! call's future is dropped (the user pressed Esc, `select!` chose another
+//! branch), the daemon has to find out, or it would keep working for
+//! nobody.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -13,20 +14,20 @@ use norte_proto::{Error, methods};
 
 use crate::rpc::{Client, ClientError};
 
-/// Tope de una llamada RPC: un daemon vivo-pero-atascado (stat sobre un
-/// NFS muerto) jamás congela el frontend (M4 del rust-reviewer).
+/// Cap on an RPC call: a daemon that is alive-but-stuck (a stat over a dead
+/// NFS) never freezes the frontend (rust-reviewer M4).
 pub(super) const CALL_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// Mapea el error del cliente RPC a la taxonomía (el contrato de los
-/// frontends es SIEMPRE la taxonomía, spec §17.7).
-/// Guard drop-based de un submit remoto (#74): si cae ARMADO con un id
-/// capturado, notifica `rpc.cancel {id}` (sync, best-effort — `notify`
-/// solo encola el frame; canal muerto = no-op). `armed=false` tras
-/// recibir la respuesta.
+/// Maps the RPC client's error onto the taxonomy (frontends' contract is
+/// ALWAYS the taxonomy, spec §17.7).
+/// Drop-based guard for a remote submit (#74): if it drops ARMED with a
+/// captured id, it notifies `rpc.cancel {id}` (sync, best-effort — `notify`
+/// only queues the frame; a dead channel = no-op). `armed=false` after
+/// receiving the response.
 pub(super) struct CancelOnAbandon {
     pub(super) client: Arc<Client>,
-    /// Id de la request en vuelo; `0` = aún sin asignar (el contador del
-    /// [`Client`] arranca en 1 — jamás emite 0).
+    /// Id of the request in flight; `0` = not yet assigned (the [`Client`]'s
+    /// counter starts at 1 — it never emits 0).
     pub(super) id: Arc<std::sync::atomic::AtomicU64>,
     pub(super) armed: bool,
 }
@@ -49,40 +50,40 @@ impl Drop for CancelOnAbandon {
     }
 }
 
-/// Traduce un error del cliente a la taxonomía del wire.
+/// Translates a client error into the wire's taxonomy.
 ///
-/// Es lo que hace [`super::RemoteBackend::connect`] por dentro, y es público
-/// porque un frontend que use [`super::RemoteBackend::connect_detallado`]
-/// —para poder enseñar lo que dijo un daemon que murió— necesita traducir
-/// todos los DEMÁS casos igual que se traducirían solos.
+/// This is what [`super::RemoteBackend::connect`] does internally, and it is
+/// public because a frontend using [`super::RemoteBackend::connect_detallado`]
+/// — to be able to show what a daemon that died said — needs to translate
+/// all the OTHER cases exactly as they would translate themselves.
 ///
-/// La pérdida es deliberada y va en un sentido: la taxonomía no lleva texto
-/// libre, así que lo que el daemon escribió no sobrevive a esta función.
+/// The loss is deliberate and goes one way: the taxonomy carries no free
+/// text, so what the daemon wrote does not survive this function.
 ///
 /// ```
 /// use norte_client::{ClientError, to_taxonomy};
-/// // Arrancó y murió: reintentar no lo arregla, y se dice.
+/// // It started and died: retrying does not fix it, and it says so.
 /// let e = to_taxonomy(ClientError::SpawnFailed {
 ///     status: Some(1),
-///     stderr: "journal corrupto".to_owned(),
+///     stderr: "corrupt journal".to_owned(),
 /// });
 /// assert_eq!(e, norte_proto::Error::ProviderUnavailable { retryable: false });
-/// // Todavía no acepta: eso sí se reintenta.
+/// // Not accepting yet: that one IS retried.
 /// let e = to_taxonomy(ClientError::SpawnTimeout);
 /// assert_eq!(e, norte_proto::Error::ProviderUnavailable { retryable: true });
 /// ```
 #[must_use]
 pub fn to_taxonomy(e: ClientError) -> Error {
     match e {
-        // La taxonomía viaja en data (ADR 0011): se entrega tal cual.
+        // The taxonomy travels in data (ADR 0011): delivered as is.
         ClientError::Rpc(rpc) => rpc.data.unwrap_or(Error::Internal { panic: false }),
         ClientError::Io(_) | ClientError::ConnectionClosed | ClientError::SpawnTimeout => {
             Error::ProviderUnavailable { retryable: true }
         }
-        // Arrancó y murió: reintentar no lo va a arreglar, así que
-        // `retryable: false`. Lo que DIJO no cabe en la taxonomía —no lleva
-        // texto libre, y no es un error del wire sino de esta máquina—, así
-        // que quien lo necesite conecta con
+        // It started and died: retrying is not going to fix it, so
+        // `retryable: false`. What it SAID does not fit the taxonomy — it
+        // carries no free text, and it is not an error of the wire but of
+        // this machine — so whoever needs it connects with
         // [`super::RemoteBackend::connect_detallado`].
         ClientError::SpawnFailed { .. } => Error::ProviderUnavailable { retryable: false },
         ClientError::BadResult(_) => Error::Internal { panic: false },

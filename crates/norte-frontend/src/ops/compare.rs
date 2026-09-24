@@ -416,44 +416,44 @@ fn face(entry: &norte_proto::Entry, reinterpret: Option<norte_encoding::NameEnco
     }
 }
 
-/// Por qué una fila enseña DOS ortografías, en una frase, o `None` cuando no
-/// hay nada que explicar (#208, 0.42.0 `CompareRow::paired_under`).
+/// Why a row shows TWO spellings, in one sentence, or `None` when there is
+/// nothing to explain (#208, 0.42.0 `CompareRow::paired_under`).
 ///
-/// Los dos paneles de diferencias pintan dos nombres que una fuente puede
-/// rendir idénticos —el par NFC/NFD— o que son visiblemente caracteres
-/// distintos —el KELVIN SIGN contra la `K` ASCII—, y hasta ahora no decían
-/// nada de por qué están en la misma fila. Esto es lo que falta: una frase
-/// fija y localizada, JAMÁS un badge pegado al nombre (misma regla que
-/// `sync::dest_twin_label`, #192 — lo que se pega a un nombre lo puede
-/// falsificar un nombre).
+/// The two diff panes paint two names that a source can render identical —
+/// the NFC/NFD pair — or that are visibly different characters — the
+/// KELVIN SIGN against the ASCII `K` — and until now said nothing about why
+/// they are on the same row. This is what was missing: a fixed, localized
+/// sentence, NEVER a badge glued to the name (the same rule as
+/// `sync::dest_twin_label`, #192 — what gets glued to a name is something a
+/// name can forge).
 ///
-/// Tres respuestas y no cuatro, y la diferencia importa:
+/// Three answers and not four, and the difference matters:
 ///
-/// * `None` cuando no hubo transformación: la pareja es byte a byte.
-/// * La frase SUAVE para [`PairTransform::CaseFold`](norte_proto::methods::PairTransform::CaseFold) y
-///   [`PairTransform::Normalization`](norte_proto::methods::PairTransform::Normalization): son las parejas para las que la clave
-///   existe, y refusarlas rompería el caso macOS↔Linux que sirve.
-/// * La frase FUERTE para [`PairTransform::NormalizationSingleton`](norte_proto::methods::PairTransform::NormalizationSingleton) y para
-///   cualquier transformación que este build no conozca — o sea, exactamente
-///   cuando [`PairTransform::names_one_text`](norte_proto::methods::PairTransform::names_one_text) contesta `false`. Un singleton
-///   puede estar juntando DOS FICHEROS DISTINTOS, y una transformación que un
-///   daemon más nuevo nombró no se puede leer como inocua.
-/// * Y una CUARTA, que es una fuerte con otro culpable:
-///   [`PairTransform::FullFold`](norte_proto::methods::PairTransform::FullFold) junta dos ficheros que pueden ser distintos,
-///   pero no los junta Unicode — los junta el volumen (un ext4/f2fs `+F`).
-///   Decirlo mal manda a buscar el problema donde no está.
+/// * `None` when there was no transformation: the pair is byte for byte.
+/// * The SOFT sentence for [`PairTransform::CaseFold`](norte_proto::methods::PairTransform::CaseFold) and
+///   [`PairTransform::Normalization`](norte_proto::methods::PairTransform::Normalization): these are the pairs the key
+///   exists for, and refusing them would break the macOS↔Linux case it serves.
+/// * The STRONG sentence for [`PairTransform::NormalizationSingleton`](norte_proto::methods::PairTransform::NormalizationSingleton) and for
+///   any transformation this build does not know — that is, exactly when
+///   [`PairTransform::names_one_text`](norte_proto::methods::PairTransform::names_one_text) answers `false`. A singleton
+///   can be joining TWO DIFFERENT FILES, and a transformation a newer
+///   daemon named cannot be read as harmless.
+/// * And a FOURTH, which is a strong one with a different culprit:
+///   [`PairTransform::FullFold`](norte_proto::methods::PairTransform::FullFold) joins two files that can be different,
+///   but Unicode is not what joins them — the volume is (an ext4/f2fs `+F`).
+///   Saying it wrong sends the search for the problem to the wrong place.
 ///
 /// ```
 /// use norte_frontend::compare::paired_under_label;
 /// use norte_i18n::Lang;
 /// use norte_proto::methods::PairTransform;
 ///
-/// assert!(paired_under_label(None, Lang::En).is_none(), "sin transformación, sin frase");
-/// let suave = paired_under_label(Some(PairTransform::Normalization), Lang::En)
-///     .expect("una pareja NFC/NFD se explica");
-/// let fuerte = paired_under_label(Some(PairTransform::NormalizationSingleton), Lang::En)
-///     .expect("y un singleton, más fuerte");
-/// assert_ne!(suave, fuerte, "la peligrosa no se dice igual que la corriente");
+/// assert!(paired_under_label(None, Lang::En).is_none(), "no transformation, no sentence");
+/// let soft = paired_under_label(Some(PairTransform::Normalization), Lang::En)
+///     .expect("an NFC/NFD pair is explained");
+/// let strong = paired_under_label(Some(PairTransform::NormalizationSingleton), Lang::En)
+///     .expect("and a singleton, stronger");
+/// assert_ne!(soft, strong, "the dangerous one is not said the same as the ordinary one");
 /// ```
 #[must_use]
 pub fn paired_under_label(
@@ -463,10 +463,10 @@ pub fn paired_under_label(
     let transform = paired_under?;
     Some(match transform {
         t if t.names_one_text() => t_in(lang, "compare-paired-under"),
-        // El pliegue COMPLETO también junta dos ficheros que pueden ser
-        // distintos, pero no lo hace Unicode: lo hace ESTE volumen. Decir
-        // «Unicode los declara iguales» sobre `straße`/`strasse` mandaría a
-        // buscar el problema donde no está.
+        // The FULL fold also joins two files that can be different, but
+        // Unicode does not do it: THIS volume does. Saying "Unicode
+        // declares them equal" about `straße`/`strasse` would send the
+        // search for the problem to the wrong place.
         norte_proto::methods::PairTransform::FullFold => {
             t_in(lang, "compare-paired-under-full-fold")
         }
@@ -580,10 +580,10 @@ pub struct ComparePane {
     /// The selected row's `id` — never an index. A filter changes which rows
     /// are on screen and must not change which one is selected.
     selected: Option<u64>,
-    /// La primera fila VISIBLE, que es PEGAJOSA (#210): se arrastra solo
-    /// cuando el cursor se sale, igual que la del listado de ficheros. Antes
-    /// se deducía del cursor en cada frame y eso lo dejaba clavado en la
-    /// última fila — ver [`crate::viewport::sticky_offset`].
+    /// The first VISIBLE row, which is STICKY (#210): it only drags along
+    /// when the cursor moves off it, the same as the file listing's. It
+    /// used to be deduced from the cursor every frame, and that pinned it
+    /// to the last row — see [`crate::viewport::sticky_offset`].
     viewport_offset: usize,
     /// The rows the reader MARKED, by `id`, for the same reason `selected` is
     /// an id: a filter must not change what was picked.
@@ -803,9 +803,9 @@ impl ComparePane {
         self.visible().position(|r| r.id == id)
     }
 
-    /// Deja la ventana lista para pintar `rows` filas con el cursor donde
-    /// está (#210): la arrastra SOLO si el cursor se salió. Se llama una vez
-    /// por frame, antes de pintar.
+    /// Leaves the window ready to paint `rows` rows with the cursor where
+    /// it is (#210): it only drags it along if the cursor moved off. Called
+    /// once per frame, before painting.
     pub fn reconcile_viewport(&mut self, rows: usize) {
         self.viewport_offset = crate::viewport::sticky_offset(
             self.viewport_offset,
@@ -815,7 +815,7 @@ impl ComparePane {
         );
     }
 
-    /// La primera fila visible — ver [`Self::reconcile_viewport`].
+    /// The first visible row — see [`Self::reconcile_viewport`].
     #[must_use]
     pub fn viewport_offset(&self) -> usize {
         self.viewport_offset
@@ -990,13 +990,13 @@ pub fn status_line(view: &CompareView, marked: usize, lang: Lang) -> String {
     // The marked count goes here and not on a key line: it is state, not
     // vocabulary. Only when there is one — a permanent "0 marked" would be
     // noise in the normal case.
-    // #208: por qué la fila SELECCIONADA enseña dos ortografías, cuando las
-    // enseña. Va aquí y no pegado al nombre por la misma razón que
-    // `sync::dest_twin_label`: lo que se pega a un nombre lo puede falsificar
-    // un nombre, y esta frase es justamente la que no debe poder falsificarse.
-    // Aquí lo ven los DOS paneles —los dos pintan esta línea— con una sola
-    // implementación y una sola traducción.
-    let pareja = view
+    // #208: why the SELECTED row shows two spellings, when it does. It goes
+    // here and not glued to the name for the same reason as
+    // `sync::dest_twin_label`: what gets glued to a name is something a
+    // name can forge, and this sentence is precisely the one that must not
+    // be forgeable. Here BOTH panes see it — both paint this line — with
+    // one single implementation and one single translation.
+    let pair = view
         .pane
         .selected_row()
         .and_then(|row| paired_under_label(row.paired_under, lang));
@@ -1005,8 +1005,8 @@ pub fn status_line(view: &CompareView, marked: usize, lang: Lang) -> String {
         let m = marked.to_string();
         out = format!("{out} · {}", ta_in(lang, "compare-marked", &[("n", &m)]));
     }
-    if let Some(pareja) = pareja {
-        out = format!("{out} · {pareja}");
+    if let Some(pair) = pair {
+        out = format!("{out} · {pair}");
     }
     out
 }
@@ -1232,10 +1232,10 @@ impl CompareView {
                 self.error = Some(crate::error::error_category_in(lang, error));
                 Some(error)
             }
-            // NO terminal: el canal de filas se cerró sin que nadie observara
-            // el desenlace. Esto era `Done` y ahí estaba el agujero (#183) —
-            // decía «terminó y llegó todo» sobre una task que pudo morir sin
-            // publicar nada.
+            // NOT terminal: the row channel closed without anyone observing
+            // the outcome. This used to be `Done`, and that was the hole
+            // (#183) — it said "finished and everything arrived" about a
+            // task that could have died without publishing anything.
             _ => {
                 self.state = CompareState::Unknown;
                 self.rows_expected = entries_done;
@@ -1794,15 +1794,16 @@ mod tests {
         }
     }
 
-    /// #208: la fila SELECCIONADA explica por qué enseña dos ortografías, y la
-    /// peligrosa no se dice igual que la corriente. Va en la línea de estado
-    /// —que pintan los DOS paneles, con una sola traducción— y jamás pegada al
-    /// nombre: lo que se pega a un nombre lo puede falsificar un nombre.
+    /// #208: the SELECTED row explains why it shows two spellings, and the
+    /// dangerous one is not said the same as the ordinary one. It goes in
+    /// the status line — which BOTH panes paint, with a single
+    /// translation — and never glued to the name: what gets glued to a
+    /// name is something a name can forge.
     #[test]
     fn la_linea_de_estado_explica_la_pareja_seleccionada() {
         use norte_proto::methods::PairTransform;
 
-        let armar = |paired: Option<PairTransform>| {
+        let build = |paired: Option<PairTransform>| {
             let mut v = CompareView::new(
                 VPath::parse("file:///a").expect("wire"),
                 VPath::parse("file:///b").expect("wire"),
@@ -1810,31 +1811,31 @@ mod tests {
                 None,
                 None,
             );
-            let mut fila = row_id(1, Different);
-            fila.paired_under = paired;
-            v.pane.extend(vec![fila]);
+            let mut row = row_id(1, Different);
+            row.paired_under = paired;
+            v.pane.extend(vec![row]);
             status_line(&v, 0, Lang::En)
         };
 
         let singleton = paired_under_label(Some(PairTransform::NormalizationSingleton), Lang::En)
-            .expect("la peligrosa tiene frase");
-        let corriente =
-            paired_under_label(Some(PairTransform::Normalization), Lang::En).expect("y la NFC/NFD");
-        assert_ne!(singleton, corriente, "no se dicen igual");
+            .expect("the dangerous one has a sentence");
+        let ordinary = paired_under_label(Some(PairTransform::Normalization), Lang::En)
+            .expect("and the NFC/NFD one");
+        assert_ne!(singleton, ordinary, "not said the same way");
 
         assert!(
-            armar(Some(PairTransform::NormalizationSingleton)).contains(&singleton),
-            "un singleton se avisa"
+            build(Some(PairTransform::NormalizationSingleton)).contains(&singleton),
+            "a singleton is warned about"
         );
         assert!(
-            armar(Some(PairTransform::Normalization)).contains(&corriente),
-            "y una pareja NFC/NFD se explica"
+            build(Some(PairTransform::Normalization)).contains(&ordinary),
+            "and an NFC/NFD pair is explained"
         );
-        // Byte a byte: no hay nada que explicar y no se dice nada.
-        let limpia = armar(None);
+        // Byte for byte: there is nothing to explain and nothing is said.
+        let clean = build(None);
         assert!(
-            !limpia.contains(&corriente) && !limpia.contains(&singleton),
-            "{limpia}"
+            !clean.contains(&ordinary) && !clean.contains(&singleton),
+            "{clean}"
         );
     }
 
@@ -1844,9 +1845,10 @@ mod tests {
     /// other nine crossed crates with nothing holding them.
     #[test]
     fn the_footer_says_every_state_and_the_marks_in_both_locales() {
-        // La lista es EXHAUSTIVA a mano, así que una variante nueva que
-        // nadie añada aquí pasa sin que su cadena exista en los dos idiomas —
-        // que es el síntoma que este test caza. `Unknown` entró con #183.
+        // The list is EXHAUSTIVE by hand, so a new variant nobody adds here
+        // slips through without its string existing in both languages —
+        // which is the symptom this test catches. `Unknown` came in with
+        // #183.
         let states = [
             CompareState::Running,
             CompareState::Done,

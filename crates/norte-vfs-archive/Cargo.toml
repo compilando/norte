@@ -1,6 +1,6 @@
 [package]
 name = "norte-vfs-archive"
-description = "Provider VFS read-only: zip/tar como directorios virtuales (ADR 0018)"
+description = "Read-only VFS provider: zip/tar as virtual directories (ADR 0018)"
 license = "MIT OR Apache-2.0"
 version.workspace = true
 edition.workspace = true
@@ -14,35 +14,35 @@ bytes.workspace = true
 futures.workspace = true
 norte-proto.workspace = true
 norte-vfs.workspace = true
-# Parsers SYNC de formato (regla 2: corren en spawn_blocking sobre un
-# adaptador Read+Seek que puentea al Provider interior con block_on). El
-# central directory de zip lo parsea el módulo propio `zip_cd` (#59): el
-# crate `zip` quedó fuera (colapso lossy H1 / sustitución 0x7075 H3).
+# SYNC format parsers (rule 2: they run in spawn_blocking over a Read+Seek
+# adapter that bridges to the inner Provider with block_on). zip's central
+# directory is parsed by our own `zip_cd` module (#59): the `zip` crate was
+# left out (lossy collapse H1 / 0x7075 substitution H3).
 tar.workspace = true
-# flate2 (backend zlib-rs, sin C): deflate de las entradas zip (#59, con el
-# `Crc` de crc32fast re-exportado para verificar lecturas completas) y
-# `MultiGzDecoder` del índice secuencial de tar.gz (#55, ADR 0028).
+# flate2 (zlib-rs backend, no C): deflate for zip entries (#59, with
+# crc32fast's `Crc` re-exported to verify complete reads) and tar.gz's
+# sequential index's `MultiGzDecoder` (#55, ADR 0028).
 flate2.workspace = true
-# `rt`: Handle::current().block_on en los hilos blocking del índice/lectura.
-# `sync`: canal acotado que puentea la descompresión zip → ByteStream (el
-# drop del receptor corta el hilo: cancelación de la regla 3).
+# `rt`: Handle::current().block_on in the index/read blocking threads.
+# `sync`: bounded channel bridging zip decompression → ByteStream (the
+# receiver's drop cuts the thread: rule 3's cancellation).
 tokio = { workspace = true, features = ["rt", "sync"] }
-# Fichero ANÓNIMO (ya unlinked, sin pathname) para el spool descomprimido
-# de tar.gz calientes (#95.1); ya estaba centralizado en el workspace.
+# ANONYMOUS file (already unlinked, no pathname) for hot tar.gz's
+# decompressed spool (#95.1); already centralized in the workspace.
 tempfile.workspace = true
-# Errores tipados del escritor (#132), regla dura 6: una librería usa
-# `thiserror`, jamás `anyhow`.
+# Typed errors for the writer (#132), hard rule 6: a library uses
+# `thiserror`, never `anyhow`.
 thiserror.workspace = true
-# warn! de entradas hostiles omitidas (ADR 0018 C2: omitir CON señal).
+# warn! for omitted hostile entries (ADR 0018 C2: omit WITH a signal).
 tracing.workspace = true
 
 [dev-dependencies]
 norte-testkit.workspace = true
 proptest.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "sync", "time"] }
-# Un subscriber de verdad para que los spans tengan id: el test de
-# `blocking::spawn_blocking` compara el span de fuera con el de dentro
-# (ADR 0127). Ya está en el workspace; el core lo usa igual.
+# A real subscriber so spans have an id: `blocking::spawn_blocking`'s test
+# compares the outer span against the inner one (ADR 0127). Already in the
+# workspace; the core uses it the same way.
 tracing-subscriber.workspace = true
 
 [lints]

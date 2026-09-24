@@ -173,13 +173,13 @@ pub const fn fold_delta(c: char) -> char {
     }
 }
 
-/// Las MISMAS filas que [`full_fold_expansion`], en forma recorrible.
+/// The SAME rows as [`full_fold_expansion`], in walkable form.
 ///
-/// Existe para que un test pueda comprobar la tabla ENTERA en vez de una
-/// muestra: un `match` no se itera, y una tabla que solo se prueba por
-/// muestreo es una tabla en la que nadie nota la fila que falta. El test que
-/// las empareja (`la_tabla_y_el_match_dicen_lo_mismo`) también barre todo el
-/// espacio de code points para probar que el `match` no tiene filas de MÁS.
+/// Exists so a test can check the ENTIRE table instead of a sample: a
+/// `match` cannot be iterated, and a table only tested by sampling is a
+/// table where nobody notices the missing row. The test that pairs them
+/// (`the_table_and_the_match_say_the_same_thing`) also sweeps the whole code
+/// point space to prove the `match` has no EXTRA rows.
 #[cfg(test)]
 const FULL_FOLD_ROWS: &[(char, &str)] = &[
     ('\u{00DF}', "ss"),
@@ -236,11 +236,12 @@ const FULL_FOLD_ROWS: &[(char, &str)] = &[
     ('\u{FB17}', "\u{0574}\u{056D}"),
 ];
 
-/// Los code points cuyo full fold es multi-carácter y que NO están en
-/// [`full_fold_expansion`] porque su expansión vuelve a componerse en NFC.
+/// The code points whose full fold is multi-character and that are NOT in
+/// [`full_fold_expansion`] because their expansion recomposes under NFC.
 ///
-/// Van aquí, y con su propio test, porque «ausente» y «ausente a propósito»
-/// se distinguen mirando el código y no la intención de quien lo escribió.
+/// They go here, with their own test, because "absent" and "absent on
+/// purpose" are told apart by looking at the code, not at the intent of
+/// whoever wrote it.
 #[cfg(test)]
 const FULL_FOLD_INERT: &[(char, &str)] = &[
     ('\u{01F0}', "\u{006A}\u{030C}"),
@@ -316,10 +317,10 @@ pub const fn full_fold_expansion(c: char) -> Option<&'static str> {
         '\u{FB02}' => Some("fl"), // LATIN SMALL LIGATURE FL
         '\u{FB03}' => Some("ffi"), // LATIN SMALL LIGATURE FFI
         '\u{FB04}' => Some("ffl"), // LATIN SMALL LIGATURE FFL
-        // LATIN SMALL LIGATURE LONG S T y LATIN SMALL LIGATURE ST: las dos a
-        // "st". Juntas y no en dos brazos porque clippy tiene razón —
-        // `match_same_arms`— y porque decirlo así es más exacto: bajo `Full`
-        // las dos ligaduras son la misma palabra.
+        // LATIN SMALL LIGATURE LONG S T and LATIN SMALL LIGATURE ST: both to
+        // "st". Combined and not in two arms because clippy is right —
+        // `match_same_arms`— and because saying it this way is more
+        // accurate: under `Full` the two ligatures are the same word.
         '\u{FB05}' | '\u{FB06}' => Some("st"),
         // --- armenian ---
         '\u{0587}' => Some("\u{0565}\u{0582}"), // ARMENIAN SMALL LIGATURE ECH YIWN
@@ -369,53 +370,54 @@ pub const fn full_fold_expansion(c: char) -> Option<&'static str> {
     }
 }
 
-/// ¿Es `c` un **`Default_Ignorable_Code_Point`** de Unicode — de los que el
-/// pliegue COMPLETO tira antes de comparar (#214)?
+/// Is `c` a Unicode **`Default_Ignorable_Code_Point`** — one of the ones the
+/// FULL fold drops before comparing (#214)?
 ///
-/// Existe porque [`FoldMode::Full`] no es una opinión de norte: es lo que hace
-/// un directorio `+F` de ext4/f2fs, y el kernel genera sus tablas con
-/// `mkutf8data` en la variante **`nfdicf`** — NFD, **ignore default
-/// ignorables**, case fold. Esa `i` es esto. Sin descartarlos, `nombre.txt` y
-/// `nom<U+00AD>bre.txt` daban dos claves distintas y norte anunciaba «no
-/// colisionan» sobre el único sistema de ficheros del que #145 habla: un plan
-/// aprobado sin aviso que se muere a mitad del lote.
+/// It exists because [`FoldMode::Full`] is not an opinion of norte's: it is
+/// what an ext4/f2fs `+F` directory does, and the kernel generates its
+/// tables with `mkutf8data` in the **`nfdicf`** variant — NFD, **ignore
+/// default ignorables**, case fold. That `i` is this. Without dropping them,
+/// `name.txt` and `nam<U+00AD>e.txt` gave two different keys and norte
+/// announced "no collision" about the one filesystem #145 talks about: a
+/// plan approved with no warning that dies mid-batch.
 ///
-/// Y es trivialmente alcanzable: el corpus ya lleva un ZWJ (U+200D), que está
-/// en esta lista.
+/// And it is trivially reachable: the corpus already carries a ZWJ
+/// (U+200D), which is on this list.
 ///
-/// Solo en `Full`. Bajo `Simple` —APFS, NTFS— un guion suave es un carácter
-/// como otro cualquiera y dos nombres que solo se diferencien en él son dos
-/// ficheros; descartarlo ahí sería inventarse una colisión que el sistema de
-/// ficheros no ve.
+/// Only under `Full`. Under `Simple` —APFS, NTFS— a soft hyphen is a
+/// character like any other and two names that differ only in it are two
+/// files; dropping it there would be inventing a collision the filesystem
+/// does not see.
 ///
-/// # Una sola tabla, dos políticas
+/// # One table, two policies
 ///
-/// Los rangos son los de `DEFAULT_IGNORABLE`, la tabla derivada de la UCD que
-/// este mismo crate ya tenía para pintar invisibles, y esta función DELEGA en
-/// ella: dos copias de la misma propiedad son dos respuestas que divergen en
-/// silencio, que es justo lo que la ADR 0051 centralizó.
+/// The ranges are `DEFAULT_IGNORABLE`'s, the UCD-derived table this same
+/// crate already had for painting invisibles, and this function DELEGATES
+/// to it: two copies of the same property are two answers that diverge
+/// silently, which is exactly what ADR 0051 centralized.
 ///
-/// Lo que NO se comparte es la política. `is_terminal_hazard` exime a
-/// propósito el ZWJ y los selectores de variación (`IGNORABLES_PERMITIDOS`),
-/// porque componen emoji legítimos y enmascararlos rompería nombres reales.
-/// Aquí no hay exención posible: el sistema de ficheros los descarta, y una
-/// clave que los conservara diría «no colisionan» sobre dos nombres que el
-/// disco junta. Misma tabla, preguntas distintas.
+/// What is NOT shared is the policy. `is_terminal_hazard` deliberately
+/// exempts ZWJ and the variation selectors (`ALLOWED_IGNORABLES`), because
+/// they compose legitimate emoji and masking them would break real names.
+/// Here there is no exemption possible: the filesystem drops them, and a key
+/// that kept them would say "no collision" about two names the disk merges.
+/// Same table, different questions.
 ///
-/// Un matiz de versión: `U+180F` es `Default_Ignorable` desde Unicode 14 y las
-/// tablas `utf8data` del kernel son 12.1, así que ahí norte junta un par que
-/// ese kernel separa. Un code point, y del lado conservador (avisa de una
-/// colisión que no habrá) — que es el lado correcto para avisar.
+/// A version nuance: `U+180F` has been `Default_Ignorable` since Unicode 14
+/// and the kernel's `utf8data` tables are 12.1, so there norte merges a pair
+/// that kernel separates. One code point, and on the conservative side (it
+/// warns of a collision that will not happen) — which is the correct side
+/// to err on.
 ///
 /// ```
 /// use norte_encoding::{FoldMode, name_key};
-/// // Un guion suave no distingue dos nombres en un directorio `+F`.
+/// // A soft hyphen does not distinguish two names in a `+F` directory.
 /// assert_eq!(
 ///     name_key("nom\u{00AD}bre.txt".as_bytes(), FoldMode::Full),
 ///     name_key("nombre.txt".as_bytes(), FoldMode::Full),
 /// );
-/// // Y sí los distingue en uno que pliega SIMPLE, que es lo que ese
-/// // filesystem hace.
+/// // And it DOES distinguish them under SIMPLE fold, which is what that
+/// // filesystem does.
 /// assert_ne!(
 ///     name_key("nom\u{00AD}bre.txt".as_bytes(), FoldMode::Simple),
 ///     name_key("nombre.txt".as_bytes(), FoldMode::Simple),
@@ -423,7 +425,7 @@ pub const fn full_fold_expansion(c: char) -> Option<&'static str> {
 /// ```
 #[must_use]
 pub fn is_default_ignorable(c: char) -> bool {
-    crate::es_ignorable_por_defecto(c)
+    crate::is_default_ignorable_impl(c)
 }
 
 /// Does folding `s` under `mode` change anything? Without allocating: compares
@@ -647,8 +649,8 @@ pub fn is_canonical_singleton(c: char) -> bool {
 /// use norte_encoding::has_canonical_singleton;
 /// assert!(has_canonical_singleton("\u{212a}.txt".as_bytes()));
 /// assert!(!has_canonical_singleton(b"K.txt"));
-/// assert!(!has_canonical_singleton(b"roto\xff\xfe"), "sin singleton en el texto");
-/// // Y el tramo VÁLIDO de un nombre que no es texto entero sí se mira.
+/// assert!(!has_canonical_singleton(b"roto\xff\xfe"), "no singleton in the text");
+/// // And the VALID stretch of a name that is not fully text IS looked at.
 /// let mut roto = "\u{212a}.txt".as_bytes().to_vec();
 /// roto.push(0xFF);
 /// assert!(has_canonical_singleton(&roto));
@@ -661,11 +663,11 @@ pub fn is_canonical_singleton(c: char) -> bool {
 pub fn has_canonical_singleton(name: &[u8]) -> bool {
     let text = match std::str::from_utf8(name) {
         Ok(text) => text,
-        // INVARIANTE (regla dura 6): `Utf8Error` garantiza que
-        // `name[..valid_up_to]` es UTF-8 válido, así que re-parsearlo no puede
-        // fallar. Es el mismo corte que hace `fold_lossy`, a propósito: las dos
-        // funciones tienen que mirar el MISMO tramo o la marca dice una cosa de
-        // una clave que se calculó de otra.
+        // INVARIANT (hard rule 6): `Utf8Error` guarantees that
+        // `name[..valid_up_to]` is valid UTF-8, so re-parsing it cannot
+        // fail. It is the same cut `fold_lossy` makes, on purpose: the two
+        // functions must look at the SAME stretch or the marker says one
+        // thing about a key computed from another.
         Err(error) => std::str::from_utf8(&name[..error.valid_up_to()])
             .expect("valid_up_to bytes of a from_utf8 error are valid UTF-8"),
     };
@@ -745,12 +747,12 @@ mod tests {
     fn a_singleton_inside_the_valid_run_of_a_broken_name_still_counts() {
         let kelvin = corpus("singleton_kelvin_sign_invalid_tail");
         let ascii = corpus("ascii_capital_k_invalid_tail");
-        assert!(std::str::from_utf8(&kelvin).is_err(), "no es texto entero");
+        assert!(std::str::from_utf8(&kelvin).is_err(), "not fully text");
         assert_ne!(kelvin, ascii);
         assert_eq!(
             name_key(&kelvin, FoldMode::None),
             name_key(&ascii, FoldMode::None),
-            "y aun así emparejan: la clave normaliza el prefijo válido"
+            "and they still pair: the key normalizes the valid prefix"
         );
         assert!(has_canonical_singleton(&kelvin));
         assert!(!has_canonical_singleton(&ascii));
@@ -790,16 +792,16 @@ mod tests {
     /// different characters, not the same one in two cases.
     #[test]
     fn non_utf8_bytes_are_never_ascii_folded() {
-        let mixto = FoldMode::Simple;
+        let simple = FoldMode::Simple;
         let tesuto = corpus("shift_jis_tesuto");
         assert_eq!(
-            name_key(&tesuto, mixto).as_ref(),
+            name_key(&tesuto, simple).as_ref(),
             &tesuto[..],
             "the trail byte `58` of ス is an ASCII `X`"
         );
         assert_ne!(
-            name_key(b"\x83\x41", mixto),
-            name_key(b"\x83\x61", mixto),
+            name_key(b"\x83\x41", simple),
+            name_key(b"\x83\x61", simple),
             "ア and ヂ differ only in their trail byte"
         );
     }
@@ -879,14 +881,14 @@ mod tests {
 
     #[test]
     fn folding_uses_case_folding_not_the_lowercase_mapping() {
-        let mixto = FoldMode::Simple;
+        let simple = FoldMode::Simple;
         for (left, right) in [
             ("greek_uppercase_final_sigma", "greek_medial_sigma_twin"),
             ("micro_sign_mu", "greek_mu_twin"),
             ("ligature_long_st", "ligature_st"),
         ] {
             let (a, b) = (corpus(left), corpus(right));
-            assert_eq!(name_key(&a, mixto), name_key(&b, mixto), "{left}");
+            assert_eq!(name_key(&a, simple), name_key(&b, simple), "{left}");
         }
     }
 
@@ -948,66 +950,67 @@ mod tests {
         );
     }
 
-    /// Las DOS ligaduras st van a `st` bajo `Full`, y eso no lo decía nada
-    /// (#214): el par estaba pineado bajo `Simple`, y un cambio de modo que
-    /// perdiera una de las dos filas habría pasado la suite entera.
+    /// The TWO st ligatures go to `st` under `Full`, and nothing used to say
+    /// so (#214): the pair was pinned under `Simple`, and a mode change that
+    /// lost one of the two rows would have passed the whole suite.
     #[test]
-    fn las_dos_ligaduras_st_van_a_lo_mismo_bajo_full() {
-        let (largo, corto) = (corpus("ligature_long_st"), corpus("ligature_st"));
+    fn both_st_ligatures_go_to_the_same_thing_under_full() {
+        let (long, short) = (corpus("ligature_long_st"), corpus("ligature_st"));
         assert_eq!(
-            name_key(&largo, FoldMode::Full),
-            name_key(&corto, FoldMode::Full)
+            name_key(&long, FoldMode::Full),
+            name_key(&short, FoldMode::Full)
         );
         assert_eq!(full_fold_expansion('\u{FB05}'), Some("st"));
         assert_eq!(full_fold_expansion('\u{FB06}'), Some("st"));
     }
 
-    // ---- #214: los ignorables por defecto, que `+F` tampoco ve ----
+    // ---- #214: the default ignorables, which `+F` does not see either ----
 
-    /// Un guion suave no distingue dos nombres en `Full`, y sí en `Simple`.
+    /// A soft hyphen does not distinguish two names under `Full`, and does
+    /// under `Simple`.
     ///
-    /// Es la mitad de `+F` que faltaba: la tabla del kernel se genera como
-    /// `nfdicf` —NFD, **i**gnore default ignorables, case fold—, así que sin
-    /// descartarlos norte contestaba «no colisionan» sobre el único sistema de
-    /// ficheros del que #145 habla.
+    /// It is the missing half of `+F`: the kernel's table is generated as
+    /// `nfdicf` —NFD, **i**gnore default ignorables, case fold—, so without
+    /// dropping them norte answered "no collision" about the one filesystem
+    /// #145 talks about.
     #[test]
-    fn un_ignorable_no_distingue_dos_nombres_bajo_full() {
-        let (con, sin) = (
+    fn an_ignorable_does_not_distinguish_two_names_under_full() {
+        let (with, without) = (
             corpus("full_fold_soft_hyphen"),
             corpus("full_fold_soft_hyphen_plain"),
         );
         assert_eq!(
-            name_key(&con, FoldMode::Full),
-            name_key(&sin, FoldMode::Full),
-            "en `+F` son un fichero"
+            name_key(&with, FoldMode::Full),
+            name_key(&without, FoldMode::Full),
+            "under `+F` they are one file"
         );
         assert_ne!(
-            name_key(&con, FoldMode::Simple),
-            name_key(&sin, FoldMode::Simple),
-            "en APFS/NTFS son dos, y decir lo contrario sería inventarse una colisión"
+            name_key(&with, FoldMode::Simple),
+            name_key(&without, FoldMode::Simple),
+            "under APFS/NTFS they are two, and saying otherwise would be inventing a collision"
         );
     }
 
-    /// Y el ZWJ que ya estaba en el corpus también: es lo que hacía a esto
-    /// trivialmente alcanzable.
+    /// And the ZWJ that was already in the corpus too: it is what made this
+    /// trivially reachable.
     #[test]
-    fn el_zwj_tampoco_cuenta_bajo_full() {
+    fn the_zwj_does_not_count_under_full_either() {
         assert_eq!(
             name_key("a\u{200D}b".as_bytes(), FoldMode::Full),
             name_key(b"ab", FoldMode::Full),
         );
     }
 
-    /// El único punto donde el ORDEN importa: descartar el ignorable y luego
-    /// componer NFC junta lo que el CGJ existía para separar.
+    /// The one place where ORDER matters: dropping the ignorable and THEN
+    /// composing NFC merges what the CGJ existed to keep apart.
     ///
-    /// `a` + COMBINING GRAPHEME JOINER + acento agudo pliega a `á` bajo
-    /// `Full`, porque el ignorable se va antes de la pasada de NFC. Es lo que
-    /// hace el kernel (`nfdicf`: descompone, ignora, pliega), así que es la
-    /// respuesta correcta para un `+F` — y es la que alguien «arreglaría» sin
-    /// este test.
+    /// `a` + COMBINING GRAPHEME JOINER + acute accent folds to `á` under
+    /// `Full`, because the ignorable is gone before the NFC pass. It is what
+    /// the kernel does (`nfdicf`: decompose, ignore, fold), so it is the
+    /// correct answer for a `+F` — and the one someone would "fix" without
+    /// this test.
     #[test]
-    fn componer_a_traves_de_un_ignorable_borrado_es_deliberado() {
+    fn composing_across_a_dropped_ignorable_is_deliberate() {
         assert_eq!(
             name_key("a\u{034F}\u{0301}".as_bytes(), FoldMode::Full),
             name_key("á".as_bytes(), FoldMode::Full),
@@ -1015,15 +1018,15 @@ mod tests {
         assert_ne!(
             name_key("a\u{034F}\u{0301}".as_bytes(), FoldMode::Simple),
             name_key("á".as_bytes(), FoldMode::Simple),
-            "bajo pliegue simple el CGJ sigue separando, que es para lo que está"
+            "under simple fold the CGJ still separates, which is what it is for"
         );
     }
 
-    /// Un nombre ENTERO de invisibles da una clave vacía bajo `Full`, y eso es
-    /// una salida nueva de `name_key` que conviene tener escrita: los
-    /// consumidores la usan como clave de mapa, y dos nombres así emparejan.
+    /// A name made ENTIRELY of invisibles gives an empty key under `Full`,
+    /// and that is a new output of `name_key` worth having written down:
+    /// consumers use it as a map key, and two such names pair up.
     #[test]
-    fn un_nombre_todo_invisible_da_clave_vacia_bajo_full() {
+    fn a_name_that_is_all_invisible_gives_an_empty_key_under_full() {
         let a = "\u{3164}\u{3164}".as_bytes();
         let b = "\u{200B}".as_bytes();
         assert!(name_key(a, FoldMode::Full).is_empty());
@@ -1031,15 +1034,15 @@ mod tests {
         assert_ne!(
             name_key(a, FoldMode::Simple),
             name_key(b, FoldMode::Simple),
-            "y bajo simple siguen siendo dos nombres distintos"
+            "and under simple they are still two different names"
         );
     }
 
-    /// La lista de ignorables cubre lo conocido y no se pasa: un `char`
-    /// corriente NO es ignorable, y descartarlo sería juntar dos ficheros que
-    /// el sistema de ficheros ve por separado.
+    /// The ignorables list covers what is known and does not overreach: an
+    /// ordinary `char` is NOT ignorable, and dropping it would merge two
+    /// files the filesystem sees as separate.
     #[test]
-    fn la_lista_de_ignorables_cubre_lo_conocido() {
+    fn the_ignorables_list_covers_what_is_known() {
         for c in [
             '\u{00AD}',
             '\u{034F}',
@@ -1085,17 +1088,17 @@ mod tests {
         }
     }
 
-    /// La tabla recorrible y el `match` dicen lo MISMO, en las dos
-    /// direcciones: cada fila está en el `match`, y el `match` no tiene filas
-    /// que la tabla no declare. Lo segundo barre el espacio entero de code
-    /// points, que es lo único que lo demuestra.
+    /// The walkable table and the `match` say the SAME thing, both ways:
+    /// every row is in the `match`, and the `match` has no rows the table
+    /// does not declare. The second half sweeps the whole code point space,
+    /// which is the only thing that proves it.
     #[test]
-    fn la_tabla_y_el_match_dicen_lo_mismo() {
-        for (c, esperado) in FULL_FOLD_ROWS {
+    fn the_table_and_the_match_say_the_same_thing() {
+        for (c, expected) in FULL_FOLD_ROWS {
             assert_eq!(
                 full_fold_expansion(*c),
-                Some(*esperado),
-                "U+{:04X} no está en el match",
+                Some(*expected),
+                "U+{:04X} is not in the match",
                 u32::from(*c)
             );
         }
@@ -1106,50 +1109,51 @@ mod tests {
             if full_fold_expansion(c).is_some() {
                 assert!(
                     FULL_FOLD_ROWS.iter().any(|(k, _)| *k == c),
-                    "U+{cp:04X} está en el match y no en la tabla"
+                    "U+{cp:04X} is in the match and not in the table"
                 );
             }
         }
     }
 
-    /// Lo que la tabla PROMETE: bajo `Full`, un carácter y su expansión dan la
-    /// misma clave. Es la aserción que importa —«esto colisiona en un `+F`»— y
-    /// se comprueba fila a fila, no por muestreo.
+    /// What the table PROMISES: under `Full`, a character and its expansion
+    /// give the same key. It is the assertion that matters —"this collides
+    /// under a `+F`"— and it is checked row by row, not by sampling.
     #[test]
-    fn cada_fila_empareja_su_expansion() {
+    fn every_row_pairs_with_its_expansion() {
         for (c, expansion) in FULL_FOLD_ROWS {
-            let texto = c.to_string();
-            let uno = name_key(texto.as_bytes(), FoldMode::Full);
-            let otro = name_key(expansion.as_bytes(), FoldMode::Full);
+            let text = c.to_string();
+            let one = name_key(text.as_bytes(), FoldMode::Full);
+            let other = name_key(expansion.as_bytes(), FoldMode::Full);
             assert_eq!(
-                uno,
-                otro,
-                "U+{:04X} y {expansion:?} tendrían que colisionar bajo Full",
+                one,
+                other,
+                "U+{:04X} and {expansion:?} should collide under Full",
                 u32::from(*c)
             );
         }
     }
 
-    /// Y lo que la AUSENCIA promete: los 23 que no están en la tabla emparejan
-    /// igual, porque el paso NFC de `name_key` recompone su expansión. Sin este
-    /// test, «lo quitamos porque NFC ya lo hace» es una afirmación sin
-    /// comprobar, que es como una tabla incompleta se disfraza de decisión.
+    /// And what the ABSENCE promises: the 23 not in the table pair up all
+    /// the same, because `name_key`'s NFC pass recomposes their expansion.
+    /// Without this test, "we removed it because NFC already does it" is an
+    /// unchecked claim, which is how an incomplete table disguises itself as
+    /// a decision.
     #[test]
-    fn los_ausentes_emparejan_por_nfc_y_no_por_la_tabla() {
+    fn the_absent_ones_pair_by_nfc_and_not_by_the_table() {
         for (c, expansion) in FULL_FOLD_INERT {
             assert_eq!(
                 full_fold_expansion(*c),
                 None,
-                "U+{:04X} no debería estar en la tabla",
+                "U+{:04X} should not be in the table",
                 u32::from(*c)
             );
-            let texto = c.to_string();
-            let uno = name_key(texto.as_bytes(), FoldMode::Full);
-            let otro = name_key(expansion.as_bytes(), FoldMode::Full);
+            let text = c.to_string();
+            let one = name_key(text.as_bytes(), FoldMode::Full);
+            let other = name_key(expansion.as_bytes(), FoldMode::Full);
             assert_eq!(
-                uno,
-                otro,
-                "U+{:04X} tiene que emparejar igual, por NFC",
+                one,
+                other,
+                "U+{:04X} has to pair up all the same, via NFC",
                 u32::from(*c)
             );
         }

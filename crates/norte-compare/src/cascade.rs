@@ -1,37 +1,40 @@
-//! La cascada: entra UNA pareja ya emparejada, sale UN veredicto — y con él,
-//! qué rung lo decidió y **cuánto vale ese rung**.
+//! The cascade: ONE already-paired match goes in, ONE verdict comes out —
+//! and with it, which rung decided it and **what that rung is worth**.
 //!
-//! Va de barato a caro y **para en el primer rung que decide**, así que el
-//! criterio es también «hasta dónde hubo que llegar»: sin él, `Different` no
-//! dice si se comparó un `u64` o 40 GB de bytes. La tabla es la de la spec
+//! It goes from cheap to expensive and **stops at the first rung that
+//! decides**, so the criterion is also "how far it had to go": without it,
+//! `Different` does not say whether a `u64` or 40 GB of bytes was compared.
+//! The table is the spec's
 //! (`docs/superpowers/specs/2026-08-11-directory-comparison-design.md`,
-//! «The cascade»), y las CONFIANZAS son la parte que hay que leer despacio:
+//! "The cascade"), and the CONFIDENCES are the part that has to be read
+//! slowly:
 //!
-//! | rung | condición | veredicto | confianza |
+//! | rung | condition | verdict | confidence |
 //! | --- | --- | --- | --- |
-//! | Presence | falta un lado | `OnlyLeft`/`OnlyRight` | `Certain` |
-//! | Kind | los `EntryKind` difieren | `TypeMismatch` | `Certain` |
-//! | Symlink | destinos, COMO BYTES | `Same`/`Different` | `Certain` |
-//! | Size | los dos conocidos y distintos | `Different` | `Certain` |
-//! | Size | uno desconocido | `Same` | `Unknown` |
-//! | Mtime | \|Δ\| > tolerancia | `Different` | `Probable` |
-//! | Mtime | \|Δ\| ≤ tolerancia | `Same` | `Probable` |
-//! | Mtime | desconocida en un lado | `Same` | `Unknown` |
-//! | Hash | sha256 en streaming de los dos | `Same`/`Different` | `Certain` |
+//! | Presence | a side is missing | `OnlyLeft`/`OnlyRight` | `Certain` |
+//! | Kind | the `EntryKind`s differ | `TypeMismatch` | `Certain` |
+//! | Symlink | targets, AS BYTES | `Same`/`Different` | `Certain` |
+//! | Size | both known and different | `Different` | `Certain` |
+//! | Size | one unknown | `Same` | `Unknown` |
+//! | Mtime | \|Δ\| > tolerance | `Different` | `Probable` |
+//! | Mtime | \|Δ\| ≤ tolerance | `Same` | `Probable` |
+//! | Mtime | unknown on one side | `Same` | `Unknown` |
+//! | Hash | streaming sha256 of both | `Same`/`Different` | `Certain` |
 //!
-//! Un tamaño distinto PRUEBA bytes distintos; una fecha distinta solo lo
-//! SUGIERE; y un provider que no puede contestar deja `Unknown`, que es una
-//! respuesta y no un fallo. Bajar una fila de `Unknown` a `Probable` porque
-//! «algo habrá que pintar» es exactamente el error que este módulo existe para
-//! no cometer.
+//! A different size PROVES different bytes; a different date only SUGGESTS
+//! it; and a provider that cannot answer leaves `Unknown`, which is an
+//! answer and not a failure. Lowering a row from `Unknown` to `Probable`
+//! because "something has to be painted" is exactly the mistake this module
+//! exists to not make.
 //!
-//! # Por qué [`decide`] es SÍNCRONA
+//! # Why [`decide`] is SYNCHRONOUS
 //!
-//! Porque los dos únicos hechos que exigen I/O —el destino de un symlink
-//! (`Provider::read_link`) y el sha256 del contenido— **entran ya calculados**,
-//! en [`Prefetched`]. Quien camina el árbol (`walk`) sabe pedirlos; la cascada
-//! solo decide. Así la tabla entera se prueba sin un provider, sin un runtime
-//! async y sin un mock que conteste lo que se le mande.
+//! Because the only two facts that require I/O — a symlink's target
+//! (`Provider::read_link`) and the content's sha256 — **come in already
+//! computed**, in [`Prefetched`]. Whoever walks the tree (`walk`) knows to
+//! ask for them; the cascade only decides. That way the whole table is
+//! tested with no provider, no async runtime and no mock answering whatever
+//! it is told to.
 
 use norte_proto::{Entry, EntryKind};
 
@@ -39,63 +42,63 @@ use crate::{
     CompareConfidence, CompareCriterion, CompareOptions, CompareRow, CompareVerdict, PairName, Side,
 };
 
-/// Lo que el rung caro (sha256) tiene YA dicho sobre una pareja cuando
-/// [`decide`] la mira.
+/// What the expensive rung (sha256) has ALREADY said about a pair by the
+/// time [`decide`] looks at it.
 ///
-/// [`decide`] no lee contenido: leerlo es asíncrono y caro, y decidir es ni una
-/// cosa ni la otra. El walk pregunta primero con [`HashOutcome::NotRun`], mira
-/// [`Decision::needs_hash`], y solo si viene a `true` lee los dos ficheros y
-/// vuelve a preguntar con el resultado.
+/// [`decide`] does not read content: reading it is async and expensive, and
+/// deciding is neither. The walk asks first with [`HashOutcome::NotRun`],
+/// looks at [`Decision::needs_hash`], and only if that comes back `true`
+/// does it read both files and ask again with the result.
 ///
 /// ```
 /// use norte_compare::cascade::HashOutcome;
-/// assert_eq!(HashOutcome::default(), HashOutcome::NotRun, "nadie ha leído nada todavía");
+/// assert_eq!(HashOutcome::default(), HashOutcome::NotRun, "nobody has read anything yet");
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum HashOutcome {
-    /// Nadie ha hasheado nada: o el llamante no pidió el rung, o aún no ha
-    /// llegado a leer.
+    /// Nobody has hashed anything: either the caller did not ask for the
+    /// rung, or it has not gotten to reading yet.
     #[default]
     NotRun,
-    /// Los dos sha256 coinciden.
+    /// Both sha256s match.
     Equal,
-    /// Los dos sha256 difieren.
+    /// Both sha256s differ.
     Differ,
 }
 
-/// Los hechos que [`decide`] no puede averiguar por sí misma, ya averiguados.
+/// The facts [`decide`] cannot find out on its own, already found out.
 ///
-/// Son exactamente dos, y los dos exigen I/O: el destino de un symlink y el
-/// sha256 del contenido. Los destinos se comparan **como bytes** y jamás se
-/// siguen (sin seguimiento no hace falta detectar ciclos, y un enlace cuyo
-/// destino cambió es una diferencia real).
+/// There are exactly two, and both require I/O: a symlink's target and the
+/// content's sha256. Targets are compared **as bytes** and never followed
+/// (with no following there is no need to detect cycles, and a link whose
+/// target changed is a real difference).
 ///
-/// Un destino a `None` significa «no se pudo leer / no se leyó», y la cascada
-/// contesta `Unknown` en vez de inventarse que los enlaces son iguales.
+/// A `None` target means "could not be read / was not read", and the
+/// cascade answers `Unknown` instead of inventing that the links are equal.
 ///
 /// ```
 /// use norte_compare::cascade::{HashOutcome, Prefetched};
-/// let nada = Prefetched::none();
-/// assert_eq!(nada.hash, HashOutcome::NotRun);
-/// assert!(nada.left_target.is_none());
+/// let nothing = Prefetched::none();
+/// assert_eq!(nothing.hash, HashOutcome::NotRun);
+/// assert!(nothing.left_target.is_none());
 ///
-/// let enlaces = Prefetched::links(Some(b"../a"), Some(b"../b"));
-/// assert_eq!(enlaces.right_target, Some(&b"../b"[..]));
+/// let links = Prefetched::links(Some(b"../a"), Some(b"../b"));
+/// assert_eq!(links.right_target, Some(&b"../b"[..]));
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct Prefetched<'a> {
-    /// Destino del symlink izquierdo, en bytes crudos. `None` = no se leyó o
-    /// no se pudo leer.
+    /// The left symlink's target, in raw bytes. `None` = not read or could
+    /// not be read.
     pub left_target: Option<&'a [u8]>,
-    /// Destino del symlink derecho, en bytes crudos.
+    /// The right symlink's target, in raw bytes.
     pub right_target: Option<&'a [u8]>,
-    /// Qué dijo el rung de hash, si es que corrió.
+    /// What the hash rung said, if it ran at all.
     pub hash: HashOutcome,
 }
 
 impl<'a> Prefetched<'a> {
-    /// Nada averiguado: ni destinos ni hash. Es lo que el walk pasa en la
-    /// primera pasada de CADA pareja.
+    /// Nothing found out: no targets, no hash. This is what the walk passes
+    /// on the first pass of EVERY pair.
     #[must_use]
     pub const fn none() -> Self {
         Self {
@@ -105,7 +108,7 @@ impl<'a> Prefetched<'a> {
         }
     }
 
-    /// Los dos destinos de symlink, tal y como los dio `Provider::read_link`.
+    /// Both symlink targets, exactly as `Provider::read_link` gave them.
     #[must_use]
     pub const fn links(left: Option<&'a [u8]>, right: Option<&'a [u8]>) -> Self {
         Self {
@@ -115,25 +118,25 @@ impl<'a> Prefetched<'a> {
         }
     }
 
-    /// El mismo conjunto de hechos, con el resultado del rung de hash puesto.
+    /// The same set of facts, with the hash rung's result set.
     #[must_use]
     pub const fn with_hash(self, hash: HashOutcome) -> Self {
         Self { hash, ..self }
     }
 }
 
-/// Lo que decidió la cascada sobre una pareja: el veredicto, el rung que lo
-/// produjo y lo que ese rung se ha ganado.
+/// What the cascade decided about a pair: the verdict, the rung that
+/// produced it and what that rung has earned.
 ///
-/// No es todavía una [`CompareRow`]: le faltan el id y los dos `Entry`, que
-/// pone el walk ([`Decision::into_row`]).
+/// This is not yet a [`CompareRow`]: it is missing the id and the two
+/// `Entry`s, which the walk sets ([`Decision::into_row`]).
 ///
 /// ```
 /// use norte_compare::cascade::Decision;
 /// use norte_compare::{CompareConfidence, CompareCriterion, CompareVerdict};
 ///
-/// // La presencia es el rung más barato y el más seguro: si un lado no está,
-/// // no hay nada más que comparar.
+/// // Presence is the cheapest and most certain rung: if a side is not
+/// // there, there is nothing else to compare.
 /// let d = Decision::only_left();
 /// assert_eq!(d.verdict, CompareVerdict::OnlyLeft);
 /// assert_eq!(d.criterion, CompareCriterion::Presence);
@@ -142,26 +145,27 @@ impl<'a> Prefetched<'a> {
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Decision {
-    /// Qué son la una respecto de la otra.
+    /// What one is relative to the other.
     pub verdict: CompareVerdict,
-    /// Qué rung lo decidió.
+    /// Which rung decided it.
     pub criterion: CompareCriterion,
-    /// Cuánto vale ese rung. NO se sube nunca «para que quede bonito».
+    /// How much that rung is worth. NEVER raised "to make it look nice".
     pub confidence: CompareConfidence,
-    /// Qué lado es MÁS NUEVO, y solo cuando lo decidió el rung de fecha. Nada
-    /// de esta spec lo lee: la spec 2 lo necesita para proponer una dirección,
-    /// y producirlo aquí no cuesta nada.
+    /// Which side is NEWER, and only when the date rung decided it. Nothing
+    /// in this spec reads it: spec 2 needs it to propose a direction, and
+    /// producing it here costs nothing.
     pub newer: Option<Side>,
-    /// Los rungs baratos dieron la pareja por IGUAL, el llamante pidió hash y
-    /// el hash aún no ha corrido: esta decisión **no es final**. Quien la
-    /// recibe lee los dos ficheros y vuelve a llamar a [`decide`] con el
-    /// [`HashOutcome`]. Emitir una fila con esto a `true` es publicar un
-    /// veredicto provisional, y en esta spec ninguna fila se corrige después.
+    /// The cheap rungs called the pair EQUAL, the caller asked for hash and
+    /// the hash has not run yet: this decision **is not final**. Whoever
+    /// receives it reads both files and calls [`decide`] again with the
+    /// [`HashOutcome`]. Emitting a row with this set to `true` is publishing
+    /// a provisional verdict, and in this spec no row is ever corrected
+    /// later.
     pub needs_hash: bool,
 }
 
 impl Decision {
-    /// Una decisión final de un rung que no mira fechas ni lados.
+    /// A final decision from a rung that looks at neither dates nor sides.
     const fn rung(
         verdict: CompareVerdict,
         criterion: CompareCriterion,
@@ -176,7 +180,7 @@ impl Decision {
         }
     }
 
-    /// El rung de presencia: solo existe a la izquierda.
+    /// The presence rung: exists only on the left.
     #[must_use]
     pub const fn only_left() -> Self {
         Self::rung(
@@ -186,7 +190,7 @@ impl Decision {
         )
     }
 
-    /// El rung de presencia: solo existe a la derecha.
+    /// The presence rung: exists only on the right.
     #[must_use]
     pub const fn only_right() -> Self {
         Self::rung(
@@ -196,29 +200,29 @@ impl Decision {
         )
     }
 
-    /// La fila del wire: esta decisión, un id y los dos lados.
+    /// The wire row: this decision, an id and both sides.
     ///
-    /// Los lados los pone el llamante porque solo él sabe cuál falta: una
-    /// decisión de presencia lleva `None` en el suyo.
+    /// The caller sets the sides because only it knows which one is
+    /// missing: a presence decision carries `None` on its missing side.
     ///
     /// ```
     /// use norte_compare::cascade::Decision;
     /// use norte_compare::CompareVerdict;
     /// # use norte_proto::{Entry, EntryKind, VPath};
-    /// # let izq = Entry { path: VPath::parse("file:///a").expect("path"),
+    /// # let left = Entry { path: VPath::parse("file:///a").expect("path"),
     /// #     kind: EntryKind::File, size: Some(1), mtime_ms: None, attrs: Default::default() };
-    /// let fila = Decision::only_left().into_row(7, Some(izq), None);
-    /// assert_eq!(fila.id, 7);
-    /// assert_eq!(fila.verdict, CompareVerdict::OnlyLeft);
-    /// assert!(fila.sides_are_consistent());
-    /// assert!(fila.reason.is_none(), "la cascada no produce filas con motivo");
+    /// let row = Decision::only_left().into_row(7, Some(left), None);
+    /// assert_eq!(row.id, 7);
+    /// assert_eq!(row.verdict, CompareVerdict::OnlyLeft);
+    /// assert!(row.sides_are_consistent());
+    /// assert!(row.reason.is_none(), "the cascade does not produce rows with a reason");
     /// ```
     #[must_use]
     pub fn into_row(self, id: u64, left: Option<Entry>, right: Option<Entry>) -> CompareRow {
-        // La marca de #152 se calcula AQUÍ y no la pone la llamante porque aquí
-        // están las dos entradas y no hay otro camino a una fila con los dos
-        // lados: una fila que se emitiera sin pasar por este constructor no
-        // podría olvidarse la marca, porque no existe.
+        // #152's mark is computed HERE and not set by the caller because
+        // both entries are here and there is no other path to a row with
+        // both sides: a row emitted without going through this constructor
+        // could not forget the mark, because it does not exist.
         let paired_under = match (left.as_ref(), right.as_ref()) {
             (Some(l), Some(r)) => crate::key::pair_transform(l.pair_name(), r.pair_name()),
             _ => None,
@@ -231,24 +235,25 @@ impl Decision {
             criterion: self.criterion,
             confidence: self.confidence,
             newer: self.newer,
-            // La cascada no emite `Ambiguous` ni `Error`: el motivo y el lado
-            // son del walk (colisiones, listados ilegibles, lecturas rotas).
+            // The cascade emits neither `Ambiguous` nor `Error`: the reason
+            // and the side belong to the walk (collisions, unreadable
+            // listings, broken reads).
             reason: None,
             side: None,
             paired_under,
         };
-        // La invariante que el wire enuncia y no sabe comprobar
-        // (`CompareRow::paired_under`): una transformación es propiedad de una
-        // PAREJA, así que marcar una fila de un solo lado no significaría nada.
-        // Hoy es cierta por construcción —el `match` de arriba—, y este assert
-        // es lo que la mantiene cierta si alguien reescribe ese `match`.
+        // The invariant the wire states and cannot check itself
+        // (`CompareRow::paired_under`): a transform is a PAIR's property, so
+        // marking a single-sided row would mean nothing. It is true today by
+        // construction — the `match` above — and this assert is what keeps
+        // it true if someone rewrites that `match`.
         debug_assert!(
             row.paired_under.is_none() || (row.left.is_some() && row.right.is_some()),
-            "transformación de emparejamiento en una fila sin dos lados"
+            "pairing transform on a row with no two sides"
         );
         debug_assert!(
             row.sides_are_consistent(),
-            "veredicto {:?} con left={} right={}",
+            "verdict {:?} with left={} right={}",
             row.verdict,
             row.left.is_some(),
             row.right.is_some()
@@ -257,16 +262,17 @@ impl Decision {
     }
 }
 
-/// Decide UNA pareja: baja la cascada y para en el primer rung que contesta.
+/// Decides ONE pair: goes down the cascade and stops at the first rung that
+/// answers.
 ///
-/// `facts` trae lo que exige I/O ya hecho (ver [`Prefetched`]); `opts` dice qué
-/// rungs corren y con qué tolerancia. La función es pura: mismas entradas,
-/// misma decisión, siempre.
+/// `facts` carries whatever needs I/O, already done (see [`Prefetched`]);
+/// `opts` says which rungs run and with what tolerance. The function is
+/// pure: same inputs, same decision, always.
 ///
-/// Es **simétrica**: intercambiar los dos lados intercambia el veredicto
-/// (`OnlyLeft`↔`OnlyRight`, que decide el walk) y el lado de
-/// [`Decision::newer`], y no cambia nada más. Una comparación que no lo fuese
-/// tendría un favorito.
+/// It is **symmetric**: swapping the two sides swaps the verdict
+/// (`OnlyLeft`↔`OnlyRight`, which the walk decides) and [`Decision::newer`]'s
+/// side, and changes nothing else. A comparison that was not would have a
+/// favorite.
 ///
 /// ```
 /// use norte_compare::cascade::{decide, Prefetched};
@@ -278,16 +284,16 @@ impl Decision {
 /// # }
 /// let opts = CompareOptions::cheap();
 ///
-/// // Tamaños distintos: PRUEBA de bytes distintos.
+/// // Different sizes: PROOF of different bytes.
 /// let d = decide(&f(Some(10), Some(0)), &f(Some(20), Some(0)), &opts, &Prefetched::none());
 /// assert_eq!(d.criterion, CompareCriterion::Size);
 /// assert_eq!(d.confidence, CompareConfidence::Certain);
 ///
-/// // Misma fecha: solo una SUGERENCIA de que son iguales.
+/// // Same date: only a SUGGESTION that they are equal.
 /// let d = decide(&f(Some(10), Some(0)), &f(Some(10), Some(500)), &opts, &Prefetched::none());
 /// assert_eq!((d.verdict, d.confidence), (CompareVerdict::Same, CompareConfidence::Probable));
 ///
-/// // Un provider que no sabe el tamaño no recibe una confianza inventada.
+/// // A provider that does not know the size gets no invented confidence.
 /// let d = decide(&f(None, Some(0)), &f(Some(10), Some(0)), &opts, &Prefetched::none());
 /// assert_eq!((d.verdict, d.confidence), (CompareVerdict::Same, CompareConfidence::Unknown));
 /// ```
@@ -300,10 +306,9 @@ pub fn decide(
 ) -> Decision {
     let cheap = cheap_rungs(left, right, opts, facts);
 
-    // El rung caro alcanza SOLO a las parejas que los baratos dieron por
-    // iguales —«verifica lo que parece igual»—, y solo a ficheros: un
-    // directorio no tiene contenido que hashear y un symlink ya decidió por su
-    // destino.
+    // The expensive rung only reaches pairs the cheap ones called equal —
+    // "verify what looks the same" — and only files: a directory has no
+    // content to hash and a symlink already decided by its target.
     if !opts.criteria.hash || cheap.verdict != CompareVerdict::Same || left.kind != EntryKind::File
     {
         return cheap;
@@ -326,7 +331,7 @@ pub fn decide(
     }
 }
 
-/// Los rungs que no leen contenido: kind, destino de enlace, tamaño y fecha.
+/// The rungs that do not read content: kind, link target, size and date.
 fn cheap_rungs(
     left: &Entry,
     right: &Entry,
@@ -343,21 +348,22 @@ fn cheap_rungs(
 
     match left.kind {
         EntryKind::File => size_and_mtime(left, right, opts),
-        // Dos directorios del mismo nombre son EL MISMO directorio: sus
-        // diferencias son las filas de sus hijos, que el walk emite aparte.
-        // Compararlos por tamaño o por fecha sería pintar «distinto» en cada
-        // directorio que contiene un fichero cambiado —la fecha de un
-        // directorio se mueve con cualquier hijo— y ahogar el panel en ruido
-        // que no se puede operar.
+        // Two directories with the same name are THE SAME directory: their
+        // differences are their children's rows, which the walk emits
+        // separately. Comparing them by size or date would paint
+        // "different" on every directory containing a changed file — a
+        // directory's date moves with any child — and drown the panel in
+        // noise that cannot be acted on.
         EntryKind::Dir => Decision::rung(
             CompareVerdict::Same,
             CompareCriterion::Kind,
             CompareConfidence::Certain,
         ),
         EntryKind::Symlink => link_target(facts),
-        // Un socket, un fifo, un device — o un kind de un protocolo N+1 que
-        // este binario no conoce. Son del mismo tipo y ahí se acaba lo que se
-        // sabe: su «tamaño» no es contenido y su fecha no dice nada.
+        // A socket, a fifo, a device — or a kind from an N+1 protocol this
+        // binary does not know. They are the same type and that is as far
+        // as knowledge goes: their "size" is not content and their date
+        // says nothing.
         EntryKind::Other => Decision::rung(
             CompareVerdict::Same,
             CompareCriterion::Kind,
@@ -366,7 +372,7 @@ fn cheap_rungs(
     }
 }
 
-/// El rung de symlink: los destinos, como bytes, jamás seguidos.
+/// The symlink rung: the targets, as bytes, never followed.
 fn link_target(facts: &Prefetched<'_>) -> Decision {
     match (facts.left_target, facts.right_target) {
         (Some(l), Some(r)) => Decision::rung(
@@ -378,9 +384,9 @@ fn link_target(facts: &Prefetched<'_>) -> Decision {
             CompareCriterion::LinkTarget,
             CompareConfidence::Certain,
         ),
-        // Sin los dos destinos no hay comparación posible, y decir `Different`
-        // sería inventarse una diferencia igual que decir `Same` se inventaría
-        // una igualdad.
+        // Without both targets there is no comparison possible, and saying
+        // `Different` would invent a difference just as saying `Same` would
+        // invent an equality.
         _ => Decision::rung(
             CompareVerdict::Same,
             CompareCriterion::LinkTarget,
@@ -389,7 +395,7 @@ fn link_target(facts: &Prefetched<'_>) -> Decision {
     }
 }
 
-/// Los dos rungs de metadatos de un fichero, en orden.
+/// A file's two metadata rungs, in order.
 fn size_and_mtime(left: &Entry, right: &Entry, opts: &CompareOptions) -> Decision {
     if opts.criteria.size {
         match (left.size, right.size) {
@@ -400,13 +406,13 @@ fn size_and_mtime(left: &Entry, right: &Entry, opts: &CompareOptions) -> Decisio
                     CompareConfidence::Certain,
                 );
             }
-            // Tamaños iguales no deciden nada: dos ficheros de 4 KiB pueden
-            // tener bytes distintos. Sigue la cascada.
+            // Equal sizes decide nothing: two 4 KiB files can have
+            // different bytes. The cascade continues.
             (Some(_), Some(_)) => {}
-            // Un lado sin tamaño: el rung no puede contestar, y el siguiente
-            // tampoco lo arregla. `Same`/`Unknown` es la respuesta honesta —
-            // seguir a la fecha daría `Probable`, o sea MÁS confianza de la
-            // que hay.
+            // A side with no size: the rung cannot answer, and the next one
+            // does not fix it either. `Same`/`Unknown` is the honest
+            // answer — following through to the date would give
+            // `Probable`, i.e. MORE confidence than there actually is.
             _ => {
                 return Decision::rung(
                     CompareVerdict::Same,
@@ -425,11 +431,11 @@ fn size_and_mtime(left: &Entry, right: &Entry, opts: &CompareOptions) -> Decisio
                 CompareConfidence::Unknown,
             );
         };
-        // `(l - r).abs()` DESBORDA: las fechas pre-1970 son negativas y reales,
-        // y un par (i64::MIN, i64::MAX) revienta en debug y da basura en
-        // release. `saturating_sub` + `unsigned_abs` no puede desbordar, y la
-        // tolerancia es `u32` para que no exista una tolerancia negativa que
-        // convierta la comparación entera en «distinto».
+        // `(l - r).abs()` OVERFLOWS: pre-1970 dates are negative and real,
+        // and a pair (i64::MIN, i64::MAX) blows up in debug and gives
+        // garbage in release. `saturating_sub` + `unsigned_abs` cannot
+        // overflow, and the tolerance is `u32` so there is no negative
+        // tolerance that could turn the whole comparison into "different".
         if l.saturating_sub(r).unsigned_abs() > u64::from(opts.mtime_tolerance_ms) {
             return Decision {
                 newer: Some(if l > r { Side::Left } else { Side::Right }),
@@ -447,9 +453,9 @@ fn size_and_mtime(left: &Entry, right: &Entry, opts: &CompareOptions) -> Decisio
         );
     }
 
-    // Ni tamaño ni fecha: ningún rung decidió. `Presence` es el criterio de
-    // esas filas por convención del wire (ver `CompareCriterion::Presence`), y
-    // la confianza es `Unknown` porque literalmente no se ha comparado nada.
+    // Neither size nor date: no rung decided. `Presence` is these rows'
+    // criterion by wire convention (see `CompareCriterion::Presence`), and
+    // the confidence is `Unknown` because literally nothing was compared.
     Decision::rung(
         CompareVerdict::Same,
         CompareCriterion::Presence,
@@ -466,8 +472,8 @@ mod tests {
     use super::*;
     use crate::CompareCriteria;
 
-    /// `size` y `mtime` genéricos porque la MISMA tabla lleva `file(10, 0)`,
-    /// `file(10, None)` y `file(None, 0)`.
+    /// `size` and `mtime` are generic because the SAME table carries
+    /// `file(10, 0)`, `file(10, None)` and `file(None, 0)`.
     fn entry(
         kind: EntryKind,
         size: impl Into<Option<u64>>,
@@ -494,7 +500,7 @@ mod tests {
         entry(EntryKind::Symlink, 4, 0)
     }
 
-    /// Nada averiguado: ni destinos de enlace, ni hash.
+    /// Nothing found out: no link targets, no hash.
     fn no_hash() -> Prefetched<'static> {
         Prefetched::none()
     }
@@ -565,8 +571,9 @@ mod tests {
     /// Symlinks are compared, not followed: no cycle detection needed, and a
     /// link whose target changed is a real difference.
     ///
-    /// El destino NO vive en `Entry`: lo lee `Provider::read_link`, que es
-    /// async, así que entra por [`Prefetched`] y `decide` sigue siendo pura.
+    /// The target does NOT live in `Entry`: `Provider::read_link` reads it,
+    /// which is async, so it comes in via [`Prefetched`] and `decide` stays
+    /// pure.
     #[test]
     fn symlink_targets_are_compared_as_bytes() {
         let opts = CompareOptions::cheap();
@@ -580,12 +587,12 @@ mod tests {
         assert_eq!(diff.confidence, CompareConfidence::Certain);
     }
 
-    // ---- lo que la tabla de la spec no fija, y una revisión podría torcer ----
+    // ---- what the spec's table does not fix, and a review could bend ----
 
-    /// Un destino que no se pudo leer no se convierte en «son iguales»: sin los
-    /// dos destinos la confianza es `Unknown`, que es una respuesta.
+    /// A target that could not be read does not turn into "they are equal":
+    /// without both targets the confidence is `Unknown`, which is an answer.
     #[test]
-    fn un_enlace_sin_destino_leido_no_inventa_una_igualdad() {
+    fn a_link_with_no_target_read_does_not_invent_an_equality() {
         let opts = CompareOptions::cheap();
         for facts in [
             no_hash(),
@@ -605,14 +612,14 @@ mod tests {
         }
     }
 
-    /// Dos directorios del mismo nombre son el mismo directorio: sus
-    /// diferencias son las filas de sus hijos. Compararlos por fecha pintaría
-    /// «distinto» en cada carpeta que contiene un fichero cambiado.
+    /// Two directories with the same name are the same directory: their
+    /// differences are their children's rows. Comparing them by date would
+    /// paint "different" on every folder that contains a changed file.
     #[test]
-    fn dos_directorios_no_se_comparan_por_fecha_ni_por_tamano() {
-        let izq = entry(EntryKind::Dir, 4096, 0);
-        let der = entry(EntryKind::Dir, 8192, 999_999_999);
-        let d = decide(&izq, &der, &CompareOptions::cheap(), &no_hash());
+    fn two_directories_are_not_compared_by_date_or_size() {
+        let left = entry(EntryKind::Dir, 4096, 0);
+        let right = entry(EntryKind::Dir, 8192, 999_999_999);
+        let d = decide(&left, &right, &CompareOptions::cheap(), &no_hash());
         assert_eq!(
             (d.verdict, d.criterion, d.confidence),
             (
@@ -621,16 +628,16 @@ mod tests {
                 CompareConfidence::Certain
             )
         );
-        assert!(d.newer.is_none(), "un directorio no tiene lado más nuevo");
+        assert!(d.newer.is_none(), "a directory has no newer side");
     }
 
-    /// Un kind que no es fichero, ni directorio, ni enlace —un fifo, un
-    /// device, o un kind de un daemon N+1— no recibe una confianza inventada.
+    /// A kind that is neither file, directory nor link — a fifo, a device,
+    /// or an N+1 daemon's kind — gets no invented confidence.
     #[test]
-    fn un_kind_desconocido_no_se_compara_por_metadatos() {
-        let izq = entry(EntryKind::Other, 1, 0);
-        let der = entry(EntryKind::Other, 2, 500_000);
-        let d = decide(&izq, &der, &CompareOptions::cheap(), &no_hash());
+    fn an_unknown_kind_is_not_compared_by_metadata() {
+        let left = entry(EntryKind::Other, 1, 0);
+        let right = entry(EntryKind::Other, 2, 500_000);
+        let d = decide(&left, &right, &CompareOptions::cheap(), &no_hash());
         assert_eq!(
             (d.verdict, d.criterion, d.confidence),
             (
@@ -641,10 +648,11 @@ mod tests {
         );
     }
 
-    /// Las fechas pre-1970 son negativas y REALES: `(l - r).abs()` desborda con
-    /// ellas. La resta saturada no, y sigue contestando lo que toca.
+    /// Pre-1970 dates are negative and REAL: `(l - r).abs()` overflows with
+    /// them. The saturated subtraction does not, and keeps answering what it
+    /// should.
     #[test]
-    fn las_fechas_pre_1970_no_desbordan_la_resta() {
+    fn pre_1970_dates_do_not_overflow_the_subtraction() {
         let opts = CompareOptions::cheap();
         let d = decide(&file(10, i64::MIN), &file(10, i64::MAX), &opts, &no_hash());
         assert_eq!(d.verdict, CompareVerdict::Different);
@@ -660,7 +668,7 @@ mod tests {
             )
         );
 
-        // Y una fecha pre-1970 dentro de tolerancia sigue siendo la misma.
+        // And a pre-1970 date within tolerance is still the same.
         let d = decide(
             &file(10, -1_000_000_000_000),
             &file(10, -1_000_000_001_000),
@@ -670,11 +678,11 @@ mod tests {
         assert_eq!(d.verdict, CompareVerdict::Same);
     }
 
-    /// La tolerancia INCLUYE su extremo: la spec dice `|Δ| > tolerancia` para
-    /// `Different`, y un FAT con granularidad de 2 s no puede distinguir
-    /// exactamente 2000 ms.
+    /// The tolerance INCLUDES its boundary: the spec says `|Δ| > tolerance`
+    /// for `Different`, and a FAT with 2s granularity cannot distinguish
+    /// exactly 2000ms.
     #[test]
-    fn la_tolerancia_incluye_su_extremo() {
+    fn the_tolerance_includes_its_boundary() {
         let opts = CompareOptions::cheap();
         assert_eq!(
             decide(&file(10, 0), &file(10, 2_000), &opts, &no_hash()).verdict,
@@ -686,12 +694,12 @@ mod tests {
         );
     }
 
-    /// La cascada es SIMÉTRICA: cambiar los lados de sitio cambia el lado de
-    /// `newer` y nada más. El walk apoya su test de espejo en esto.
+    /// The cascade is SYMMETRIC: swapping the sides changes `newer`'s side
+    /// and nothing else. The walk's mirror test relies on this.
     #[test]
-    fn cambiar_los_lados_de_sitio_solo_cambia_el_lado_mas_nuevo() {
+    fn swapping_the_sides_only_changes_the_newer_side() {
         let opts = CompareOptions::cheap();
-        let parejas = [
+        let pairs = [
             (file(10, 0), file(20, 0)),
             (file(10, 0), file(10, 9_000)),
             (file(10, 0), file(10, None)),
@@ -699,58 +707,59 @@ mod tests {
             (file(10, 0), dir()),
             (link(), link()),
         ];
-        for (l, r) in parejas {
-            let ida = decide(&l, &r, &opts, &targets(b"../a", b"../b"));
-            let vuelta = decide(&r, &l, &opts, &targets(b"../b", b"../a"));
+        for (l, r) in pairs {
+            let forward = decide(&l, &r, &opts, &targets(b"../a", b"../b"));
+            let back = decide(&r, &l, &opts, &targets(b"../b", b"../a"));
             assert_eq!(
-                (ida.verdict, ida.criterion, ida.confidence),
-                (vuelta.verdict, vuelta.criterion, vuelta.confidence),
+                (forward.verdict, forward.criterion, forward.confidence),
+                (back.verdict, back.criterion, back.confidence),
                 "{l:?} vs {r:?}"
             );
-            let espejo = match vuelta.newer {
+            let mirrored = match back.newer {
                 Some(Side::Left) => Some(Side::Right),
                 Some(Side::Right) => Some(Side::Left),
-                otro => otro,
+                other => other,
             };
-            assert_eq!(ida.newer, espejo, "{l:?} vs {r:?}");
+            assert_eq!(forward.newer, mirrored, "{l:?} vs {r:?}");
         }
     }
 
-    /// El rung caro NO decide aquí: `decide` es síncrona y no lee contenido.
-    /// Cuando los baratos dan la pareja por igual y el llamante pidió hash, la
-    /// decisión sale marcada como NO final, y el walk vuelve con el resultado.
+    /// The expensive rung does NOT decide here: `decide` is synchronous and
+    /// reads no content. When the cheap ones call the pair equal and the
+    /// caller asked for hash, the decision comes out marked as NOT final,
+    /// and the walk comes back with the result.
     #[test]
-    fn el_rung_de_hash_se_pide_y_luego_se_contesta() {
+    fn the_hash_rung_is_requested_and_then_answered() {
         let opts = with_hash();
 
-        let pendiente = decide(&file(10, 0), &file(10, 0), &opts, &no_hash());
-        assert!(pendiente.needs_hash, "los baratos dijeron `Same`");
-        assert_eq!(pendiente.criterion, CompareCriterion::Mtime);
+        let pending = decide(&file(10, 0), &file(10, 0), &opts, &no_hash());
+        assert!(pending.needs_hash, "the cheap ones said `Same`");
+        assert_eq!(pending.criterion, CompareCriterion::Mtime);
 
-        let iguales = decide(
+        let equal = decide(
             &file(10, 0),
             &file(10, 0),
             &opts,
             &no_hash().with_hash(HashOutcome::Equal),
         );
         assert_eq!(
-            (iguales.verdict, iguales.criterion, iguales.confidence),
+            (equal.verdict, equal.criterion, equal.confidence),
             (
                 CompareVerdict::Same,
                 CompareCriterion::Hash,
                 CompareConfidence::Certain
             )
         );
-        assert!(!iguales.needs_hash);
+        assert!(!equal.needs_hash);
 
-        let distintos = decide(
+        let different = decide(
             &file(10, 0),
             &file(10, 0),
             &opts,
             &no_hash().with_hash(HashOutcome::Differ),
         );
         assert_eq!(
-            (distintos.verdict, distintos.criterion, distintos.confidence),
+            (different.verdict, different.criterion, different.confidence),
             (
                 CompareVerdict::Different,
                 CompareCriterion::Hash,
@@ -759,44 +768,44 @@ mod tests {
         );
     }
 
-    /// El rung caro alcanza SOLO a lo que los baratos dieron por igual, y solo
-    /// a ficheros. Hashear una pareja que ya se sabe distinta es leer dos
-    /// ficheros enteros para no aprender nada.
+    /// The expensive rung ONLY reaches what the cheap ones called equal, and
+    /// only files. Hashing a pair already known to differ is reading two
+    /// whole files to learn nothing.
     #[test]
-    fn el_hash_no_alcanza_a_lo_que_ya_esta_decidido() {
+    fn the_hash_does_not_reach_what_is_already_decided() {
         let opts = with_hash();
         for (l, r) in [
-            (file(10, 0), file(20, 0)),     // distinto por tamaño
-            (file(10, 0), file(10, 9_000)), // distinto por fecha
-            (file(10, 0), dir()),           // distinto por kind
-            (dir(), dir()),                 // un directorio no tiene contenido
-            (link(), link()),               // ya decidió el destino
+            (file(10, 0), file(20, 0)),     // different by size
+            (file(10, 0), file(10, 9_000)), // different by date
+            (file(10, 0), dir()),           // different by kind
+            (dir(), dir()),                 // a directory has no content
+            (link(), link()),               // the target already decided
         ] {
             let d = decide(&l, &r, &opts, &targets(b"../a", b"../a"));
             assert!(!d.needs_hash, "{l:?} vs {r:?}");
         }
     }
 
-    /// Un tamaño desconocido tampoco impide hashear: es justo la pareja que el
-    /// rung caro convierte de `Unknown` en `Certain`.
+    /// An unknown size does not prevent hashing either: it is exactly the
+    /// pair the expensive rung turns from `Unknown` into `Certain`.
     #[test]
-    fn una_pareja_sin_tamano_tambien_se_puede_verificar() {
+    fn a_pair_with_no_size_can_still_be_verified() {
         let d = decide(&file(None, 0), &file(10, 0), &with_hash(), &no_hash());
         assert!(d.needs_hash);
         assert_eq!(d.confidence, CompareConfidence::Unknown);
     }
 
-    /// Apagar un rung lo SALTA, no lo convierte en `Different`.
+    /// Turning off a rung SKIPS it, it does not turn it into `Different`.
     #[test]
-    fn apagar_un_rung_lo_salta() {
-        let sin_tamano = CompareOptions {
+    fn turning_off_a_rung_skips_it() {
+        let no_size = CompareOptions {
             criteria: CompareCriteria {
                 size: false,
                 ..CompareCriteria::default()
             },
             ..CompareOptions::cheap()
         };
-        let d = decide(&file(10, 0), &file(999, 500), &sin_tamano, &no_hash());
+        let d = decide(&file(10, 0), &file(999, 500), &no_size, &no_hash());
         assert_eq!(
             (d.verdict, d.criterion, d.confidence),
             (
@@ -804,12 +813,12 @@ mod tests {
                 CompareCriterion::Mtime,
                 CompareConfidence::Probable
             ),
-            "sin el rung de tamaño decide la fecha"
+            "without the size rung the date decides"
         );
 
-        // Sin NINGÚN rung no hay criterio que haya decidido: `Presence` por
-        // convención del wire, y `Unknown` porque no se comparó nada.
-        let sin_nada = CompareOptions {
+        // With NO rung at all there is no criterion that decided: `Presence`
+        // by wire convention, and `Unknown` because nothing was compared.
+        let no_rungs = CompareOptions {
             criteria: CompareCriteria {
                 size: false,
                 mtime: false,
@@ -817,7 +826,7 @@ mod tests {
             },
             ..CompareOptions::cheap()
         };
-        let d = decide(&file(10, 0), &file(999, 500), &sin_nada, &no_hash());
+        let d = decide(&file(10, 0), &file(999, 500), &no_rungs, &no_hash());
         assert_eq!(
             (d.verdict, d.criterion, d.confidence),
             (
@@ -828,48 +837,50 @@ mod tests {
         );
     }
 
-    /// El rung de presencia: el más barato y el único que no compara nada.
+    /// The presence rung: the cheapest and the only one that compares
+    /// nothing.
     #[test]
-    fn la_presencia_decide_con_certeza_y_produce_una_fila_consistente() {
-        let izq = Decision::only_left();
+    fn presence_decides_with_certainty_and_produces_a_consistent_row() {
+        let left = Decision::only_left();
         assert_eq!(
-            (izq.verdict, izq.criterion, izq.confidence),
+            (left.verdict, left.criterion, left.confidence),
             (
                 CompareVerdict::OnlyLeft,
                 CompareCriterion::Presence,
                 CompareConfidence::Certain
             )
         );
-        let fila = izq.into_row(3, Some(file(10, 0)), None);
-        assert!(fila.sides_are_consistent());
-        assert!(fila.reason_is_consistent());
-        assert_eq!(fila.id, 3);
+        let row = left.into_row(3, Some(file(10, 0)), None);
+        assert!(row.sides_are_consistent());
+        assert!(row.reason_is_consistent());
+        assert_eq!(row.id, 3);
 
-        let der = Decision::only_right();
-        assert_eq!(der.verdict, CompareVerdict::OnlyRight);
+        let right = Decision::only_right();
+        assert_eq!(right.verdict, CompareVerdict::OnlyRight);
         assert!(
-            der.into_row(4, None, Some(file(10, 0)))
+            right
+                .into_row(4, None, Some(file(10, 0)))
                 .sides_are_consistent()
         );
     }
 
-    /// Una decisión de la cascada se convierte en fila SIN perder nada: el lado
-    /// más nuevo viaja, y ni el motivo ni el lado se inventan.
+    /// A cascade decision turns into a row with NOTHING lost: the newer side
+    /// travels, and neither the reason nor the side is invented.
     #[test]
-    fn la_decision_viaja_entera_a_la_fila() {
+    fn the_decision_travels_whole_into_the_row() {
         let d = decide(
             &file(10, 0),
             &file(10, 9_000),
             &CompareOptions::cheap(),
             &no_hash(),
         );
-        let fila = d.into_row(9, Some(file(10, 0)), Some(file(10, 9_000)));
-        assert_eq!(fila.verdict, CompareVerdict::Different);
-        assert_eq!(fila.criterion, CompareCriterion::Mtime);
-        assert_eq!(fila.confidence, CompareConfidence::Probable);
-        assert_eq!(fila.newer, Some(Side::Right));
-        assert_eq!(fila.reason, None);
-        assert_eq!(fila.side, None);
-        assert!(fila.sides_are_consistent() && fila.reason_is_consistent());
+        let row = d.into_row(9, Some(file(10, 0)), Some(file(10, 9_000)));
+        assert_eq!(row.verdict, CompareVerdict::Different);
+        assert_eq!(row.criterion, CompareCriterion::Mtime);
+        assert_eq!(row.confidence, CompareConfidence::Probable);
+        assert_eq!(row.newer, Some(Side::Right));
+        assert_eq!(row.reason, None);
+        assert_eq!(row.side, None);
+        assert!(row.sides_are_consistent() && row.reason_is_consistent());
     }
 }

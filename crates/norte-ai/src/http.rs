@@ -1,7 +1,7 @@
-//! Helpers HTTP compartidos por los proveedores (ADR 0031): mapeo de status
-//! HTTP → [`AiError`], y el stream de líneas (SSE/NDJSON) montado sobre el
-//! body de reqwest. Cada proveedor aporta SOLO el parser de una línea; el
-//! buffering, el corte en `\n` y la terminación viven aquí.
+//! HTTP helpers shared by the providers (ADR 0031): HTTP status → [`AiError`]
+//! mapping, and the line stream (SSE/NDJSON) built over reqwest's body. Each
+//! provider contributes ONLY the parser for one line; the buffering, the
+//! `\n` splitting and the termination live here.
 
 use std::collections::VecDeque;
 
@@ -11,24 +11,25 @@ use futures::stream::BoxStream;
 
 use crate::provider::{AiError, ChatRequest, ChatRole, ChatStream};
 
-/// Tope de UNA línea del wire (SSE/NDJSON). Un delta de chat jamás se acerca;
-/// pasarse = server hostil o roto → [`AiError::Protocol`] (ADR 0031: los
-/// casos hostiles se cortan tipados, no se acumulan sin límite).
+/// Cap on ONE wire (SSE/NDJSON) line. A chat delta never comes close;
+/// exceeding it = hostile or broken server → [`AiError::Protocol`] (ADR
+/// 0031: hostile cases are cut off typed, never accumulated without limit).
 const MAX_LINE_BYTES: usize = 1024 * 1024;
 
-/// Resultado de interpretar UNA línea del wire.
+/// Result of interpreting ONE wire line.
 pub(crate) enum WireEvent {
-    /// Delta de texto a entregar al consumidor.
+    /// Text delta to deliver to the consumer.
     Delta(String),
-    /// Línea sin interés (ping, `event:`, keep-alive, chunk sin contenido).
+    /// Uninteresting line (ping, `event:`, keep-alive, content-less chunk).
     Skip,
-    /// Fin limpio de la respuesta (`message_stop`, `[DONE]`, `done: true`).
+    /// Clean end of the response (`message_stop`, `[DONE]`, `done: true`).
     Stop,
 }
 
-/// Mapea el status de una respuesta YA recibida: 401/403 → [`AiError::Auth`],
-/// 429 → [`AiError::RateLimited`] (con `retry-after` en segundos si vino),
-/// resto no-2xx → [`AiError::Http`]. Una 2xx pasa intacta.
+/// Maps the status of a response ALREADY received: 401/403 →
+/// [`AiError::Auth`], 429 → [`AiError::RateLimited`] (with `retry-after` in
+/// seconds if it came), any other non-2xx → [`AiError::Http`]. A 2xx passes
+/// through untouched.
 pub(crate) fn check_status(resp: reqwest::Response) -> Result<reqwest::Response, AiError> {
     let status = resp.status();
     if status.is_success() {
@@ -47,34 +48,35 @@ pub(crate) fn check_status(resp: reqwest::Response) -> Result<reqwest::Response,
     })
 }
 
-/// Error de transporte (conexión, DNS, TLS, timeout). El `Display` de
-/// `reqwest::Error` no incluye headers: la api key jamás se filtra por aquí
-/// (regla 10).
+/// Transport error (connection, DNS, TLS, timeout). `reqwest::Error`'s
+/// `Display` does not include headers: the api key is never leaked through
+/// here (rule 10).
 pub(crate) fn transport(e: &reqwest::Error) -> AiError {
     AiError::Transport(e.to_string())
 }
 
-/// El payload de una línea SSE `data: ...` (sin el prefijo ni el espacio
-/// opcional); `None` si la línea no es de datos (`event:`, comentario, vacía).
+/// The payload of an SSE `data: ...` line (without the prefix nor the
+/// optional space); `None` if the line is not a data line (`event:`,
+/// comment, empty).
 pub(crate) fn sse_data(line: &str) -> Option<&str> {
     line.strip_prefix("data:").map(str::trim_start)
 }
 
-/// Valida el contrato de [`ChatRequest`]: existe al menos un turno no-system
-/// y el primero es `user` (lo exigen los tres proveedores; se corta aquí,
-/// tipado, antes de tocar la red).
+/// Validates [`ChatRequest`]'s contract: at least one non-system turn exists
+/// and the first one is `user` (all three providers require it; it is cut
+/// off here, typed, before touching the network).
 pub(crate) fn validate_turns(req: &ChatRequest) -> Result<(), AiError> {
     match req.messages.iter().find(|m| m.role != ChatRole::System) {
         Some(m) if m.role == ChatRole::User => Ok(()),
         _ => Err(AiError::Protocol(
-            "el primer turno de la conversación debe ser `user`".into(),
+            "the conversation's first turn must be `user`".into(),
         )),
     }
 }
 
-/// Estado del stream de líneas: posee el body de reqwest (dropear el stream
-/// devuelto dropea el body → reqwest aborta la petición HTTP; regla 3,
-/// cancelación drop-based).
+/// State of the line stream: owns reqwest's body (dropping the returned
+/// stream drops the body → reqwest aborts the HTTP request; rule 3,
+/// drop-based cancellation).
 struct LineState<F> {
     body: BoxStream<'static, reqwest::Result<Bytes>>,
     buf: Vec<u8>,
@@ -84,11 +86,12 @@ struct LineState<F> {
     parse: F,
 }
 
-/// Stream de deltas sobre el body de `resp`: bufferiza bytes, corta en `\n`
-/// (recortando TODOS los `\r` finales), y pasa cada línea completa por
-/// `parse`. Un `Err` del parser o del transporte TERMINA el stream tras
-/// emitirse; [`WireEvent::Stop`] lo termina sin emitir nada más. El resto de
-/// bytes al EOF (línea final sin `\n`) también pasa por el parser.
+/// Stream of deltas over `resp`'s body: buffers bytes, splits on `\n`
+/// (trimming ALL trailing `\r`s), and passes each complete line through
+/// `parse`. An `Err` from the parser or the transport ENDS the stream after
+/// being emitted; [`WireEvent::Stop`] ends it without emitting anything
+/// else. The remaining bytes at EOF (a final line with no `\n`) also go
+/// through the parser.
 pub(crate) fn delta_stream<F>(resp: reqwest::Response, parse: F) -> ChatStream
 where
     F: FnMut(&str) -> Result<WireEvent, AiError> + Send + 'static,
@@ -122,10 +125,10 @@ where
                 match st.body.next().await {
                     None => {
                         st.eof = true;
-                        // Flush del resto: una línea final sin `\n` (NDJSON
-                        // sin newline terminal, SSE truncado) también se
-                        // interpreta — un truncado hostil acaba en Protocol
-                        // en el parser, no en silencio.
+                        // Flush the remainder: a final line with no `\n`
+                        // (NDJSON with no terminal newline, truncated SSE)
+                        // also gets interpreted — a hostile truncation ends
+                        // in Protocol in the parser, not in silence.
                         if !st.buf.is_empty() {
                             let tail = std::mem::take(&mut st.buf);
                             match into_line(tail) {
@@ -155,43 +158,41 @@ where
     .boxed()
 }
 
-/// Extrae de `buf` todas las líneas COMPLETAS (terminadas en `\n`) hacia
-/// `ready`. Vigila el tope de línea sobre el residuo sin terminar.
+/// Extracts every COMPLETE line (ending in `\n`) from `buf` into `ready`.
+/// Watches the line cap against the unfinished leftover.
 fn drain_lines(buf: &mut Vec<u8>, ready: &mut VecDeque<String>) -> Result<(), AiError> {
     while let Some(pos) = buf.iter().position(|&b| b == b'\n') {
         let mut line: Vec<u8> = buf.drain(..=pos).collect();
-        line.pop(); // el `\n`
+        line.pop(); // the `\n`
         ready.push_back(into_line(line)?);
     }
     if buf.len() > MAX_LINE_BYTES {
-        return Err(AiError::Protocol(
-            "línea del stream demasiado larga (>1 MiB)".into(),
-        ));
+        return Err(AiError::Protocol("stream line too long (>1 MiB)".into()));
     }
     Ok(())
 }
 
-/// Una línea de bytes → `String`, recortando TODOS los `\r` finales (hay
-/// servers que emiten `\r\r\n`). SSE/NDJSON son UTF-8 por contrato: bytes
-/// inválidos = server roto → [`AiError::Protocol`], jamás lossy silencioso.
+/// A line of bytes → `String`, trimming ALL trailing `\r`s (some servers
+/// emit `\r\r\n`). SSE/NDJSON are UTF-8 by contract: invalid bytes = broken
+/// server → [`AiError::Protocol`], never silent lossy conversion.
 fn into_line(mut line: Vec<u8>) -> Result<String, AiError> {
     while line.last() == Some(&b'\r') {
         line.pop();
     }
-    String::from_utf8(line).map_err(|_| AiError::Protocol("línea del stream no es UTF-8".into()))
+    String::from_utf8(line).map_err(|_| AiError::Protocol("stream line is not UTF-8".into()))
 }
 
 #[cfg(test)]
 pub(crate) mod testutil {
-    //! Fake server HTTP/1.1 a mano sobre `tokio::net::TcpListener` (ADR 0031:
-    //! sin dev-deps nuevas, sin red en los tests) + tests del propio buffering
-    //! de líneas.
+    //! A hand-rolled HTTP/1.1 fake server over `tokio::net::TcpListener`
+    //! (ADR 0031: no new dev-deps, no network in the tests) + tests of the
+    //! line buffering itself.
 
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::{TcpListener, TcpStream};
 
-    /// Un fake server de UNA petición: la lee entera, responde `response`
-    /// crudo y cierra. La petición capturada se recupera con
+    /// A ONE-request fake server: reads it whole, answers with the raw
+    /// `response` and closes. The captured request is recovered with
     /// [`FakeHttp::request`].
     pub(crate) struct FakeHttp {
         pub(crate) base_url: String,
@@ -199,14 +200,14 @@ pub(crate) mod testutil {
     }
 
     impl FakeHttp {
-        /// La petición cruda que recibió el server (request line + headers +
-        /// body). Consúmela DESPUÉS de agotar la respuesta.
+        /// The raw request the server received (request line + headers +
+        /// body). Consume it AFTER the response has been drained.
         pub(crate) async fn request(self) -> String {
             self.handle.await.unwrap()
         }
     }
 
-    /// Arranca el fake server en `127.0.0.1:0` y devuelve su URL base.
+    /// Starts the fake server on `127.0.0.1:0` and returns its base URL.
     pub(crate) async fn serve_once(response: Vec<u8>) -> FakeHttp {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
@@ -224,27 +225,27 @@ pub(crate) mod testutil {
         }
     }
 
-    /// Un fake server de VARIAS peticiones: contesta la n-ésima respuesta a
-    /// la n-ésima petición, y devuelve todas las peticiones en orden.
+    /// A MULTI-request fake server: answers the nth response to the nth
+    /// request, and returns every request in order.
     ///
-    /// Hace falta para probar un REINTENTO, que por definición son dos viajes:
-    /// el que el servidor rechaza y el que acepta. Con `serve_once` solo se
-    /// puede ver el primero, así que el fallback de la salida tipada del
-    /// proveedor compatible con `OpenAI` no se podía comprobar.
+    /// Needed to test a RETRY, which by definition is two round trips: the
+    /// one the server rejects and the one it accepts. With `serve_once` only
+    /// the first can be seen, so the `OpenAI`-compatible provider's typed-
+    /// output fallback could not be checked.
     pub(crate) struct FakeHttpN {
         pub(crate) base_url: String,
         handle: tokio::task::JoinHandle<Vec<String>>,
     }
 
     impl FakeHttpN {
-        /// Las peticiones crudas, en orden. Consúmelas DESPUÉS de agotar las
-        /// respuestas.
+        /// The raw requests, in order. Consume them AFTER the responses have
+        /// been drained.
         pub(crate) async fn requests(self) -> Vec<String> {
             self.handle.await.unwrap()
         }
     }
 
-    /// Arranca un fake server que atiende `responses.len()` peticiones.
+    /// Starts a fake server that serves `responses.len()` requests.
     pub(crate) async fn serve_seq(responses: Vec<Vec<u8>>) -> FakeHttpN {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
@@ -265,8 +266,8 @@ pub(crate) mod testutil {
         }
     }
 
-    /// Construye una respuesta HTTP/1.1 cruda con `content-length` correcto y
-    /// `connection: close` (una petición por conexión).
+    /// Builds a raw HTTP/1.1 response with a correct `content-length` and
+    /// `connection: close` (one request per connection).
     pub(crate) fn response(
         status: u16,
         reason: &str,
@@ -284,8 +285,8 @@ pub(crate) mod testutil {
         out.into_bytes()
     }
 
-    /// Lee una petición completa: headers hasta `\r\n\r\n` + `content-length`
-    /// bytes de body.
+    /// Reads a complete request: headers up to `\r\n\r\n` plus
+    /// `content-length` bytes of body.
     async fn read_request(sock: &mut TcpStream) -> String {
         let mut buf = Vec::new();
         let mut tmp = [0u8; 4096];
@@ -310,17 +311,17 @@ pub(crate) mod testutil {
         String::from_utf8_lossy(&buf).into_owned()
     }
 
-    // ---- tests del buffering de líneas (vía un GET real al fake) ----
+    // ---- line-buffering tests (via a real GET to the fake) ----
 
     use futures::StreamExt;
 
     use super::{MAX_LINE_BYTES, WireEvent, check_status, delta_stream};
     use crate::provider::AiError;
 
-    /// Cada línea es un delta; la cola sin `\n` final también se entrega y
-    /// los `\r` finales (incluso dobles) se recortan.
+    /// Every line is a delta; the tail with no final `\n` is also delivered
+    /// and trailing `\r`s (even doubled) are trimmed.
     #[tokio::test]
-    async fn lineas_con_cola_sin_newline_y_cr_dobles() {
+    async fn lines_with_a_tail_with_no_newline_and_double_cr() {
         let srv = serve_once(response(200, "OK", &[], "a\r\r\nb\nc")).await;
         let resp = reqwest::get(format!("{}/x", srv.base_url)).await.unwrap();
         let s = delta_stream(check_status(resp).unwrap(), |l| {
@@ -330,23 +331,23 @@ pub(crate) mod testutil {
         assert_eq!(got, ["a", "b", "c"]);
     }
 
-    /// Una línea gigante sin `\n` (server hostil) corta el stream con
-    /// `Protocol`, no acumula sin límite.
+    /// A giant line with no `\n` (hostile server) cuts the stream off with
+    /// `Protocol`, it does not accumulate without limit.
     #[tokio::test]
-    async fn linea_gigante_es_protocol() {
+    async fn a_giant_line_is_protocol() {
         let huge = "x".repeat(MAX_LINE_BYTES + 1);
         let srv = serve_once(response(200, "OK", &[], &huge)).await;
         let resp = reqwest::get(format!("{}/x", srv.base_url)).await.unwrap();
         let mut s = delta_stream(check_status(resp).unwrap(), |_| Ok(WireEvent::Skip));
         let item = s.next().await.unwrap();
         assert!(matches!(item, Err(AiError::Protocol(_))), "{item:?}");
-        assert!(s.next().await.is_none(), "el stream termina tras el Err");
+        assert!(s.next().await.is_none(), "the stream ends after the Err");
     }
 
-    /// `Stop` del parser termina el stream aunque queden líneas detrás.
+    /// A `Stop` from the parser ends the stream even if lines remain after it.
     #[tokio::test]
-    async fn stop_termina_el_stream() {
-        let srv = serve_once(response(200, "OK", &[], "uno\nSTOP\nignorado\n")).await;
+    async fn stop_ends_the_stream() {
+        let srv = serve_once(response(200, "OK", &[], "one\nSTOP\nignored\n")).await;
         let resp = reqwest::get(format!("{}/x", srv.base_url)).await.unwrap();
         let s = delta_stream(check_status(resp).unwrap(), |l| {
             if l == "STOP" {
@@ -356,6 +357,6 @@ pub(crate) mod testutil {
             }
         });
         let got: Vec<String> = s.map(Result::unwrap).collect().await;
-        assert_eq!(got, ["uno"]);
+        assert_eq!(got, ["one"]);
     }
 }

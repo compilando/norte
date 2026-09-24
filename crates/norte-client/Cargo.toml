@@ -1,6 +1,6 @@
 [package]
 name = "norte-client"
-description = "SDK de cliente del daemon de norte: transporte, JSON-RPC enmarcado y backend remoto"
+description = "norte daemon client SDK: transport, framed JSON-RPC and remote backend"
 license = "MIT OR Apache-2.0"
 version.workspace = true
 edition.workspace = true
@@ -8,10 +8,10 @@ rust-version.workspace = true
 repository.workspace = true
 authors.workspace = true
 
-# La frontera de este crate ES su lista de dependencias, y hay un test que
-# falla si crece hacia el core (`tests/dependency_boundary.rs`, ADR 0066): un
-# frontend que solo habla por socket no puede arrastrar el engine, los
-# providers, el índice ni el host de plugins para mandar un JSON-RPC.
+# This crate's boundary IS its dependency list, and a test fails if it grows
+# toward the core (`tests/dependency_boundary.rs`, ADR 0066): a frontend that
+# only talks over a socket has no reason to drag in the engine, the
+# providers, the index or the plugin host just to send a JSON-RPC.
 [dependencies]
 base64.workspace = true
 futures.workspace = true
@@ -23,9 +23,9 @@ tokio = { workspace = true, features = ["io-util", "macros", "net", "process", "
 tracing.workspace = true
 
 [dev-dependencies]
-# El test de frontera lee el grafo de cargo y lo recorre.
+# The boundary test reads cargo's graph and walks it.
 serde_json.workspace = true
-# Los tests del backend remoto levantan sockets en directorios temporales.
+# The remote backend's tests bring up sockets in temporary directories.
 tempfile.workspace = true
 tokio = { workspace = true, features = ["io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }
 

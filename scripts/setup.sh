@@ -1,22 +1,23 @@
 #!/usr/bin/env bash
-# Bootstrap del entorno de desarrollo de norte. Idempotente: reejecutar es
-# seguro (salta lo ya instalado). Instala EXACTAMENTE lo que exige el justfile.
+# Bootstrap for norte's development environment. Idempotent: re-running is
+# safe (skips what is already installed). Installs EXACTLY what the justfile
+# requires.
 #
-#   rustup + toolchain pineado (rust-toolchain.toml → 1.96.1, con rustfmt/
+#   rustup + pinned toolchain (rust-toolchain.toml → 1.96.1, with rustfmt/
 #   clippy/llvm-tools) · just · cargo-nextest · cargo-llvm-cov · cargo-deny
 #
-# Uso:  make setup     (o directamente:  bash scripts/setup.sh)
+# Usage:  make setup     (or directly:  bash scripts/setup.sh)
 set -euo pipefail
 
 info() { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 ok() { printf '\033[1;32m  ✓\033[0m %s\n' "$*"; }
-skip() { printf '\033[1;33m  ·\033[0m %s (ya está)\n' "$*"; }
+skip() { printf '\033[1;33m  ·\033[0m %s (already there)\n' "$*"; }
 
-# --- 1) rustup + toolchain pineado ------------------------------------------
+# --- 1) rustup + pinned toolchain -------------------------------------------
 if ! command -v rustup >/dev/null 2>&1; then
-  info "instalando rustup (respeta rust-toolchain.toml)"
-  # SIN --no-modify-path: que rustup añada ~/.cargo/bin al PATH del shell
-  # (perfiles), para que las terminales NUEVAS tengan cargo/just sin trucos.
+  info "installing rustup (respects rust-toolchain.toml)"
+  # WITHOUT --no-modify-path: let rustup add ~/.cargo/bin to the shell's PATH
+  # (profiles), so NEW terminals have cargo/just without any tricks.
   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
     | sh -s -- -y --default-toolchain none
   # shellcheck disable=SC1091
@@ -25,28 +26,28 @@ else
   skip "rustup"
 fi
 
-# Asegura el PATH de cargo en esta sesión aunque rustup ya estuviera.
+# Ensures cargo's PATH in this session even if rustup was already there.
 if ! command -v cargo >/dev/null 2>&1; then
   # shellcheck disable=SC1091
   . "${CARGO_HOME:-$HOME/.cargo}/env"
 fi
 
-info "materializando el toolchain pineado (rust-toolchain.toml)"
-# Cualquier invocación en el repo instala el channel + components pineados.
+info "materializing the pinned toolchain (rust-toolchain.toml)"
+# Any invocation in the repo installs the pinned channel + components.
 rustup show >/dev/null
 ok "toolchain: $(rustc --version)"
 
-# --- 2) herramientas del justfile -------------------------------------------
-# cargo-binstall (si está) baja binarios precompilados: mucho más rápido que
-# compilar cada tool. Si no está, caemos a `cargo install` (compila).
+# --- 2) justfile tools -------------------------------------------------------
+# cargo-binstall (if present) downloads precompiled binaries: much faster than
+# compiling each tool. If absent, falls back to `cargo install` (compiles).
 inst() { # inst <bin> <crate>
   local bin="$1" crate="$2"
   if command -v "$bin" >/dev/null 2>&1; then
     skip "$bin"
   elif command -v cargo-binstall >/dev/null 2>&1; then
-    info "instalando $crate (binstall)"; cargo binstall -y "$crate"; ok "$bin"
+    info "installing $crate (binstall)"; cargo binstall -y "$crate"; ok "$bin"
   else
-    info "instalando $crate (cargo install; compila, tarda)"
+    info "installing $crate (cargo install; compiles, takes a while)"
     cargo install --locked "$crate"; ok "$bin"
   fi
 }
@@ -56,15 +57,15 @@ inst cargo-nextest cargo-nextest
 inst cargo-llvm-cov cargo-llvm-cov
 inst cargo-deny cargo-deny
 
-# --- 3) verificación --------------------------------------------------------
-info "verificando el setup"
+# --- 3) verification ---------------------------------------------------------
+info "verifying the setup"
 for c in cargo rustc rustfmt just cargo-nextest cargo-deny; do
-  command -v "$c" >/dev/null 2>&1 && ok "$c" || { echo "  ✗ falta $c"; exit 1; }
+  command -v "$c" >/dev/null 2>&1 && ok "$c" || { echo "  ✗ missing $c"; exit 1; }
 done
 rustup component list --installed | grep -q clippy && ok "clippy" || {
-  info "añadiendo clippy"; rustup component add clippy; }
+  info "adding clippy"; rustup component add clippy; }
 
 echo
-ok "listo. Prueba:  make dev   ·   just ci   ·   make test"
-echo "   (si 'cargo' no está en el PATH de un shell nuevo, abre otra terminal"
-echo "    o ejecuta: . \"\${CARGO_HOME:-\$HOME/.cargo}/env\")"
+ok "done. Try:  make dev   ·   just ci   ·   make test"
+echo "   (if 'cargo' is not on a new shell's PATH, open another terminal"
+echo "    or run: . \"\${CARGO_HOME:-\$HOME/.cargo}/env\")"

@@ -1,17 +1,18 @@
-//! Provider VFS read-only de archivos RAR, **delegando** en un `7z` o `unrar`
-//! ya instalado (decisión de producto 5 del roadmap post-alpha).
+//! Read-only VFS provider for RAR archives, **delegating** to an already
+//! installed `7z` or `unrar` (post-alpha roadmap product decision 5).
 //!
-//! El descompresor de RAR es no libre: no hay forma de leer un `.rar`
-//! comprimido con código que este árbol pueda contener. La salida es delegar
-//! en un programa externo — y entonces el problema deja de ser el formato y
-//! pasa a ser la **regla 9**: al delegado se le da una ruta y una tubería,
-//! jamás el sistema de ficheros del usuario.
+//! RAR's decompressor is non-free: there is no way to read a compressed
+//! `.rar` with code this tree can contain. The way out is delegating to an
+//! external program — and then the problem stops being the format and
+//! becomes **rule 9**: the delegate is given a path and a pipe, never the
+//! user's filesystem.
 //!
-//! Por eso este crate NO compone sobre otro
-//! [`Provider`](norte_vfs::Provider) como hace `norte-vfs-archive`: sostiene
-//! una **ruta local** al archivo y nada más, así que no puede alcanzar un byte
-//! remoto ni conocer a otros providers. Quién puede montar un `rar` — solo
-//! sobre `file://` — lo decide el dispatch del engine, no este crate.
+//! That is why this crate does NOT compose over another
+//! [`Provider`](norte_vfs::Provider) the way `norte-vfs-archive` does: it
+//! holds a **local path** to the archive and nothing else, so it cannot
+//! reach a remote byte or know about other providers. Who gets to mount a
+//! `rar` — only over `file://` — is decided by the engine's dispatch, not
+//! this crate.
 #![forbid(unsafe_code)]
 
 mod delegate;
@@ -24,23 +25,23 @@ pub use index::ArchiveIndex;
 pub use listing::{Listing, RawEntry, parse_7z_slt, parse_unrar_vt};
 pub use provider::RarProvider;
 
-/// Topes anti-bomba del índice de un `.rar`, hermanos de los de ADR 0018.
+/// Anti-bomb caps for a `.rar`'s index, siblings of ADR 0018's.
 ///
-/// Superarlos NO declara roto el archivo: omiten la entrada, la cuentan y
-/// siguen. Un `.rar` con un nombre absurdo se explora igual, con una entrada
-/// menos y el contador diciéndolo.
+/// Exceeding them does NOT mark the archive broken: the entry is skipped,
+/// counted, and it moves on. A `.rar` with an absurd name is still
+/// explored, with one fewer entry and the counter saying so.
 ///
 /// ```
-/// let flojos = norte_vfs_rar::RarLimits { max_entries: 10, ..Default::default() };
-/// assert_eq!(flojos.max_depth, norte_vfs_rar::RarLimits::default().max_depth);
+/// let loose = norte_vfs_rar::RarLimits { max_entries: 10, ..Default::default() };
+/// assert_eq!(loose.max_depth, norte_vfs_rar::RarLimits::default().max_depth);
 /// ```
 #[derive(Debug, Clone, Copy)]
 pub struct RarLimits {
-    /// Tope de entradas indexadas.
+    /// Cap on indexed entries.
     pub max_entries: usize,
-    /// Tope de bytes del nombre completo de una entrada.
+    /// Cap on an entry's full name, in bytes.
     pub max_name_bytes: usize,
-    /// Tope de componentes de path de una entrada.
+    /// Cap on an entry's path components.
     pub max_depth: usize,
 }
 

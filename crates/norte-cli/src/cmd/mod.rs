@@ -1,4 +1,4 @@
-//! Subcomandos de `norte`, un módulo por familia (reparto de `main.rs`).
+//! Subcommands of `norte`, one module per family (split out of `main.rs`).
 
 pub(crate) mod ai;
 pub(crate) mod audit;

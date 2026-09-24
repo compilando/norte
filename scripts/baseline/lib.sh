@@ -1,34 +1,35 @@
 # shellcheck shell=bash
-# Funciones puras del sistema de base (ADR 0112): sin Docker, sin red, sin
-# estado. Las prueba `selftest.sh`; las usan `build.sh`, `smoke.sh` y
+# Pure functions for the baseline system (ADR 0112): no Docker, no network,
+# no state. Tested by `selftest.sh`; used by `build.sh`, `smoke.sh` and
 # `verify.sh`.
 
-# La versión GLIBC_ más alta de una salida de `objdump -T` (stdin), sin
-# prefijo. Nada si no hay ninguna. Siempre sale 0: un binario sin símbolos de
-# glibc no es un error de esta función.
+# The highest GLIBC_ version from an `objdump -T` output (stdin), without the
+# prefix. Nothing if there is none. Always exits 0: a binary with no glibc
+# symbols is not an error for this function.
 glibc_max() {
   { grep -oE 'GLIBC_[0-9]+\.[0-9]+(\.[0-9]+)?' || true; } |
     sed 's/^GLIBC_//' | sort -Vu | tail -n 1
 }
 
-# 0 si $1 <= $2 en orden de versiones (2.3.4 < 2.35).
+# 0 if $1 <= $2 in version order (2.3.4 < 2.35).
 version_le() {
   [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | head -n 1)" = "$1" ]
 }
 
-# 0 si la salida de `--version` ($1) termina en «($2)».
+# 0 if `--version`'s output ($1) ends in "($2)".
 version_matches() {
   [[ "$1" == *"($2)" ]]
 }
 
-# `debian:trixie@sha256:…` → `debian-trixie`: un nombre de fichero por imagen.
+# `debian:trixie@sha256:…` → `debian-trixie`: one file name per image.
 image_slug() {
   local s="${1%%@*}"
   printf '%s\n' "${s//[:\/]/-}"
 }
 
-# SHA256SUMS de todo fichero bajo $1 salvo los que se escriben DESPUÉS (las
-# sumas mismas, el MANIFEST, los humos). Formato de `dist`: `<hash> *<ruta>`.
+# SHA256SUMS of every file under $1 except the ones written AFTERWARD (the
+# sums themselves, the MANIFEST, the smoke tests). `dist`'s format:
+# `<hash> *<path>`.
 manifest_sums() {
   local dir="$1"
   (
@@ -39,36 +40,36 @@ manifest_sums() {
   ) >"$dir/SHA256SUMS"
 }
 
-# 0 si toda suma de $1/SHA256SUMS cuadra.
+# 0 if every sum in $1/SHA256SUMS matches.
 manifest_check_sums() {
   (cd "$1" && sha256sum --quiet --strict -c SHA256SUMS)
 }
 
-# Un problema por línea; nada si el MANIFEST es aceptable.
+# One problem per line; nothing if the MANIFEST is acceptable.
 manifest_problems() {
   local file="$1" floor revision kind path rest b
   floor="$(awk '$1 == "glibc-floor" { print $2 }' "$file")"
   revision="$(awk '$1 == "revision" { print $2 }' "$file")"
-  [ -n "$floor" ] || echo "MANIFEST sin glibc-floor"
-  [ -n "$revision" ] || echo "MANIFEST sin revision"
+  [ -n "$floor" ] || echo "MANIFEST with no glibc-floor"
+  [ -n "$revision" ] || echo "MANIFEST with no revision"
   for b in norte ntc norte-gui; do
-    grep -qE "^glibc [^ ]*/$b " "$file" || echo "MANIFEST sin glibc de $b"
+    grep -qE "^glibc [^ ]*/$b " "$file" || echo "MANIFEST with no glibc for $b"
   done
   while read -r kind path rest; do
     case "$kind" in
       glibc)
         if [ "$rest" != none ] && [ -n "$floor" ] && ! version_le "$rest" "$floor"; then
-          echo "$path pide glibc $rest, por encima del suelo $floor"
+          echo "$path requires glibc $rest, above the $floor floor"
         fi
         ;;
       version)
-        version_matches "$rest" "$revision" || echo "$path dice «$rest», se esperaba ($revision)"
+        version_matches "$rest" "$revision" || echo "$path says «$rest», expected ($revision)"
         ;;
     esac
   done <"$file"
 }
 
-# Las líneas `artefacto imagen` de la matriz sin su `ok artefacto imagen`.
+# The matrix's `artifact image` lines without their `ok artifact image`.
 smoke_missing() {
   local matrix="$1" record="$2" artifact image
   while read -r artifact image; do
@@ -77,8 +78,8 @@ smoke_missing() {
   done <"$matrix"
 }
 
-# El tag de la imagen de construcción: cambia si cambia cualquiera de sus
-# entradas, así que una imagen vieja no se reusa por error.
+# The build image's tag: changes if any of its inputs change, so an old
+# image is not reused by mistake.
 builder_tag() {
   local root="$1"
   printf 'norte-builder:%s\n' "$(cat "$root/scripts/baseline/Dockerfile" \

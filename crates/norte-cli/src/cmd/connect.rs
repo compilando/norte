@@ -1,5 +1,6 @@
-//! `norte connect` (fase 6e) y la resolución de rutas/URLs compartida por el
-//! resto de subcomandos: TOFU, schemes remotos y `VPath` desde un `PathBuf`.
+//! `norte connect` (phase 6e) and the path/URL resolution shared by the
+//! rest of the subcommands: TOFU, remote schemes and `VPath` from a
+//! `PathBuf`.
 
 use std::process::ExitCode;
 
@@ -7,22 +8,22 @@ use anyhow::Context;
 use norte_core::backend::Backend;
 use norte_proto::VPath;
 
-/// Schemes remotos que la CLI enruta por URL. ALLOWLIST explícita: un path
-/// local puede llamarse legalmente `a://b` (o `./x://y`) y debe seguir
-/// siendo un fichero — solo lo que empieza EXACTAMENTE por estos prefijos se
-/// trata como URL remota.
+/// Remote schemes the CLI routes by URL. Explicit ALLOWLIST: a local path
+/// can legally be called `a://b` (or `./x://y`) and must remain a file —
+/// only what starts EXACTLY with these prefixes is treated as a remote
+/// URL.
 const REMOTE_SCHEMES: [&str; 3] = ["sftp://", "ftp://", "s3://"];
 
-/// ¿El arg es una URL de archivo-como-directorio (ADR 0018)? Exige la forma
-/// completa `<formato>+<scheme>://…` con formato de la whitelist de proto
-/// (la reserva normativa garantiza que ningún provider legítimo empieza
-/// así, test abajo): un path local raro tipo `zip+dir/sub://y` sigue
-/// siendo nativo.
+/// Is the arg an archive-as-directory URL (ADR 0018)? Requires the full
+/// `<format>+<scheme>://…` shape with a format from proto's whitelist
+/// (the normative reservation guarantees no legitimate provider starts
+/// this way, test below): an odd local path like `zip+dir/sub://y`
+/// remains native.
 ///
-/// Delegado en `norte_proto::scheme_archive_format` (longest-match, #55) en
-/// vez de reimplementar la gramática con `split_once('+')`: un token puede
-/// contener `+` propio (`tar+gz`), y duplicar la whitelist aquí divergiría
-/// en cuanto proto gane un formato compuesto nuevo.
+/// Delegated to `norte_proto::scheme_archive_format` (longest-match, #55)
+/// instead of reimplementing the grammar with `split_once('+')`: a token
+/// can contain its own `+` (`tar+gz`), and duplicating the whitelist here
+/// would diverge as soon as proto gains a new compound format.
 fn is_archive_url(s: &str) -> bool {
     let Some((scheme, _)) = s.split_once("://") else {
         return false;
@@ -34,23 +35,24 @@ fn is_archive_url(s: &str) -> bool {
     !inner.is_empty() && !inner.contains('/')
 }
 
-/// ¿`s` es una URL que la CLI enruta como remota? Los schemes del core, los
-/// de archivo-como-directorio, y los que declare un provider plugin
-/// INSTALADO (`plugin_schemes`): en cuanto hay quien sirve `webdav://`, un
-/// argumento `webdav://x` deja de ser un fichero local con nombre raro.
-/// Consentido o no — enrutar no concede nada; conectar sigue fail-closed.
+/// Is `s` a URL the CLI routes as remote? The core's schemes, the
+/// archive-as-directory ones, and whatever an INSTALLED provider plugin
+/// declares (`plugin_schemes`): as soon as someone serves `webdav://`, a
+/// `webdav://x` argument stops being a local file with an odd name.
+/// Whether consented or not — routing grants nothing; connecting stays
+/// fail-closed.
 fn is_remote_url(s: &str, plugin_schemes: &[String]) -> bool {
     REMOTE_SCHEMES.iter().any(|p| s.starts_with(p))
         || is_archive_url(s)
         || plugin_schemes.iter().any(|sch| {
             s.strip_prefix(sch.as_str())
-                .is_some_and(|resto| resto.len() > 3 && resto.starts_with("://"))
+                .is_some_and(|rest| rest.len() > 3 && rest.starts_with("://"))
         })
 }
 
-/// Los schemes de los provider plugins instalados bajo el config dir de
-/// este proceso: un `plugin.toml` por plugin, leído UNA vez por proceso y
-/// solo para enrutar (`cp` pregunta dos veces por comando).
+/// The schemes of the provider plugins installed under this process's
+/// config dir: one `plugin.toml` per plugin, read ONCE per process and
+/// only to route (`cp` asks twice per command).
 fn plugin_schemes() -> &'static [String] {
     static SCHEMES: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
     SCHEMES.get_or_init(|| {
@@ -58,22 +60,23 @@ fn plugin_schemes() -> &'static [String] {
     })
 }
 
-/// Un argumento de la línea de órdenes, como `VPath`.
+/// A command-line argument, as a `VPath`.
 ///
-/// Se queda en la CLI a propósito, y no en `norte-frontend` junto a
-/// `goto::parece_ruta`: son DOS gramáticas para dos entradas distintas. El
-/// «ir a» de la TUI y la ventana rechaza la ruta relativa (a dónde lleva no
-/// puede depender del panel) y toma cualquier `x://` como URL; un argumento
-/// de shell es relativo al cwd casi siempre, y `a://b` tiene que seguir
-/// siendo un fichero local salvo que su esquema esté en la allowlist
-/// ([`REMOTE_SCHEMES`], los de archivo y los de plugins instalados). Lo que
-/// sí es del core —rechazar un `user:pass@`, saber si un esquema tiene quien
-/// lo sirva— ya lo hacen `VPath::parse` y el conector; aquí solo se decide si
-/// un argumento es URL o ruta.
+/// Stays in the CLI on purpose, and not in `norte-frontend` next to
+/// `goto::parece_ruta`: they are TWO grammars for two different inputs.
+/// The TUI's and the window's "go to" rejects a relative path (where it
+/// leads cannot depend on the pane) and takes any `x://` as a URL; a
+/// shell argument is almost always relative to the cwd, and `a://b` has
+/// to remain a local file unless its scheme is in the allowlist
+/// ([`REMOTE_SCHEMES`], the archive ones and the installed plugins'). What
+/// IS the core's job — rejecting a `user:pass@`, knowing whether a scheme
+/// has someone serving it — is already done by `VPath::parse` and the
+/// connector; here it is only decided whether an argument is a URL or a
+/// path.
 pub(crate) fn vpath(path: &std::path::Path) -> anyhow::Result<VPath> {
-    // Una URL remota va por el parser wire; todo lo demás es un path NATIVO
-    // local (bytes, jamás forzados a UTF-8 — un arg no-UTF8 no puede ser URL
-    // y cae al camino nativo).
+    // A remote URL goes through the wire parser; everything else is a
+    // NATIVE local path (bytes, never forced to UTF-8 — a non-UTF-8 arg
+    // cannot be a URL and falls to the native path).
     if let Some(s) = path.to_str()
         && is_remote_url(s, plugin_schemes())
     {
@@ -84,10 +87,10 @@ pub(crate) fn vpath(path: &std::path::Path) -> anyhow::Result<VPath> {
         .with_context(|| format!("path no representable: {}", path.display()))
 }
 
-/// Rechaza `user:pass@host` en una URL ANTES de que entre a `VPath::parse`
-/// (que la aceptaría) y por tanto a spans/errores: mensaje ESTÁTICO, sin
-/// ecoar la URL (regla 10). El parser de conexiones la rechazaría después,
-/// pero para entonces ya habría tocado logs.
+/// Rejects `user:pass@host` in a URL BEFORE it enters `VPath::parse`
+/// (which would accept it) and therefore spans/errors: a STATIC message,
+/// without echoing the URL (hard rule 10). The connections parser would
+/// reject it afterward, but by then it would already have touched logs.
 fn reject_inline_password(url: &str) -> anyhow::Result<()> {
     let after_scheme = url.split_once("://").map_or(url, |(_, r)| r);
     let authority = after_scheme.split('/').next().unwrap_or(after_scheme);
@@ -99,11 +102,12 @@ fn reject_inline_password(url: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Flujo TOFU interactivo (ADR 0015 D/G): ante un `Error::HostKeyUnknown`
-/// muestra la huella, pide confirmación por el terminal y, si el usuario
-/// acepta, la registra (el core re-verifica anti-TOCTOU) y devuelve `true`
-/// (reintentar la operación). Errores que no son TOFU → `false` (el caller
-/// reporta el original). Sin terminal NO se confía nada: instrucciones y error.
+/// Interactive TOFU flow (ADR 0015 D/G): faced with an
+/// `Error::HostKeyUnknown` it shows the fingerprint, asks for confirmation
+/// via the terminal and, if the user accepts, records it (the core
+/// re-verifies against TOCTOU) and returns `true` (retry the operation).
+/// Errors that are not TOFU → `false` (the caller reports the original).
+/// With no terminal NOTHING is trusted: instructions and error.
 pub(crate) async fn tofu_confirm(
     backend: &Backend,
     err: &norte_proto::Error,
@@ -140,7 +144,7 @@ pub(crate) async fn tofu_confirm(
         anyhow::bail!(norte_i18n::t("cli-hostkey-noninteractive"));
     }
     eprint!("{} ", norte_i18n::t("cli-hostkey-prompt"));
-    // stdin es bloqueante: fuera del reactor (regla 2).
+    // stdin is blocking: off the reactor (hard rule 2).
     let line = tokio::task::spawn_blocking(|| {
         let mut s = String::new();
         std::io::stdin().read_line(&mut s).map(|_| s)
@@ -162,23 +166,24 @@ pub(crate) async fn tofu_confirm(
     Ok(true)
 }
 
-/// `norte connect <nombre|url>`: establece la conexión (disparando el flujo
-/// TOFU si es el primer contacto) y confirma. El valor duradero es el
-/// registro de la host key + la validación de credenciales.
+/// `norte connect <name|url>`: establishes the connection (triggering the
+/// TOFU flow if it is the first contact) and confirms. The lasting value
+/// is the host key record + the credential validation.
 pub(crate) async fn connect_cmd(
     backend: &Backend,
     target: &str,
     daemon: bool,
 ) -> anyhow::Result<ExitCode> {
     if daemon {
-        // La resolución por nombre lee el config LOCAL; contra un daemon
-        // remoto la semántica cambia — se difiere (mínimo viable, ADR 0015 G).
+        // Resolution by name reads the LOCAL config; against a remote
+        // daemon the semantics change — deferred (minimum viable, ADR
+        // 0015 G).
         anyhow::bail!(norte_i18n::t("cli-connect-daemon-unsupported"));
     }
     let url = if target.contains("://") {
         target.to_string()
     } else {
-        // Nombre de connections.toml → su URL (el core la resuelve).
+        // A connections.toml name → its URL (the core resolves it).
         norte_core::connect::named_url(&norte_core::connect::config_dir(), target)
             .await
             .map_err(|e| anyhow::anyhow!("{e}"))
@@ -187,21 +192,22 @@ pub(crate) async fn connect_cmd(
     reject_inline_password(&url)?;
     let root = VPath::parse(&url)
         .with_context(|| norte_i18n::ta("cli-invalid-url", &[("url", url.as_str())]))?;
-    // #322: el canal del PORQUÉ, tomado ANTES del intento. Este es el comando
-    // que se teclea justo para averiguar por qué una conexión no entra, y
-    // hasta ahora contestaba «permiso denegado» a un secreto vacío, a una
-    // clave equivocada y a un bucket ajeno por igual. Se toma aquí y no en el
-    // arranque porque ningún otro subcomando lo mira.
-    let mut fallos = backend.take_failed();
-    // capabilities fuerza el establecimiento por el camino normal del engine.
+    // #322: the WHY channel, taken BEFORE the attempt. This is the command
+    // typed exactly to find out why a connection does not go through, and
+    // until now it answered "permission denied" for an empty secret, a
+    // wrong key and someone else's bucket alike. It is taken here and not
+    // at startup because no other subcommand looks at it.
+    let mut failures = backend.take_failed();
+    // capabilities forces establishment through the engine's normal path.
     let result = match backend.capabilities(&root).await {
         Err(e) if tofu_confirm(backend, &e).await? => backend.capabilities(&root).await,
         other => other,
     };
     if let Err(e) = result {
-        // El motivo, si el core supo contarlo. Va ANTES del error para que la
-        // última línea siga siendo la categoría, que es lo que un script mira.
-        if let Some(f) = fallos.as_mut().and_then(|rx| rx.try_recv().ok()) {
+        // The reason, if the core managed to tell it. Goes BEFORE the
+        // error so the last line stays the category, which is what a
+        // script looks at.
+        if let Some(f) = failures.as_mut().and_then(|rx| rx.try_recv().ok()) {
             eprintln!(
                 "{}",
                 norte_frontend::banners::failure_line(norte_i18n::active(), &f)
@@ -220,75 +226,77 @@ pub(crate) async fn connect_cmd(
 mod tests {
     use super::*;
 
-    /// Un provider plugin instalado añade su scheme al enrutado de la CLI; sin
-    /// él, el mismo argumento sigue siendo un fichero local (`a://b` es un
-    /// nombre legal). El scheme casa ENTERO: `mem` instalado no convierte
-    /// `memplug://x` en URL.
+    /// An installed provider plugin adds its scheme to the CLI's routing;
+    /// without it, the same argument stays a local file (`a://b` is a
+    /// legal name). The scheme must match WHOLE: an installed `mem` does
+    /// not turn `memplug://x` into a URL.
     #[test]
-    fn un_scheme_de_plugin_instalado_enruta_como_url() {
-        let ninguno: Vec<String> = vec![];
-        assert!(!is_remote_url("memplug://host", &ninguno));
+    fn an_installed_plugin_scheme_routes_as_a_url() {
+        let none: Vec<String> = vec![];
+        assert!(!is_remote_url("memplug://host", &none));
         let memplug = vec!["memplug".to_string()];
         assert!(is_remote_url("memplug://host", &memplug));
         assert!(
             !is_remote_url("memplug://", &memplug),
-            "sin authority no es URL"
+            "no authority is not a URL"
         );
         let mem = vec!["mem".to_string()];
         assert!(
             !is_remote_url("memplug://host", &mem),
-            "prefijo no es scheme"
+            "a prefix is not a scheme"
         );
-        // Los del core y los de archivo siguen entrando sin plugin.
-        assert!(is_remote_url("sftp://h", &ninguno));
-        assert!(is_remote_url("zip+file:///a.zip/!/x", &ninguno));
+        // The core's and the archive ones still get in without a plugin.
+        assert!(is_remote_url("sftp://h", &none));
+        assert!(is_remote_url("zip+file:///a.zip/!/x", &none));
     }
 
-    /// Reserva normativa de ADR 0018: ningún scheme remoto de la allowlist
-    /// puede empezar por `<formato>+` — el registro de formatos manda.
+    /// ADR 0018's normative reservation: no remote scheme in the allowlist
+    /// can start with `<format>+` — the format registry rules.
     #[test]
-    fn remote_schemes_respetan_la_reserva_de_formatos() {
+    fn remote_schemes_respect_the_format_reservation() {
         for scheme in REMOTE_SCHEMES {
             for format in norte_proto::ARCHIVE_FORMATS {
                 assert!(
                     !scheme.starts_with(&format!("{format}+")),
-                    "{scheme} invade el namespace del formato {format}"
+                    "{scheme} invades format {format}'s namespace"
                 );
             }
         }
     }
 
     #[test]
-    fn urls_de_archivo_van_por_el_parser_wire() {
-        let p = vpath(std::path::Path::new("zip+file:///tmp/a.zip/!/x")).expect("parsea");
+    fn archive_urls_go_through_the_wire_parser() {
+        let p = vpath(std::path::Path::new("zip+file:///tmp/a.zip/!/x")).expect("parses");
         assert_eq!(p.scheme(), "zip+file");
-        // Un path local que solo se PARECE (sin `://`) sigue siendo nativo.
-        let p = vpath(std::path::Path::new("zip+file")).expect("nativo");
+        // A local path that only LOOKS like one (no `://`) stays native.
+        let p = vpath(std::path::Path::new("zip+file")).expect("native");
         assert_eq!(p.scheme(), "file");
-        // Password inline en un compuesto remoto: mismo guard que siempre.
-        // Directo contra el guard (el parse TAMBIÉN lo rechaza desde #46,
-        // pero este test protege la defensa en profundidad de la CLI).
+        // Inline password in a remote compound: same guard as always.
+        // Directly against the guard (the parse ALSO rejects it since
+        // #46, but this test protects the CLI's defense in depth).
         assert!(reject_inline_password("tar+sftp://u:pass@h/a.tar/!").is_err());
         assert!(vpath(std::path::Path::new("tar+sftp://u:pass@h/a.tar/!")).is_err());
-        // Paths locales patológicos que se PARECEN: nativos, no URL.
-        for nativo in ["zip+dir/sub://y", "tar+xz", "zip+://x"] {
-            assert!(!is_archive_url(nativo), "{nativo} debe ser nativo");
+        // Pathological local paths that LOOK like one: native, not URL.
+        for native in ["zip+dir/sub://y", "tar+xz", "zip+://x"] {
+            assert!(!is_archive_url(native), "{native} must be native");
         }
     }
 
-    /// #55: `tar+gz` es un TOKEN COMPUESTO en la whitelist de proto —
-    /// `is_archive_url` debe reconocerlo vía `scheme_archive_format`
-    /// (longest-match), no reimplementando la gramática con `split_once('+')`
-    /// (eso dejaría un interior huérfano tipo `gz+file` para casos con más de
-    /// un nivel, y duplica una whitelist que ya vive en proto — regla 8).
+    /// #55: `tar+gz` is a COMPOUND TOKEN in proto's whitelist —
+    /// `is_archive_url` must recognize it via `scheme_archive_format`
+    /// (longest-match), not by reimplementing the grammar with
+    /// `split_once('+')` (that would leave an orphaned interior like
+    /// `gz+file` for cases with more than one level, and duplicates a
+    /// whitelist that already lives in proto — rule 8).
     #[test]
-    fn is_archive_url_reconoce_targz_compuesto() {
+    fn is_archive_url_recognizes_compound_targz() {
         assert!(is_archive_url("tar+gz+file://x"));
         assert!(is_archive_url("tar+gz+sftp://h/a.tgz/!/x"));
-        // #56: anidado multi-capa también enruta por el parser wire.
+        // #56: multi-layer nesting also routes through the wire parser.
         assert!(is_archive_url("zip+tar+file:///b.tar/!/i.zip/!/f"));
-        // El wire completo enruta por el parser y compone el scheme real.
-        let p = vpath(std::path::Path::new("tar+gz+file:///a.tgz/!/x")).expect("parsea");
+        // The whole wire routes through the parser and composes the real
+        // scheme.
+        let p = vpath(std::path::Path::new("tar+gz+file:///a.tgz/!/x")).expect("parses");
         assert_eq!(p.scheme(), "tar+gz+file");
     }
 }

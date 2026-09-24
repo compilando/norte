@@ -1,11 +1,11 @@
-//! El backend REMOTO: los métodos tipados que un frontend usa de verdad.
+//! The REMOTE backend: the typed methods a frontend actually uses.
 //!
-//! Por debajo hay un [`crate::rpc::Client`] y, por encima, la misma superficie
-//! que el backend embebido del core presenta a un frontend. Lo que vive aquí y
-//! no en el `Client` es todo lo que hace falta para que hablar con un daemon
-//! se parezca a llamar a una función: reconexión con resincronización, un
-//! registro de tasks, el enrutado de los lotes de búsqueda/comparación/
-//! sincronización, y el fan-out de eventos de conexión y de aprobaciones.
+//! Underneath there is a [`crate::rpc::Client`] and, above, the same surface
+//! the core's embedded backend presents to a frontend. What lives here and
+//! not in the `Client` is everything it takes for talking to a daemon to
+//! feel like calling a function: reconnection with resync, a task registry,
+//! the routing of search/compare/sync batches, and the fan-out of
+//! connection events and approvals.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -42,28 +42,28 @@ use crate::types::{
     AI_CALL_TIMEOUT, ConnEvent, EntryStream, SyncPlanEvent, Transfer, TransferOptions,
 };
 
-/// Backoff de reconexión (se recorre y se queda en el último).
+/// Reconnection backoff (walked through and staying on the last one).
 const RECONNECT_BACKOFF_MS: &[u64] = &[250, 500, 1000, 2000, 5000];
 
-/// Cuánto vale un permiso de arranque tras un `daemon.going_away`.
+/// How long a start-up permit is worth after a `daemon.going_away`.
 ///
-/// Tiene que cubrir lo que tarda el daemon viejo en SALIR DEL PROCESO —no
-/// en contestar—, porque hasta entonces retiene el lock exclusivo de
-/// `journal.db` y el reemplazo aborta al abrirlo. Treinta segundos son de
-/// sobra para eso, y siguen siendo poco para lo que la regla protege: que
-/// un daemon que el usuario paró no resucite más tarde.
+/// It has to cover how long the old daemon takes to LEAVE THE PROCESS — not
+/// to answer — because until then it holds `journal.db`'s exclusive lock and
+/// the replacement aborts on opening it. Thirty seconds are plenty for that,
+/// and still little for what the rule protects: that a daemon the user
+/// stopped does not resurrect later.
 const HANDOVER_SPAWN_WINDOW: Duration = Duration::from_secs(30);
 
-/// ¿Sigue vivo el permiso de arranque?
+/// Is the start-up permit still alive?
 ///
-/// Función aparte y pura para poder probar la caducidad sin gastar treinta
-/// segundos de reloj.
-fn spawn_allowed(hasta: Option<std::time::Instant>, ahora: std::time::Instant) -> bool {
-    hasta.is_some_and(|d| ahora < d)
+/// A separate, pure function so its expiry can be tested without spending
+/// thirty seconds of wall clock.
+fn spawn_allowed(until: Option<std::time::Instant>, now: std::time::Instant) -> bool {
+    until.is_some_and(|d| now < d)
 }
 
-// `derive(Default)` exigiría `T: Default`, que un lote no tiene por qué
-// ser: el mapa vacío no depende del tipo del lote.
+// `derive(Default)` would require `T: Default`, which a batch has no reason
+// to be: the empty map does not depend on the batch's type.
 impl<T> Default for BatchRoutes<T> {
     fn default() -> Self {
         Self {
@@ -75,19 +75,19 @@ impl<T> Default for BatchRoutes<T> {
 }
 
 impl<T> BatchRoutes<T> {
-    /// Lotes pendientes retenidos en total (todos los `task_id`).
+    /// Pending batches held in total (across all `task_id`s).
     fn pending_len(&self) -> usize {
         self.pending.values().map(Vec::len).sum()
     }
 
-    /// Recuerda que `id` llegó a terminal (acotado: un backstop borra todo
-    /// si crece sin límite, jamás memoria ilimitada ante un daemon hostil).
-    /// Devuelve `true` solo en la INSERCIÓN nueva: el caller agenda la
-    /// retirada una única vez, sin duplicarla ante terminales repetidos
-    /// (bomba + resync de `task.list`). El set SOLO acumula terminales del
-    /// KIND de este feed (ver `route`), así que el tope 256 es realista
-    /// (harían falta 256 feeds concurrentes para que el `clear` borre una
-    /// marca viva).
+    /// Remembers that `id` reached its terminal (bounded: a backstop clears
+    /// everything if it grows unbounded, never unlimited memory against a
+    /// hostile daemon). Returns `true` only on the NEW insertion: the caller
+    /// schedules the removal exactly once, without duplicating it on
+    /// repeated terminals (the pump + a `task.list` resync). The set ONLY
+    /// accumulates terminals of this feed's KIND (see `route`), so the 256
+    /// cap is realistic (it would take 256 concurrent feeds for `clear` to
+    /// erase a live mark).
     fn mark_terminated(&mut self, id: u64) -> bool {
         if self.terminated.len() >= 256 {
             self.terminated.clear();
@@ -95,7 +95,7 @@ impl<T> BatchRoutes<T> {
         self.terminated.insert(id)
     }
 
-    /// Suelta todo (reconexión): los `rx` en vuelo se cierran.
+    /// Drops everything (reconnection): the `rx`s in flight close.
     fn clear(&mut self) {
         self.routes.clear();
         self.pending.clear();
@@ -105,140 +105,146 @@ impl<T> BatchRoutes<T> {
 
 struct Inner {
     socket: PathBuf,
-    /// Comando de autoarranque (`argv[0]` + args); `None` = solo connect.
+    /// Auto-start command (`argv[0]` + args); `None` = connect only.
     spawn_cmd: Option<Vec<std::ffi::OsString>>,
     client_info: ClientInfo,
-    /// Sesión de agente declarada en el handshake, o `None` para una
-    /// conexión humana. Vive AQUÍ y no solo en el `connect` porque
-    /// `establish` corre también en cada RECONEXIÓN: un backend de agente
-    /// que reconectara sin ella volvería como `Actor::User` — el actor se
-    /// blanquearía solo, en silencio, al primer corte del daemon.
+    /// Agent session declared in the handshake, or `None` for a human
+    /// connection. Lives HERE and not only in `connect` because
+    /// `establish` also runs on every RECONNECTION: an agent backend that
+    /// reconnected without it would come back as `Actor::User` — the actor
+    /// would whiten itself out silently on the daemon's first disconnect.
     agent_session: Option<String>,
-    /// El daemon dijo que venía un RELEVO (`daemon.going_away` con
-    /// `reconnect: true`), así que la próxima reconexión puede arrancarlo.
+    /// The daemon said a HANDOFF was coming (`daemon.going_away` with
+    /// `reconnect: true`), so the next reconnection may start it.
     ///
-    /// Existe porque un relevo y una parada son la MISMA conexión cerrada
-    /// vistas desde aquí, y la respuesta correcta es la contraria: sin esta
-    /// señal, reconectar siempre resucitaría un daemon que el usuario acaba
-    /// de parar, y no reconectar nunca dejaría la sesión muerta tras una
-    /// actualización.
+    /// Exists because a handoff and a stop are the SAME closed connection
+    /// seen from here, and the correct response is the opposite one:
+    /// without this signal, reconnecting would always resurrect a daemon
+    /// the user just stopped, and never reconnecting would leave the
+    /// session dead after an update.
     ///
-    /// **Caduca por TIEMPO, no por intentos**, y la diferencia es la que hay
-    /// entre que el relevo funcione y que no.
+    /// **Expires by TIME, not by attempts**, and that difference is the one
+    /// between the handoff working and not.
     ///
-    /// La primera versión lo gastaba en el primer intento de reconexión,
-    /// que llega a los 250 ms. Para entonces el daemon viejo TODAVÍA no ha
-    /// salido del proceso, y con él retiene el lock exclusivo de
-    /// `journal.db` — que es lo primero que abre el reemplazo, y aborta si
-    /// no puede. Así que el relevo moría en ese lock, el permiso se iba con
-    /// el intento fallido, y ningún intento posterior volvía a arrancar
-    /// nada: sesión muerta para siempre tras una actualización rutinaria,
-    /// que es exactamente el fallo que esta feature existe para evitar.
-    /// Lo encontró la revisión de seguridad de esta fase.
+    /// The first version spent it on the first reconnection attempt, which
+    /// arrives at 250ms. By then the old daemon has STILL not left the
+    /// process, and with it holds `journal.db`'s exclusive lock — the first
+    /// thing the replacement opens, and it aborts if it cannot. So the
+    /// handoff died on that lock, the permit went with the failed attempt,
+    /// and no later attempt ever started anything again: a session dead
+    /// forever after a routine update, which is exactly the failure this
+    /// feature exists to avoid. This phase's security review found it.
     ///
-    /// Lo que la regla de no-resucitar quiere es que la licencia no
-    /// sobreviva «hasta la semana que viene», y eso es una cota de TIEMPO.
-    /// Dentro de la ventana se arranca tantas veces como haga falta;
-    /// pasada, «el daemon no está» vuelve a significar lo de siempre.
+    /// What the no-resurrection rule wants is that the license does not
+    /// survive "until next week", and that is a TIME bound. Within the
+    /// window it starts as many times as needed; once past, "the daemon is
+    /// not there" goes back to meaning what it always meant.
     handover_until: Mutex<Option<std::time::Instant>>,
-    /// La versión de protocolo que el peer declaró en el ÚLTIMO handshake
-    /// (#294). `None` = todavía no se ha conectado nunca.
+    /// The protocol version the peer declared in the LAST handshake (#294).
+    /// `None` = it has never connected yet.
     ///
-    /// Existe porque un cliente no podía saber con qué habla, y eso deja sin
-    /// defensa las degradaciones que son seguras solo por accidente: manda
-    /// `expected_digest` (#282), un daemon 0.52 lo ignora como manda ADR 0004,
-    /// concede sin comprobar, y nada se lo dice. Un `InitializeResult` que se
-    /// tira es una respuesta que ya se pagó.
+    /// Exists because a client could not know what it was talking to, and
+    /// that leaves undefended the degradations that are only safe by
+    /// accident: it sends `expected_digest` (#282), a 0.52 daemon ignores
+    /// it as ADR 0004 mandates, grants without checking, and nothing tells
+    /// it. An `InitializeResult` that gets thrown away is a response
+    /// already paid for.
     ///
-    /// Se reescribe en CADA reconexión, porque el daemon del otro lado puede
-    /// ser otro: un relevo (`daemon.going_away { reconnect: true }`) es
-    /// exactamente el caso de una versión distinta al mismo socket.
+    /// Rewritten on EVERY reconnection, because the daemon on the other end
+    /// can be a different one: a handoff (`daemon.going_away { reconnect:
+    /// true }`) is exactly the case of a different version on the same
+    /// socket.
     peer_version: Mutex<Option<String>>,
     client: tokio::sync::RwLock<Option<Arc<Client>>>,
     watches: Mutex<HashMap<u64, watch::Sender<TaskProgress>>>,
-    /// Desenlaces vistos SIN watch receptor (el broadcast terminal
-    /// puede adelantar a la response del método que creó la task):
-    /// `own_task` los consulta para no esperar un progreso que ya pasó.
+    /// Outcomes seen with NO watch receiver (the terminal broadcast can get
+    /// ahead of the response of the method that created the task):
+    /// `own_task` consults them so as not to wait on a progress that
+    /// already passed.
     finished: Mutex<std::collections::VecDeque<TaskProgress>>,
     foreign_tx: mpsc::UnboundedSender<RemoteTask>,
     events_tx: mpsc::UnboundedSender<ConnEvent>,
-    /// Aprobaciones de policy hacia el frontend (M3-3b T5): las notifs
-    /// `policy.approval_required` de la bomba + el resync de
-    /// `policy.pending` al (re)conectar.
+    /// Policy approvals toward the frontend (M3-3b T5): the pump's
+    /// `policy.approval_required` notifications + the `policy.pending`
+    /// resync on (re)connect.
     approvals_tx: mpsc::UnboundedSender<PolicyApprovalRequired>,
-    /// Avisos `connection.degraded` (#44) hacia el frontend: cada notif de
-    /// la bomba se reenvía por aquí (mismo patrón que `approvals_tx`).
+    /// `connection.degraded` warnings (#44) toward the frontend: every
+    /// notification from the pump is relayed here (same pattern as
+    /// `approvals_tx`).
     degraded_tx: mpsc::UnboundedSender<ConnectionDegraded>,
-    /// Fallos `connection.failed` (#322) hacia el frontend: por qué NO se
-    /// pudo conectar. Mismo canal de un solo consumidor que `degraded`.
+    /// `connection.failed` failures (#322) toward the frontend: why it
+    /// could NOT connect. Same single-consumer channel as `degraded`.
     failed_tx: mpsc::UnboundedSender<ConnectionFailed>,
-    /// Avisos `plugin.notice` (0.69.0, ADR 0100) hacia el frontend: la frase
-    /// de un hook, o que el daemon apagó los hooks de un plugin. Mismo canal
-    /// de un solo consumidor que `failed`.
+    /// `plugin.notice` warnings (0.69.0, ADR 0100) toward the frontend: a
+    /// hook's sentence, or that the daemon turned off a plugin's hooks.
+    /// Same single-consumer channel as `failed`.
     notices_tx: mpsc::UnboundedSender<PluginNotice>,
-    /// `approval_id`s ya entregados al frontend: la entrega del daemon es
-    /// at-least-once (broadcast + resync pueden solapar; cada reconexión
-    /// re-lista pendientes) y un prompt de SEGURIDAD duplicado confunde
-    /// (MAJOR-1 del rust-reviewer). Dedup best-effort acotado.
+    /// `approval_id`s already delivered to the frontend: the daemon's
+    /// delivery is at-least-once (broadcast + resync can overlap; every
+    /// reconnection re-lists pending ones) and a duplicate SECURITY prompt
+    /// is confusing (rust-reviewer MAJOR-1). Bounded best-effort dedup.
     seen_approvals: Mutex<std::collections::HashSet<u64>>,
-    /// Enrutado de los lotes de `search.hits` por `task_id` (live search).
-    /// Compartido por TODOS los clones vía `Inner`: es enrutado (no un
-    /// canal one-shot `take_*`), así que una búsqueda lanzada por cualquier
-    /// clon recibe sus hits por la bomba única.
+    /// Routing of `search.hits` batches by `task_id` (live search). Shared
+    /// by ALL clones via `Inner`: it is routed (not a one-shot `take_*`
+    /// channel), so a search launched by any clone receives its hits via
+    /// the single pump.
     search_routes: Mutex<BatchRoutes<SearchHits>>,
-    /// Lo mismo para las `compare.rows` de una `fs.compare` (0.39.0). Mapa
-    /// SEPARADO y no uno compartido: los `task_id` de dos feeds distintos
-    /// no colisionan, pero un mapa único obligaría a un lote-suma en el
-    /// canal y el frontend tendría que filtrar lo que no pidió.
+    /// The same for an `fs.compare`'s `compare.rows` (0.39.0). A SEPARATE
+    /// map and not a shared one: the `task_id`s of two different feeds do
+    /// not collide, but a single map would force a sum-type batch in the
+    /// channel and the frontend would have to filter out what it did not
+    /// ask for.
     compare_routes: Mutex<BatchRoutes<CompareRowsBatch>>,
-    /// Y lo mismo para `sync.plan` (0.40.0), con una diferencia: los DOS
-    /// eventos del plan —`sync.steps` y el `sync.plan_done` que lo cierra—
-    /// viajan por UN canal, igual que en el daemon, porque el orden entre
-    /// ellos es normativo. Con dos mapas ese orden dependería de cómo el
-    /// runtime despierta dos receptores; con uno es la cola.
+    /// And the same for `sync.plan` (0.40.0), with one difference: the
+    /// plan's TWO events — `sync.steps` and the `sync.plan_done` that
+    /// closes it — travel over ONE channel, same as in the daemon, because
+    /// the order between them is normative. With two maps that order would
+    /// depend on how the runtime wakes two receivers; with one it is the
+    /// queue.
     sync_routes: Mutex<BatchRoutes<SyncPlanEvent>>,
-    /// La identidad OPACA de los directorios que este cliente ha LISTADO
-    /// (#295, ADR 0073), para poder decir al copiar «el destino era ESE».
+    /// The OPAQUE identity of the directories this client has LISTED (#295,
+    /// ADR 0073), to be able to say, on copying, "the destination was
+    /// THAT one".
     ///
-    /// Vive en `Inner` y no por instancia: quien lista es el panel y quien
-    /// copia puede ser otro clon del mismo backend. Y se guarda AQUÍ, no en
-    /// el frontend, para que un cliente cualquiera —la TUI, la ventana, el
-    /// CLI— gane la comprobación sin escribir una línea.
+    /// Lives in `Inner` and not per instance: whoever lists is the pane and
+    /// whoever copies can be another clone of the same backend. And it is
+    /// saved HERE, not in the frontend, so any client — the TUI, the
+    /// window, the CLI — gets the check without writing a line.
     ///
-    /// Acotado y best-effort: son directorios que un humano tiene abiertos,
-    /// o sea unidades. Perder uno cuesta la comprobación de esa copia, jamás
-    /// la copia.
+    /// Bounded and best-effort: these are directories a human has open, i.e.
+    /// units. Losing one costs that copy's check, never the copy.
     anchors: Mutex<AnchorCache>,
 }
 
-/// Anclas de directorio retenidas, con tope y orden de llegada (#295).
+/// Retained directory anchors, with a cap and arrival order (#295).
 ///
-/// Un mapa a secas crecería con cada directorio visitado en una sesión larga.
-/// El tope es de escala humana: los paneles abiertos, su historia reciente y
-/// poco más.
+/// A bare map would grow with every directory visited in a long session.
+/// The cap is human-scale: the open panes, their recent history and little
+/// more.
 #[derive(Debug, Default)]
 struct AnchorCache {
     by_dir: HashMap<VPath, norte_proto::DirAnchor>,
     order: std::collections::VecDeque<VPath>,
 }
 
-/// Cuántos directorios se recuerdan a la vez.
+/// How many directories are remembered at once.
 const ANCHORS_MAX: usize = 64;
 
 impl AnchorCache {
-    /// Recuerda (o refresca) el ancla de `dir`.
+    /// Remembers (or refreshes) `dir`'s anchor.
     ///
-    /// `None` BORRA la que hubiera, y eso es deliberado: un listado que ya no
-    /// trae ancla —porque el destino dejó de saber darla, o porque se reconectó
-    /// contra un daemon 0.53— no puede dejar viva la de antes. Una copia que
-    /// mandara un ancla vieja se rechazaría a sí misma sin motivo.
+    /// `None` DELETES whatever there was, and that is deliberate: a listing
+    /// that no longer brings an anchor — because the destination stopped
+    /// being able to give one, or because it reconnected against a 0.53
+    /// daemon — must not leave the old one alive. A copy that sent an old
+    /// anchor would reject itself for no reason.
     ///
-    /// El desalojo es **LRU y no FIFO** (#301): refrescar mueve el directorio
-    /// al final de la cola. Con FIFO, el directorio que el humano tiene abierto
-    /// se desalojaba en cuanto pasaban `ANCHORS_MAX` directorios DISTINTOS por
-    /// la conexión —el árbol lateral desplegado, una búsqueda— por mucho que se
-    /// estuviera relistando cada segundo, y la comprobación de la siguiente
-    /// copia desaparecía sin que nadie lo dijera.
+    /// Eviction is **LRU, not FIFO** (#301): refreshing moves the directory
+    /// to the back of the queue. With FIFO, the directory a human has open
+    /// got evicted as soon as `ANCHORS_MAX` DIFFERENT directories passed
+    /// through the connection — the side tree expanded, a search — no
+    /// matter that it was being relisted every second, and the next copy's
+    /// check disappeared without anyone saying so.
     fn remember(&mut self, dir: &VPath, anchor: Option<norte_proto::DirAnchor>) {
         let Some(anchor) = anchor else {
             self.by_dir.remove(dir);
@@ -250,8 +256,8 @@ impl AnchorCache {
         }
         self.order.push_back(dir.clone());
         while self.order.len() > ANCHORS_MAX {
-            if let Some(viejo) = self.order.pop_front() {
-                self.by_dir.remove(&viejo);
+            if let Some(old) = self.order.pop_front() {
+                self.by_dir.remove(&old);
             }
         }
     }
@@ -262,15 +268,15 @@ impl AnchorCache {
 }
 
 impl Inner {
-    /// Entrega una aprobación al frontend UNA sola vez por `approval_id`
-    /// (la fuente es at-least-once: broadcast + resync de cada
-    /// reconexión). El set se poda entero al tope — dedup best-effort
-    /// (escala humana), jamás memoria sin límite.
+    /// Delivers an approval to the frontend exactly ONCE per `approval_id`
+    /// (the source is at-least-once: broadcast + resync on every
+    /// reconnection). The set is pruned entirely at the cap — best-effort
+    /// dedup (human scale), never unbounded memory.
     fn push_approval(&self, req: PolicyApprovalRequired) {
         let mut seen = self
             .seen_approvals
             .lock()
-            .expect("seen_approvals lock sano");
+            .expect("seen_approvals lock is sound");
         if seen.len() >= 1024 {
             seen.clear();
         }
@@ -279,71 +285,70 @@ impl Inner {
         }
     }
 
-    /// Encola un aviso `connection.degraded` (#44) hacia el frontend.
+    /// Queues a `connection.degraded` warning (#44) toward the frontend.
     fn push_degraded(&self, d: ConnectionDegraded) {
         let _ = self.degraded_tx.send(d);
     }
 
-    /// Encola un fallo `connection.failed` (#322) hacia el frontend.
+    /// Queues a `connection.failed` failure (#322) toward the frontend.
     fn push_failed(&self, f: ConnectionFailed) {
         let _ = self.failed_tx.send(f);
     }
 
-    /// Encola un aviso `plugin.notice` (0.69.0, ADR 0100) hacia el frontend.
+    /// Queues a `plugin.notice` warning (0.69.0, ADR 0100) toward the
+    /// frontend.
     fn push_notice(&self, n: PluginNotice) {
         let _ = self.notices_tx.send(n);
     }
 
-    /// Retiene el ancla del directorio recién listado (#295).
-    ///
-    /// Un lock envenenado se traga sin ruido, y es la respuesta correcta: lo
-    /// que se pierde es la COMPROBACIÓN de una copia, nunca la copia. Hacerlo
-    /// panicar convertiría un fallo de otro hilo en la muerte del listado.
+    /// panicking would turn another thread's failure into the listing's
+    /// death.
     fn remember_anchor(&self, dir: &VPath, anchor: Option<norte_proto::DirAnchor>) {
         if let Ok(mut cache) = self.anchors.lock() {
             cache.remember(dir, anchor);
         }
     }
 
-    /// El ancla retenida de `dir`, si este cliente lo listó.
+    /// `dir`'s retained anchor, if this client listed it.
     fn anchor_for(&self, dir: &VPath) -> Option<norte_proto::DirAnchor> {
         self.anchors.lock().ok()?.get(dir)
     }
 }
 
-/// Conexión (auto-reconectante) con el daemon. Clonable: todos los
-/// clones comparten conexión y watches (`inner`), pero los canales
-/// one-shot de abajo son POR INSTANCIA — ver el `impl Clone` manual.
+/// (Auto-reconnecting) connection to the daemon. Clonable: every clone
+/// shares the connection and watches (`inner`), but the one-shot channels
+/// below are PER INSTANCE — see the manual `impl Clone`.
 pub struct RemoteBackend {
     inner: Arc<Inner>,
-    /// Canal de tasks FORÁNEAS. `Some` solo en la instancia que aún no
-    /// lo tomó; un clon nace con `None` (no puede robárselo al dueño).
+    /// FOREIGN tasks channel. `Some` only in the instance that has not
+    /// taken it yet; a clone is born with `None` (it cannot steal it from
+    /// the owner).
     foreign_rx: Mutex<Option<mpsc::UnboundedReceiver<RemoteTask>>>,
-    /// Canal de eventos de conexión. Mismo invariante que `foreign_rx`.
+    /// Connection events channel. Same invariant as `foreign_rx`.
     events_rx: Mutex<Option<mpsc::UnboundedReceiver<ConnEvent>>>,
-    /// Canal de aprobaciones de policy. Mismo invariante que `foreign_rx`.
+    /// Policy approvals channel. Same invariant as `foreign_rx`.
     approvals_rx: Mutex<Option<mpsc::UnboundedReceiver<PolicyApprovalRequired>>>,
-    /// Canal de avisos `connection.degraded` (#44). Mismo invariante que
+    /// `connection.degraded` warnings channel (#44). Same invariant as
     /// `foreign_rx`.
     degraded_rx: Mutex<Option<mpsc::UnboundedReceiver<ConnectionDegraded>>>,
-    /// Canal de fallos `connection.failed` (#322). Mismo invariante que
-    /// `degraded_rx`: un solo consumidor se lo lleva.
+    /// `connection.failed` failures channel (#322). Same invariant as
+    /// `degraded_rx`: a single consumer takes it.
     failed_rx: Mutex<Option<mpsc::UnboundedReceiver<ConnectionFailed>>>,
-    /// Canal de avisos `plugin.notice` (0.69.0). Mismo invariante que
+    /// `plugin.notice` warnings channel (0.69.0). Same invariant as
     /// `failed_rx`.
     notices_rx: Mutex<Option<mpsc::UnboundedReceiver<PluginNotice>>>,
 }
 
 impl Clone for RemoteBackend {
-    /// Clon ESTRUCTURAL (no derive): comparte `inner` (conexión, watches,
-    /// los `_tx`) vía `Arc`, pero los receptores nacen `None`.
-    /// Antes vivían dentro de `Inner` (compartido) y un clon podía
-    /// `take_*` y robárselos al dueño real (p. ej. la TUI) — el `ask` de
-    /// policy caducaría a `deny` en silencio sin que nadie lo viera
-    /// (MAJOR del rust-reviewer sobre e408373). Los usos INTERNOS que
-    /// clonan `RemoteBackend` (`TaskCanceller::Remote`, `PageState` del
-    /// `list_stream`, etc.) jamás llaman `take_*`, así que `None` es
-    /// también el valor correcto para ellos.
+    /// STRUCTURAL clone (not derived): shares `inner` (connection, watches,
+    /// the `_tx`s) via `Arc`, but the receivers are born `None`.
+    /// They used to live inside `Inner` (shared) and a clone could
+    /// `take_*` and steal them from the real owner (e.g. the TUI) — a
+    /// policy `ask` would expire to `deny` silently with nobody seeing it
+    /// (rust-reviewer MAJOR over e408373). The INTERNAL uses that clone
+    /// `RemoteBackend` (`TaskCanceller::Remote`, `list_stream`'s
+    /// `PageState`, etc.) never call `take_*`, so `None` is also the
+    /// correct value for them.
     fn clone(&self) -> Self {
         Self {
             inner: Arc::clone(&self.inner),
@@ -358,12 +363,12 @@ impl Clone for RemoteBackend {
 }
 
 impl RemoteBackend {
-    /// Conecta (arrancando el daemon si `spawn_cmd` lo permite),
-    /// negocia `initialize` y resincroniza con `task.list`.
+    /// Connects (starting the daemon if `spawn_cmd` allows it), negotiates
+    /// `initialize` and resyncs with `task.list`.
     ///
     /// # Errors
-    /// Taxonomía: `ProviderUnavailable` si no hay daemon alcanzable;
-    /// `Internal` ante un server incompatible.
+    /// Taxonomy: `ProviderUnavailable` if no daemon is reachable;
+    /// `Internal` against an incompatible server.
     pub async fn connect(
         socket: PathBuf,
         spawn_cmd: Option<Vec<std::ffi::OsString>>,
@@ -374,21 +379,22 @@ impl RemoteBackend {
             .map_err(crate::remote::calls::to_taxonomy)
     }
 
-    /// Como [`Self::connect`], pero devolviendo el error CRUDO del cliente.
+    /// Like [`Self::connect`], but returning the client's RAW error.
     ///
-    /// Existe por lo que la taxonomía del wire no puede llevar: cuando el
-    /// daemon arranca y MUERE —un journal que no se puede migrar, un socket
-    /// de otro usuario—, la única frase que dice qué hacer la escribe él por
-    /// `stderr`, y `Error::ProviderUnavailable` no tiene dónde ponerla.
+    /// Exists for what the wire's taxonomy cannot carry: when the daemon
+    /// starts and DIES — a journal that cannot be migrated, another user's
+    /// socket — the only sentence saying what to do is the one it writes
+    /// to `stderr`, and `Error::ProviderUnavailable` has nowhere to put it.
     ///
-    /// Un frontend que ARRANCA el daemon debería usar esta: es el único que
-    /// puede enseñar esa frase, porque es quien lo parió. Para todo lo demás,
-    /// [`Self::connect`] y su taxonomía.
+    /// A frontend that STARTS the daemon should use this one: it is the
+    /// only one that can show that sentence, because it is the one that
+    /// spawned it. For everything else, [`Self::connect`] and its
+    /// taxonomy.
     ///
     /// # Errors
-    /// [`ClientError::SpawnFailed`] si el daemon arrancó y murió;
-    /// [`ClientError::SpawnTimeout`] si sigue vivo y no acepta; lo que dé el
-    /// handshake en otro caso.
+    /// [`ClientError::SpawnFailed`] if the daemon started and died;
+    /// [`ClientError::SpawnTimeout`] if it is still alive and does not
+    /// accept; whatever the handshake gives otherwise.
     pub async fn connect_detallado(
         socket: PathBuf,
         spawn_cmd: Option<Vec<std::ffi::OsString>>,
@@ -397,24 +403,24 @@ impl RemoteBackend {
         Self::connect_inner(socket, spawn_cmd, client_info, None).await
     }
 
-    /// Como [`Self::connect`], pero declarando `agent_session`: la
-    /// conexión queda ligada al actor de agente que el daemon gobierna
-    /// (`Actor::Agent { session }`), y por tanto al gate de agente —
-    /// lecturas y mutaciones exigen un scope vivo de esa sesión.
+    /// Like [`Self::connect`], but declaring `agent_session`: the
+    /// connection ends up bound to the agent actor the daemon governs
+    /// (`Actor::Agent { session }`), and therefore to the agent gate —
+    /// reads and mutations require a live scope from that session.
     ///
-    /// Existe para el puente MCP, que necesita un brazo capaz de drenar
-    /// notificaciones (`fs.compare` y `sync.plan` entregan por ahí) sin
-    /// dejar de ser el mismo actor que su conexión de tools. Los scopes de
-    /// policy se guardan por SESIÓN (`ScopeRegistry::grant(session, …)`),
-    /// no por conexión, así que los permisos concedidos valen igual en las
-    /// dos. Lo que NO se comparte es el `conn_id`: un plan retenido para
-    /// esta conexión no es redimible desde la otra.
+    /// Exists for the MCP bridge, which needs an arm able to drain
+    /// notifications (`fs.compare` and `sync.plan` deliver through there)
+    /// without stopping being the same actor as its tools connection.
+    /// Policy scopes are stored PER SESSION (`ScopeRegistry::grant(session,
+    /// …)`), not per connection, so granted permissions hold equally in
+    /// both. What is NOT shared is the `conn_id`: a plan held for this
+    /// connection is not redeemable from the other one.
     ///
-    /// Sin `spawn_cmd` a propósito: un agente no arranca daemons. Si no
-    /// hay uno escuchando, esto falla.
+    /// No `spawn_cmd` on purpose: an agent does not start daemons. If none
+    /// is listening, this fails.
     ///
     /// # Errors
-    /// Los de [`Self::connect`], más sesión rechazada por el daemon
+    /// Those of [`Self::connect`], plus a session rejected by the daemon
     /// (charset `[A-Za-z0-9._-]`, 1..=64).
     pub async fn connect_as_agent(
         socket: PathBuf,
@@ -426,12 +432,12 @@ impl RemoteBackend {
             .map_err(crate::remote::calls::to_taxonomy)
     }
 
-    /// El cuerpo compartido de [`Self::connect`] y
-    /// [`Self::connect_as_agent`]: un solo handshake, una sola bomba.
+    /// The shared body of [`Self::connect`] and [`Self::connect_as_agent`]:
+    /// one single handshake, one single pump.
     ///
-    /// Devuelve el error CRUDO y traduce cada llamante: lo que un daemon dice
-    /// al morir no cabe en la taxonomía, y traducir aquí lo perdería para
-    /// todos (ver [`Self::connect_detallado`]).
+    /// Returns the RAW error and lets each caller translate: what a daemon
+    /// says while dying does not fit the taxonomy, and translating here
+    /// would lose it for everyone (see [`Self::connect_detallado`]).
     async fn connect_inner(
         socket: PathBuf,
         spawn_cmd: Option<Vec<std::ffi::OsString>>,
@@ -474,21 +480,21 @@ impl RemoteBackend {
             failed_rx: Mutex::new(Some(failed_rx)),
             notices_rx: Mutex::new(Some(notices_rx)),
         };
-        // La 1ª conexión SÍ arranca el daemon (spawn); las reconexiones
-        // NO (M3 del rust-reviewer: reconectar jamás debe resucitar un
-        // daemon que el usuario acaba de parar).
+        // The 1st connection DOES start the daemon (spawn); reconnections
+        // do NOT (rust-reviewer M3: reconnecting must never resurrect a
+        // daemon the user just stopped).
         let notifications = backend.establish(true).await?;
-        // UNA task de bomba para toda la vida del backend. Sostiene un
-        // Weak (no un Arc): cuando el último `RemoteBackend` externo se
-        // suelta, `Inner` se libera y la bomba sale sola — sin ciclo de
-        // Arc ni reconexión eterna (M2 del rust-reviewer).
+        // ONE pump task for the backend's whole life. Holds a Weak (not an
+        // Arc): when the last external `RemoteBackend` is dropped, `Inner`
+        // is freed and the pump exits on its own — no Arc cycle, no eternal
+        // reconnection (rust-reviewer M2).
         let weak = Arc::downgrade(&backend.inner);
         tokio::spawn(async move { pump_loop(weak, notifications).await });
         Ok(backend)
     }
 
-    /// Una conexión nueva: connect(+spawn si `spawn`) → initialize →
-    /// resync → reconciliación. Devuelve el receptor de notificaciones.
+    /// A new connection: connect(+spawn if `spawn`) → initialize → resync →
+    /// reconciliation. Returns the notification receiver.
     async fn establish(
         &self,
         spawn: bool,
@@ -505,9 +511,9 @@ impl RemoteBackend {
             }
             _ => Client::connect(&self.inner.socket).await?,
         };
-        // El actor se re-declara en CADA conexión: el daemon lo fija en
-        // el handshake y no lo recuerda de la anterior.
-        let hola = match self.inner.agent_session.clone() {
+        // The actor is re-declared on EVERY connection: the daemon sets it
+        // in the handshake and does not remember it from the previous one.
+        let hello = match self.inner.agent_session.clone() {
             Some(session) => {
                 client
                     .initialize_as_agent(self.inner.client_info.clone(), session)
@@ -515,28 +521,29 @@ impl RemoteBackend {
             }
             None => client.initialize(self.inner.client_info.clone()).await?,
         };
-        // La versión del peer se RETIENE (#294): sin ella, un cliente no puede
-        // saber que la comprobación que acaba de pedir no se hizo. Se
-        // reescribe en cada reconexión porque al otro lado puede haber otro
-        // daemon — que es exactamente lo que un relevo significa.
+        // The peer's version is RETAINED (#294): without it, a client
+        // cannot know that the check it just asked for was not done.
+        // Rewritten on every reconnection because there may be a different
+        // daemon on the other side — which is exactly what a handoff
+        // means.
         *self
             .inner
             .peer_version
             .lock()
-            .expect("peer_version lock sano") = Some(hola.protocol_version.clone());
+            .expect("peer_version lock is sound") = Some(hello.protocol_version.clone());
         let notifications = client.take_notifications();
         let client = Arc::new(client);
         *self.inner.client.write().await = Some(Arc::clone(&client));
 
-        // A partir de AQUÍ, un fallo tiene que dejar el hueco vacío
-        // (#181). Publicar el cliente antes del resync es correcto —el
-        // resync se hace CON él—, pero si el resync falla y el cliente se
-        // queda puesto, el llamante habla por una conexión cuyo receptor
-        // de notificaciones acaba de morir con este marco: nada se
-        // enruta, `task.progress` incluido, y un `TaskRef::join()` —que
-        // no tiene plazo— espera para siempre un terminal que ya no puede
-        // llegar. Con el hueco a `None`, el siguiente intento empieza
-        // limpio y el llamante recibe un error en vez de un silencio.
+        // From HERE on, a failure has to leave the slot empty (#181).
+        // Publishing the client before the resync is correct — the resync
+        // is done WITH it — but if the resync fails and the client is left
+        // set, the caller talks over a connection whose notification
+        // receiver just died with this frame: nothing gets routed,
+        // `task.progress` included, and a `TaskRef::join()` — which has no
+        // deadline — waits forever for a terminal that can no longer
+        // arrive. With the slot set to `None`, the next attempt starts
+        // clean and the caller gets an error instead of silence.
         let resync = self.resync(&client).await;
         if let Err(e) = resync {
             *self.inner.client.write().await = None;
@@ -545,36 +552,40 @@ impl RemoteBackend {
         Ok(notifications)
     }
 
-    /// El resync de una conexión recién hecha: las tasks que ya corrían,
-    /// la reconciliación de huérfanas y las aprobaciones pendientes.
+    /// The resync of a freshly made connection: the tasks that were already
+    /// running, orphan reconciliation and pending approvals.
     ///
-    /// Separado de [`Self::establish`] para que su fallo tenga UN camino
-    /// de salida y no varios `?` repartidos, cada uno con su ocasión de
-    /// olvidar que hay estado publicado que limpiar (#181).
+    /// Separated from [`Self::establish`] so its failure has ONE exit path
+    /// and not several `?`s scattered around, each one a chance to forget
+    /// there is published state to clean up (#181).
     async fn resync(&self, client: &Arc<Client>) -> Result<(), ClientError> {
-        // Resync: el estado de las tasks que ya corrían (o terminaron
-        // mientras no estábamos — el server retiene desenlaces recientes).
+        // Resync: the state of the tasks that were already running (or
+        // finished while we were away — the server retains recent
+        // outcomes).
         let list: TaskListResult = client.call(methods::TASK_LIST, &TaskListParams {}).await?;
         let mut live: std::collections::HashSet<u64> = std::collections::HashSet::new();
         for snapshot in list.tasks {
             live.insert(snapshot.task_id.get());
             self.route(snapshot);
         }
-        // Reconciliación (B1): una task NUESTRA en vuelo que el daemon
-        // (posiblemente reiniciado y vacío) ya no conoce jamás recibiría
-        // su terminal — su `join()` colgaría. Se resuelve `Failed`.
+        // Reconciliation (B1): one of OUR tasks in flight that the daemon
+        // (possibly restarted and empty) no longer knows about would never
+        // receive its terminal — its `join()` would hang. Resolved as
+        // `Failed`.
         self.fail_orphans(&live);
-        // Resync de aprobaciones de policy pendientes (M3-3b T5): un Ask
-        // difundido ANTES de esta conexión no se pierde. Best-effort: un
-        // daemon N-1 (sin `policy.pending`) responde METHOD_NOT_FOUND y
-        // no pasa nada; el TTL de una pendiente sin ver la deniega solo.
+        // Resync of pending policy approvals (M3-3b T5): an Ask broadcast
+        // BEFORE this connection is not lost. Best-effort: an N-1 daemon
+        // (with no `policy.pending`) answers METHOD_NOT_FOUND and nothing
+        // happens; the TTL of a pending one nobody saw denies it on its
+        // own.
         //
-        // Una conexión de AGENTE no lo pide: `policy.pending` es
-        // human-only y el daemon le contesta INVALID_REQUEST, que no es
-        // METHOD_NOT_FOUND y caería en el `warn!` de abajo — un aviso por
-        // conexión Y POR RECONEXIÓN, para siempre, en el canal donde hay
-        // que poder leer los avisos de verdad. Además no tendría sentido:
-        // quien aprueba es el humano, jamás el agente.
+        // An AGENT connection does not ask for it: `policy.pending` is
+        // human-only and the daemon answers it with INVALID_REQUEST, which
+        // is not METHOD_NOT_FOUND and would fall into the `warn!` below —
+        // one warning per connection AND PER RECONNECTION, forever, on the
+        // channel where the real warnings need to be readable. It would
+        // also make no sense: whoever approves is the human, never the
+        // agent.
         if self.inner.agent_session.is_some() {
             return Ok(());
         }
@@ -590,36 +601,38 @@ impl RemoteBackend {
                         op: p.op,
                         paths: p.paths,
                         paths_total: p.paths_total,
-                        // El TTL restante no viaja en `policy.pending`:
-                        // 0 = desconocido (documentado en proto).
+                        // The remaining TTL does not travel in
+                        // `policy.pending`: 0 = unknown (documented in
+                        // proto).
                         ttl_ms: 0,
-                        // #314: el detalle SÍ viaja en el resync, y por eso
-                        // está en las dos formas — una pendiente reconstruida
-                        // que enseñara menos que la notificación que la
-                        // anunció dejaría al humano decidiendo con menos.
+                        // #314: the detail DOES travel in the resync, and
+                        // that is why it is in both shapes — a reconstructed
+                        // pending entry showing less than the notification
+                        // that announced it would leave the human deciding
+                        // with less.
                         detail: p.detail,
                     });
                 }
             }
-            // Se sigue igual en ambos casos, pero un fallo real no debe
-            // confundirse en silencio con un daemon N-1 (m4 del review).
+            // The behavior is the same in both cases, but a real failure
+            // must not be silently confused with an N-1 daemon (review m4).
             Err(ClientError::Rpc(ref rpc))
                 if rpc.code == norte_proto::wire::codes::METHOD_NOT_FOUND =>
             {
-                tracing::debug!("daemon sin policy.pending (N-1): resync omitido");
+                tracing::debug!("daemon with no policy.pending (N-1): resync skipped");
             }
             Err(e) => {
-                tracing::warn!(error = %e, "resync de policy.pending falló");
+                tracing::warn!(error = %e, "policy.pending resync failed");
             }
         }
         Ok(())
     }
 
-    /// Marca `Failed{ProviderUnavailable}` toda task con watch vivo que
-    /// el daemon ya no conoce (ni viva ni recién-terminada): su
-    /// desenlace se perdió con la desconexión (B1 del rust-reviewer).
+    /// Marks `Failed{ProviderUnavailable}` on every task with a live watch
+    /// the daemon no longer knows about (neither alive nor just-finished):
+    /// its outcome was lost with the disconnect (rust-reviewer B1).
     fn fail_orphans(&self, live: &std::collections::HashSet<u64>) {
-        let mut watches = self.inner.watches.lock().expect("watches lock sano");
+        let mut watches = self.inner.watches.lock().expect("watches lock is sound");
         let orphans: Vec<u64> = watches
             .keys()
             .copied()
@@ -636,29 +649,30 @@ impl RemoteBackend {
         }
     }
 
-    /// Rutea UN snapshot: al watch de su task, creándolo (y
-    /// anunciándolo como task foránea) si es la primera vez.
+    /// Routes ONE snapshot: to its task's watch, creating it (and
+    /// announcing it as a foreign task) if it is the first time.
     fn route(&self, snapshot: TaskProgress) {
         let id = snapshot.task_id;
-        // Búsqueda terminal: programa la retirada de su route TRAS la gracia
-        // (deja pasar los `search.hits` rezagados; ver `BATCH_ROUTE_GRACE`).
-        // FILTRO POR KIND (obligatorio): solo se marca `terminated` para
-        // terminales de BÚSQUEDA. Si se marcara todo, los terminales de
-        // copy/move/delete/list ajenos llenarían el set y el `clear(256)`
-        // podría borrar la marca de una búsqueda viva justo entre su
-        // terminal y el registro de su route → route colgado (sender leak).
-        // La marca se toma SIEMPRE bajo el lock: si el terminal adelantó al
-        // registro del route (aún no hay route), `search` verá la marca y
-        // programará la retirada él. Así ninguna de las dos órdenes lo deja
-        // colgado. Se agenda SOLO en la inserción nueva (`mark_terminated`
-        // devuelve `true`) y con route vivo: un terminal duplicado
-        // (bomba + resync) no vuelve a agendar. El lock de `search_routes`
-        // es independiente del de `watches`; se toma y suelta aquí, sin
-        // anidar. Mejora futura: un cierre ESTRUCTURAL (sentinela «search
-        // done» tras drenar los hits) evitaría la gracia por tiempo.
+        // Terminal search: schedules its route's removal AFTER the grace
+        // period (lets stray `search.hits` through; see
+        // `BATCH_ROUTE_GRACE`). FILTER BY KIND (mandatory): `terminated` is
+        // only marked for SEARCH terminals. If everything were marked, other
+        // copy/move/delete/list terminals would fill the set and
+        // `clear(256)` could erase a live search's mark right between its
+        // terminal and its route's registration → a hung route (sender
+        // leak). The mark is ALWAYS taken under the lock: if the terminal
+        // got ahead of the route's registration (no route yet), `search`
+        // will see the mark and schedule the removal itself. That way
+        // neither order leaves it hanging. Scheduled ONLY on the new
+        // insertion (`mark_terminated` returns `true`) and with a live
+        // route: a duplicate terminal (pump + resync) does not schedule it
+        // again. `search_routes`'s lock is independent of `watches`'; it is
+        // taken and dropped here, with no nesting. Future improvement: a
+        // STRUCTURAL close (a "search done" sentinel after draining the
+        // hits) would avoid the time-based grace period.
         //
-        // `fs.compare` (0.39.0) tiene su propio mapa y el mismo trato: su
-        // kind es `Compare` y sus lotes son `compare.rows`.
+        // `fs.compare` (0.39.0) has its own map and the same treatment: its
+        // kind is `Compare` and its batches are `compare.rows`.
         if snapshot.state.is_terminal() {
             match snapshot.kind {
                 TaskKind::Search => {
@@ -667,7 +681,7 @@ impl RemoteBackend {
                             .inner
                             .search_routes
                             .lock()
-                            .expect("search_routes lock sano");
+                            .expect("search_routes lock is sound");
                         let newly = sr.mark_terminated(id.get());
                         newly && sr.routes.contains_key(&id.get())
                     };
@@ -681,7 +695,7 @@ impl RemoteBackend {
                             .inner
                             .compare_routes
                             .lock()
-                            .expect("compare_routes lock sano");
+                            .expect("compare_routes lock is sound");
                         let newly = cr.mark_terminated(id.get());
                         newly && cr.routes.contains_key(&id.get())
                     };
@@ -695,7 +709,7 @@ impl RemoteBackend {
                             .inner
                             .sync_routes
                             .lock()
-                            .expect("sync_routes lock sano");
+                            .expect("sync_routes lock is sound");
                         let newly = sr.mark_terminated(id.get());
                         newly && sr.routes.contains_key(&id.get())
                     };
@@ -706,7 +720,7 @@ impl RemoteBackend {
                 _ => {}
             }
         }
-        let mut watches = self.inner.watches.lock().expect("watches lock sano");
+        let mut watches = self.inner.watches.lock().expect("watches lock is sound");
         if let Some(sender) = watches.get(&id.get()) {
             let terminal = snapshot.state.is_terminal();
             let _ = sender.send(snapshot.clone());
@@ -716,12 +730,12 @@ impl RemoteBackend {
             }
             return;
         }
-        // Task nueva no pedida por este proceso: si ya llegó terminal
-        // no se anuncia como foránea, pero SÍ se recuerda — el terminal
-        // por broadcast puede adelantar a la response de fs.copy y
-        // own_task lo necesita. El lock de watches se RETIENE durante
-        // el registro (orden watches→finished en todas partes): así
-        // own_task no puede colarse entre ambos y perder el desenlace.
+        // A new task not requested by this process: if it already arrived
+        // terminal it is not announced as foreign, but it IS remembered —
+        // the broadcast terminal can get ahead of fs.copy's response and
+        // own_task needs it. The watches lock is HELD during registration
+        // (watches→finished order everywhere): that way own_task cannot
+        // slip in between the two and lose the outcome.
         if snapshot.state.is_terminal() {
             self.remember_finished(snapshot);
             drop(watches);
@@ -746,9 +760,9 @@ impl RemoteBackend {
             .ok_or(Error::ProviderUnavailable { retryable: true })
     }
 
-    /// Una request con TOPE de tiempo (M4 del rust-reviewer): un daemon
-    /// vivo-pero-atascado jamás congela al frontend — a los
-    /// [`CALL_TIMEOUT`] la operación falla `ProviderUnavailable`.
+    /// A request with a time CAP (rust-reviewer M4): a daemon that is
+    /// alive-but-stuck never freezes the frontend — at [`CALL_TIMEOUT`] the
+    /// operation fails `ProviderUnavailable`.
     async fn call_timed<P, R>(&self, method: &str, params: &P) -> Result<R, Error>
     where
         P: serde::Serialize,
@@ -761,26 +775,26 @@ impl RemoteBackend {
         }
     }
 
-    /// Como [`Self::call_timed`] pero CANCEL-ON-DROP (#74, patrón #72):
-    /// si este future se dropea (o expira el timeout) con la request aún
-    /// EN VUELO, envía `rpc.cancel {id}` best-effort — el dispatch del
-    /// daemon muere PRE-efecto y la Task no nace huérfana sin canceller
-    /// (la ventana del driver Lua que abandona el run con el submit en
-    /// vuelo). Un id cuyo dispatch YA terminó es un no-op en el daemon.
-    /// Lo usan las mutaciones (fs.copy/move/delete/mkdir), `index.build`
-    /// y — vía [`Self::call_timed_guarded_with`] — `ai.rename_plan`. El
-    /// daemon envuelve en su brazo de cancelación (#72) todos esos
-    /// métodos MENOS `index.build`: para ese el guard es best-effort (el
-    /// `rpc.cancel` no encuentra dispatch que cortar).
+    /// Like [`Self::call_timed`] but CANCEL-ON-DROP (#74, #72's pattern): if
+    /// this future is dropped (or the timeout expires) with the request
+    /// still IN FLIGHT, it sends `rpc.cancel {id}` best-effort — the
+    /// daemon's dispatch dies PRE-effect and the Task is not born orphaned
+    /// with no canceller (the window where the Lua driver abandons the run
+    /// with the submit in flight). An id whose dispatch has ALREADY
+    /// finished is a no-op on the daemon. Used by mutations
+    /// (fs.copy/move/delete/mkdir), `index.build` and — via
+    /// [`Self::call_timed_guarded_with`] — `ai.rename_plan`. The daemon
+    /// wraps all those methods EXCEPT `index.build` in its cancellation arm
+    /// (#72): for that one the guard is best-effort (`rpc.cancel` finds no
+    /// dispatch to cut).
     ///
-    /// **También lo usan las LECTURAS** (`fs.list`, `fs.stat`, `fs.read`,
-    /// `fs.capabilities`) desde #248, y ahí no protege un efecto a medias
-    /// —una lectura no deja ninguno— sino la CONEXIÓN: `serve_connection`
-    /// despacha en serie, así que una lectura abandonada —el presupuesto
-    /// de cinco segundos de la sesión (#235), un future dropeado— dejaba a
-    /// todas las peticiones siguientes esperando detrás de ella, cada una
-    /// muriendo en su propio [`CALL_TIMEOUT`] de 30 s. La TUI arrancaba,
-    /// se veía, y no servía para nada sin decirlo.
+    /// **READS also use it** (`fs.list`, `fs.stat`, `fs.read`,
+    /// `fs.capabilities`) since #248, and there it protects not a half-done
+    /// effect — a read leaves none — but the CONNECTION: `serve_connection`
+    /// dispatches serially, so an abandoned read — the session's five-second
+    /// budget (#235), a dropped future — left every following request
+    /// waiting behind it, each one dying in its own 30s [`CALL_TIMEOUT`].
+    /// The TUI started up, showed itself, and was useless without saying so.
     async fn call_timed_guarded<P, R>(&self, method: &str, params: &P) -> Result<R, Error>
     where
         P: serde::Serialize,
@@ -790,9 +804,9 @@ impl RemoteBackend {
             .await
     }
 
-    /// Como [`Self::call_timed_guarded`] con timeout EXPLÍCITO: la llamada
-    /// de IA usa [`AI_CALL_TIMEOUT`] (un modelo remoto tarda legítimamente
-    /// más que el [`CALL_TIMEOUT`] de un fs.*).
+    /// Like [`Self::call_timed_guarded`] with an EXPLICIT timeout: the AI
+    /// call uses [`AI_CALL_TIMEOUT`] (a remote model legitimately takes
+    /// longer than an fs.*'s [`CALL_TIMEOUT`]).
     async fn call_timed_guarded_with<P, R>(
         &self,
         timeout: Duration,
@@ -813,38 +827,39 @@ impl RemoteBackend {
         let res = match tokio::time::timeout(
             timeout,
             client.call_tracked(method, params, |id| {
-                // El contador del Client arranca en 1: `0` = «aún sin id».
+                // The Client's counter starts at 1: `0` = "no id yet".
                 id_cell.store(id, std::sync::atomic::Ordering::SeqCst);
             }),
         )
         .await
         {
             Ok(res) => res.map_err(to_taxonomy),
-            // Timeout: el guard queda ARMADO — el return lo dropea y el
-            // rpc.cancel viaja (antes, el dispatch seguía corriendo
-            // server-side sin nadie escuchando).
+            // Timeout: the guard stays ARMED — the return drops it and the
+            // rpc.cancel travels (before, the dispatch kept running
+            // server-side with nobody listening).
             Err(_) => return Err(Error::ProviderUnavailable { retryable: true }),
         };
-        // Respuesta recibida (ok o error del RPC): ya no hay nada que
-        // cancelar — desarmar para no cancelar un id reutilizable.
+        // Response received (RPC ok or error): there is nothing left to
+        // cancel — disarm so as not to cancel a reusable id.
         guard.armed = false;
         res
     }
 
-    /// Listado remoto como stream perezoso: primera página EAGER (paridad
-    /// de errores) + `try_unfold` sobre el `next_cursor`. Sin deps nuevas.
-    /// El `skipped` del contenedor (#93) viaja en cada página — basta el
-    /// de la primera (un daemon N-1 no lo manda: `None` = desconocido).
+    /// Remote listing as a lazy stream: an EAGER first page (error parity)
+    /// + `try_unfold` over the `next_cursor`. No new deps. The container's
+    /// `skipped` (#93) travels on every page — the first one's is enough
+    /// (an N-1 daemon does not send it: `None` = unknown).
     ///
     /// # Errors
-    /// Lo que responda el daemon.
+    /// Whatever the daemon responds.
     pub async fn list_stream(
         &self,
         dir: &VPath,
         attrs: Vec<String>,
     ) -> Result<(EntryStream, Option<u64>), Error> {
-        // Primera página síncrona: un `NotFound`/`TypeMismatch` sale en el
-        // Result, no como primer item del stream (paridad con el embebido).
+        // Synchronous first page: a `NotFound`/`TypeMismatch` comes out in
+        // the Result, not as the stream's first item (parity with the
+        // embedded one).
         let first: FsListResult = self
             .call_timed_guarded(
                 methods::FS_LIST,
@@ -857,9 +872,9 @@ impl RemoteBackend {
             )
             .await?;
         let skipped = first.skipped;
-        // El ancla del directorio que se acaba de listar (#295): se retiene
-        // aquí para que un `transfer` hacia él la devuelva sola. Es el listado
-        // que el humano está mirando, que es exactamente lo que el ancla dice.
+        // The anchor of the directory just listed (#295): retained here so
+        // a `transfer` toward it returns it on its own. It is the listing
+        // the human is looking at, which is exactly what the anchor says.
         self.inner.remember_anchor(dir, first.dir_anchor.clone());
         let done = first.next_cursor.is_none();
         let state = PageState {
@@ -876,27 +891,27 @@ impl RemoteBackend {
         ))
     }
 
-    /// Las capacidades de la localización, sin el catálogo de atributos.
+    /// The location's capabilities, without the attribute catalog.
     ///
     /// # Errors
-    /// Lo que responda el daemon.
+    /// Whatever the daemon responds.
     pub async fn capabilities(&self, path: &VPath) -> Result<Capabilities, Error> {
         Ok(self.capabilities_full(path).await?.capabilities)
     }
 
-    /// El catálogo de atributos que la localización sabe reportar (#117).
+    /// The attribute catalog the location knows how to report (#117).
     ///
     /// # Errors
-    /// Lo que responda el daemon.
+    /// Whatever the daemon responds.
     pub async fn attr_catalog(&self, path: &VPath) -> Result<norte_proto::AttrCatalog, Error> {
         Ok(self.capabilities_full(path).await?.attrs)
     }
 
-    /// `fs.capabilities` completo: capacidades MÁS catálogo de atributos, en
-    /// un solo viaje (los dos accesores de arriba salen de aquí).
+    /// Full `fs.capabilities`: capabilities PLUS the attribute catalog, in
+    /// one single trip (the two accessors above come from here).
     ///
     /// # Errors
-    /// Lo que responda el daemon.
+    /// Whatever the daemon responds.
     pub async fn capabilities_full(&self, path: &VPath) -> Result<FsCapabilitiesResult, Error> {
         self.call_timed_guarded(
             methods::FS_CAPABILITIES,
@@ -905,10 +920,10 @@ impl RemoteBackend {
         .await
     }
 
-    /// `fs.stat` de una entrada, pidiendo los atributos indicados.
+    /// An entry's `fs.stat`, asking for the given attributes.
     ///
     /// # Errors
-    /// Lo que responda el daemon.
+    /// Whatever the daemon responds.
     pub async fn stat(&self, path: &VPath, attrs: Vec<String>) -> Result<Entry, Error> {
         let r: FsStatResult = self
             .call_timed_guarded(
@@ -922,11 +937,11 @@ impl RemoteBackend {
         Ok(r.entry)
     }
 
-    /// `connection.trust_host_key`: confía en la clave de host que el TOFU
-    /// acaba de enseñar (#45, ADR 0015).
+    /// `connection.trust_host_key`: trusts the host key TOFU just showed
+    /// (#45, ADR 0015).
     ///
     /// # Errors
-    /// Lo que responda el daemon.
+    /// Whatever the daemon responds.
     pub async fn trust_host_key(
         &self,
         host: &str,
@@ -945,10 +960,9 @@ impl RemoteBackend {
                 },
             )
             .await?;
-        // `trusted: false` está reservado en 0.7.0 para un rechazo por
-        // política de un core futuro: tratarlo como éxito dejaría al
-        // usuario en un bucle de reintentos "confiados" que nunca
-        // registran nada.
+        // `trusted: false` is reserved in 0.7.0 for a policy rejection from
+        // a future core: treating it as success would leave the user in a
+        // loop of "trusted" retries that never register anything.
         if r.trusted {
             Ok(())
         } else {
@@ -958,15 +972,15 @@ impl RemoteBackend {
         }
     }
 
-    /// `connection.provide_secret`: entrega el secreto que el humano tecleó
-    /// tras un [`Error::SecretNeeded`] (#325, ADR 0015).
+    /// `connection.provide_secret`: delivers the secret the human typed
+    /// after an [`Error::SecretNeeded`] (#325, ADR 0015).
     ///
-    /// El secreto cruza el socket EN CLARO —el socket es de dominio unix, con
-    /// permisos 0600 y del propio usuario; ver ADR 0015— y el daemon lo
-    /// guarda solo en memoria, hasta que pare.
+    /// The secret crosses the socket IN THE CLEAR — the socket is a unix
+    /// domain one, with 0600 permissions and owned by the user; see ADR
+    /// 0015 — and the daemon keeps it only in memory, until it stops.
     ///
     /// # Errors
-    /// Lo que responda el daemon.
+    /// Whatever the daemon responds.
     pub async fn provide_secret(&self, conn: &str, secret: &str) -> Result<(), Error> {
         let r: methods::ConnectionProvideSecretResult = self
             .call_timed(
@@ -977,10 +991,10 @@ impl RemoteBackend {
                 },
             )
             .await?;
-        // Mismo razonamiento que `trusted` arriba: un `stored: false` es la
-        // reserva para un core que se niegue, y tratarlo como éxito dejaría
-        // al usuario reintentando una navegación que nunca tendrá el
-        // secreto.
+        // Same reasoning as `trusted` above: a `stored: false` is the
+        // reservation for a core that refuses, and treating it as success
+        // would leave the user retrying a navigation that will never have
+        // the secret.
         if r.stored {
             Ok(())
         } else {
@@ -990,10 +1004,10 @@ impl RemoteBackend {
         }
     }
 
-    /// `fs.read` de un rango de bytes.
+    /// `fs.read` of a byte range.
     ///
     /// # Errors
-    /// Lo que responda el daemon.
+    /// Whatever the daemon responds.
     pub async fn read(&self, path: &VPath, range: Option<ByteRange>) -> Result<Vec<u8>, Error> {
         let mut offset = range.as_ref().map_or(0, |r| r.offset);
         let mut remaining = range.as_ref().and_then(|r| r.len);
@@ -1020,8 +1034,8 @@ impl RemoteBackend {
             let bytes = base64::engine::general_purpose::STANDARD
                 .decode(r.content_b64.as_bytes())
                 .map_err(|_| Error::Internal { panic: false })?;
-            // Guard defensivo (m1 del rust/protocol reviewers): un server
-            // que devuelva 0 bytes con eof=false haría bucle infinito.
+            // Defensive guard (rust/protocol reviewers m1): a server
+            // returning 0 bytes with eof=false would loop forever.
             if bytes.is_empty() && !r.eof {
                 return Err(Error::Internal { panic: false });
             }
@@ -1036,14 +1050,15 @@ impl RemoteBackend {
         }
     }
 
-    /// Copia o mueve, según `what`: una Task del daemon en los dos casos.
+    /// Copy or move, per `what`: a daemon Task in both cases.
     ///
-    /// El verbo es un [`Transfer`] y no el nombre del método (#270): con una
-    /// cadena, cualquier cosa que no fuera exactamente `fs.copy` caía en el
-    /// `else` y se convertía en un movimiento, que además borra el origen.
+    /// The verb is a [`Transfer`] and not the method name (#270): with a
+    /// string, anything that was not exactly `fs.copy` fell into the `else`
+    /// and turned into a move, which also deletes the source.
     ///
     /// # Errors
-    /// Lo que responda el daemon al ENCOLAR (el desenlace llega por progreso).
+    /// Whatever the daemon responds on ENQUEUING (the outcome arrives via
+    /// progress).
     pub async fn transfer(
         &self,
         what: Transfer,
@@ -1051,10 +1066,10 @@ impl RemoteBackend {
         to: &VPath,
         opts: TransferOptions,
     ) -> Result<RemoteTask, Error> {
-        // El ancla del DIRECTORIO destino, si este cliente lo listó (#295).
-        // Sale sola: ningún frontend tiene que acordarse, y quien no listó el
-        // destino —un `norte cp` con una ruta escrita a mano— manda `None` y
-        // obtiene el comportamiento de 0.53.
+        // The DESTINATION directory's anchor, if this client listed it
+        // (#295). Comes out on its own: no frontend has to remember, and
+        // whoever did not list the destination — a `norte cp` with a
+        // hand-typed path — sends `None` and gets 0.53's behavior.
         let dest_anchor = to.parent().and_then(|dir| self.inner.anchor_for(&dir));
         let result: FsTaskResult = match what {
             Transfer::Copy => {
@@ -1068,7 +1083,7 @@ impl RemoteBackend {
                         resume: opts.resume,
                         verify: opts.verify,
                         dest_anchor,
-                        // A la cola si se pidió (ADR 0149).
+                        // Into the queue if asked (ADR 0149).
                         queued: opts.queued,
                     },
                 )
@@ -1085,7 +1100,7 @@ impl RemoteBackend {
                         resume: opts.resume,
                         verify: opts.verify,
                         dest_anchor,
-                        // A la cola si se pidió (ADR 0149).
+                        // Into the queue if asked (ADR 0149).
                         queued: opts.queued,
                     },
                 )
@@ -1099,10 +1114,10 @@ impl RemoteBackend {
         Ok(self.own_task(result.task_id, kind))
     }
 
-    /// `index.build`: indexa un root como Task.
+    /// `index.build`: indexes a root as a Task.
     ///
     /// # Errors
-    /// Lo que responda el daemon al encolar.
+    /// Whatever the daemon responds on enqueuing.
     pub async fn index_build(&self, root: &VPath) -> Result<RemoteTask, Error> {
         let result: FsTaskResult = self
             .call_timed_guarded(
@@ -1113,10 +1128,10 @@ impl RemoteBackend {
         Ok(self.own_task(result.task_id, TaskKind::Index))
     }
 
-    /// `index.query`: búsqueda por nombre contra el índice.
+    /// `index.query`: search by name against the index.
     ///
     /// # Errors
-    /// Lo que responda el daemon.
+    /// Whatever the daemon responds.
     pub async fn index_query(
         &self,
         root: &VPath,
@@ -1136,10 +1151,10 @@ impl RemoteBackend {
         Ok(r.hits)
     }
 
-    /// `index.embed`: calcula los embeddings de un root como Task (M4-IA-2).
+    /// `index.embed`: computes a root's embeddings as a Task (M4-IA-2).
     ///
     /// # Errors
-    /// Lo que responda el daemon al encolar.
+    /// Whatever the daemon responds on enqueuing.
     pub async fn index_embed(&self, root: &VPath) -> Result<RemoteTask, Error> {
         let result: FsTaskResult = self
             .call_timed_guarded(
@@ -1150,12 +1165,12 @@ impl RemoteBackend {
         Ok(self.own_task(result.task_id, TaskKind::Embed))
     }
 
-    /// `index.search_semantic` (0.33.0, M4-IA-2): respuesta directa con
-    /// el timeout LARGO de IA y cancel-on-drop (el daemon la tiene en su
-    /// brazo de cancelación #72 — abandonar la espera corta el dispatch).
+    /// `index.search_semantic` (0.33.0, M4-IA-2): a direct response with
+    /// AI's LONG timeout and cancel-on-drop (the daemon has it in its
+    /// cancellation arm #72 — abandoning the wait cuts the dispatch).
     ///
     /// # Errors
-    /// Lo que responda el daemon.
+    /// Whatever the daemon responds.
     pub async fn index_search_semantic(
         &self,
         root: Option<&VPath>,
@@ -1176,12 +1191,12 @@ impl RemoteBackend {
         Ok(r.hits)
     }
 
-    /// `ai.rename_plan` (0.32.0, M4-IA): respuesta directa con el timeout
-    /// LARGO de IA y cancel-on-drop (el daemon lo tiene en su brazo de
-    /// cancelación #72 — abandonar la espera corta el dispatch).
+    /// `ai.rename_plan` (0.32.0, M4-IA): a direct response with AI's LONG
+    /// timeout and cancel-on-drop (the daemon has it in its cancellation arm
+    /// #72 — abandoning the wait cuts the dispatch).
     ///
     /// # Errors
-    /// Lo que responda el daemon.
+    /// Whatever the daemon responds.
     pub async fn ai_rename_plan(
         &self,
         dir: &VPath,
@@ -1194,20 +1209,20 @@ impl RemoteBackend {
             &methods::AiRenamePlanParams {
                 dir: dir.clone(),
                 instruction: instruction.to_string(),
-                // Los nombres MARCADOS, si los hay (#121): vacío es el
-                // directorio entero, que es lo que este método hacía.
+                // The MARKED names, if any (#121): empty is the whole
+                // directory, which is what this method used to do.
                 names: names.to_vec(),
             },
         )
         .await
     }
 
-    /// `ai.organize_plan` (0.77.0, fase 8): un plan REVISABLE de reorganizar
-    /// un directorio. No muta nada.
+    /// `ai.organize_plan` (0.77.0, phase 8): a REVIEWABLE plan to reorganize
+    /// a directory. Mutates nothing.
     ///
     /// # Errors
-    /// Lo que responda el daemon: sin proveedor, `Unsupported`; el gate de IA
-    /// deniega con su motivo.
+    /// Whatever the daemon responds: with no provider, `Unsupported`; the AI
+    /// gate refuses with its reason.
     pub async fn ai_organize_plan(
         &self,
         dir: &VPath,
@@ -1226,12 +1241,12 @@ impl RemoteBackend {
         .await
     }
 
-    /// `fs.organize` (0.77.0, fase 8): aplica el plan que el humano aprobó —
-    /// crea las carpetas y mueve, todo como UN lote deshacible.
+    /// `fs.organize` (0.77.0, phase 8): applies the plan the human approved
+    /// — creates the folders and moves, all as ONE undoable batch.
     ///
     /// # Errors
-    /// `PlanStale` si el token no es el del plan revisado; lo que responda el
-    /// daemon al encolar.
+    /// `PlanStale` if the token is not the reviewed plan's; whatever the
+    /// daemon responds on enqueuing.
     pub async fn organize(
         &self,
         dir: &VPath,
@@ -1251,10 +1266,10 @@ impl RemoteBackend {
         Ok(self.own_task(result.task_id, TaskKind::RenameBatch))
     }
 
-    /// `fs.delete` de un lote: papelera o permanente según `mode`.
+    /// `fs.delete` of a batch: trash or permanent per `mode`.
     ///
     /// # Errors
-    /// Lo que responda el daemon al encolar.
+    /// Whatever the daemon responds on enqueuing.
     pub async fn delete(&self, path: &VPath, mode: DeleteMode) -> Result<RemoteTask, Error> {
         let result: FsTaskResult = self
             .call_timed_guarded(
@@ -1268,13 +1283,13 @@ impl RemoteBackend {
         Ok(self.own_task(result.task_id, TaskKind::Delete))
     }
 
-    /// `fs.rename_batch_plan` (0.36.0, ADR 0042): respuesta DIRECTA, sin
-    /// Task. El daemon la tiene en su brazo de cancelación (#72), así que
-    /// abandonar la espera corta el dispatch en vez de dejarlo planificando
-    /// un directorio enorme.
+    /// `fs.rename_batch_plan` (0.36.0, ADR 0042): a DIRECT response, no
+    /// Task. The daemon has it in its cancellation arm (#72), so abandoning
+    /// the wait cuts the dispatch instead of leaving it planning a huge
+    /// directory.
     ///
     /// # Errors
-    /// Lo que responda el daemon.
+    /// Whatever the daemon responds.
     pub async fn rename_batch_plan(
         &self,
         dir: &VPath,
@@ -1290,12 +1305,12 @@ impl RemoteBackend {
         .await
     }
 
-    /// `fs.rename_batch` (0.36.0, ADR 0042): UNA Task para el lote entero.
-    /// Se manda la MISMA intención que produjo el `plan_hash`; el orden
-    /// jamás cruza el wire.
+    /// `fs.rename_batch` (0.36.0, ADR 0042): ONE Task for the whole batch.
+    /// The SAME intent that produced the `plan_hash` is sent; the order
+    /// never crosses the wire.
     ///
     /// # Errors
-    /// Lo que responda el daemon.
+    /// Whatever the daemon responds.
     pub async fn rename_batch(
         &self,
         dir: &VPath,
@@ -1315,13 +1330,14 @@ impl RemoteBackend {
         Ok(self.own_task(result.task_id, TaskKind::RenameBatch))
     }
 
-    /// Como [`Self::call_timed`], traduciendo `METHOD_NOT_FOUND` a
+    /// Like [`Self::call_timed`], translating `METHOD_NOT_FOUND` into
     /// [`Error::Unsupported`] (#247).
     ///
-    /// Es la primitiva de «degrada Y dilo»: contra un daemon más viejo,
-    /// «tu daemon no sabe de esto» y un fallo de verdad no son lo mismo, y
-    /// un `session.get` que devuelve un error genérico deja al frontend
-    /// diciendo que la sesión falló cuando lo que pasa es que no la hay.
+    /// This is the "degrade AND say so" primitive: against an older daemon,
+    /// "your daemon does not know this" and a real failure are not the same
+    /// thing, and a `session.get` that returns a generic error leaves the
+    /// frontend saying the session failed when what happened is that there
+    /// is none.
     async fn call_no_method_is_unsupported<P, R>(
         &self,
         method: &str,
@@ -1343,14 +1359,15 @@ impl RemoteBackend {
         }
     }
 
-    /// `fs.rename_batch_report` (0.36.0): informe del lote. Un daemon N-1
-    /// sin el método responde `METHOD_NOT_FOUND` → `Unsupported`, para que
-    /// el caller lo distinga de un fallo REAL — mismo criterio que
-    /// `policy.undo_report` (#71): el informe es la ÚNICA señal de que un
-    /// lote dejó el directorio a medias, y no se degrada en silencio.
+    /// `fs.rename_batch_report` (0.36.0): the batch's report. An N-1 daemon
+    /// with no such method answers `METHOD_NOT_FOUND` → `Unsupported`, so
+    /// the caller can tell it apart from a REAL failure — same rule as
+    /// `policy.undo_report` (#71): the report is the ONLY signal that a
+    /// batch left the directory half-done, and it does not degrade
+    /// silently.
     ///
     /// # Errors
-    /// Lo que responda el daemon.
+    /// Whatever the daemon responds.
     pub async fn rename_batch_report(
         &self,
         task_id: TaskId,
@@ -1372,18 +1389,18 @@ impl RemoteBackend {
         }
     }
 
-    /// `fs.create`: un fichero VACÍO, como Task (#290).
+    /// `fs.create`: an EMPTY file, as a Task (#290).
     ///
-    /// Falla si el destino existe. Crear es una afirmación sobre un nombre
-    /// libre, y un método que trunca en silencio es una pérdida de datos con
-    /// nombre inocente.
+    /// Fails if the destination exists. Creating is a claim about a free
+    /// name, and a method that silently truncates is data loss with an
+    /// innocent-sounding name.
     ///
     /// # Errors
-    /// Lo que responda el daemon al encolar.
+    /// Whatever the daemon responds on enqueuing.
     pub async fn create_file(&self, path: &VPath) -> Result<RemoteTask, Error> {
-        // El ancla del directorio en el que se crea, si este SDK lo listó
-        // (#295). Va sola, como en `copy`/`move`: un frontend gana la
-        // comprobación sin escribir una línea.
+        // The anchor of the directory it is created in, if this SDK listed
+        // it (#295). Comes out on its own, as in `copy`/`move`: a frontend
+        // gets the check without writing a line.
         let dest_anchor = path.parent().and_then(|dir| self.inner.anchor_for(&dir));
         let result: FsTaskResult = self
             .call_timed_guarded(
@@ -1397,14 +1414,14 @@ impl RemoteBackend {
         Ok(self.own_task(result.task_id, TaskKind::Create))
     }
 
-    /// `fs.set_mode`: los permisos POSIX de un lote, como Task (#314).
+    /// `fs.set_mode`: a batch's POSIX permissions, as a Task (#314).
     ///
-    /// Muta, así que el daemon la registra en el journal con su reversa —el
-    /// modo anterior— y la pasa por la política. Una ubicación sin permisos
-    /// POSIX responde `Unsupported` sin cambiar nada.
+    /// Mutates, so the daemon logs it in the journal with its reverse — the
+    /// previous mode — and passes it through policy. A location with no
+    /// POSIX permissions answers `Unsupported` without changing anything.
     ///
     /// # Errors
-    /// Lo que responda el daemon al encolar.
+    /// Whatever the daemon responds on enqueuing.
     pub async fn set_mode(
         &self,
         params: norte_proto::methods::FsSetModeParams,
@@ -1415,10 +1432,11 @@ impl RemoteBackend {
         Ok(self.own_task(result.task_id, TaskKind::SetMode))
     }
 
-    /// `fs.mkdir`, como Task (la mutación pasa por journal y policy igual).
+    /// `fs.mkdir`, as a Task (the mutation goes through journal and policy
+    /// just the same).
     ///
     /// # Errors
-    /// Lo que responda el daemon al encolar.
+    /// Whatever the daemon responds on enqueuing.
     pub async fn mkdir(&self, path: &VPath) -> Result<RemoteTask, Error> {
         let result: FsTaskResult = self
             .call_timed_guarded(
@@ -1429,39 +1447,39 @@ impl RemoteBackend {
         Ok(self.own_task(result.task_id, TaskKind::Mkdir))
     }
 
-    /// `fs.search` (live search T5): lanza la Task y devuelve el `rx` por el
-    /// que la bomba enruta los lotes de `search.hits` de ESTE `task_id`.
+    /// `fs.search` (live search T5): launches the Task and returns the `rx`
+    /// the pump routes THIS `task_id`'s `search.hits` batches through.
     ///
-    /// Orden ANTI-CARRERA: el route se registra ANTES de que puedan llegar
-    /// más hits. La bomba (otra task) puede haber enrutado ya lotes que
-    /// adelantaron a esta respuesta —el frame de `search.hits` puede salir
-    /// del daemon antes que la respuesta de `fs.search`, y en el cliente la
-    /// bomba y esta llamada corren en paralelo—: esos lotes se quedaron en
-    /// `pending`. El registro (drenar `pending` + insertar el route) es
-    /// ATÓMICO bajo el lock de `search_routes`, así que ni un lote se pierde
-    /// entre ambos pasos. Es el mismo patrón con el que `own_task` cierra la
-    /// carrera del terminal adelantado vía el anillo `finished`.
+    /// ANTI-RACE order: the route is registered BEFORE more hits can arrive.
+    /// The pump (another task) may have already routed batches that got
+    /// ahead of this response — the `search.hits` frame can leave the daemon
+    /// before `fs.search`'s response, and on the client the pump and this
+    /// call run in parallel: those batches stayed in `pending`.
+    /// Registration (draining `pending` + inserting the route) is ATOMIC
+    /// under `search_routes`'s lock, so not a single batch is lost between
+    /// the two steps. Same pattern `own_task` uses to close the race of an
+    /// early terminal via the `finished` ring.
     ///
     /// # Errors
-    /// Lo que responda el daemon.
+    /// Whatever the daemon responds.
     pub async fn search(
         &self,
         params: FsSearchParams,
     ) -> Result<(RemoteTask, mpsc::Receiver<SearchHits>), Error> {
-        // Los filtros de 0.81.0 no se le mandan a un daemon que no los
-        // conoce, por el mismo criterio que el techo de `undo_after` y con
-        // un agravante: un filtro ignorado no deja de filtrar en silencio,
-        // devuelve el SUPERCONJUNTO. Quien pidió «de menos de un mega, sin
-        // bajar a node_modules» recibiría el árbol entero, y una búsqueda de
-        // más se lee exactamente igual que una búsqueda a secas.
-        if let Some(filtro) = primer_filtro_de_0_81(&params)
-            && !self.peer_honra_los_filtros()
+        // 0.81.0's filters are not sent to a daemon that does not know them,
+        // by the same rule as `undo_after`'s ceiling and with an
+        // aggravation: an ignored filter does not stop filtering silently,
+        // it returns the SUPERSET. Whoever asked for "under a meg, not
+        // going into node_modules" would receive the whole tree, and an
+        // over-broad search reads exactly like a plain one.
+        if let Some(filter) = first_filter_since_0_81(&params)
+            && !self.peer_honors_filters()
         {
             tracing::warn!(
                 peer = self.peer_protocol_version().as_deref().unwrap_or("?"),
-                filtro,
-                "el daemon es anterior a 0.81 y no sabe filtrar la búsqueda: \
-                 se rehúsa en vez de devolver más de lo que se pidió"
+                filter,
+                "the daemon predates 0.81 and cannot filter the search: \
+                 refusing instead of returning more than was asked for"
             );
             return Err(Error::Unsupported);
         }
@@ -1473,20 +1491,19 @@ impl RemoteBackend {
         Ok((self.own_task(id, TaskKind::Search), rx))
     }
 
-    /// `fs.compare` (0.39.0, ADR 0048): lanza la Task y devuelve el `rx`
-    /// por el que la bomba enruta los lotes de `compare.rows` de ESTE
-    /// `task_id`. Mismo ciclo de vida que [`Self::search`], incluida la
-    /// carrera de arranque.
+    /// `fs.compare` (0.39.0, ADR 0048): launches the Task and returns the
+    /// `rx` the pump routes THIS `task_id`'s `compare.rows` batches through.
+    /// Same lifecycle as [`Self::search`], including the startup race.
     ///
-    /// Un daemon N-1 (0.38.x) NO tiene el método y contesta
-    /// `METHOD_NOT_FOUND`: se traduce a [`Error::Unsupported`] para que el
-    /// frontend distinga «tu daemon es más viejo» de un fallo real (mismo
-    /// criterio que `undo_report` y que el resync de `policy.pending`).
-    /// `version_compatible` acepta N-1, así que esta combinación no es
-    /// hipotética.
+    /// An N-1 daemon (0.38.x) does NOT have the method and answers
+    /// `METHOD_NOT_FOUND`: translated to [`Error::Unsupported`] so the
+    /// frontend can tell "your daemon is older" apart from a real failure
+    /// (same rule as `undo_report` and the `policy.pending` resync).
+    /// `version_compatible` accepts N-1, so this combination is not
+    /// hypothetical.
     ///
     /// # Errors
-    /// Lo que responda el daemon.
+    /// Whatever the daemon responds.
     pub async fn compare(
         &self,
         params: methods::FsCompareParams,
@@ -1509,10 +1526,10 @@ impl RemoteBackend {
         Ok((self.own_task(id, TaskKind::Compare), rx))
     }
 
-    /// `connection.close` (0.49.0, #140): suelta la sesión de esa ruta.
+    /// `connection.close` (0.49.0, #140): drops that path's session.
     ///
     /// # Errors
-    /// Lo que responda el daemon.
+    /// Whatever the daemon responds.
     pub async fn close_connection(&self, path: &norte_proto::VPath) -> Result<bool, Error> {
         let client = self.client().await?;
         let params = methods::ConnectionCloseParams { path: path.clone() };
@@ -1529,12 +1546,12 @@ impl RemoteBackend {
         }
     }
 
-    /// `fs.dir_size` (0.49.0, #139): lanza la Task y devuelve su
-    /// referencia. Sin canal: lo que hay que escuchar es el progreso, que
-    /// ya llega por la suscripción de siempre.
+    /// `fs.dir_size` (0.49.0, #139): launches the Task and returns its
+    /// reference. No channel: what needs listening to is the progress,
+    /// which already arrives via the usual subscription.
     ///
     /// # Errors
-    /// Lo que responda el daemon.
+    /// Whatever the daemon responds.
     pub async fn dir_size(&self, params: methods::FsDirSizeParams) -> Result<RemoteTask, Error> {
         let client = self.client().await?;
         let call = client.call::<_, FsTaskResult>(methods::FS_DIR_SIZE, &params);
@@ -1550,13 +1567,14 @@ impl RemoteBackend {
         Ok(self.own_task(result.task_id, TaskKind::DirSize))
     }
 
-    /// `fs.checksum` (0.59.0, #311): lanza la Task de sumas y devuelve su
-    /// referencia. Los digests se recogen con [`Self::checksum_report`], que es
-    /// el único camino: no caben en el desenlace de una Task.
+    /// `fs.checksum` (0.59.0, #311): launches the checksum Task and returns
+    /// its reference. The digests are collected with
+    /// [`Self::checksum_report`], which is the only way: they do not fit in
+    /// a Task's outcome.
     ///
     /// # Errors
-    /// Lo que responda el daemon; [`Error::Unsupported`] contra uno 0.58, que
-    /// no conoce el método.
+    /// Whatever the daemon responds; [`Error::Unsupported`] against a 0.58
+    /// one, which does not know the method.
     pub async fn checksum(&self, params: methods::FsChecksumParams) -> Result<RemoteTask, Error> {
         let result: FsTaskResult = self
             .call_maybe_unknown(methods::FS_CHECKSUM, &params)
@@ -1564,10 +1582,11 @@ impl RemoteBackend {
         Ok(self.own_task(result.task_id, TaskKind::Checksum))
     }
 
-    /// `fs.checksum_report` (0.59.0, #311): los digests calculados hasta ahora.
+    /// `fs.checksum_report` (0.59.0, #311): the digests computed so far.
     ///
     /// # Errors
-    /// Lo que responda el daemon; [`Error::Unsupported`] contra uno 0.58.
+    /// Whatever the daemon responds; [`Error::Unsupported`] against a 0.58
+    /// one.
     pub async fn checksum_report(
         &self,
         task_id: TaskId,
@@ -1579,17 +1598,18 @@ impl RemoteBackend {
         .await
     }
 
-    /// `fs.dir_usage` (0.75.0, fase 4): lanza la Task que mide un directorio
-    /// hijo a hijo y devuelve su referencia. El mapa se recoge con
-    /// [`Self::dir_usage_report`], que es el único camino: una lista de hijos no
-    /// cabe en el desenlace de una Task.
+    /// `fs.dir_usage` (0.75.0, phase 4): launches the Task that measures a
+    /// directory child by child and returns its reference. The map is
+    /// collected with [`Self::dir_usage_report`], which is the only way: a
+    /// list of children does not fit in a Task's outcome.
     ///
     /// # Errors
-    /// Lo que responda el daemon. [`Error::Unsupported`] dice DOS cosas y no
-    /// una: que el daemon no conoce el método (uno 0.74, que contesta
-    /// `METHOD_NOT_FOUND`) o que conoce el método y no sirve esa `depth`
-    /// todavía. Las distingue quien llamó, por la `depth` que pidió: con
-    /// `depth: 1` —lo que pinta un mapa— solo cabe la primera.
+    /// Whatever the daemon responds. [`Error::Unsupported`] says TWO things,
+    /// not one: that the daemon does not know the method (a 0.74 one, which
+    /// answers `METHOD_NOT_FOUND`) or that it knows the method and does not
+    /// serve that `depth` yet. Whoever called tells them apart, by the
+    /// `depth` it asked for: with `depth: 1` — what paints a map — only the
+    /// first fits.
     pub async fn dir_usage(&self, params: methods::FsDirUsageParams) -> Result<RemoteTask, Error> {
         let result: FsTaskResult = self
             .call_maybe_unknown(methods::FS_DIR_USAGE, &params)
@@ -1597,11 +1617,11 @@ impl RemoteBackend {
         Ok(self.own_task(result.task_id, TaskKind::DirUsage))
     }
 
-    /// `fs.dir_usage_report` (0.75.0, fase 4): el mapa medido hasta ahora.
+    /// `fs.dir_usage_report` (0.75.0, phase 4): the map measured so far.
     ///
     /// # Errors
-    /// Lo que responda el daemon; [`Error::Unsupported`] contra uno 0.74, que
-    /// no conoce el método.
+    /// Whatever the daemon responds; [`Error::Unsupported`] against a 0.74
+    /// one, which does not know the method.
     pub async fn dir_usage_report(
         &self,
         task_id: TaskId,
@@ -1616,7 +1636,7 @@ impl RemoteBackend {
     /// `archive.pack` (0.50.0, #132).
     ///
     /// # Errors
-    /// Lo que responda el daemon.
+    /// Whatever the daemon responds.
     pub async fn pack(&self, params: methods::ArchivePackParams) -> Result<RemoteTask, Error> {
         let result: FsTaskResult = self
             .call_maybe_unknown(methods::ARCHIVE_PACK, &params)
@@ -1627,7 +1647,7 @@ impl RemoteBackend {
     /// `archive.test` (0.50.0, #132).
     ///
     /// # Errors
-    /// Lo que responda el daemon.
+    /// Whatever the daemon responds.
     pub async fn test_archive(
         &self,
         params: methods::ArchiveTestParams,
@@ -1638,11 +1658,11 @@ impl RemoteBackend {
         Ok(self.own_task(result.task_id, TaskKind::TestArchive))
     }
 
-    /// `archive.test_report` (0.50.0, #132): el informe, cuando la Task ya
-    /// ha terminado (o antes, parcial).
+    /// `archive.test_report` (0.50.0, #132): the report, once the Task has
+    /// already finished (or before, partial).
     ///
     /// # Errors
-    /// Lo que responda el daemon.
+    /// Whatever the daemon responds.
     pub async fn archive_test_report(
         &self,
         task_id: norte_proto::TaskId,
@@ -1654,22 +1674,25 @@ impl RemoteBackend {
         .await
     }
 
-    /// `archive.pack_report` (0.58.0, #250): qué guardó ese empaquetado que
-    /// SIGNIFICA otra cosa en otro sistema — un `a\b.txt` que en Windows es un
-    /// `b.txt` dentro de una carpeta `a`, un `CON` que allí no se extrae.
+    /// `archive.pack_report` (0.58.0, #250): what that packaging saved that
+    /// MEANS something else on another system — an `a\b.txt` that on
+    /// Windows is a `b.txt` inside an `a` folder, a `CON` that will not
+    /// extract there.
     ///
-    /// El informe está listo antes que el archivo: se calcula sobre la lista de
-    /// entradas antes de escribir el primer byte. Pedirlo al terminar la Task
-    /// es lo natural, pero un informe pedido a mitad ya es definitivo.
+    /// The report is ready before the archive: it is computed over the
+    /// entry list before writing the first byte. Asking for it when the
+    /// Task finishes is the natural thing, but a report asked for halfway
+    /// through is already final.
     ///
-    /// **Un informe vacío es una afirmación**, y solo sobre las clases que
-    /// `checked` declare. Este SDK habla siempre con un daemon N o N+1 —el
-    /// handshake rechaza lo demás—, así que un daemon que no conozca el método
-    /// no es un caso alcanzable desde aquí; el `Unsupported` que aun así se
-    /// propaga es la degradación defensiva, no la historia de compatibilidad.
+    /// **An empty report is a claim**, and only about the classes `checked`
+    /// declares. This SDK always talks to an N or N+1 daemon — the
+    /// handshake rejects anything else — so a daemon that does not know the
+    /// method is not a reachable case from here; the `Unsupported` that
+    /// still propagates is the defensive degradation, not the compatibility
+    /// story.
     ///
     /// # Errors
-    /// Lo que responda el daemon.
+    /// Whatever the daemon responds.
     pub async fn archive_pack_report(
         &self,
         task_id: norte_proto::TaskId,
@@ -1684,7 +1707,7 @@ impl RemoteBackend {
     /// `file.split` (0.50.0, #132).
     ///
     /// # Errors
-    /// Lo que responda el daemon.
+    /// Whatever the daemon responds.
     pub async fn split_file(&self, params: methods::FileSplitParams) -> Result<RemoteTask, Error> {
         let result: FsTaskResult = self
             .call_maybe_unknown(methods::FILE_SPLIT, &params)
@@ -1695,7 +1718,7 @@ impl RemoteBackend {
     /// `file.combine` (0.50.0, #132).
     ///
     /// # Errors
-    /// Lo que responda el daemon.
+    /// Whatever the daemon responds.
     pub async fn combine_files(
         &self,
         params: methods::FileCombineParams,
@@ -1706,17 +1729,17 @@ impl RemoteBackend {
         Ok(self.own_task(result.task_id, TaskKind::Combine))
     }
 
-    /// `sync.plan` (0.40.0, ADR 0049): lanza la Task y devuelve el `rx` por
-    /// el que la bomba enruta los DOS eventos del plan (`sync.steps` y el
-    /// `sync.plan_done` que lo cierra) de ESTE `task_id`. Mismo ciclo de
-    /// vida que [`Self::compare`], incluida la carrera de arranque.
+    /// `sync.plan` (0.40.0, ADR 0049): launches the Task and returns the
+    /// `rx` the pump routes THIS `task_id`'s plan's TWO events
+    /// (`sync.steps` and the `sync.plan_done` that closes it) through. Same
+    /// lifecycle as [`Self::compare`], including the startup race.
     ///
-    /// Un daemon N-1 sin el método contesta `METHOD_NOT_FOUND` →
-    /// [`Error::Unsupported`], para que el frontend distinga «tu daemon es
-    /// más viejo» de un fallo real.
+    /// An N-1 daemon with no such method answers `METHOD_NOT_FOUND` →
+    /// [`Error::Unsupported`], so the frontend can tell "your daemon is
+    /// older" apart from a real failure.
     ///
     /// # Errors
-    /// Lo que responda el daemon.
+    /// Whatever the daemon responds.
     pub async fn sync_plan(
         &self,
         params: methods::SyncPlanParams,
@@ -1729,49 +1752,50 @@ impl RemoteBackend {
         Ok((self.own_task(id, TaskKind::SyncPlan), rx))
     }
 
-    /// `sync.apply` (0.40.0, ADR 0049): ejecuta el plan que `plan_hash`
-    /// nombra. No lleva rutas — las dos raíces salen del plan retenido
-    /// server-side, atado a ESTA conexión.
+    /// `sync.apply` (0.40.0, ADR 0049): executes the plan `plan_hash` names.
+    /// Carries no paths — the two roots come from the server-side retained
+    /// plan, bound to THIS connection.
     ///
     /// # Errors
-    /// Lo que responda el daemon.
+    /// Whatever the daemon responds.
     pub async fn sync_apply(&self, plan_hash: &methods::PlanHash) -> Result<RemoteTask, Error> {
         let params = methods::SyncApplyParams {
             plan_hash: plan_hash.clone(),
         };
-        // CANCEL-ON-DROP (#74), y aquí no es una precaución de más: el gate
-        // de `sync.apply` puede quedarse suspendido en un `ask` de policy
-        // más de lo que dura [`CALL_TIMEOUT`], y sin el guard el despacho
-        // seguiría vivo server-side — el humano aprobaría un minuto después
-        // y el árbol se reescribiría para un cliente que ya había desistido
-        // y había recibido «el daemon no contesta». Con él, abandonar manda
-        // el `rpc.cancel` que retira el gate PRE-efecto.
+        // CANCEL-ON-DROP (#74), and here it is not an extra precaution:
+        // `sync.apply`'s gate can stay suspended on a policy `ask` for
+        // longer than [`CALL_TIMEOUT`] lasts, and without the guard the
+        // dispatch would stay alive server-side — the human would approve a
+        // minute later and the tree would get rewritten for a client that
+        // had already given up and had received "the daemon is not
+        // answering". With it, abandoning sends the `rpc.cancel` that
+        // withdraws the gate PRE-effect.
         //
-        // Se pierde a cambio la traducción de `METHOD_NOT_FOUND`, y no
-        // importa: para llegar aquí hace falta un `plan_hash`, que solo
-        // puede haber salido de un `sync.plan` del MISMO daemon.
+        // In exchange, the translation of `METHOD_NOT_FOUND` is lost, and it
+        // does not matter: reaching here requires a `plan_hash`, which can
+        // only have come from a `sync.plan` of the SAME daemon.
         let result: FsTaskResult = self
             .call_timed_guarded(methods::SYNC_APPLY, &params)
             .await?;
         Ok(self.own_task(result.task_id, TaskKind::Sync))
     }
 
-    /// `sync.report` (0.40.0, ADR 0049): el informe de una aplicación ya
-    /// lanzada. `NotFound` si ese id no es una aplicación que este daemon
-    /// retenga — y esa es también la respuesta a un id de OTRA conexión, a
-    /// propósito.
+    /// `sync.report` (0.40.0, ADR 0049): the report of an already-launched
+    /// apply. `NotFound` if that id is not an apply this daemon retains —
+    /// and that is also the answer for an id from ANOTHER connection, on
+    /// purpose.
     ///
     /// # Errors
-    /// Lo que responda el daemon.
+    /// Whatever the daemon responds.
     pub async fn sync_report(&self, task_id: TaskId) -> Result<methods::SyncReportResult, Error> {
         let params = methods::SyncReportParams { task_id };
         self.call_maybe_unknown(methods::SYNC_REPORT, &params).await
     }
 
-    /// Una llamada cuyo `METHOD_NOT_FOUND` significa «tu daemon es más
-    /// viejo» y se entrega como [`Error::Unsupported`], no como el
-    /// `Internal` en el que `to_taxonomy` convertiría un `-32601`. Es el
-    /// patrón que `compare` y `undo_report` ya escribían a mano.
+    /// A call whose `METHOD_NOT_FOUND` means "your daemon is older" and is
+    /// delivered as [`Error::Unsupported`], not as the `Internal` that
+    /// `to_taxonomy` would turn a `-32601` into. This is the pattern
+    /// `compare` and `undo_report` already wrote by hand.
     async fn call_maybe_unknown<P: serde::Serialize, R: serde::de::DeserializeOwned>(
         &self,
         method: &'static str,
@@ -1790,11 +1814,11 @@ impl RemoteBackend {
         }
     }
 
-    /// `policy.undo_session` (M3-4): un humano deshace la sesión de un
-    /// agente. Corre como Task de undo con progreso/cancel como las demás.
+    /// `policy.undo_session` (M3-4): a human undoes an agent's session.
+    /// Runs as an undo Task with progress/cancel like the others.
     ///
     /// # Errors
-    /// Lo que responda el daemon.
+    /// Whatever the daemon responds.
     pub async fn undo_session(&self, session: &str) -> Result<RemoteTask, Error> {
         let result: methods::PolicyUndoSessionResult = self
             .call_timed(
@@ -1807,27 +1831,28 @@ impl RemoteBackend {
         Ok(self.own_task(result.task_id, TaskKind::Undo))
     }
 
-    /// `journal.list` (0.76.0, fase 7): una página de la línea de tiempo,
-    /// de la más nueva hacia atrás.
+    /// `journal.list` (0.76.0, phase 7): a page of the timeline, newest to
+    /// oldest.
     ///
-    /// SOLO para una conexión humana: contra una de agente el daemon
-    /// responde `PolicyDenied`, que es lo que hay que enseñar — un journal
-    /// vedado no se puede leer como uno vacío.
+    /// ONLY for a human connection: against an agent one the daemon answers
+    /// `PolicyDenied`, which is what has to be shown — a forbidden journal
+    /// cannot be read as an empty one.
     ///
     /// # Errors
-    /// Lo que responda el daemon.
+    /// Whatever the daemon responds.
     pub async fn journal_list(
         &self,
         before_seq: Option<i64>,
         limit: u32,
         actor_kind: Option<&str>,
     ) -> Result<methods::JournalListResult, Error> {
-        // `call_maybe_unknown` y no `call_timed`: un daemon que no conozca el
-        // método contesta `METHOD_NOT_FOUND`, y eso es «este daemon no
-        // guarda línea de tiempo», que se dice, no un fallo genérico. El
-        // handshake debería hacerlo inalcanzable —un cliente 0.76 no llega a
-        // hablar con un daemon 0.74—, pero el patrón es el que ya usa
-        // `undo_report` doce líneas más abajo, y es gratis.
+        // `call_maybe_unknown` and not `call_timed`: a daemon that does not
+        // know the method answers `METHOD_NOT_FOUND`, and that is "this
+        // daemon keeps no timeline", which gets said, not a generic
+        // failure. The handshake should make this unreachable — a 0.76
+        // client never gets to talk to a 0.74 daemon — but the pattern is
+        // the one `undo_report` already uses twelve lines below, and it is
+        // free.
         self.call_maybe_unknown(
             methods::JOURNAL_LIST,
             &methods::JournalListParams {
@@ -1839,32 +1864,33 @@ impl RemoteBackend {
         .await
     }
 
-    /// `journal.undo_after` (0.76.0, fase 7): deshace lo del humano
-    /// posterior a `seq`. La entrada señalada se queda.
+    /// `journal.undo_after` (0.76.0, phase 7): undoes the human's work after
+    /// `seq`. The marked entry stays.
     ///
-    /// Corre como Task de undo, con el mismo progreso, la misma cancelación
-    /// y el mismo informe (`policy.undo_report`) que deshacer una sesión
-    /// entera: es el mismo undo con otro criterio de selección.
+    /// Runs as an undo Task, with the same progress, the same cancellation
+    /// and the same report (`policy.undo_report`) as undoing a whole
+    /// session: it is the same undo with a different selection rule.
     ///
-    /// `upto_seq` (0.80.0) es el techo: lo más nuevo que el humano vio
-    /// contado. Un daemon 0.79 no lo conoce y lo IGNORARÍA (ADR 0004), así
-    /// que deshacer con techo contra él se rehúsa con `Unsupported`, en vez
-    /// de deshacer sin techo lo que la pregunta no contó (#294).
+    /// `upto_seq` (0.80.0) is the ceiling: the newest thing the human saw
+    /// counted. A 0.79 daemon does not know it and would IGNORE it (ADR
+    /// 0004), so undoing with a ceiling against it is refused with
+    /// `Unsupported`, instead of undoing with no ceiling what the question
+    /// did not count (#294).
     ///
     /// # Errors
-    /// `Unsupported` con techo contra un daemon anterior a 0.80; lo que
-    /// responda el daemon.
+    /// `Unsupported` with a ceiling against a pre-0.80 daemon; whatever the
+    /// daemon responds.
     pub async fn undo_after(&self, seq: i64, upto_seq: Option<i64>) -> Result<RemoteTask, Error> {
-        // Mismo criterio que el ancla de `plugins_set_approval` (#294):
-        // mandar una garantía que el peer no sabe aplicar es creerse una
-        // garantía que no se aplicó — y aquí lo que se pierde es el techo de
-        // una operación que REVIERTE trabajo. La pregunta prometió N; un
-        // daemon viejo desharía N más lo que se hizo después.
-        if upto_seq.is_some() && !self.peer_honra_el_techo() {
+        // Same rule as `plugins_set_approval`'s anchor (#294): sending a
+        // guarantee the peer does not know how to apply is believing in a
+        // guarantee that was never applied — and here what is lost is the
+        // ceiling of an operation that REVERTS work. The question promised
+        // N; an old daemon would undo N plus whatever was done after it.
+        if upto_seq.is_some() && !self.peer_honors_the_ceiling() {
             tracing::warn!(
                 peer = self.peer_protocol_version().as_deref().unwrap_or("?"),
-                "el daemon es anterior a 0.80 y no sabe poner techo a un deshacer: \
-                 se rehúsa en vez de deshacer más de lo que se contó"
+                "the daemon predates 0.80 and cannot put a ceiling on an undo: \
+                 refusing instead of undoing more than was counted"
             );
             return Err(Error::Unsupported);
         }
@@ -1877,14 +1903,14 @@ impl RemoteBackend {
         Ok(self.own_task(result.task_id, TaskKind::Undo))
     }
 
-    /// `policy.undo_report` (#71): informe de la Task de undo. Un daemon
-    /// N-1 sin el método responde `METHOD_NOT_FOUND` → `Unsupported`, para
-    /// que el caller lo distinga de un fallo REAL (el informe es la única
-    /// señal de que un undo Completed se bloqueó o saltó — no se degrada
-    /// en silencio; mismo criterio que el resync de `policy.pending`).
+    /// `policy.undo_report` (#71): the undo Task's report. An N-1 daemon
+    /// with no such method answers `METHOD_NOT_FOUND` → `Unsupported`, so
+    /// the caller can tell it apart from a REAL failure (the report is the
+    /// only signal that a Completed undo got blocked or skipped — it does
+    /// not degrade silently; same rule as the `policy.pending` resync).
     ///
     /// # Errors
-    /// Lo que responda el daemon.
+    /// Whatever the daemon responds.
     pub async fn undo_report(
         &self,
         task_id: TaskId,
@@ -1904,29 +1930,30 @@ impl RemoteBackend {
         }
     }
 
-    /// Recuerda un desenlace (anillo acotado).
+    /// Remembers an outcome (bounded ring).
     fn remember_finished(&self, snapshot: TaskProgress) {
-        let mut finished = self.inner.finished.lock().expect("finished lock sano");
+        let mut finished = self.inner.finished.lock().expect("finished lock is sound");
         finished.push_back(snapshot);
         while finished.len() > 128 {
             finished.pop_front();
         }
     }
 
-    /// `TaskRef` de una task PEDIDA por este proceso: engancha (o crea)
-    /// su watch. Si la bomba llegó antes (broadcast) y ya la anunció
-    /// como foránea, el frontend dedupe por id (contrato documentado);
-    /// si ya llegó su TERMINAL, el watch nace resuelto.
+    /// The `TaskRef` of a task REQUESTED by this process: hooks up (or
+    /// creates) its watch. If the pump arrived first (broadcast) and
+    /// already announced it as foreign, the frontend dedupes by id
+    /// (documented contract); if its TERMINAL already arrived, the watch is
+    /// born resolved.
     fn own_task(&self, id: TaskId, kind: TaskKind) -> RemoteTask {
-        // Orden de locks watches→finished (el mismo que route): con
-        // watches retenido, un desenlace o ya está en finished o
-        // llegará al watch que se crea abajo — sin ventana.
-        let mut watches = self.inner.watches.lock().expect("watches lock sano");
+        // Lock order watches→finished (the same as route): with watches
+        // held, an outcome is either already in finished or will reach the
+        // watch created below — no window.
+        let mut watches = self.inner.watches.lock().expect("watches lock is sound");
         if let Some(done) = self
             .inner
             .finished
             .lock()
-            .expect("finished lock sano")
+            .expect("finished lock is sound")
             .iter()
             .find(|p| p.task_id == id)
             .cloned()
@@ -1957,8 +1984,8 @@ impl RemoteBackend {
         RemoteTask::new(id, rx, RemoteTaskCanceller::new(self.clone(), id))
     }
 
-    /// `task.cancel` fire-and-forget (la confirmación llega por
-    /// `task.progress`, contrato del método).
+    /// `task.cancel` fire-and-forget (the confirmation arrives via
+    /// `task.progress`, the method's contract).
     pub(crate) fn spawn_cancel(&self, id: TaskId) {
         let backend = self.clone();
         tokio::spawn(async move {
@@ -1973,14 +2000,14 @@ impl RemoteBackend {
         });
     }
 
-    /// `task.pause` / `task.resume` (0.82.0, ADR 0147). NO es fire-and-forget
-    /// como cancelar: un daemon 0.81 no sabe pausar, contesta
-    /// `METHOD_NOT_FOUND`, y eso vuelve como `Unsupported` para que el
-    /// frontend lo DIGA en vez de pintar una pausa que no ocurrió.
+    /// `task.pause` / `task.resume` (0.82.0, ADR 0147). NOT fire-and-forget
+    /// like cancel: a 0.81 daemon cannot pause, answers `METHOD_NOT_FOUND`,
+    /// and that comes back as `Unsupported` so the frontend can SAY so
+    /// instead of painting a pause that never happened.
     ///
     /// # Errors
-    /// `Unsupported` contra un daemon sin el método; lo que responda el
-    /// daemon en otro caso.
+    /// `Unsupported` against a daemon with no such method; whatever the
+    /// daemon responds otherwise.
     pub(crate) async fn set_paused(&self, id: TaskId, paused: bool) -> Result<(), Error> {
         let client = self.client().await?;
         let method = if paused {
@@ -2001,12 +2028,12 @@ impl RemoteBackend {
         }
     }
 
-    /// `task.move` (0.83.0, ADR 0149): sube o baja en la cola en serie una
-    /// task que aún no empezó.
+    /// `task.move` (0.83.0, ADR 0149): moves a task that has not started yet
+    /// up or down in the serial queue.
     ///
     /// # Errors
-    /// `Unsupported` contra un daemon sin el método; lo que responda el
-    /// daemon en otro caso.
+    /// `Unsupported` against a daemon with no such method; whatever the
+    /// daemon responds otherwise.
     pub(crate) async fn mover_en_cola(&self, id: TaskId, up: bool) -> Result<(), Error> {
         let client = self.client().await?;
         let params = methods::TaskMoveParams { task_id: id, up };
@@ -2022,75 +2049,88 @@ impl RemoteBackend {
         }
     }
 
-    /// El canal de tasks AJENAS (las que otro cliente lanzó y este observa).
-    /// Es del PRIMER dueño: un clon del backend no debe llamarlo.
+    /// The channel for FOREIGN tasks (the ones another client launched and
+    /// this one observes). Belongs to the FIRST owner: a clone of the
+    /// backend must not call it.
     ///
     /// # Panics
-    /// Si el estado interno está envenenado por un panic previo.
+    /// If the internal state is poisoned by a previous panic.
     pub fn take_foreign_tasks(&self) -> Option<mpsc::UnboundedReceiver<RemoteTask>> {
-        self.foreign_rx.lock().expect("foreign_rx lock sano").take()
+        self.foreign_rx
+            .lock()
+            .expect("foreign_rx lock is sound")
+            .take()
     }
 
-    /// El canal de eventos de conexión (perdida / restaurada). Del primer
-    /// dueño, como el resto de los `take_*`.
+    /// The connection events channel (lost / restored). From the first
+    /// owner, like the rest of the `take_*`s.
     ///
     /// # Panics
-    /// Si el estado interno está envenenado por un panic previo.
+    /// If the internal state is poisoned by a previous panic.
     pub fn take_conn_events(&self) -> Option<mpsc::UnboundedReceiver<ConnEvent>> {
-        self.events_rx.lock().expect("events_rx lock sano").take()
+        self.events_rx
+            .lock()
+            .expect("events_rx lock is sound")
+            .take()
     }
 
-    /// El canal de aprobaciones pendientes de policy. Del primer dueño.
+    /// The pending policy approvals channel. From the first owner.
     ///
     /// # Panics
-    /// Si el estado interno está envenenado por un panic previo.
+    /// If the internal state is poisoned by a previous panic.
     pub fn take_approvals(&self) -> Option<mpsc::UnboundedReceiver<PolicyApprovalRequired>> {
         self.approvals_rx
             .lock()
-            .expect("approvals_rx lock sano")
+            .expect("approvals_rx lock is sound")
             .take()
     }
 
-    /// Se lleva el receptor de avisos `connection.degraded` (#44). Uno solo
-    /// (el primer dueño), como los otros `take_*`.
+    /// Takes the `connection.degraded` warnings receiver (#44). Just one
+    /// (the first owner), like the other `take_*`s.
     ///
     /// # Panics
-    /// Si el estado interno está envenenado por un panic previo.
+    /// If the internal state is poisoned by a previous panic.
     pub fn take_degraded(&self) -> Option<mpsc::UnboundedReceiver<ConnectionDegraded>> {
         self.degraded_rx
             .lock()
-            .expect("degraded_rx lock sano")
+            .expect("degraded_rx lock is sound")
             .take()
     }
 
-    /// Se lleva el receptor de fallos `connection.failed` (#322): POR QUÉ no
-    /// se pudo conectar. Uno solo, como los otros `take_*`.
+    /// Takes the `connection.failed` failures receiver (#322): WHY it could
+    /// not connect. Just one, like the other `take_*`s.
     ///
-    /// Sin esto, el frontend recibe la categoría del error —`PermissionDenied`,
-    /// que no distingue un secreto vacío de una clave equivocada— y la frase
-    /// exacta se queda en el log del daemon.
+    /// Without this, the frontend receives the error's category —
+    /// `PermissionDenied`, which does not distinguish an empty secret from a
+    /// wrong key — and the exact sentence stays in the daemon's log.
     ///
     /// # Panics
-    /// Si el estado interno está envenenado por un panic previo.
+    /// If the internal state is poisoned by a previous panic.
     pub fn take_failed(&self) -> Option<mpsc::UnboundedReceiver<ConnectionFailed>> {
-        self.failed_rx.lock().expect("failed_rx lock sano").take()
+        self.failed_rx
+            .lock()
+            .expect("failed_rx lock is sound")
+            .take()
     }
 
-    /// Se lleva el receptor de avisos `plugin.notice` (0.69.0, ADR 0100): lo
-    /// que un plugin `hook` quiso decirle al humano sobre una mutación ya
-    /// registrada, o que el daemon apagó los hooks de un plugin. Uno solo,
-    /// como los otros `take_*`.
+    /// Takes the `plugin.notice` warnings receiver (0.69.0, ADR 0100): what
+    /// a `hook` plugin wanted to tell the human about an already-logged
+    /// mutation, or that the daemon turned off a plugin's hooks. Just one,
+    /// like the other `take_*`s.
     ///
     /// # Panics
-    /// Si el estado interno está envenenado por un panic previo.
+    /// If the internal state is poisoned by a previous panic.
     pub fn take_plugin_notices(&self) -> Option<mpsc::UnboundedReceiver<PluginNotice>> {
-        self.notices_rx.lock().expect("notices_rx lock sano").take()
+        self.notices_rx
+            .lock()
+            .expect("notices_rx lock is sound")
+            .take()
     }
 
-    /// `policy.decide` contra el daemon (M3-3b T5).
+    /// `policy.decide` against the daemon (M3-3b T5).
     ///
     /// # Errors
-    /// Lo que responda el daemon.
+    /// Whatever the daemon responds.
     pub async fn policy_decide(&self, approval_id: u64, approve: bool) -> Result<(), Error> {
         let _: PolicyDecideResult = self
             .call_timed(
@@ -2104,21 +2144,21 @@ impl RemoteBackend {
         Ok(())
     }
 
-    /// `plugin.list` contra el daemon (M4-P3).
+    /// `plugin.list` against the daemon (M4-P3).
     ///
     /// # Errors
-    /// Lo que responda el daemon.
+    /// Whatever the daemon responds.
     pub async fn plugins_list(&self) -> Result<methods::PluginListResult, Error> {
         self.call_timed(methods::PLUGIN_LIST, &methods::PluginListParams {})
             .await
     }
 
-    /// `host.volumes` contra el daemon (0.37.0, #131). El gate por actor
-    /// vive server-side (diseño §C): una conexión de agente ve
-    /// [`Error::PolicyDenied`] aquí, no un fallo de transporte.
+    /// `host.volumes` against the daemon (0.37.0, #131). The per-actor gate
+    /// lives server-side (design §C): an agent connection sees
+    /// [`Error::PolicyDenied`] here, not a transport failure.
     ///
     /// # Errors
-    /// Lo que responda el daemon.
+    /// Whatever the daemon responds.
     pub async fn volumes(&self, include_pseudo: bool) -> Result<Vec<methods::Volume>, Error> {
         let result: methods::HostVolumesResult = self
             .call_timed(
@@ -2129,35 +2169,37 @@ impl RemoteBackend {
         Ok(result.volumes)
     }
 
-    /// `connection.list` (0.56.0, #264): las conexiones nombradas que el
-    /// DAEMON tiene configuradas.
+    /// `connection.list` (0.56.0, #264): the named connections the DAEMON
+    /// has configured.
     ///
-    /// Se pregunta en vez de leer `connections.toml` porque leerlo obligaría a
-    /// meter la pila de red entera —russh, opendal, suppaftp, age, keyring—
-    /// en un binario que solo quiere pintar una lista de nombres.
+    /// Asked for instead of reading `connections.toml` because reading it
+    /// would force pulling the whole network stack — russh, opendal,
+    /// suppaftp, age, keyring — into a binary that only wants to paint a
+    /// list of names.
     ///
-    /// Lo que vuelve NO conecta: es a dónde se podría ir. Ir es navegar a esa
-    /// URL, y eso ya establece la sesión por el camino de siempre, con su
-    /// TOFU y su política.
+    /// What comes back does NOT connect: it is where one COULD go. Going is
+    /// navigating to that URL, and that already establishes the session the
+    /// usual way, with its TOFU and its policy.
     ///
-    /// Devuelve el resultado ENTERO y no solo las buenas: desde 0.84.0 trae
-    /// también las entradas que el daemon no supo leer (#365), y tirarlas aquí
-    /// dejaría al cliente sin poder decir por qué falta una conexión que el
-    /// lector sabe que escribió.
+    /// Returns the WHOLE result and not just the good ones: since 0.84.0 it
+    /// also carries the entries the daemon could not read (#365), and
+    /// dropping them here would leave the client unable to say why a
+    /// connection the reader knows they wrote is missing.
     ///
     /// # Errors
-    /// Taxonomía: `PolicyDenied` si la conexión es de agente; `InvalidPath` si
-    /// el fichero del daemon existe y su TOML no parsea.
+    /// Taxonomy: `PolicyDenied` if the connection is an agent's;
+    /// `InvalidPath` if the daemon's file exists and its TOML does not
+    /// parse.
     pub async fn connections(&self) -> Result<methods::ConnectionListResult, Error> {
         self.call_timed(methods::CONNECTION_LIST, &serde_json::json!({}))
             .await
     }
 
-    /// `session.get` contra el daemon (L2): la pantalla y si ESTA conexión
-    /// es la dueña.
+    /// `session.get` against the daemon (L2): the screen and whether THIS
+    /// connection owns it.
     ///
     /// # Errors
-    /// Lo que responda el daemon.
+    /// Whatever the daemon responds.
     pub async fn session_get(&self) -> Result<(methods::Session, bool), Error> {
         let r: methods::SessionGetResult = self
             .call_no_method_is_unsupported(methods::SESSION_GET, &serde_json::json!({}))
@@ -2165,10 +2207,10 @@ impl RemoteBackend {
         Ok((r.session, r.owner))
     }
 
-    /// `session.put` contra el daemon (L2): devuelve la revisión NUEVA.
+    /// `session.put` against the daemon (L2): returns the NEW revision.
     ///
     /// # Errors
-    /// Lo que responda el daemon.
+    /// Whatever the daemon responds.
     pub async fn session_put(
         &self,
         version: u32,
@@ -2188,18 +2230,18 @@ impl RemoteBackend {
         Ok(r.revision)
     }
 
-    /// `session.release` contra el daemon (0.78.0, fase 9): esta conexión
-    /// renuncia a ser la dueña de la sesión de UI.
+    /// `session.release` against the daemon (0.78.0, phase 9): this
+    /// connection gives up owning the UI session.
     ///
-    /// Devuelve si ERA la dueña. `false` no es un error: es «no eras tú», y
-    /// quien releva lo necesita para no lanzar al otro frontend a reclamar una
-    /// sesión que sigue ocupada.
+    /// Returns whether it WAS the owner. `false` is not an error: it is
+    /// "it wasn't you", and whoever hands off needs it so as not to send the
+    /// other frontend to claim a session that is still occupied.
     ///
-    /// Un daemon 0.77 contesta `Unsupported` —`MethodNotFound` traducido—, y
-    /// ahí la degradación honesta es no soltar nada.
+    /// A 0.77 daemon answers `Unsupported` — a translated `MethodNotFound`
+    /// — and there the honest degradation is releasing nothing.
     ///
     /// # Errors
-    /// Lo que responda el daemon.
+    /// Whatever the daemon responds.
     pub async fn session_release(&self) -> Result<bool, Error> {
         let r: methods::SessionReleaseResult = self
             .call_no_method_is_unsupported(methods::SESSION_RELEASE, &serde_json::json!({}))
@@ -2207,29 +2249,30 @@ impl RemoteBackend {
         Ok(r.released)
     }
 
-    /// `log.tail` contra el daemon (L2): lo que su anillo de registro tiene
-    /// después de `cursor` (0.65.0, #328, ADR 0092).
+    /// `log.tail` against the daemon (L2): what its log ring has after
+    /// `cursor` (0.65.0, #328, ADR 0092).
     ///
-    /// `cursor: None` pide «lo que haya» — NO es lo mismo que `Some(0)`, ver
-    /// [`methods::LogTailParams::cursor`]: contra un anillo que ya dio la
-    /// vuelta, un `0` reportaría un `lost` falso en el primer sondeo. Este
-    /// SDK no traduce nada: pasa el `Option` tal cual.
+    /// `cursor: None` asks for "whatever there is" — this is NOT the same as
+    /// `Some(0)`, see [`methods::LogTailParams::cursor`]: against a ring
+    /// that has already wrapped around, a `0` would report a false `lost`
+    /// on the first poll. This SDK translates nothing: it passes the
+    /// `Option` as is.
     ///
-    /// El caso alcanzable de verdad no es un daemon MÁS VIEJO —un cliente
-    /// 0.65 nunca completa `initialize` contra uno 0.64, ver
-    /// [`methods::LOG_TAIL`]— sino uno de la MISMA versión compilado sin la
-    /// feature `logging`, que no tiene anillo que servir y contesta
+    /// The really reachable case is not an OLDER daemon — a 0.65 client
+    /// never completes `initialize` against a 0.64 one, see
+    /// [`methods::LOG_TAIL`] — but one of the SAME version compiled without
+    /// the `logging` feature, which has no ring to serve and answers
     /// `Error::Unsupported` (`-32000`).
     ///
-    /// Este SDK dobla ADEMÁS un `METHOD_NOT_FOUND` en [`Error::Unsupported`]
-    /// (`call_no_method_is_unsupported`), y eso se queda: es defensa contra un
-    /// peer que no sea este daemon, no la descripción del caso que ocurre.
-    /// Quien lea esto para escribir una degradación tiene UNA rama que
-    /// programar, y es [`Error::Unsupported`].
+    /// This SDK ALSO folds a `METHOD_NOT_FOUND` into [`Error::Unsupported`]
+    /// (`call_no_method_is_unsupported`), and that stays: it is defense
+    /// against a peer that is not this daemon, not the description of the
+    /// case that happens. Whoever reads this to write a degradation has ONE
+    /// branch to program, and it is [`Error::Unsupported`].
     ///
     /// # Errors
-    /// Lo que responda el daemon; [`Error::Unsupported`] si no tiene registro
-    /// que servir.
+    /// Whatever the daemon responds; [`Error::Unsupported`] if it has no
+    /// ring to serve.
     pub async fn log_tail(
         &self,
         cursor: Option<u64>,
@@ -2242,21 +2285,21 @@ impl RemoteBackend {
         .await
     }
 
-    /// `log.level` contra el daemon (L2): sube el nivel que su anillo está
-    /// guardando y devuelve el que de verdad quedó puesto (0.65.0, #328,
+    /// `log.level` against the daemon (L2): raises the level its ring is
+    /// keeping and returns the one that really ended up set (0.65.0, #328,
     /// ADR 0092).
     ///
-    /// El anillo nunca BAJA de nivel (ver [`methods::LOG_LEVEL`]), así que
-    /// pedir uno menos verboso que el vigente no es un error: el daemon
-    /// contesta el que ya tenía puesto, y este SDK lo entrega tal cual — no
-    /// hay nada que traducir ni que pre-validar contra [`methods::LOG_LEVELS`]
-    /// en el cliente.
+    /// The ring never LOWERS its level (see [`methods::LOG_LEVEL`]), so
+    /// asking for one less verbose than the current one is not an error:
+    /// the daemon answers with the one it already had set, and this SDK
+    /// delivers it as is — there is nothing to translate nor to
+    /// pre-validate against [`methods::LOG_LEVELS`] on the client.
     ///
     /// # Errors
-    /// Lo que responda el daemon; [`Error::Unsupported`] contra uno sin
-    /// registro que servir (ver [`Self::log_tail`]). Un `level` fuera del
-    /// vocabulario es `INVALID_PARAMS`, no `Unsupported` — son dos preguntas
-    /// distintas y el daemon las distingue a propósito.
+    /// Whatever the daemon responds; [`Error::Unsupported`] against one with
+    /// no ring to serve (see [`Self::log_tail`]). A `level` outside the
+    /// vocabulary is `INVALID_PARAMS`, not `Unsupported` — they are two
+    /// different questions and the daemon distinguishes them on purpose.
     pub async fn log_level(&self, level: &str) -> Result<String, Error> {
         let r: methods::LogLevelResult = self
             .call_no_method_is_unsupported(
@@ -2269,90 +2312,100 @@ impl RemoteBackend {
         Ok(r.level)
     }
 
-    /// La versión de protocolo que el peer declaró en el último handshake
-    /// (#294), o `None` si todavía no se ha conectado nunca.
+    /// The protocol version the peer declared in the last handshake (#294),
+    /// or `None` if it has never connected yet.
     ///
-    /// Lo que se contesta con ella es «¿se hizo de verdad la comprobación que
-    /// pedí?». Un campo opcional que un peer viejo ignora (ADR 0004) es una
-    /// degradación silenciosa, y sin esto el cliente ni siquiera podía
-    /// detectarla.
+    /// What is answered with it is "was the check I asked for really done?".
+    /// An optional field an old peer ignores (ADR 0004) is a silent
+    /// degradation, and without this the client could not even detect it.
     ///
     /// # Panics
-    /// Nunca en la práctica: solo por envenenamiento del lock interno, que
-    /// exigiría que otro hilo hubiese panicado con él tomado — y lo único que
-    /// se hace bajo él es leer y escribir un `Option<String>`.
+    /// Never in practice: only from poisoning of the internal lock, which
+    /// would require another thread to have panicked while holding it — and
+    /// the only thing done under it is reading and writing an
+    /// `Option<String>`.
     #[must_use]
     pub fn peer_protocol_version(&self) -> Option<String> {
         self.inner
             .peer_version
             .lock()
-            .expect("peer_version lock sano")
+            .expect("peer_version lock is sound")
             .clone()
     }
 
-    /// ¿Entiende el peer `expected_digest` en `plugin.set_approval` (#282)?
+    // TODO(translation): review — this doc comment appears to have been
+    // split between two functions: the paragraphs about `expected_digest`
+    // belong to `peer_checks_the_anchor` below (which carries no doc of its
+    // own), while only the last paragraph ("Does the peer know how to cap
+    // `journal.undo_after`...") documents `peer_honors_the_ceiling`. Translated
+    // in place, split intact, not restructured.
+    /// Does the peer understand `expected_digest` in `plugin.set_approval`
+    /// (#282)?
     ///
-    /// La comparación la hace [`methods::version_at_least`], que es la función
-    /// canónica y **falla CERRADO**: una versión que no parsea contesta
-    /// `false`, «sin saber qué habla el otro, no se le supone nada». Esto tuvo
-    /// su propio parser durante media hora y fallaba ABIERTO, que es la
-    /// dirección equivocada — la cadena la elige el PEER, o sea justo la parte
-    /// que se está intentando clasificar, y un `"norte-0.52"` se habría
-    /// saltado la comprobación entera.
+    /// The comparison is done by [`methods::version_at_least`], which is the
+    /// canonical function and **fails CLOSED**: a version that does not
+    /// parse answers `false`, "not knowing what the other one speaks, it is
+    /// assumed nothing". This had its own parser for half an hour and it
+    /// failed OPEN, which is the wrong direction — the string is chosen by
+    /// the PEER, i.e. exactly the part being classified, and a
+    /// `"norte-0.52"` would have skipped the whole check.
     ///
-    /// Sin versión retenida —todavía sin conectar— se contesta `true` y quien
-    /// decide es el daemon: ahí no hay ninguna afirmación que hacer, y el
-    /// handshake va antes que cualquier llamada.
-    /// ¿Sabe el peer poner techo a `journal.undo_after` (`upto_seq`, 0.80.0)?
-    /// Falla CERRADO como [`Self::peer_comprueba_el_ancla`], y por lo mismo.
-    fn peer_honra_el_techo(&self) -> bool {
-        techo_honrado(self.peer_protocol_version().as_deref())
+    /// With no version retained — not connected yet — it answers `true` and
+    /// whoever decides is the daemon: there is no claim to make there, and
+    /// the handshake goes before any call.
+    /// Does the peer know how to cap `journal.undo_after` (`upto_seq`,
+    /// 0.80.0)? Fails CLOSED like [`Self::peer_checks_the_anchor`], and for
+    /// the same reason.
+    fn peer_honors_the_ceiling(&self) -> bool {
+        ceiling_honored(self.peer_protocol_version().as_deref())
     }
 
-    /// ¿Sabe el peer filtrar una búsqueda (0.81.0)? Falla CERRADO igual.
-    fn peer_honra_los_filtros(&self) -> bool {
+    /// Does the peer know how to filter a search (0.81.0)? Fails CLOSED the
+    /// same way.
+    fn peer_honors_filters(&self) -> bool {
         let Some(v) = self.peer_protocol_version() else {
             return true;
         };
         methods::version_at_least(&v, 0, 81)
     }
 
-    fn peer_comprueba_el_ancla(&self) -> bool {
+    fn peer_checks_the_anchor(&self) -> bool {
         let Some(v) = self.peer_protocol_version() else {
             return true;
         };
-        // `expected_digest` llegó en 0.53.0.
+        // `expected_digest` arrived in 0.53.0.
         methods::version_at_least(&v, 0, 53)
     }
 
-    /// `plugin.set_approval` contra el daemon (M4-P3).
+    /// `plugin.set_approval` against the daemon (M4-P3).
     ///
-    /// `expected_digest` es el ancla que el humano LEYÓ (#282): el daemon
-    /// rehúsa si ya no casa con la suya, de modo que lo que se concede sea lo
-    /// que se enseñó. `None` deja el comportamiento de 0.52 — la comprobación
-    /// es lo que se pierde, no la corrección.
+    /// `expected_digest` is the anchor the human READ (#282): the daemon
+    /// refuses if it no longer matches its own, so that what is granted is
+    /// what was shown. `None` keeps 0.52's behavior — the check is what is
+    /// lost, not the correctness.
     ///
     /// # Errors
-    /// Lo que responda el daemon.
+    /// Whatever the daemon responds.
     pub async fn plugins_set_approval(
         &self,
         id: &str,
         approved: bool,
         expected_digest: Option<&str>,
     ) -> Result<(), Error> {
-        // Conceder pidiendo una comprobación que el peer no sabe hacer es
-        // creerse una garantía que no se aplicó (#294): el daemon viejo ignora
-        // el campo como manda ADR 0004 y concede lo que él tenga. Se rehúsa, y
-        // quien quiera conceder de todas formas puede mandar `None` — que es
-        // decir explícitamente «sin comprobar».
-        if approved && expected_digest.is_some() && !self.peer_comprueba_el_ancla() {
-            // Se DICE, con la versión dentro: el punto entero de #294 es hacer
-            // audible una degradación silenciosa, y un `Unsupported` mudo se
-            // lee igual que «este daemon no hace plugins».
+        // Granting while asking for a check the peer does not know how to do
+        // is believing in a guarantee that was never applied (#294): the old
+        // daemon ignores the field as ADR 0004 mandates and grants whatever
+        // it has. It is refused, and whoever wants to grant anyway can send
+        // `None` — which is explicitly saying "without checking".
+        if approved && expected_digest.is_some() && !self.peer_checks_the_anchor() {
+            // It IS SAID, with the version inside: the whole point of #294
+            // is making a silent degradation audible, and a mute
+            // `Unsupported` reads exactly like "this daemon does not do
+            // plugins".
             tracing::warn!(
                 peer = self.peer_protocol_version().as_deref().unwrap_or("?"),
-                "el daemon es anterior a 0.53 y no puede comprobar el ancla de la aprobación: \
-                 se rehúsa en vez de conceder sin comprobar (#294)"
+                "the daemon predates 0.53 and cannot check the approval's anchor: \
+                 refusing instead of granting without checking (#294)"
             );
             return Err(Error::Unsupported);
         }
@@ -2369,10 +2422,10 @@ impl RemoteBackend {
         Ok(())
     }
 
-    /// `plugin.set_enabled` contra el daemon (M4-P3).
+    /// `plugin.set_enabled` against the daemon (M4-P3).
     ///
     /// # Errors
-    /// Lo que responda el daemon.
+    /// Whatever the daemon responds.
     pub async fn plugins_set_enabled(&self, id: &str, enabled: bool) -> Result<(), Error> {
         let _: methods::PluginSetEnabledResult = self
             .call_timed(
@@ -2386,12 +2439,13 @@ impl RemoteBackend {
         Ok(())
     }
 
-    /// `plugin.uninstall` contra el daemon (0.71.0, ADR 0104): borra el
-    /// plugin, retira su consentimiento y lo olvida en el registro del daemon.
+    /// `plugin.uninstall` against the daemon (0.71.0, ADR 0104): deletes the
+    /// plugin, withdraws its consent and forgets it in the daemon's
+    /// registry.
     ///
     /// # Errors
-    /// Lo que responda el daemon: `INVALID_PARAMS` si no es un id o no está
-    /// instalado; `INVALID_REQUEST` desde una conexión de agente.
+    /// Whatever the daemon responds: `INVALID_PARAMS` if it is not an id or
+    /// is not installed; `INVALID_REQUEST` from an agent connection.
     pub async fn plugins_uninstall(
         &self,
         id: &str,
@@ -2403,11 +2457,12 @@ impl RemoteBackend {
         .await
     }
 
-    /// `plugin.run_command` contra el daemon (M4-P4): devuelve la salida del
-    /// comando. El daemon ya redacta los fallos de runtime a `Internal`.
+    /// `plugin.run_command` against the daemon (M4-P4): returns the
+    /// command's output. The daemon already redacts runtime failures to
+    /// `Internal`.
     ///
     /// # Errors
-    /// Lo que responda el daemon.
+    /// Whatever the daemon responds.
     pub async fn plugin_run_command(
         &self,
         id: &str,
@@ -2427,12 +2482,12 @@ impl RemoteBackend {
         Ok(r.output)
     }
 
-    /// `plugin.preview` contra el daemon (M4-P5): devuelve el result tal cual
-    /// (la preview, o `None`). El daemon ya redacta los fallos de runtime a
-    /// `INTERNAL_ERROR` y resuelve el previewer fail-closed.
+    /// `plugin.preview` against the daemon (M4-P5): returns the result as is
+    /// (the preview, or `None`). The daemon already redacts runtime
+    /// failures to `INTERNAL_ERROR` and resolves the previewer fail-closed.
     ///
     /// # Errors
-    /// Lo que responda el daemon.
+    /// Whatever the daemon responds.
     pub async fn plugin_preview(
         &self,
         path: &VPath,
@@ -2444,22 +2499,21 @@ impl RemoteBackend {
         .await
     }
 
-    /// `plugin.preview_styled` contra el daemon (G3a, ADR 0037): gemelo
-    /// con estilo de [`Self::plugin_preview`]. `MethodNotFound` (-32601)
-    /// es el trigger REAL dentro de la MISMA ventana 0.27 (un daemon
-    /// 0.27 sin este handler aún cableado — el ADR distingue esto de
-    /// `VERSION_MISMATCH`, que ni deja intentar la llamada): se traduce
-    /// a `Ok(None)`, exactamente lo mismo que "ningún previewer
-    /// aplica" — el caller cae a [`Self::plugin_preview`] (plano). NO
-    /// se usa `call_timed` aquí (mismo motivo que `undo_report`,
-    /// arriba): `call_timed`/`to_taxonomy` solo miran `rpc.data`, que
-    /// para un `METHOD_NOT_FOUND` de la rama `_` del dispatch es `None`
-    /// — el código -32601 se perdería. Cualquier OTRO fallo (I/O,
-    /// timeout, un fallo real de runtime redactado por el daemon…) se
-    /// propaga tal cual.
+    /// `plugin.preview_styled` against the daemon (G3a, ADR 0037): the
+    /// styled twin of [`Self::plugin_preview`]. `MethodNotFound` (-32601) is
+    /// the REAL trigger within the SAME 0.27 window (a 0.27 daemon with this
+    /// handler not wired up yet — the ADR distinguishes this from
+    /// `VERSION_MISMATCH`, which does not even let the call be attempted):
+    /// translated to `Ok(None)`, exactly the same as "no previewer
+    /// applies" — the caller falls back to [`Self::plugin_preview`] (plain).
+    /// `call_timed` is NOT used here (same reason as `undo_report` above):
+    /// `call_timed`/`to_taxonomy` only look at `rpc.data`, which for a
+    /// `METHOD_NOT_FOUND` from the dispatch's `_` branch is `None` — the
+    /// -32601 code would be lost. Any OTHER failure (I/O, timeout, a real
+    /// runtime failure redacted by the daemon…) propagates as is.
     ///
     /// # Errors
-    /// Lo que responda el daemon.
+    /// Whatever the daemon responds.
     pub async fn plugin_preview_styled(
         &self,
         path: &VPath,
@@ -2478,12 +2532,12 @@ impl RemoteBackend {
         }
     }
 
-    /// `plugin.thumbnail` contra el daemon (ADR 0107): `MethodNotFound` —un
-    /// daemon 0.72 que no lo tiene— cae a SIN miniatura, que es lo que
-    /// había. Cualquier otro error se propaga.
+    /// `plugin.thumbnail` against the daemon (ADR 0107): `MethodNotFound` —
+    /// a 0.72 daemon that does not have it — falls back to NO thumbnail,
+    /// which is what there was. Any other error propagates.
     ///
     /// # Errors
-    /// Los del wire, traducidos a la taxonomía; nunca `MethodNotFound`.
+    /// The wire's, translated into the taxonomy; never `MethodNotFound`.
     pub async fn plugin_thumbnail(
         &self,
         path: &VPath,
@@ -2502,13 +2556,13 @@ impl RemoteBackend {
         }
     }
 
-    /// `plugin.panel_render` contra el daemon (0.74.0, fase 3):
-    /// `MethodNotFound` —un daemon 0.73 que no lo tiene— cae a SIN marco, que
-    /// deja el hueco con lo último que pintó. Cualquier otro error se
-    /// propaga.
+    /// `plugin.panel_render` against the daemon (0.74.0, phase 3):
+    /// `MethodNotFound` — a 0.73 daemon that does not have it — falls back to
+    /// NO frame, which leaves the slot with the last thing it painted. Any
+    /// other error propagates.
     ///
     /// # Errors
-    /// Los del wire, traducidos a la taxonomía; nunca `MethodNotFound`.
+    /// The wire's, translated into the taxonomy; never `MethodNotFound`.
     pub async fn plugin_panel_render(
         &self,
         params: methods::PluginPanelRenderParams,
@@ -2522,22 +2576,23 @@ impl RemoteBackend {
         }
     }
 
-    /// `plugin.decorate` contra el daemon (G3b, ADR 0037): `MethodNotFound`
-    /// (mismos DOS triggers documentados en el ADR — un daemon 0.27 que aún
-    /// no cableó el handler, o un cliente que decide no llamarlo) cae a SIN
-    /// decoraciones (`Ok(vec![])`) — el listado se pinta igual, sin badges.
-    /// Cualquier OTRO error se propaga. `paths` vacío no llama al wire (nada
-    /// que decorar).
+    /// `plugin.decorate` against the daemon (G3b, ADR 0037): `MethodNotFound`
+    /// (the same TWO triggers documented in the ADR — a 0.27 daemon that has
+    /// not wired up the handler yet, or a client that decides not to call
+    /// it) falls back to NO decorations (`Ok(vec![])`) — the listing paints
+    /// just the same, with no badges. Any OTHER error propagates. An empty
+    /// `paths` does not call the wire (nothing to decorate).
     ///
-    /// `kinds` es la clase de cada ruta, POSICIONAL con `paths` (0.72.0, ADR
-    /// 0105): construir las dos listas de iteradores distintos —una filtrada,
-    /// la otra no— da iconos equivocados sin ningún error. Vacío es legal y
-    /// significa «no lo sé»: todo se trata como `other`, y las carpetas van
-    /// sin icono; más corto que `paths` degrada igual lo que falte, y el
-    /// daemon lo anota; más largo es `INVALID_PARAMS`.
+    /// `kinds` is each path's class, POSITIONAL with `paths` (0.72.0, ADR
+    /// 0105): building the two lists from different iterators — one
+    /// filtered, the other not — gives wrong icons with no error at all.
+    /// Empty is legal and means "I don't know": everything is treated as
+    /// `other`, and directories go with no icon; shorter than `paths`
+    /// degrades whatever is missing the same way, and the daemon notes it;
+    /// longer is `INVALID_PARAMS`.
     ///
     /// # Errors
-    /// Lo que responda el daemon.
+    /// Whatever the daemon responds.
     pub async fn plugin_decorate(
         &self,
         paths: &[VPath],
@@ -2559,16 +2614,16 @@ impl RemoteBackend {
         }
     }
 
-    /// `plugin.rename_plan` (0.67.0, C3, ADR 0095): el plan que propone un
-    /// plugin `renamer`. Un daemon 0.66 no negocia con este cliente, así
-    /// que aquí nunca llega un `MethodNotFound` por versión.
+    /// `plugin.rename_plan` (0.67.0, C3, ADR 0095): the plan a `renamer`
+    /// plugin proposes. A 0.66 daemon does not negotiate with this client,
+    /// so a version-caused `MethodNotFound` never arrives here.
     ///
-    /// Un rehúse del guest no es un error: `entries` vacío y `refused` con
-    /// la frase (0.68.0, #332).
+    /// A guest refusal is not an error: an empty `entries` and `refused`
+    /// with the sentence (0.68.0, #332).
     ///
     /// # Errors
-    /// Los del daemon: `NotFound` si el renamer no está consentido; `Io` si
-    /// el guest no corre.
+    /// The daemon's: `NotFound` if the renamer is not consented to; `Io` if
+    /// the guest does not run.
     pub async fn plugin_rename_plan(
         &self,
         plugin_id: &str,
@@ -2589,14 +2644,15 @@ impl RemoteBackend {
         .await
     }
 
-    /// `plugin.organize_plan` (0.77.0, fase 8): el plan de un plugin del
-    /// kind `organizer`. Mismo contrato que el del renamer — propone, no
-    /// muta— y el mismo tipo de respuesta que `ai.organize_plan`, porque lo
-    /// que hace segura la operación no es de dónde salieron los nombres.
+    /// `plugin.organize_plan` (0.77.0, phase 8): the plan of an `organizer`
+    /// kind plugin. Same contract as the renamer's — it proposes, does not
+    /// mutate — and the same response type as `ai.organize_plan`, because
+    /// what makes the operation safe is not where the names came from.
     ///
     /// # Errors
-    /// `NotFound` si ese plugin no declara ese organizer, no está aprobado o
-    /// está apagado; `InvalidPath` si propuso escribir fuera del directorio.
+    /// `NotFound` if that plugin does not declare that organizer, is not
+    /// approved or is disabled; `InvalidPath` if it proposed writing outside
+    /// the directory.
     pub async fn plugin_organize_plan(
         &self,
         plugin_id: &str,
@@ -2617,15 +2673,14 @@ impl RemoteBackend {
         .await
     }
 
-    /// `plugin.column_values` contra el daemon (G3b, ADR 0037): mismo
-    /// criterio de fallback que [`Self::plugin_decorate`], pero la forma
-    /// "sin datos" es un vector de `None` del tamaño de `paths` (celda
-    /// vacía por entrada), no un vector vacío — el caller espera SIEMPRE
-    /// una celda por ruta (contrato posicional), incluso cuando la
-    /// columna no aplica en absoluto.
+    /// `plugin.column_values` against the daemon (G3b, ADR 0037): same
+    /// fallback rule as [`Self::plugin_decorate`], but the "no data" shape
+    /// is a vector of `None` the size of `paths` (an empty cell per entry),
+    /// not an empty vector — the caller ALWAYS expects one cell per path
+    /// (positional contract), even when the column does not apply at all.
     ///
     /// # Errors
-    /// Lo que responda el daemon.
+    /// Whatever the daemon responds.
     pub async fn plugin_column_values(
         &self,
         plugin_id: &str,
@@ -2649,15 +2704,14 @@ impl RemoteBackend {
         }
     }
 
-    /// `plugin.get_config` contra el daemon (0.28.0, G3c). Sin fallback
-    /// especial: un daemon N-1 (0.27, que no tiene el handler) responde
-    /// `MethodNotFound`, que `call_timed`/`to_taxonomy` degradan a un
-    /// error genérico — el caller (TUI/GUI) trata "no pude leer la
-    /// config" como "esconde la sección de ajustes de este plugin",
-    /// nunca como un crash.
+    /// `plugin.get_config` against the daemon (0.28.0, G3c). No special
+    /// fallback: an N-1 daemon (0.27, with no such handler) answers
+    /// `MethodNotFound`, which `call_timed`/`to_taxonomy` degrade to a
+    /// generic error — the caller (TUI/GUI) treats "could not read the
+    /// config" as "hide this plugin's settings section", never as a crash.
     ///
     /// # Errors
-    /// Lo que responda el daemon.
+    /// Whatever the daemon responds.
     pub async fn plugin_get_config(
         &self,
         id: &str,
@@ -2669,19 +2723,19 @@ impl RemoteBackend {
         .await
     }
 
-    /// `plugin.help` contra el daemon (H3e, 0.34.0). Sin fallback
-    /// especial: cualquier error —incluido un peer que no implemente el
-    /// método y conteste `MethodNotFound`— lo degradan
-    /// `call_timed`/`to_taxonomy` a un error de la taxonomía, y el frontend
-    /// lo trata como "este plugin no tiene página" y sigue pintando la
-    /// ayuda, nunca como un fallo. La ayuda es cosmética.
+    /// `plugin.help` against the daemon (H3e, 0.34.0). No special fallback:
+    /// any error — including a peer that does not implement the method and
+    /// answers `MethodNotFound` — is degraded by `call_timed`/`to_taxonomy`
+    /// into a taxonomy error, and the frontend treats it as "this plugin has
+    /// no page" and keeps painting the help, never as a failure. The help is
+    /// cosmetic.
     ///
-    /// El markdown NO está enmascarado (ver `Backend::plugin_help` del core):
-    /// se parsea antes de pintarlo, nunca se vuelca en crudo a un terminal
-    /// ni a un log.
+    /// The markdown is NOT masked (see the core's `Backend::plugin_help`):
+    /// it is parsed before painting it, never dumped raw to a terminal or a
+    /// log.
     ///
     /// # Errors
-    /// Lo que responda el daemon.
+    /// Whatever the daemon responds.
     pub async fn plugin_help(&self, id: &str) -> Result<methods::PluginHelpResult, Error> {
         self.call_timed(
             methods::PLUGIN_HELP,
@@ -2690,13 +2744,13 @@ impl RemoteBackend {
         .await
     }
 
-    /// `plugin.set_config` contra el daemon (0.28.0, G3c). Mismo
-    /// criterio de fallback que [`Self::plugin_get_config`] — SIN
-    /// fallback especial, un error (incluido un daemon N-1 sin el
-    /// handler, o un valor rechazado por el daemon) se propaga tal cual.
+    /// `plugin.set_config` against the daemon (0.28.0, G3c). Same fallback
+    /// rule as [`Self::plugin_get_config`] — NO special fallback, an error
+    /// (including an N-1 daemon with no such handler, or a value the daemon
+    /// rejects) propagates as is.
     ///
     /// # Errors
-    /// Lo que responda el daemon.
+    /// Whatever the daemon responds.
     pub async fn plugin_set_config(&self, id: &str, key: &str, value: &str) -> Result<(), Error> {
         let _: methods::PluginSetConfigResult = self
             .call_timed(
@@ -2712,22 +2766,27 @@ impl RemoteBackend {
     }
 }
 
-/// Traduce el `Result` crudo de `plugin.preview_styled` (G3a, ADR 0037)
-/// al contrato de [`RemoteBackend::plugin_preview_styled`]. Extraída de
-/// esa función SOLO para poder testearla sin socket (construyendo un
-/// [`ClientError::Rpc`] a mano): `METHOD_NOT_FOUND` (-32601) → `Ok(None)`
-/// (mismo destino que "ningún previewer aplica" — el caller cae al
-/// preview plano); cualquier OTRO error va por la taxonomía normal
-/// (`to_taxonomy`, que SÍ mira `rpc.data` para los `APP_ERROR`).
-/// Traduce el `Result` crudo de `plugin.thumbnail` (ADR 0107) al contrato
-/// de [`RemoteBackend::plugin_thumbnail`]: `METHOD_NOT_FOUND` → `Ok(None)`.
-/// Traduce el `Result` crudo de `plugin.panel_render` (0.74.0, fase 3) al
-/// contrato de [`RemoteBackend::plugin_panel_render`]: `METHOD_NOT_FOUND` →
-/// `Ok(None)`, el mismo destino que «ningún plugin pinta este panel».
+// TODO(translation): review — this doc comment appears to document three
+// different functions in a row (`map_styled_preview_result`,
+// `map_thumbnail_result`, and the `map_panel_result` it is actually attached
+// to). Translated in place, not restructured.
+/// Translates `plugin.preview_styled`'s raw `Result` (G3a, ADR 0037) into
+/// [`RemoteBackend::plugin_preview_styled`]'s contract. Extracted out of that
+/// function ONLY so it can be tested with no socket (building a
+/// [`ClientError::Rpc`] by hand): `METHOD_NOT_FOUND` (-32601) → `Ok(None)`
+/// (same destination as "no previewer applies" — the caller falls back to
+/// the plain preview); any OTHER error goes through the normal taxonomy
+/// (`to_taxonomy`, which DOES look at `rpc.data` for `APP_ERROR`s).
+/// Translates `plugin.thumbnail`'s raw `Result` (ADR 0107) into
+/// [`RemoteBackend::plugin_thumbnail`]'s contract: `METHOD_NOT_FOUND` →
+/// `Ok(None)`.
+/// Translates `plugin.panel_render`'s raw `Result` (0.74.0, phase 3) into
+/// [`RemoteBackend::plugin_panel_render`]'s contract: `METHOD_NOT_FOUND` →
+/// `Ok(None)`, the same destination as "no plugin paints this panel".
 ///
-/// Extraída de la función por lo mismo que su hermana: así la promesa de
-/// compatibilidad N-1 se puede probar construyendo un [`ClientError::Rpc`] a
-/// mano, sin levantar un socket ni un daemon viejo.
+/// Extracted out of the function for the same reason as its sibling: this
+/// way the N-1 compatibility promise can be tested by building a
+/// [`ClientError::Rpc`] by hand, with no socket or old daemon to bring up.
 fn map_panel_result(
     res: Result<methods::PluginPanelRenderResult, ClientError>,
 ) -> Result<Option<methods::PanelFrame>, Error> {
@@ -2770,10 +2829,10 @@ fn map_styled_preview_result(
     }
 }
 
-/// Traduce el `Result` crudo de `plugin.decorate` (G3b, ADR 0037) al
-/// contrato de [`RemoteBackend::plugin_decorate`]: `METHOD_NOT_FOUND` →
-/// `Ok(vec![])` (sin decoraciones, mismo destino que "ningún decorator
-/// consentido"); cualquier OTRO error va por la taxonomía normal.
+/// Translates `plugin.decorate`'s raw `Result` (G3b, ADR 0037) into
+/// [`RemoteBackend::plugin_decorate`]'s contract: `METHOD_NOT_FOUND` →
+/// `Ok(vec![])` (no decorations, same destination as "no decorator
+/// consented to"); any OTHER error goes through the normal taxonomy.
 fn map_decorate_result(
     res: Result<methods::PluginDecorateResult, ClientError>,
 ) -> Result<Vec<methods::PluginDecorations>, Error> {
@@ -2788,12 +2847,11 @@ fn map_decorate_result(
     }
 }
 
-/// Traduce el `Result` crudo de `plugin.column_values` (G3b, ADR 0037)
-/// al contrato de [`RemoteBackend::plugin_column_values`]:
-/// `METHOD_NOT_FOUND` → `Ok(vec![None; expected_len])` (celda vacía por
-/// entrada, NUNCA un vector vacío — el caller espera SIEMPRE una celda
-/// por ruta, contrato posicional); cualquier OTRO error va por la
-/// taxonomía normal.
+/// Translates `plugin.column_values`'s raw `Result` (G3b, ADR 0037) into
+/// [`RemoteBackend::plugin_column_values`]'s contract: `METHOD_NOT_FOUND` →
+/// `Ok(vec![None; expected_len])` (an empty cell per entry, NEVER an empty
+/// vector — the caller ALWAYS expects one cell per path, positional
+/// contract); any OTHER error goes through the normal taxonomy.
 fn map_column_values_result(
     res: Result<methods::PluginColumnValuesResult, ClientError>,
     expected_len: usize,
@@ -2809,35 +2867,35 @@ fn map_column_values_result(
     }
 }
 
-/// Bomba vitalicia de notificaciones (M2 del rust-reviewer). Sostiene
-/// un [`Weak`]: en el estado estable (bloqueada en `recv().await`) NO
-/// mantiene viva a `Inner`, así que cuando el último `RemoteBackend`
-/// externo se suelta, `Inner` se libera, el `Client` interno cierra la
-/// conexión, `recv()` devuelve `None` y la bomba SALE — sin ciclo de
-/// Arc ni reconexión eterna.
+/// Lifelong notification pump (rust-reviewer M2). Holds a [`Weak`]: in the
+/// steady state (blocked in `recv().await`) it does NOT keep `Inner` alive,
+/// so when the last external `RemoteBackend` is dropped, `Inner` is freed,
+/// the internal `Client` closes the connection, `recv()` returns `None` and
+/// the pump EXITS — no Arc cycle, no eternal reconnection.
 #[expect(
     clippy::too_many_lines,
-    reason = "tabla de despacho notif→destino + reconexión"
+    reason = "notification→destination dispatch table + reconnection"
 )]
 async fn pump_loop(
     weak: Weak<Inner>,
     mut notifications: mpsc::UnboundedReceiver<norte_proto::wire::Notification>,
 ) {
     loop {
-        // Consumo: NUNCA se retiene un Arc a través del `recv().await`.
+        // Consumption: an Arc is NEVER held across `recv().await`.
         while let Some(n) = notifications.recv().await {
-            // Aprobación de policy pendiente (M3-3b T5): al frontend.
+            // Pending policy approval (M3-3b T5): to the frontend.
             if n.method == methods::POLICY_APPROVAL_REQUIRED {
-                // Malformada = descartada CON traza (m3 del review): el
-                // agente esperará su TTL y alguien debe poder saber por qué.
+                // Malformed = discarded WITH a trace (review m3): the agent
+                // will wait out its TTL and someone must be able to know
+                // why.
                 let Some(params) = n.params else {
-                    tracing::warn!("policy.approval_required sin params: descartada");
+                    tracing::warn!("policy.approval_required with no params: discarded");
                     continue;
                 };
                 let req = match serde_json::from_value::<PolicyApprovalRequired>(params) {
                     Ok(req) => req,
                     Err(e) => {
-                        tracing::warn!(error = %e, "policy.approval_required malformada");
+                        tracing::warn!(error = %e, "malformed policy.approval_required");
                         continue;
                     }
                 };
@@ -2845,17 +2903,17 @@ async fn pump_loop(
                 inner.push_approval(req);
                 continue;
             }
-            // Aviso de sesión degradada (#44): al frontend. Malformada =
-            // descartada CON traza (mismo trato que la aprobación).
+            // Degraded session warning (#44): to the frontend. Malformed =
+            // discarded WITH a trace (same treatment as the approval).
             if n.method == methods::CONNECTION_DEGRADED {
                 let Some(params) = n.params else {
-                    tracing::warn!("connection.degraded sin params: descartada");
+                    tracing::warn!("connection.degraded with no params: discarded");
                     continue;
                 };
                 let d = match serde_json::from_value::<ConnectionDegraded>(params) {
                     Ok(d) => d,
                     Err(e) => {
-                        tracing::warn!(error = %e, "connection.degraded malformada");
+                        tracing::warn!(error = %e, "malformed connection.degraded");
                         continue;
                     }
                 };
@@ -2863,18 +2921,18 @@ async fn pump_loop(
                 inner.push_degraded(d);
                 continue;
             }
-            // #322: POR QUÉ no se pudo conectar. Mismo trato que la de
-            // arriba — sin params o malformada, se descarta CON traza: una
-            // notificación de presentación no puede tumbar el router.
+            // #322: WHY it could not connect. Same treatment as above — no
+            // params or malformed, discarded WITH a trace: a presentation
+            // notification must not bring down the router.
             if n.method == methods::CONNECTION_FAILED {
                 let Some(params) = n.params else {
-                    tracing::warn!("connection.failed sin params: descartada");
+                    tracing::warn!("connection.failed with no params: discarded");
                     continue;
                 };
                 let f = match serde_json::from_value::<ConnectionFailed>(params) {
                     Ok(f) => f,
                     Err(e) => {
-                        tracing::warn!(error = %e, "connection.failed malformada");
+                        tracing::warn!(error = %e, "malformed connection.failed");
                         continue;
                     }
                 };
@@ -2882,17 +2940,17 @@ async fn pump_loop(
                 inner.push_failed(f);
                 continue;
             }
-            // ADR 0100: la frase de un hook, o «apagué sus hooks». Mismo
-            // trato: sin params o malformada, se descarta CON traza.
+            // ADR 0100: a hook's sentence, or "I turned off its hooks". Same
+            // treatment: no params or malformed, discarded WITH a trace.
             if n.method == methods::PLUGIN_NOTICE {
                 let Some(params) = n.params else {
-                    tracing::warn!("plugin.notice sin params: descartada");
+                    tracing::warn!("plugin.notice with no params: discarded");
                     continue;
                 };
                 let p = match serde_json::from_value::<PluginNotice>(params) {
                     Ok(p) => p,
                     Err(e) => {
-                        tracing::warn!(error = %e, "plugin.notice malformada");
+                        tracing::warn!(error = %e, "malformed plugin.notice");
                         continue;
                     }
                 };
@@ -2900,56 +2958,61 @@ async fn pump_loop(
                 inner.push_notice(p);
                 continue;
             }
-            // El daemon se va (0.46.0). Lo único que hay que quedarse es
-            // si volver, y hay que quedárselo AQUÍ: cuando la conexión se
-            // cierre no habrá forma de distinguir un relevo de una parada.
+            // The daemon is leaving (0.46.0). The only thing that needs
+            // keeping is whether it is coming back, and it has to be kept
+            // HERE: once the connection closes there will be no way to tell
+            // a handoff apart from a stop.
             if n.method == methods::DAEMON_GOING_AWAY {
-                // Malformada = descartada CON traza, y SIN tocar el
-                // permiso: «no se entiende» no es «no vuelvas».
+                // Malformed = discarded WITH a trace, and WITHOUT touching
+                // the permit: "not understood" is not "do not come back".
                 let Some(params) = n.params else {
-                    tracing::warn!("daemon.going_away sin params: descartada");
+                    tracing::warn!("daemon.going_away with no params: discarded");
                     continue;
                 };
-                let aviso = match serde_json::from_value::<methods::DaemonGoingAway>(params) {
+                let notice = match serde_json::from_value::<methods::DaemonGoingAway>(params) {
                     Ok(g) => g,
                     Err(e) => {
-                        tracing::warn!(error = %e, "daemon.going_away malformada");
+                        tracing::warn!(error = %e, "malformed daemon.going_away");
                         continue;
                     }
                 };
                 let Some(inner) = weak.upgrade() else { return };
-                // Un backend de AGENTE no arranca daemons: su `spawn_cmd`
-                // es `None` por construcción, así que no se le guarda un
-                // permiso que no puede usar. Hoy es redundante; mañana, si
-                // alguien le diera comando de arranque, esto es lo único
-                // que impediría que una notificación del daemon hiciera que
-                // el puente MCP lance procesos.
+                // An AGENT backend does not start daemons: its `spawn_cmd`
+                // is `None` by construction, so it is not given a permit it
+                // cannot use. Redundant today; tomorrow, if someone gave it
+                // a start-up command, this is the only thing that would
+                // keep a daemon notification from making the MCP bridge
+                // launch processes.
                 if inner.agent_session.is_some() {
                     continue;
                 }
-                *inner.handover_until.lock().expect("handover lock sano") = aviso
+                *inner.handover_until.lock().expect("handover lock is sound") = notice
                     .reconnect
                     .then(|| std::time::Instant::now() + HANDOVER_SPAWN_WINDOW);
-                tracing::info!(reconnect = aviso.reconnect, "el daemon avisa de que se va");
-                // Y se DICE hacia arriba. Este aviso es la única ocasión de
-                // distinguir un relevo de una parada: en cuanto la conexión
-                // se cierre, el frontend ve lo mismo en los dos casos.
+                tracing::info!(
+                    reconnect = notice.reconnect,
+                    "the daemon warns it is leaving"
+                );
+                // And it IS SAID upward. This warning is the only chance to
+                // tell a handoff apart from a stop: as soon as the
+                // connection closes, the frontend sees the same thing in
+                // both cases.
                 let _ = inner.events_tx.send(ConnEvent::GoingAway {
-                    reconnect: aviso.reconnect,
+                    reconnect: notice.reconnect,
                 });
                 continue;
             }
-            // Lote de hits de una búsqueda viva (live search T5): al `rx`
-            // de su `task_id`. Malformado = descartado con traza.
+            // A live search's batch of hits (live search T5): to its
+            // `task_id`'s `rx`. Malformed = discarded with a trace.
             if n.method == methods::SEARCH_HITS {
                 let Some(params) = n.params else {
-                    tracing::debug!("search.hits sin params: descartada");
+                    tracing::debug!("search.hits with no params: discarded");
                     continue;
                 };
                 let hits = match serde_json::from_value::<SearchHits>(params) {
                     Ok(hits) => hits,
                     Err(e) => {
-                        tracing::debug!(error = %e, "search.hits malformada: descartada");
+                        tracing::debug!(error = %e, "malformed search.hits: discarded");
                         continue;
                     }
                 };
@@ -2964,16 +3027,16 @@ async fn pump_loop(
                 );
                 continue;
             }
-            // Lote de filas de una comparación viva (0.39.0): mismo trato.
+            // A live comparison's batch of rows (0.39.0): same treatment.
             if n.method == methods::COMPARE_ROWS {
                 let Some(params) = n.params else {
-                    tracing::debug!("compare.rows sin params: descartada");
+                    tracing::debug!("compare.rows with no params: discarded");
                     continue;
                 };
                 let rows = match serde_json::from_value::<CompareRowsBatch>(params) {
                     Ok(rows) => rows,
                     Err(e) => {
-                        tracing::debug!(error = %e, "compare.rows malformada: descartada");
+                        tracing::debug!(error = %e, "malformed compare.rows: discarded");
                         continue;
                     }
                 };
@@ -2988,15 +3051,15 @@ async fn pump_loop(
                 );
                 continue;
             }
-            // Los dos eventos de un plan vivo (0.40.0) van al MISMO `rx`,
-            // envueltos en el mismo enum que devuelve el brazo embebido:
-            // el orden «pasos* y después el cierre» es la cola de ese
-            // canal, no una carrera entre dos mapas. Un evento malformado
-            // se descarta con traza, como los otros dos feeds.
+            // A live plan's two events (0.40.0) go to the SAME `rx`, wrapped
+            // in the same enum the embedded arm returns: the order "steps*
+            // and then the close" is that channel's queue, not a race
+            // between two maps. A malformed event is discarded with a
+            // trace, like the other two feeds.
             if n.method == methods::SYNC_STEPS || n.method == methods::SYNC_PLAN_DONE {
                 let done = n.method == methods::SYNC_PLAN_DONE;
                 let Some(params) = n.params else {
-                    tracing::debug!(method = %n.method, "evento de sync sin params: descartado");
+                    tracing::debug!(method = %n.method, "sync event with no params: discarded");
                     continue;
                 };
                 let event = if done {
@@ -3008,7 +3071,7 @@ async fn pump_loop(
                 let event = match event {
                     Ok(e) => e,
                     Err(e) => {
-                        tracing::debug!(error = %e, "evento de sync malformado: descartado");
+                        tracing::debug!(error = %e, "malformed sync event: discarded");
                         continue;
                     }
                 };
@@ -3033,8 +3096,8 @@ async fn pump_loop(
                 continue;
             };
             let Some(inner) = weak.upgrade() else { return };
-            // Wrapper EFÍMERO solo para reusar `route` (&self) — jamás
-            // llama take_*, así que los tres `None` son correctos.
+            // EPHEMERAL wrapper only to reuse `route` (&self) — it never
+            // calls take_*, so the three `None`s are correct.
             RemoteBackend {
                 inner,
                 foreign_rx: Mutex::new(None),
@@ -3046,9 +3109,9 @@ async fn pump_loop(
             }
             .route(snapshot);
         }
-        // Conexión muerta. Si ya no queda backend externo, salir.
+        // Dead connection. If there is no external backend left, exit.
         let Some(inner) = weak.upgrade() else { return };
-        // Wrapper EFÍMERO (jamás llama take_*): los tres `None` son correctos.
+        // EPHEMERAL wrapper (never calls take_*): the three `None`s are correct.
         let backend = RemoteBackend {
             inner,
             foreign_rx: Mutex::new(None),
@@ -3059,17 +3122,17 @@ async fn pump_loop(
             notices_rx: Mutex::new(None),
         };
         *backend.inner.client.write().await = None;
-        // Los feeds vivos (hits de una búsqueda, filas de una comparación)
-        // NO sobreviven a la reconexión: la bomba del daemon apuntaba al
-        // `conn_id` viejo (muerto). Suelta todos los routes → los `rx` en
-        // vuelo se cierran (el frontend infiere el fin por el terminal de
-        // la Task, reconciliado por el resync de `task.list`).
+        // Live feeds (a search's hits, a comparison's rows) do NOT survive
+        // reconnection: the daemon's pump pointed at the old (dead)
+        // `conn_id`. Drops all routes → the `rx`s in flight close (the
+        // frontend infers the end from the Task's terminal, reconciled by
+        // the `task.list` resync).
         {
             let mut sr = backend
                 .inner
                 .search_routes
                 .lock()
-                .expect("search_routes lock sano");
+                .expect("search_routes lock is sound");
             sr.clear();
         }
         {
@@ -3077,7 +3140,7 @@ async fn pump_loop(
                 .inner
                 .compare_routes
                 .lock()
-                .expect("compare_routes lock sano");
+                .expect("compare_routes lock is sound");
             cr.clear();
         }
         {
@@ -3085,21 +3148,21 @@ async fn pump_loop(
                 .inner
                 .sync_routes
                 .lock()
-                .expect("sync_routes lock sano");
+                .expect("sync_routes lock is sound");
             sr.clear();
         }
         let _ = backend.inner.events_tx.send(ConnEvent::Lost);
         drop(backend);
-        // Reconexión con backoff (NO re-arranca el daemon: M3). Si el
-        // daemon es incompatible de versión, reintentar es fútil: se
-        // abandona (el aviso Lost ya se envió).
+        // Reconnection with backoff (does NOT re-start the daemon: M3). If
+        // the daemon is version-incompatible, retrying is futile: it gives
+        // up (the Lost warning was already sent).
         let mut attempt = 0usize;
         notifications = loop {
             let delay = RECONNECT_BACKOFF_MS[attempt.min(RECONNECT_BACKOFF_MS.len() - 1)];
             attempt += 1;
             tokio::time::sleep(Duration::from_millis(delay)).await;
             let Some(inner) = weak.upgrade() else { return };
-            // Wrapper EFÍMERO (jamás llama take_*): los tres `None` son correctos.
+            // EPHEMERAL wrapper (never calls take_*): the three `None`s are correct.
             let backend = RemoteBackend {
                 inner,
                 foreign_rx: Mutex::new(None),
@@ -3109,29 +3172,29 @@ async fn pump_loop(
                 failed_rx: Mutex::new(None),
                 notices_rx: Mutex::new(None),
             };
-            // ¿Sigue vivo el permiso de arranque? Por TIEMPO, no por
-            // intentos (ver `Inner::handover_until`): dentro de la ventana
-            // se puede insistir, que es lo que deja sobrevivir al lock del
-            // journal que el daemon viejo todavía retiene.
-            let relevo = {
-                let mut hasta = backend
+            // Is the start-up permit still alive? By TIME, not by attempts
+            // (see `Inner::handover_until`): within the window it can keep
+            // insisting, which is what lets it outlast the journal lock the
+            // old daemon still holds.
+            let handoff = {
+                let mut until = backend
                     .inner
                     .handover_until
                     .lock()
-                    .expect("handover lock sano");
-                let vivo = spawn_allowed(*hasta, std::time::Instant::now());
-                if !vivo {
-                    // Caducado: se limpia para no volver a mirarlo.
-                    *hasta = None;
+                    .expect("handover lock is sound");
+                let alive = spawn_allowed(*until, std::time::Instant::now());
+                if !alive {
+                    // Expired: cleared so it is not looked at again.
+                    *until = None;
                 }
-                vivo
+                alive
             };
-            match backend.establish(relevo).await {
+            match backend.establish(handoff).await {
                 Ok(rx) => {
                     let _ = backend.inner.events_tx.send(ConnEvent::Restored);
                     break rx;
                 }
-                // Daemon incompatible de versión: reintentar es fútil.
+                // Version-incompatible daemon: retrying is futile.
                 Err(e) if crate::rpc::is_version_mismatch(&e) => return,
                 Err(_) => {}
             }
@@ -3139,23 +3202,24 @@ async fn pump_loop(
     }
 }
 
-/// El PRIMER filtro de 0.81.0 que trae una petición de búsqueda, por su
-/// nombre, o `None` si no trae ninguno.
+/// The FIRST 0.81.0 filter a search request carries, by name, or `None` if
+/// it carries none.
 ///
-/// Devuelve el nombre y no un booleano porque es lo que se pone en el aviso:
-/// «tu daemon es viejo» sin decir qué se ha rehusado deja al lector quitando
-/// campos a ciegas hasta acertar.
+/// Returns the name and not a boolean because that is what goes into the
+/// warning: "your daemon is old" without saying what was refused leaves the
+/// reader removing fields blindly until they get it right.
 ///
-/// Pura, para poder probar la promesa N-1 sin levantar un daemon viejo.
+/// Pure, so the N-1 promise can be tested with no old daemon to bring up.
 #[must_use]
-fn primer_filtro_de_0_81(p: &FsSearchParams) -> Option<&'static str> {
-    // Se DESTRUCTURA entero, y eso no es estilo: es lo único que hace que el
-    // filtro número once no se pueda olvidar aquí. Una cadena de `if`s sobre
-    // `p.campo` compila igual con un campo nuevo sin mirar, y el test que
-    // enumera los diez de hoy también pasa — y entonces ese filtro nuevo
-    // viajaría a un daemon 0.81 que lo ignora, que es exactamente el fallo
-    // del superconjunto una versión más tarde. Así, el campo nuevo no
-    // compila hasta que alguien decida qué hacer con él.
+fn first_filter_since_0_81(p: &FsSearchParams) -> Option<&'static str> {
+    // It is DESTRUCTURED whole, and that is not style: it is the only thing
+    // that keeps the eleventh filter from being forgettable here. A chain of
+    // `if`s over `p.field` compiles just the same with a new field
+    // unlooked-at, and the test that enumerates today's ten also passes —
+    // and then that new filter would travel to a 0.81 daemon that ignores
+    // it, which is exactly the superset failure one version later. This
+    // way, the new field does not compile until someone decides what to do
+    // with it.
     let FsSearchParams {
         root: _,
         name_glob: _,
@@ -3199,8 +3263,9 @@ fn primer_filtro_de_0_81(p: &FsSearchParams) -> Option<&'static str> {
     if *whole_word {
         return Some("whole_word");
     }
-    // `recursive` es el ÚNICO cuyo defecto es `true`, así que lo que se pide
-    // —y lo que un daemon viejo no sabría respetar— es el `false`.
+    // `recursive` is the ONLY one whose default is `true`, so what is being
+    // asked for — and what an old daemon would not know to honor — is the
+    // `false`.
     if !*recursive {
         return Some("recursive");
     }
@@ -3210,13 +3275,14 @@ fn primer_filtro_de_0_81(p: &FsSearchParams) -> Option<&'static str> {
     None
 }
 
-/// ¿Sabe un peer con esta versión poner techo a `journal.undo_after`
+/// Does a peer with this version know how to cap `journal.undo_after`
 /// (`upto_seq`, 0.80.0)?
 ///
-/// Pura para poder probar la promesa N-1 sin levantar un daemon viejo. Falla
-/// CERRADO como el resto de estas comprobaciones: una versión que no parsea no
-/// sabe nada. Sin versión —todavía sin handshake— decide el daemon.
-fn techo_honrado(peer: Option<&str>) -> bool {
+/// Pure so the N-1 promise can be tested with no old daemon to bring up.
+/// Fails CLOSED like the rest of these checks: a version that does not
+/// parse knows nothing. With no version — not handshaken yet — the daemon
+/// decides.
+fn ceiling_honored(peer: Option<&str>) -> bool {
     peer.is_none_or(|v| methods::version_at_least(v, 0, 80))
 }
 
@@ -3225,47 +3291,54 @@ mod tests {
     use super::*;
 
     fn vpd(wire: &str) -> VPath {
-        VPath::parse(wire).expect("wire válido")
+        VPath::parse(wire).expect("valid wire")
     }
 
-    /// Un daemon 0.79 ignoraría `upto_seq` y desharía sin techo: con él, el
-    /// SDK rehúsa (`undo_after` devuelve `Unsupported`) en vez de deshacer
-    /// más de lo que la pregunta contó. Una versión que no parsea, igual.
+    /// A 0.79 daemon would ignore `upto_seq` and undo with no ceiling: with
+    /// it, the SDK refuses (`undo_after` returns `Unsupported`) instead of
+    /// undoing more than the question counted. A version that does not
+    /// parse, the same.
     #[test]
-    fn el_techo_solo_se_manda_a_quien_sabe_aplicarlo() {
-        assert!(techo_honrado(Some("0.80.0")));
-        assert!(techo_honrado(Some("0.81.3")));
-        assert!(!techo_honrado(Some("0.79.9")), "N-1 no sabe");
-        assert!(!techo_honrado(Some("norte-0.80")), "no parsea: no sabe");
-        assert!(techo_honrado(None), "sin handshake decide el daemon");
+    fn the_ceiling_is_only_sent_to_whoever_knows_how_to_apply_it() {
+        assert!(ceiling_honored(Some("0.80.0")));
+        assert!(ceiling_honored(Some("0.81.3")));
+        assert!(!ceiling_honored(Some("0.79.9")), "N-1 does not know");
+        assert!(
+            !ceiling_honored(Some("norte-0.80")),
+            "does not parse: does not know"
+        );
+        assert!(
+            ceiling_honored(None),
+            "with no handshake the daemon decides"
+        );
     }
 
-    /// Cada filtro de 0.81.0 se DETECTA, y se detecta por su nombre.
+    /// Every 0.81.0 filter is DETECTED, and detected by its name.
     ///
-    /// Es lo que decide si la búsqueda se manda o se rehúsa, así que un
-    /// filtro que este barrido no viera viajaría a un daemon que lo ignora —
-    /// y ese daemon contestaría el SUPERCONJUNTO, que se lee exactamente
-    /// igual que un resultado. Por eso están los diez, uno a uno: un `||` de
-    /// diez condiciones pasa el test con nueve.
+    /// This is what decides whether the search is sent or refused, so a
+    /// filter this sweep missed would travel to a daemon that ignores it —
+    /// and that daemon would answer with the SUPERSET, which reads exactly
+    /// like a result. That is why all ten are here, one by one: a ten-way
+    /// `||` passes the test with nine.
     #[test]
-    fn cada_filtro_de_0_81_se_reconoce_por_su_nombre() {
+    fn every_0_81_filter_is_recognized_by_its_name() {
         use norte_proto::methods::FsSearchParams;
-        let base = || FsSearchParams::new(vpd("file:///casa"));
-        // Sin nada: no hay nada que rehusar, y la búsqueda de siempre va.
-        assert_eq!(primer_filtro_de_0_81(&base()), None);
-        // Y los criterios de 0.18 tampoco son filtros.
+        let base = || FsSearchParams::new(vpd("file:///home"));
+        // With nothing: nothing to refuse, and the usual search goes through.
+        assert_eq!(first_filter_since_0_81(&base()), None);
+        // And 0.18's criteria are not filters either.
         assert_eq!(
-            primer_filtro_de_0_81(&FsSearchParams {
+            first_filter_since_0_81(&FsSearchParams {
                 name_glob: Some("*.rs".into()),
-                content: Some("hola".into()),
+                content: Some("hello".into()),
                 case_sensitive: true,
                 max_hits: Some(10),
                 ..base()
             }),
             None,
-            "lo que 0.80 ya sabía hacer no se rehúsa"
+            "what 0.80 already knew how to do is not refused"
         );
-        let casos: [(&str, FsSearchParams); 10] = [
+        let cases: [(&str, FsSearchParams); 10] = [
             (
                 "kinds",
                 FsSearchParams {
@@ -3322,7 +3395,8 @@ mod tests {
                     ..base()
                 },
             ),
-            // El ÚNICO cuyo defecto es `true`: lo que se pide es el `false`.
+            // The ONLY one whose default is `true`: what is being asked for
+            // is the `false`.
             (
                 "recursive",
                 FsSearchParams {
@@ -3338,16 +3412,16 @@ mod tests {
                 },
             ),
         ];
-        for (nombre, p) in casos {
+        for (name, p) in cases {
             assert_eq!(
-                primer_filtro_de_0_81(&p),
-                Some(nombre),
-                "{nombre} no se reconoce y viajaría a un daemon que lo ignora"
+                first_filter_since_0_81(&p),
+                Some(name),
+                "{name} is not recognized and would travel to a daemon that ignores it"
             );
         }
-        // Y `recursive: true` NO es pedir nada: es el defecto.
+        // And `recursive: true` is NOT asking for anything: it is the default.
         assert_eq!(
-            primer_filtro_de_0_81(&FsSearchParams {
+            first_filter_since_0_81(&FsSearchParams {
                 recursive: true,
                 ..base()
             }),
@@ -3355,57 +3429,58 @@ mod tests {
         );
     }
 
-    /// Un daemon que no conoce `plugin.panel_render` deja el hueco SIN marco,
-    /// no roto (0.74.0, fase 3).
+    /// A daemon that does not know `plugin.panel_render` leaves the slot
+    /// with NO frame, not broken (0.74.0, phase 3).
     ///
-    /// Es la promesa de compatibilidad N-1 que la nota de versión escribe con
-    /// palabras, comprobada aquí sin socket ni daemon viejo: un cliente 0.74
-    /// contra un daemon 0.73 recibe `MethodNotFound`, y eso tiene que
-    /// significar «ningún plugin pinta este panel» —el mismo destino que
-    /// cuando no hay plugin— y no un error que tumbe la pantalla.
+    /// This is the N-1 compatibility promise the release note writes in
+    /// words, checked here with no socket or old daemon: a 0.74 client
+    /// against a 0.73 daemon receives `MethodNotFound`, and that has to
+    /// mean "no plugin paints this panel" — the same destination as when
+    /// there is no plugin — and not an error that brings down the screen.
     #[test]
-    fn un_daemon_sin_el_metodo_deja_el_panel_sin_marco() {
-        let no_esta = ClientError::Rpc(norte_proto::wire::RpcError::protocol(
+    fn a_daemon_with_no_such_method_leaves_the_panel_with_no_frame() {
+        let not_there = ClientError::Rpc(norte_proto::wire::RpcError::protocol(
             norte_proto::wire::codes::METHOD_NOT_FOUND,
-            "método desconocido",
+            "unknown method",
         ));
         assert!(
-            map_panel_result(Err(no_esta))
-                .expect("degrada, no falla")
+            map_panel_result(Err(not_there))
+                .expect("degrades, does not fail")
                 .is_none(),
-            "un daemon N-1 deja el hueco con lo que ya pintó"
+            "an N-1 daemon leaves the slot with what it already painted"
         );
     }
 
-    /// Y cualquier OTRO error sí se propaga: degradar en silencio ante un
-    /// fallo real es indistinguible de «este panel no existe».
+    /// And any OTHER error DOES propagate: silently degrading on a real
+    /// failure is indistinguishable from "this panel does not exist".
     #[test]
-    fn otro_error_del_wire_no_se_confunde_con_un_panel_ausente() {
-        let roto = ClientError::ConnectionClosed;
-        assert!(map_panel_result(Err(roto)).is_err());
+    fn another_wire_error_is_not_confused_with_an_absent_panel() {
+        let broken = ClientError::ConnectionClosed;
+        assert!(map_panel_result(Err(broken)).is_err());
     }
 
-    /// Lo que el `transfer` va a preguntar: el ancla del directorio listado.
+    /// What `transfer` is going to ask: the listed directory's anchor.
     #[test]
-    fn el_ancla_de_un_directorio_listado_se_recuerda_y_se_devuelve() {
+    fn a_listed_directorys_anchor_is_remembered_and_returned() {
         let inner = test_inner();
         let dir = vpd("file:///d/sub");
         let a = norte_proto::DirAnchor::new("0123456789abcdef0123456789abcdef".to_owned());
         inner.remember_anchor(&dir, Some(a.clone()));
         assert_eq!(inner.anchor_for(&dir), Some(a));
         assert_eq!(
-            inner.anchor_for(&vpd("file:///otro")),
+            inner.anchor_for(&vpd("file:///other")),
             None,
-            "un directorio que nadie listó no tiene ancla que mandar"
+            "a directory nobody listed has no anchor to send"
         );
     }
 
-    /// **Un listado SIN ancla borra la que hubiera**, y esto es lo que evita el
-    /// fallo tonto: reconectar contra un daemon 0.53 —o listar un destino que
-    /// dejó de saber identificar nodos— dejaría viva un ancla vieja, y la copia
-    /// siguiente se rechazaría a sí misma sin que nada hubiera pasado.
+    /// **A listing with NO anchor deletes whatever there was**, and this is
+    /// what avoids the silly failure: reconnecting against a 0.53 daemon —
+    /// or listing a destination that stopped knowing how to identify nodes
+    /// — would leave an old anchor alive, and the next copy would reject
+    /// itself with nothing having actually happened.
     #[test]
-    fn un_listado_sin_ancla_olvida_la_anterior() {
+    fn a_listing_with_no_anchor_forgets_the_previous_one() {
         let inner = test_inner();
         let dir = vpd("file:///d/sub");
         inner.remember_anchor(
@@ -3418,11 +3493,11 @@ mod tests {
         assert_eq!(inner.anchor_for(&dir), None);
     }
 
-    /// El tope no puede dejar sin ancla al directorio recién listado: lo que se
-    /// tira es lo VIEJO. Un panel abierto en una sesión larga visita muchos
-    /// directorios y el que importa es siempre el último.
+    /// The cap must not leave the freshly listed directory with no anchor:
+    /// what gets dropped is the OLD one. A panel open in a long session
+    /// visits many directories and the one that matters is always the last.
     #[test]
-    fn el_tope_tira_lo_viejo_y_conserva_lo_recien_listado() {
+    fn the_cap_drops_the_old_one_and_keeps_the_freshly_listed_one() {
         let inner = test_inner();
         for i in 0..(ANCHORS_MAX + 5) {
             inner.remember_anchor(
@@ -3433,24 +3508,26 @@ mod tests {
         assert_eq!(
             inner.anchor_for(&vpd("file:///d0")),
             None,
-            "el primero ya no cabe"
+            "the first one no longer fits"
         );
-        let ultimo = ANCHORS_MAX + 4;
+        let last = ANCHORS_MAX + 4;
         assert_eq!(
-            inner.anchor_for(&vpd(&format!("file:///d{ultimo}"))),
-            Some(norte_proto::DirAnchor::new(format!("{ultimo:032x}"))),
-            "y el último sigue"
+            inner.anchor_for(&vpd(&format!("file:///d{last}"))),
+            Some(norte_proto::DirAnchor::new(format!("{last:032x}"))),
+            "and the last one survives"
         );
     }
 
-    /// Y lo que se sigue MIRANDO no se desaloja: el desalojo es LRU (#301).
+    /// And what keeps being LOOKED AT is not evicted: eviction is LRU
+    /// (#301).
     ///
-    /// Con FIFO —lo que había— el directorio del panel activo se iba en cuanto
-    /// pasaban `ANCHORS_MAX` directorios distintos por la conexión (un árbol
-    /// desplegado, una búsqueda), aunque se estuviera relistando cada segundo:
-    /// la comprobación de la siguiente copia desaparecía sin decir nada.
+    /// With FIFO — what there was — the active panel's directory left as
+    /// soon as `ANCHORS_MAX` different directories passed through the
+    /// connection (an expanded tree, a search), even while it was being
+    /// relisted every second: the next copy's check disappeared with
+    /// nothing said about it.
     #[test]
-    fn refrescar_salva_del_desalojo() {
+    fn refreshing_saves_from_eviction() {
         let inner = test_inner();
         let panel = vpd("file:///panel");
         let ancla = norte_proto::DirAnchor::new("a".repeat(32));
@@ -3465,42 +3542,42 @@ mod tests {
         assert_eq!(
             inner.anchor_for(&panel),
             Some(ancla),
-            "lo que se sigue mirando no se desaloja"
+            "what keeps being looked at is not evicted"
         );
     }
 
-    /// Re-listar el MISMO directorio refresca su ancla sin gastar hueco: si
-    /// contara como entrada nueva, un panel refrescándose con F5 se comería el
-    /// tope él solo y tiraría los otros paneles.
+    /// Re-listing the SAME directory refreshes its anchor without spending a
+    /// slot: if it counted as a new entry, a panel refreshing with F5 would
+    /// eat up the cap by itself and evict the other panes.
     #[test]
-    fn relistar_el_mismo_directorio_no_gasta_hueco() {
+    fn relisting_the_same_directory_spends_no_slot() {
         let inner = test_inner();
         let dir = vpd("file:///d/sub");
         for i in 0..(ANCHORS_MAX + 5) {
             inner.remember_anchor(&dir, Some(norte_proto::DirAnchor::new(format!("{i:032x}"))));
         }
         inner.remember_anchor(
-            &vpd("file:///otro"),
+            &vpd("file:///other"),
             Some(norte_proto::DirAnchor::new(format!("{:032x}", 999))),
         );
-        let ultimo = ANCHORS_MAX + 4;
+        let last = ANCHORS_MAX + 4;
         assert_eq!(
             inner.anchor_for(&dir),
-            Some(norte_proto::DirAnchor::new(format!("{ultimo:032x}"))),
-            "la última gana"
+            Some(norte_proto::DirAnchor::new(format!("{last:032x}"))),
+            "the last one wins"
         );
         assert_eq!(
-            inner.anchor_for(&vpd("file:///otro")),
+            inner.anchor_for(&vpd("file:///other")),
             Some(norte_proto::DirAnchor::new(format!("{:032x}", 999))),
-            "y el otro directorio no lo desalojó nadie"
+            "and nobody evicted the other directory"
         );
     }
 
     fn test_inner() -> Arc<Inner> {
-        test_inner_en(PathBuf::from("/nonexistent/test.sock"))
+        test_inner_for(PathBuf::from("/nonexistent/test.sock"))
     }
 
-    fn test_inner_en(socket: PathBuf) -> Arc<Inner> {
+    fn test_inner_for(socket: PathBuf) -> Arc<Inner> {
         let (foreign_tx, _fr) = mpsc::unbounded_channel();
         let (events_tx, _er) = mpsc::unbounded_channel();
         let (approvals_tx, _ar) = mpsc::unbounded_channel();
@@ -3534,14 +3611,13 @@ mod tests {
         })
     }
 
-    /// Un daemon de mentira que acepta el handshake y RECHAZA
-    /// `task.list` — el estado exacto de #181, que ningún daemon de
-    /// verdad sabe montar.
+    /// A fake daemon that accepts the handshake and REFUSES `task.list` —
+    /// the exact state from #181, which no real daemon knows how to set up.
     ///
-    /// Devuelve al soltar el listener; el test lo mantiene vivo por su
+    /// Returns on dropping the listener; the test keeps it alive via its
     /// `JoinHandle`.
-    fn stub_que_rechaza_task_list(socket: &std::path::Path) -> tokio::task::JoinHandle<()> {
-        let listener = tokio::net::UnixListener::bind(socket).expect("bind del stub");
+    fn stub_that_refuses_task_list(socket: &std::path::Path) -> tokio::task::JoinHandle<()> {
+        let listener = tokio::net::UnixListener::bind(socket).expect("stub bind");
         tokio::spawn(async move {
             let Ok((mut conn, _)) = listener.accept().await else {
                 return;
@@ -3575,14 +3651,14 @@ mod tests {
                             .expect("json"),
                         )
                     } else {
-                        // `task.list` (y cualquier otra cosa) se rechaza:
-                        // es lo que #181 necesita que pase DESPUÉS de que
-                        // `establish` haya publicado el cliente.
+                        // `task.list` (and anything else) is refused: this
+                        // is what #181 needs to happen AFTER `establish` has
+                        // published the client.
                         norte_proto::wire::Response::err(
                             Some(req.id.clone()),
                             norte_proto::wire::RpcError::protocol(
                                 norte_proto::wire::codes::INTERNAL_ERROR,
-                                "el stub rechaza esto a propósito",
+                                "the stub refuses this on purpose",
                             ),
                         )
                     };
@@ -3600,19 +3676,19 @@ mod tests {
         })
     }
 
-    /// #181: un resync que falla NO puede dejar publicado el cliente.
+    /// #181: a resync that fails must NOT leave the client published.
     ///
-    /// Si se queda, el llamante habla por una conexión cuyo receptor de
-    /// notificaciones murió con el marco de `establish`: no se enruta
-    /// nada, `task.progress` incluido, y `TaskRef::join()` —que no tiene
-    /// plazo— espera un terminal que ya no puede llegar. Para siempre.
+    /// If it stays, the caller talks over a connection whose notification
+    /// receiver died with `establish`'s frame: nothing gets routed,
+    /// `task.progress` included, and `TaskRef::join()` — which has no
+    /// deadline — waits for a terminal that can no longer arrive. Forever.
     #[tokio::test]
-    async fn un_resync_fallido_no_deja_el_cliente_publicado() {
+    async fn a_failed_resync_does_not_leave_the_client_published() {
         let dir = tempfile::tempdir().expect("tempdir");
         let socket = dir.path().join("stub.sock");
-        let _stub = stub_que_rechaza_task_list(&socket);
+        let _stub = stub_that_refuses_task_list(&socket);
 
-        let inner = test_inner_en(socket);
+        let inner = test_inner_for(socket);
         let backend = RemoteBackend {
             inner: Arc::clone(&inner),
             foreign_rx: Mutex::new(None),
@@ -3624,26 +3700,26 @@ mod tests {
         };
 
         let r = backend.establish(false).await;
-        assert!(r.is_err(), "el resync lo rechaza el stub");
+        assert!(r.is_err(), "the stub refuses the resync");
         assert!(
             inner.client.read().await.is_none(),
-            "y el hueco queda VACÍO: con un cliente ahí, nadie enruta y un join() cuelga para siempre"
+            "and the slot stays EMPTY: with a client there, nobody routes and a join() hangs forever"
         );
     }
 
-    /// Un daemon de mentira que hace el handshake completo —INITIALIZE,
-    /// `TASK_LIST` vacío, `POLICY_PENDING` con `METHOD_NOT_FOUND` (que el resync
-    /// tolera, ver [`RemoteBackend::resync`])— y contesta cualquier OTRO
-    /// método con lo que devuelva `responder`.
+    /// A fake daemon that does the whole handshake — INITIALIZE, an empty
+    /// `TASK_LIST`, `POLICY_PENDING` with `METHOD_NOT_FOUND` (which the
+    /// resync tolerates, see [`RemoteBackend::resync`]) — and answers any
+    /// OTHER method with whatever `responder` returns.
     ///
-    /// Separado de [`stub_que_rechaza_task_list`] porque las pruebas de
-    /// `log_tail`/`log_level` no quieren reimplementar el handshake entero
-    /// para probar una sola respuesta.
-    fn stub_daemon_con(
+    /// Separate from [`stub_that_refuses_task_list`] because the
+    /// `log_tail`/`log_level` tests do not want to reimplement the whole
+    /// handshake to test a single response.
+    fn stub_daemon_with(
         socket: &std::path::Path,
         responder: impl Fn(&str) -> norte_proto::wire::Response + Send + Sync + 'static,
     ) -> tokio::task::JoinHandle<()> {
-        let listener = tokio::net::UnixListener::bind(socket).expect("bind del stub");
+        let listener = tokio::net::UnixListener::bind(socket).expect("stub bind");
         tokio::spawn(async move {
             let Ok((mut conn, _)) = listener.accept().await else {
                 return;
@@ -3708,69 +3784,69 @@ mod tests {
         })
     }
 
-    /// Respuesta que da [`stub_daemon_con`] cuando el método pedido no era
-    /// el que la prueba esperaba.
+    /// The response [`stub_daemon_with`] gives when the requested method was
+    /// not the one the test expected.
     ///
-    /// A propósito NO es un `assert_eq!` dentro del closure: eso vive en la
-    /// tarea `tokio::spawn`eada de `stub_daemon_con`, cuyo `JoinHandle` nunca
-    /// se espera, así que un pánico ahí no tumba la prueba — solo se nota
-    /// indirectamente, como un error distinto en `establish()` o en la
-    /// llamada bajo prueba. Con un código de error DISTINGUIBLE de
-    /// `METHOD_NOT_FOUND`, un método inesperado hace fallar la propia
-    /// aserción que la prueba ya hace (`Error::Unsupported` no sale de
-    /// aquí, o el `expect("con anillo: ok")` revienta con el error real).
-    fn respuesta_de_metodo_inesperado(method: &str) -> norte_proto::wire::Response {
+    /// Deliberately NOT an `assert_eq!` inside the closure: that lives in
+    /// `stub_daemon_with`'s `tokio::spawn`ed task, whose `JoinHandle` is
+    /// never awaited, so a panic there does not bring down the test — it is
+    /// only noticed indirectly, as a different error in `establish()` or in
+    /// the call under test. With an error code DISTINGUISHABLE from
+    /// `METHOD_NOT_FOUND`, an unexpected method fails the very assertion the
+    /// test already makes (`Error::Unsupported` does not come out of here,
+    /// or the `expect("with ring: ok")` blows up with the real error).
+    fn unexpected_method_response(method: &str) -> norte_proto::wire::Response {
         norte_proto::wire::Response::err(
             None,
             norte_proto::wire::RpcError::protocol(
                 norte_proto::wire::codes::INTERNAL_ERROR,
-                format!("stub: método inesperado {method}"),
+                format!("stub: unexpected method {method}"),
             ),
         )
     }
 
-    /// El caso alcanzable de verdad (ver rustdoc de [`methods::LOG_TAIL`]):
-    /// un daemon misma-versión SIN anillo —compilado sin la feature
-    /// `logging`— contesta `METHOD_NOT_FOUND`, y el SDK lo entrega como
-    /// [`Error::Unsupported`] en vez de un error de protocolo crudo, que es
-    /// lo que un panel convierte en una frase (#328).
+    /// The really reachable case (see [`methods::LOG_TAIL`]'s rustdoc): a
+    /// same-version daemon with NO ring — compiled without the `logging`
+    /// feature — answers `METHOD_NOT_FOUND`, and the SDK delivers it as
+    /// [`Error::Unsupported`] instead of a raw protocol error, which is what
+    /// a panel turns into a sentence (#328).
     #[tokio::test]
-    async fn log_tail_contra_un_daemon_sin_anillo_degrada_a_unsupported() {
+    async fn log_tail_against_a_daemon_with_no_ring_degrades_to_unsupported() {
         let dir = tempfile::tempdir().expect("tempdir");
         let socket = dir.path().join("stub.sock");
-        let _stub = stub_daemon_con(&socket, |method| {
+        let _stub = stub_daemon_with(&socket, |method| {
             if method == norte_proto::methods::LOG_TAIL {
                 norte_proto::wire::Response::err(
                     None,
                     norte_proto::wire::RpcError::protocol(
                         norte_proto::wire::codes::METHOD_NOT_FOUND,
-                        "sin anillo",
+                        "no ring",
                     ),
                 )
             } else {
-                respuesta_de_metodo_inesperado(method)
+                unexpected_method_response(method)
             }
         });
 
-        let inner = test_inner_en(socket);
+        let inner = test_inner_for(socket);
         let backend = backend_for(Arc::clone(&inner));
         backend.establish(false).await.expect("handshake");
 
         let err = backend
             .log_tail(None, 500)
             .await
-            .expect_err("sin anillo: Unsupported");
+            .expect_err("no ring: Unsupported");
         assert!(matches!(err, Error::Unsupported));
     }
 
-    /// Y contra un daemon que SÍ tiene anillo, las líneas llegan parseadas
-    /// — no un `serde_json::Value` crudo que cada frontend tendría que
-    /// reinterpretar.
+    /// And against a daemon that DOES have a ring, the lines arrive parsed —
+    /// not a raw `serde_json::Value` every frontend would have to
+    /// reinterpret.
     #[tokio::test]
-    async fn log_tail_contra_un_daemon_con_anillo_devuelve_las_lineas() {
+    async fn log_tail_against_a_daemon_with_a_ring_returns_the_lines() {
         let dir = tempfile::tempdir().expect("tempdir");
         let socket = dir.path().join("stub.sock");
-        let _stub = stub_daemon_con(&socket, |method| {
+        let _stub = stub_daemon_with(&socket, |method| {
             if method == norte_proto::methods::LOG_TAIL {
                 norte_proto::wire::Response::ok(
                     norte_proto::wire::RequestId::Num(0),
@@ -3779,7 +3855,7 @@ mod tests {
                             epoch_ms: 1_756_000_000_000,
                             level: "info".into(),
                             target: "norte_core::daemon".into(),
-                            message: "escuchando".into(),
+                            message: "listening".into(),
                         }],
                         next: 1,
                         lost: 0,
@@ -3789,57 +3865,59 @@ mod tests {
                     .expect("json"),
                 )
             } else {
-                respuesta_de_metodo_inesperado(method)
+                unexpected_method_response(method)
             }
         });
 
-        let inner = test_inner_en(socket);
+        let inner = test_inner_for(socket);
         let backend = backend_for(Arc::clone(&inner));
         backend.establish(false).await.expect("handshake");
 
-        let r = backend.log_tail(None, 500).await.expect("con anillo: ok");
+        let r = backend.log_tail(None, 500).await.expect("with ring: ok");
         assert_eq!(r.lines.len(), 1);
-        assert_eq!(r.lines[0].message, "escuchando");
+        assert_eq!(r.lines[0].message, "listening");
         assert_eq!(r.next, 1);
     }
 
-    /// `log.level` degrada igual que `log.tail`: mismo daemon, mismo motivo.
+    /// `log.level` degrades the same way as `log.tail`: same daemon, same
+    /// reason.
     #[tokio::test]
-    async fn log_level_contra_un_daemon_sin_anillo_degrada_a_unsupported() {
+    async fn log_level_against_a_daemon_with_no_ring_degrades_to_unsupported() {
         let dir = tempfile::tempdir().expect("tempdir");
         let socket = dir.path().join("stub.sock");
-        let _stub = stub_daemon_con(&socket, |method| {
+        let _stub = stub_daemon_with(&socket, |method| {
             if method == norte_proto::methods::LOG_LEVEL {
                 norte_proto::wire::Response::err(
                     None,
                     norte_proto::wire::RpcError::protocol(
                         norte_proto::wire::codes::METHOD_NOT_FOUND,
-                        "sin anillo",
+                        "no ring",
                     ),
                 )
             } else {
-                respuesta_de_metodo_inesperado(method)
+                unexpected_method_response(method)
             }
         });
 
-        let inner = test_inner_en(socket);
+        let inner = test_inner_for(socket);
         let backend = backend_for(Arc::clone(&inner));
         backend.establish(false).await.expect("handshake");
 
         let err = backend
             .log_level("debug")
             .await
-            .expect_err("sin anillo: Unsupported");
+            .expect_err("no ring: Unsupported");
         assert!(matches!(err, Error::Unsupported));
     }
 
-    /// El daemon puede contestar un nivel MÁS verbose que el pedido —nunca
-    /// baja (ADR 0092)— y el SDK entrega justo eso, sin reinterpretarlo.
+    /// The daemon may answer a level MORE verbose than the one asked for —
+    /// it never lowers it (ADR 0092) — and the SDK delivers exactly that,
+    /// with no reinterpretation.
     #[tokio::test]
-    async fn log_level_devuelve_el_nivel_que_de_verdad_quedo_puesto() {
+    async fn log_level_returns_the_level_that_really_ended_up_set() {
         let dir = tempfile::tempdir().expect("tempdir");
         let socket = dir.path().join("stub.sock");
-        let _stub = stub_daemon_con(&socket, |method| {
+        let _stub = stub_daemon_with(&socket, |method| {
             if method == norte_proto::methods::LOG_LEVEL {
                 norte_proto::wire::Response::ok(
                     norte_proto::wire::RequestId::Num(0),
@@ -3849,78 +3927,83 @@ mod tests {
                     .expect("json"),
                 )
             } else {
-                respuesta_de_metodo_inesperado(method)
+                unexpected_method_response(method)
             }
         });
 
-        let inner = test_inner_en(socket);
+        let inner = test_inner_for(socket);
         let backend = backend_for(Arc::clone(&inner));
         backend.establish(false).await.expect("handshake");
 
-        let level = backend.log_level("warn").await.expect("con anillo: ok");
-        assert_eq!(level, "debug", "el anillo no baja: contesta lo vigente");
+        let level = backend.log_level("warn").await.expect("with ring: ok");
+        assert_eq!(
+            level, "debug",
+            "the ring does not lower: it answers the current one"
+        );
     }
 
-    /// El permiso de arranque caduca por TIEMPO y no por intentos.
+    /// The start-up permit expires by TIME and not by attempts.
     ///
-    /// Es la corrección de un fallo que la revisión de seguridad encontró y
-    /// que anulaba la feature entera: gastándolo en el primer intento —a
-    /// los 250 ms— el reemplazo todavía no puede arrancar, porque el daemon
-    /// viejo no ha salido del proceso y retiene el lock de `journal.db`. El
-    /// intento fallaba, el permiso se iba con él, y la sesión quedaba
-    /// muerta para siempre tras una actualización normal.
+    /// This is the fix for a bug the security review found that nullified
+    /// the whole feature: spending it on the first attempt — at 250ms — the
+    /// replacement still cannot start, because the old daemon has not left
+    /// the process and holds `journal.db`'s lock. The attempt failed, the
+    /// permit went with it, and the session stayed dead forever after a
+    /// normal update.
     #[test]
-    fn el_permiso_de_arranque_caduca_por_tiempo() {
-        let ahora = std::time::Instant::now();
-        // Sin aviso, jamás: es la regla de no resucitar un daemon parado.
-        assert!(!spawn_allowed(None, ahora));
-        // Dentro de la ventana, tantas veces como haga falta — que es lo
-        // que deja sobrevivir al lock del journal.
-        let hasta = ahora + HANDOVER_SPAWN_WINDOW;
-        assert!(spawn_allowed(Some(hasta), ahora));
-        assert!(spawn_allowed(Some(hasta), ahora + Duration::from_secs(29)));
-        // Pasada, «el daemon no está» vuelve a significar lo de siempre.
-        assert!(!spawn_allowed(Some(hasta), ahora + Duration::from_secs(31)));
+    fn the_startup_permit_expires_by_time() {
+        let now = std::time::Instant::now();
+        // With no notice, never: this is the rule against resurrecting a
+        // stopped daemon.
+        assert!(!spawn_allowed(None, now));
+        // Within the window, as many times as needed — which is what lets
+        // it outlast the journal's lock.
+        let until = now + HANDOVER_SPAWN_WINDOW;
+        assert!(spawn_allowed(Some(until), now));
+        assert!(spawn_allowed(Some(until), now + Duration::from_secs(29)));
+        // Once past, "the daemon is not there" goes back to its usual meaning.
+        assert!(!spawn_allowed(Some(until), now + Duration::from_secs(31)));
     }
 
-    /// El feed de `sync.plan` se CIERRA cuando el consumidor no drena, en
-    /// vez de descartar el lote como hacen los otros dos.
+    /// The `sync.plan` feed CLOSES when the consumer does not drain, instead
+    /// of dropping the batch like the other two do.
     ///
-    /// Es la diferencia que hace segura la aprobación: un lote de pasos
-    /// descartado en silencio, con el `sync.plan_done` entregado detrás,
-    /// dejaría a un humano aprobando un `plan_hash` que cubre `DeleteTree` y
-    /// `Overwrite` que nunca vio en pantalla. Cerrando el feed no llega
-    /// cierre, y sin cierre no hay hash con el que aprobar nada.
+    /// This is the difference that makes the approval safe: a batch of steps
+    /// silently dropped, with `sync.plan_done` delivered behind it, would
+    /// leave a human approving a `plan_hash` that covers `DeleteTree` and
+    /// `Overwrite` they never saw on screen. By closing the feed no closing
+    /// event arrives, and with no closing event there is no hash to approve
+    /// anything with.
     #[test]
-    fn el_feed_de_sync_se_cierra_en_vez_de_perder_un_lote() {
+    fn the_sync_feed_closes_instead_of_losing_a_batch() {
         let routes: Mutex<BatchRoutes<u32>> = Mutex::new(BatchRoutes::default());
         let (tx, mut rx) = mpsc::channel::<u32>(1);
         routes.lock().expect("lock").routes.insert(7, tx);
 
         route_batch(&routes, 7, 1, "sync.steps", OnFull::CloseFeed);
-        route_batch(&routes, 7, 2, "sync.steps", OnFull::CloseFeed); // no cabe
-        // El route se retiró: el `rx` ve lo que sí entró y después el fin.
+        route_batch(&routes, 7, 2, "sync.steps", OnFull::CloseFeed); // does not fit
+        // The route was removed: the `rx` sees what did get in and then the end.
         assert!(
             !routes.lock().expect("lock").routes.contains_key(&7),
-            "el feed tenía que cerrarse"
+            "the feed had to close"
         );
         assert_eq!(rx.try_recv(), Ok(1));
         assert_eq!(rx.try_recv(), Err(mpsc::error::TryRecvError::Disconnected));
     }
 
-    /// Y el de una búsqueda o una comparación NO: ahí un lote es pintura, y
-    /// cerrar el feed entero castigaría más de lo que protege.
+    /// And a search's or a comparison's does NOT: there a batch is paint,
+    /// and closing the whole feed would punish more than it protects.
     #[test]
-    fn el_feed_de_una_busqueda_descarta_el_lote_y_sigue() {
+    fn a_search_feed_drops_the_batch_and_continues() {
         let routes: Mutex<BatchRoutes<u32>> = Mutex::new(BatchRoutes::default());
         let (tx, mut rx) = mpsc::channel::<u32>(1);
         routes.lock().expect("lock").routes.insert(7, tx);
 
         route_batch(&routes, 7, 1, "search.hits", OnFull::DropBatch);
-        route_batch(&routes, 7, 2, "search.hits", OnFull::DropBatch); // se pierde
+        route_batch(&routes, 7, 2, "search.hits", OnFull::DropBatch); // is lost
         assert!(
             routes.lock().expect("lock").routes.contains_key(&7),
-            "el feed sigue vivo"
+            "the feed is still alive"
         );
         assert_eq!(rx.try_recv(), Ok(1));
         assert_eq!(rx.try_recv(), Err(mpsc::error::TryRecvError::Empty));
@@ -3953,14 +4036,14 @@ mod tests {
         }
     }
 
-    /// FIX RAÍZ del review: `route` marca `terminated` SOLO para terminales
-    /// de búsqueda. Un terminal de copy/move/delete/list ajeno jamás entra
-    /// (si lo hiciera, ≥256 de ellos entre el terminal de una búsqueda y el
-    /// registro de su route dispararían el `clear` y perderían la marca →
-    /// route colgado). Y un terminal de SEARCH sí se recuerda, para que
-    /// `search` agende la retirada aunque el terminal se le adelante.
+    /// ROOT FIX from the review: `route` marks `terminated` ONLY for search
+    /// terminals. A foreign copy/move/delete/list terminal never gets in
+    /// (if it did, ≥256 of them between a search's terminal and its route's
+    /// registration would trigger the `clear` and lose the mark → a hung
+    /// route). And a SEARCH terminal is remembered, so `search` schedules
+    /// the removal even if the terminal gets ahead of it.
     #[test]
-    fn route_solo_cuenta_terminales_de_busqueda() {
+    fn route_only_counts_search_terminals() {
         let inner = test_inner();
         let backend = backend_for(Arc::clone(&inner));
 
@@ -3973,7 +4056,7 @@ mod tests {
                 .expect("lock")
                 .terminated
                 .is_empty(),
-            "los terminales no-search jamás entran en `terminated`"
+            "non-search terminals never enter `terminated`"
         );
 
         backend.route(progress(9, TaskKind::Search, TaskState::Completed));
@@ -3984,26 +4067,26 @@ mod tests {
                 .expect("lock")
                 .terminated
                 .contains(&9),
-            "el terminal de búsqueda queda marcado para que `search` lo vea"
+            "the search terminal is marked so `search` sees it"
         );
     }
 
-    /// H2/H3: `mark_terminated` solo devuelve `true` en la inserción nueva,
-    /// así la retirada se agenda UNA vez (un terminal duplicado —bomba +
-    /// resync— no vuelve a spawnear la task de gracia).
+    /// H2/H3: `mark_terminated` only returns `true` on the new insertion,
+    /// so the removal is scheduled ONCE (a duplicate terminal — pump +
+    /// resync — does not spawn the grace task again).
     #[test]
-    fn mark_terminated_solo_true_en_insercion_nueva() {
+    fn mark_terminated_is_only_true_on_a_new_insertion() {
         let mut sr = BatchRoutes::<SearchHits>::default();
-        assert!(sr.mark_terminated(1), "primera vez: recién insertada");
-        assert!(!sr.mark_terminated(1), "repetida: no reagenda");
-        assert!(sr.mark_terminated(2), "otro id: recién insertado");
+        assert!(sr.mark_terminated(1), "first time: freshly inserted");
+        assert!(!sr.mark_terminated(1), "repeated: does not reschedule");
+        assert!(sr.mark_terminated(2), "another id: freshly inserted");
     }
 
-    /// #44: la seam de `connection.degraded` refleja la de aprobaciones —
-    /// `push_degraded` (lo que hace el arm de la bomba) entrega en el
-    /// receptor que `take_degraded` se lleva UNA vez.
+    /// #44: `connection.degraded`'s seam mirrors the approvals' one —
+    /// `push_degraded` (what the pump's arm does) delivers to the receiver
+    /// `take_degraded` takes ONCE.
     #[test]
-    fn degraded_push_llega_a_take_degraded() {
+    fn degraded_push_reaches_take_degraded() {
         let (degraded_tx, degraded_rx) = mpsc::unbounded_channel();
         let (failed_tx, _ffr) = mpsc::unbounded_channel();
         let (notices_tx, _fnr) = mpsc::unbounded_channel();
@@ -4052,22 +4135,23 @@ mod tests {
             detail: None,
         });
 
-        let mut rx = backend.take_degraded().expect("primer dueño se lo lleva");
-        let got = rx.try_recv().expect("el aviso llegó al receptor");
+        let mut rx = backend.take_degraded().expect("first owner takes it");
+        let got = rx.try_recv().expect("the warning reached the receiver");
         assert_eq!(got.scheme, "ftp");
         assert_eq!(got.reason, "tls-auth-rejected");
-        // Uno solo: un segundo `take_*` ve `None` (como los otros canales).
+        // Just one: a second `take_*` sees `None` (like the other channels).
         assert!(
             backend.take_degraded().is_none(),
-            "el receptor es one-shot, igual que take_approvals"
+            "the receiver is one-shot, same as take_approvals"
         );
     }
 
-    /// #322: el canal de `connection.failed` es el de `degraded` con otra
-    /// carga. Se prueba aparte porque son DOS canales: mezclarlos haría que un
-    /// fallo de conexión llegara como degradación y al revés.
+    /// #322: the `connection.failed` channel is `degraded`'s with a
+    /// different payload. Tested separately because they are TWO channels:
+    /// mixing them up would make a connection failure arrive as a
+    /// degradation and vice versa.
     #[test]
-    fn failed_push_llega_a_take_failed() {
+    fn failed_push_reaches_take_failed() {
         let (failed_tx, failed_rx) = mpsc::unbounded_channel();
         let (notices_tx, notices_rx) = mpsc::unbounded_channel();
         let (degraded_tx, _dr) = mpsc::unbounded_channel();
@@ -4114,55 +4198,56 @@ mod tests {
             scheme: "s3".into(),
             host: "rosetta.example.test".into(),
             reason: "secret-empty".into(),
-            detail: Some("la clave configurada está vacía".into()),
+            detail: Some("the configured key is empty".into()),
         });
 
-        let mut rx = backend.take_failed().expect("primer dueño se lo lleva");
-        let got = rx.try_recv().expect("el fallo llegó al receptor");
+        let mut rx = backend.take_failed().expect("first owner takes it");
+        let got = rx.try_recv().expect("the failure reached the receiver");
         assert_eq!(got.reason, "secret-empty");
         assert_eq!(
             got.detail.as_deref(),
-            Some("la clave configurada está vacía"),
-            "el detalle es lo único que este canal existe para transportar"
+            Some("the configured key is empty"),
+            "the detail is the only thing this channel exists to carry"
         );
         assert!(
             backend.take_failed().is_none(),
-            "el receptor es one-shot, igual que take_degraded"
+            "the receiver is one-shot, same as take_degraded"
         );
-        // Y NO se cruzan: el canal de degradación sigue vacío.
+        // And they do NOT cross: the degraded channel stays empty.
         assert!(
             backend.take_degraded().is_none(),
-            "este backend no cableó degraded; un fallo no debe aparecer ahí"
+            "this backend did not wire up degraded; a failure must not show up there"
         );
     }
 
-    /// G3a (ADR 0037): `METHOD_NOT_FOUND` (-32601) de `plugin.preview_styled`
-    /// se traduce a `Ok(None)` — un daemon 0.27 sin este handler aún
-    /// cableado degrada EXACTAMENTE como "ningún previewer aplica"; el
-    /// caller (frontend) cae al preview plano. Construye el `ClientError`
-    /// a mano (sin socket): es el trigger REAL dentro de la ventana 0.27,
-    /// distinto de `VERSION_MISMATCH` (que ni deja llamar).
+    /// G3a (ADR 0037): `plugin.preview_styled`'s `METHOD_NOT_FOUND` (-32601)
+    /// translates to `Ok(None)` — a 0.27 daemon with this handler not wired
+    /// up yet degrades EXACTLY like "no previewer applies"; the caller
+    /// (frontend) falls back to the plain preview. Builds the `ClientError`
+    /// by hand (no socket): this is the REAL trigger within the 0.27
+    /// window, distinct from `VERSION_MISMATCH` (which does not even let
+    /// the call happen).
     #[test]
-    fn plugin_preview_styled_method_not_found_es_none() {
+    fn plugin_preview_styled_method_not_found_is_none() {
         let err = ClientError::Rpc(norte_proto::wire::RpcError::protocol(
             norte_proto::wire::codes::METHOD_NOT_FOUND,
             "unknown method: plugin.preview_styled",
         ));
-        let got = map_styled_preview_result(Err(err)).expect("METHOD_NOT_FOUND no es error");
+        let got = map_styled_preview_result(Err(err)).expect("METHOD_NOT_FOUND is not an error");
         assert_eq!(
             got, None,
-            "cae a Ok(None), como si ningún previewer aplicara"
+            "falls back to Ok(None), as if no previewer applied"
         );
     }
 
-    /// Un `Ok` con `preview: Some(..)` pasa tal cual.
+    /// An `Ok` with `preview: Some(..)` passes through as is.
     #[test]
-    fn plugin_preview_styled_ok_pasa_la_preview() {
+    fn plugin_preview_styled_ok_passes_the_preview_through() {
         let preview = methods::PluginPreviewStyled {
             plugin_id: "org.norte.demo".into(),
             plugin_name: "Demo".into(),
             lines: vec![vec![methods::SpanWire {
-                text: "hola".into(),
+                text: "hello".into(),
                 role: None,
                 fg: None,
                 bg: None,
@@ -4172,21 +4257,21 @@ mod tests {
         let got = map_styled_preview_result(Ok(methods::PluginPreviewStyledResult {
             preview: Some(preview.clone()),
         }))
-        .expect("Ok pasa");
+        .expect("Ok passes through");
         assert_eq!(got, Some(preview));
     }
 
-    /// Un fallo REAL (no `METHOD_NOT_FOUND`) se propaga vía `to_taxonomy`
-    /// — jamás se confunde en silencio con "no hay handler todavía".
+    /// A REAL failure (not `METHOD_NOT_FOUND`) propagates via `to_taxonomy`
+    /// — never silently confused with "no handler yet".
     #[test]
-    fn plugin_preview_styled_otro_error_se_propaga() {
+    fn plugin_preview_styled_another_error_propagates() {
         let err = ClientError::Rpc(norte_proto::wire::RpcError::from(Error::Internal {
             panic: false,
         }));
         let got = map_styled_preview_result(Err(err));
         assert!(
             matches!(got, Err(Error::Internal { panic: false })),
-            "un fallo real se propaga, no se confunde con METHOD_NOT_FOUND: {got:?}"
+            "a real failure propagates, it is not confused with METHOD_NOT_FOUND: {got:?}"
         );
     }
 }

@@ -1,26 +1,27 @@
 # shellcheck shell=bash
-# Corre DENTRO de un contenedor de humo (lo lee `bash -s`). Recibe
-# ARTIFACT (tarball|installer|deb|rpm|appimage), REV (vacío = no comprobar la
-# revisión) y los artefactos en /a, montado en solo lectura. Lo que prueba:
-# que se instala con lo que la distribución trae, que `--version` dice la
-# revisión esperada, que llega un listado, y —si hay ventana— que no muere al
-# arrancar bajo Xvfb.
+# Runs INSIDE a smoke container (read by `bash -s`). Receives
+# ARTIFACT (tarball|installer|deb|rpm|appimage), REV (empty = do not check
+# the revision) and the artifacts under /a, mounted read-only. What it
+# tests: that it installs with what the distribution ships, that
+# `--version` reports the expected revision, that a listing comes back,
+# and —if there is a window— that it does not die on start under Xvfb.
 set -euo pipefail
 : "${ARTIFACT:?}"
 REV="${REV:-}"
 
-# Nombres lógicos → paquetes de cada familia.
+# Logical names → each family's packages.
 #
-# `escritorio` es lo que un AppImage da por hecho: la *excludelist* de
-# AppImage/linuxdeploy deja FUERA del paquete las bibliotecas que todo
-# escritorio trae (GL/EGL, X11/xcb, fontconfig, freetype, harfbuzz, gbm…),
-# porque llevar las suyas rompe con los drivers del sistema. Un contenedor
-# mínimo no es un escritorio, y sin ellas la ventana muere con
-# «libfontconfig.so.1: cannot open shared object file». La lista es la que
-# `ldd` dio por ausente sobre el AppImage extraído en Debian 13 y Fedora 41,
-# más lo que WebKit abre con `dlopen` y `ldd` no ve: `libGLESv2.so.2`, y el
-# EGL/DRI de Mesa con el que pinta bajo Xvfb. En Fedora esos llegan como
-# dependencias de mesa-libEGL; en la familia Debian hay que pedirlos.
+# `desktop` is what an AppImage takes for granted: AppImage/linuxdeploy's
+# *excludelist* leaves OUT of the package the libraries every desktop ships
+# (GL/EGL, X11/xcb, fontconfig, freetype, harfbuzz, gbm…), because carrying
+# its own breaks against the system's drivers. A minimal container is not a
+# desktop, and without them the window dies with
+# "libfontconfig.so.1: cannot open shared object file". The list is what
+# `ldd` reported as absent on the AppImage extracted on Debian 13 and
+# Fedora 41, plus what WebKit opens with `dlopen` and `ldd` does not see:
+# `libGLESv2.so.2`, and the Mesa EGL/DRI it paints with under Xvfb. On
+# Fedora those arrive as mesa-libEGL's dependencies; on the Debian family
+# they have to be requested.
 instalar() {
   local pkgs=() p
   if command -v apt-get >/dev/null; then
@@ -57,7 +58,7 @@ version_ok() {
   out="$("$1" --version)"
   echo "$out"
   if [ -n "$REV" ] && [[ "$out" != *"($REV)" ]]; then
-    echo "revisión inesperada: se esperaba ($REV)" >&2
+    echo "unexpected revision: expected ($REV)" >&2
     return 1
   fi
 }
@@ -65,14 +66,14 @@ version_ok() {
 listado() {
   local salida
   mkdir -p /tmp/casa && : >/tmp/casa/hola.txt
-  # `norte ls` levanta el daemon si no hay ninguno: el camino de la ventana.
+  # `norte ls` starts the daemon if there is none: the window's path.
   salida="$("$1" ls /tmp/casa)"
-  grep -q 'hola.txt' <<<"$salida" || { echo "el listado no trajo el fichero: $salida" >&2; return 1; }
-  echo "llega el listado"
+  grep -q 'hola.txt' <<<"$salida" || { echo "the listing did not bring the file: $salida" >&2; return 1; }
+  echo "the listing comes through"
 }
 
-# No se comprueba que PINTE —eso pide una persona—, sino que no se cae al
-# arrancar: una dependencia de WebKitGTK que falte muere aquí.
+# It does not check that it PAINTS —that needs a person—, only that it does
+# not fall over on start: a missing WebKitGTK dependency dies here.
 ventana() {
   local pid
   export DISPLAY=:99
@@ -82,22 +83,23 @@ ventana() {
   pid=$!
   sleep 8
   if kill -0 "$pid" 2>/dev/null; then
-    echo "la ventana sigue viva a los 8 segundos"
+    echo "the window is still alive after 8 seconds"
     kill "$pid" 2>/dev/null || true
   else
     wait "$pid" 2>/dev/null || true
-    echo "la ventana MURIÓ al arrancar" >&2
+    echo "the window DIED on start" >&2
     return 1
   fi
 }
 
-# Que cada /usr/bin/<b> lo haya puesto ESTE paquete: estar en el PATH no basta.
+# That each /usr/bin/<b> was put there by THIS package: being on the PATH is
+# not enough.
 dueno_de() {
   local b
   for b in norte-gui norte ntc; do
-    "$@" "/usr/bin/$b" >/dev/null 2>&1 || { echo "el paquete no instala /usr/bin/$b" >&2; return 1; }
+    "$@" "/usr/bin/$b" >/dev/null 2>&1 || { echo "the package does not install /usr/bin/$b" >&2; return 1; }
   done
-  echo "los tres binarios los pone el paquete"
+  echo "the package provides all three binaries"
 }
 
 case "$ARTIFACT" in
@@ -108,7 +110,7 @@ case "$ARTIFACT" in
     norte="$(find /opt/t -type f -name norte -print -quit)"
     ntc="$(find /opt/t -type f -name ntc -print -quit)"
     if [ -z "$norte" ] || [ -z "$ntc" ]; then
-      echo "faltan norte o ntc en los tarballs" >&2
+      echo "norte or ntc missing from the tarballs" >&2
       exit 1
     fi
     version_ok "$norte"
@@ -116,8 +118,8 @@ case "$ARTIFACT" in
     listado "$norte"
     ;;
   installer)
-    # El instalador descarga de GitHub; `INSTALLER_DOWNLOAD_URL` lo apunta a
-    # los artefactos locales, y `curl -sSfL` lee `file://`.
+    # The installer downloads from GitHub; `INSTALLER_DOWNLOAD_URL` points it
+    # at the local artifacts, and `curl -sSfL` reads `file://`.
     instalar curl xz
     for s in /a/*-installer.sh; do
       INSTALLER_DOWNLOAD_URL=file:///a INSTALLER_NO_MODIFY_PATH=1 sh "$s"
@@ -145,7 +147,7 @@ case "$ARTIFACT" in
     ventana /usr/bin/norte-gui
     ;;
   appimage)
-    # Un contenedor no tiene FUSE: se extrae y se corre lo extraído.
+    # A container has no FUSE: it is extracted and the extraction is run.
     instalar xvfb escritorio
     cd /tmp
     cp /a/*.AppImage app.AppImage
@@ -157,8 +159,8 @@ case "$ARTIFACT" in
     ventana squashfs-root/AppRun
     ;;
   *)
-    echo "artefacto desconocido: $ARTIFACT" >&2
+    echo "unknown artifact: $ARTIFACT" >&2
     exit 2
     ;;
 esac
-echo "humo OK: $ARTIFACT"
+echo "smoke OK: $ARTIFACT"

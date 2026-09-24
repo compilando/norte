@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
-# Construye TODO lo que se publicaría de una referencia —tarballs e
-# instaladores de `dist`, y el deb/rpm/AppImage de la ventana— dentro de la
-# imagen de construcción, y deja un MANIFEST que dice qué glibc pide cada
-# binario y qué revisión dice ser (ADR 0112).
+# Builds EVERYTHING that would be published from a ref —`dist`'s tarballs and
+# installers, and the window's deb/rpm/AppImage— inside the build image, and
+# leaves a MANIFEST saying which glibc each binary requires and which
+# revision it claims to be (ADR 0112).
 #
-#   scripts/baseline/build.sh [ref]      # por defecto HEAD
+#   scripts/baseline/build.sh [ref]      # HEAD by default
 #
-# El repo entra por un clon DENTRO del contenedor desde el `.git` montado en
-# solo lectura: la revisión (`git describe`) sale del ref pedido y no de
-# HEAD, y `dist` puede hacer su `source.tar.gz`. El `target/` del host no se
-# toca.
+# The repo comes in via a clone INSIDE the container from the `.git` mounted
+# read-only: the revision (`git describe`) comes from the requested ref and
+# not from HEAD, and `dist` can make its `source.tar.gz`. The host's
+# `target/` is not touched.
 #
-# Todo el progreso va a stderr; stdout es UNA línea, el directorio de salida.
+# All progress goes to stderr; stdout is ONE line, the output directory.
 set -euo pipefail
 RAIZ="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 # shellcheck source=scripts/baseline/lib.sh
@@ -21,7 +21,7 @@ REF="${1:-HEAD}"
 FLOOR="${NORTE_GLIBC_FLOOR:-2.35}"
 
 for c in docker git bsdtar objdump; do
-  command -v "$c" >/dev/null || { echo "hace falta $c" >&2; exit 1; }
+  command -v "$c" >/dev/null || { echo "need $c" >&2; exit 1; }
 done
 
 commit="$(git -C "$RAIZ" rev-parse --verify "$REF^{commit}")"
@@ -30,11 +30,11 @@ gitdir="$(git -C "$RAIZ" rev-parse --path-format=absolute --git-common-dir)"
 SALIDA="$RAIZ/target/baseline/$revision"
 imagen="$("$RAIZ/scripts/baseline/image.sh")"
 
-echo "ref $REF · commit ${commit:0:12} · revisión $revision · $imagen" >&2
+echo "ref $REF · commit ${commit:0:12} · revision $revision · $imagen" >&2
 rm -rf "$SALIDA"
 mkdir -p "$SALIDA"
 
-# shellcheck disable=SC2016  # se expande DENTRO del contenedor
+# shellcheck disable=SC2016  # expands INSIDE the container
 DENTRO='
 set -euo pipefail
 export CARGO_TARGET_DIR=/target
@@ -44,18 +44,18 @@ git checkout -q "$COMMIT"
 triple="$(rustc -vV | grep "^host:" | cut -d" " -f2)"
 rm -rf /target/distrib /src/target/distrib /target/release/bundle
 
-echo "--- dist: norte y ntc"
+echo "--- dist: norte and ntc"
 dist build --artifacts=local --target="$triple"
 dist build --artifacts=global --target="$triple"
 
 echo "--- webview"
 (cd crates/norte-gui-tauri/ui && npm ci --no-audit --no-fund && npm run build)
 
-echo "--- paquete de la ventana, con los MISMOS norte y ntc que los tarballs"
+echo "--- window package, with the SAME norte and ntc as the tarballs"
 mkdir -p crates/norte-gui-tauri/binaries
 for b in norte ntc; do
   src="$(find /target -type f -perm -u+x -path "*/dist/$b" -print -quit)"
-  [ -n "$src" ] || { echo "dist no dejó el binario $b bajo /target" >&2; exit 1; }
+  [ -n "$src" ] || { echo "dist did not leave binary $b under /target" >&2; exit 1; }
   cp "$src" "crates/norte-gui-tauri/binaries/$b-$triple"
 done
 (cd crates/norte-gui-tauri && NO_STRIP=1 APPIMAGE_EXTRACT_AND_RUN=1 ./ui/node_modules/.bin/tauri build)
@@ -78,13 +78,13 @@ docker run --rm \
   -e HOST_GID="$(id -g)" \
   "$imagen" bash -c "$DENTRO" >&2
 
-# --- MANIFEST: se abre lo que se publicaría y se mira DENTRO -------------
+# --- MANIFEST: what would be published is opened and looked at INSIDE ----
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 mkdir -p "$tmp/tar" "$tmp/deb"
 for t in "$SALIDA"/dist/*.tar.xz; do tar -xf "$t" -C "$tmp/tar"; done
 deb="$(find "$SALIDA/gui" -name '*.deb' -print -quit)"
-[ -n "$deb" ] || { echo "la build no dejó .deb" >&2; exit 1; }
+[ -n "$deb" ] || { echo "the build did not leave a .deb" >&2; exit 1; }
 bsdtar -xOf "$deb" 'data.tar.*' | bsdtar -x -C "$tmp/deb"
 
 {
@@ -107,7 +107,7 @@ manifest_sums "$SALIDA"
 
 problemas="$(manifest_problems "$SALIDA/MANIFEST")"
 if [ -n "$problemas" ]; then
-  printf 'la build NO vale:\n%s\n' "$problemas" >&2
+  printf 'the build is NOT valid:\n%s\n' "$problemas" >&2
   exit 1
 fi
 printf '%s\n' "$SALIDA"

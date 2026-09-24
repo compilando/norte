@@ -1,8 +1,9 @@
-//! Qué programa externo lee el RAR, cómo se encuentra y **cómo se le acota**.
+//! What external program reads the RAR, how it is found and **how it is
+//! bounded**.
 //!
-//! La regla 9 vive aquí: al delegado se le da una ruta, un nombre y una
-//! tubería, jamás el sistema de ficheros del usuario. Cada endurecimiento de
-//! [`Delegate::command`] carga peso, y ninguno es decorativo.
+//! Rule 9 lives here: the delegate is given a path, a name and a pipe,
+//! never the user's filesystem. Every hardening in [`Delegate::command`]
+//! carries weight, and none of it is decorative.
 
 use futures::stream::StreamExt;
 use norte_proto::Error;
@@ -16,100 +17,102 @@ use tokio::io::AsyncReadExt;
 use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 
-/// Los fallos propios de la delegación, con el detalle que
-/// [`norte_proto::Error`] no puede llevar por el cable.
+/// Delegation's own failures, with the detail
+/// [`norte_proto::Error`] cannot carry over the wire.
 ///
-/// La conversión al error de protocolo es deliberadamente pobre —
-/// `Unsupported` — porque el cable no transporta prosa; la frase vive aquí,
-/// para el log y para `norte doctor`.
+/// The conversion to the protocol error is deliberately poor —
+/// `Unsupported` — because the wire does not carry prose; the sentence
+/// lives here, for the log and for `norte doctor`.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum RarError {
-    /// No hay ningún lector de RAR instalado.
+    /// No RAR reader is installed.
     ///
-    /// El mensaje NOMBRA qué instalar a propósito: un `.rar` que se abre y no
-    /// enseña nada no le enseña nada al usuario.
+    /// The message NAMES what to install on purpose: a `.rar` that opens
+    /// and shows nothing teaches the user nothing.
     #[error("no RAR reader found: install `7z` (p7zip) or `unrar` and try again")]
     NoDelegate,
-    /// El ejecutable no arrancó (no existe, no es ejecutable, sin permisos).
+    /// The executable did not start (does not exist, is not executable, no
+    /// permissions).
     #[error("could not run the RAR reader `{program}`: {source}")]
     Spawn {
-        /// Ruta del ejecutable que se intentó lanzar.
+        /// Path of the executable that was attempted.
         program: String,
-        /// El fallo del sistema operativo.
+        /// The operating system's failure.
         source: std::io::Error,
     },
-    /// El hijo pasó del plazo de pared y fue MUERTO. No es un `Io` con
-    /// reintento: repetir lo mismo vuelve a colgarse.
+    /// The child went past the wall-clock deadline and was KILLED. Not an
+    /// `Io` worth retrying: doing the same thing again just hangs again.
     #[error("the RAR reader took longer than {}s and was killed", .0.as_secs())]
     Timeout(Duration),
-    /// El nombre de la entrada, tratado como el patrón que el delegado
-    /// aplicaría, alcanza a OTRA entrada del archivo.
+    /// The entry's name, treated as the pattern the delegate would apply,
+    /// also matches ANOTHER entry in the archive.
     ///
-    /// Se rehúsa en vez de adivinar: el flujo de la entrada equivocada tiene
-    /// exactamente el mismo aspecto que el de la correcta.
+    /// Refused instead of guessed: the wrong entry's stream looks exactly
+    /// like the right one's.
     #[error("the entry name would match more than one entry as a pattern; refusing to guess")]
     AmbiguousForDelegate,
-    /// El hijo terminó mal. `stderr` va recortado: es diagnóstico, no un canal.
+    /// The child ended badly. `stderr` comes trimmed: it is diagnostic, not
+    /// a channel.
     #[error("the RAR reader failed (exit {code}): {stderr}")]
     Failed {
-        /// Código de salida, o `-1` si murió por señal.
+        /// Exit code, or `-1` if it died by signal.
         code: i32,
-        /// Primeras líneas de `stderr`, en lossy — solo para el log.
+        /// First lines of `stderr`, lossy — for the log only.
         stderr: String,
     },
 }
 
 impl From<RarError> for Error {
-    /// El cable no transporta prosa: todo esto colapsa a un puñado de
-    /// categorías, y la frase se queda en el log de este lado.
+    /// The wire does not carry prose: all of this collapses into a handful
+    /// of categories, and the sentence stays in this side's log.
     fn from(e: RarError) -> Self {
         match e {
-            // Ninguna de las dos se arregla reintentando, y las dos tienen
-            // una frase que el log sí lleva.
+            // Neither is fixed by retrying, and both have a sentence the
+            // log does carry.
             RarError::NoDelegate | RarError::AmbiguousForDelegate => Self::Unsupported,
             RarError::Spawn { .. } | RarError::Timeout(_) => {
                 Self::ProviderUnavailable { retryable: false }
             }
-            // El delegado responde y dice que no: el contenedor es lo que
-            // falla, no la I/O.
+            // The delegate answers and says no: it is the container that
+            // fails, not the I/O.
             RarError::Failed { .. } => Self::Corrupt,
         }
     }
 }
 
-/// Cuántos hijos pueden vivir a la vez en todo el proceso.
+/// How many children can be alive at once across the whole process.
 ///
-/// Un panel que lista un directorio con cuarenta `.rar` no puede convertirse
-/// en cuarenta procesos: el semáforo es el que hace que la delegación tenga un
-/// coste acotado.
+/// A pane listing a directory with forty `.rar`s cannot turn into forty
+/// processes: the semaphore is what keeps delegation's cost bounded.
 const MAX_CHILDREN: usize = 4;
 
 static CHILDREN: Semaphore = Semaphore::const_new(MAX_CHILDREN);
 
-/// Plazo de pared por invocación de listado.
+/// Wall-clock deadline per list invocation.
 pub const LIST_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// Directorio de trabajo del hijo: uno VACÍO y propio del proceso.
+/// The child's working directory: an EMPTY one, the process's own.
 ///
-/// Nunca el árbol del usuario. Un delegado que decida escribir rutas
-/// relativas —`7z e` sin `-so`, una versión futura, un flag mal puesto—
-/// escribe aquí, donde no hay nada que pisar. Si no se puede crear, el hijo
-/// corre sin `current_dir` explícito antes que fallar la lectura entera; ese
-/// caso ya solo puede pasar con el temporal del sistema roto.
+/// Never the user's tree. A delegate that decides to write relative paths
+/// —`7z e` without `-so`, a future version, a misplaced flag— writes here,
+/// where there is nothing to overwrite. If it cannot be created, the child
+/// runs without an explicit `current_dir` rather than failing the whole
+/// read; that case can now only happen with a broken system temp.
 ///
-/// # Creado en EXCLUSIVA, y no con un nombre adivinable
+/// # Created EXCLUSIVELY, and not with a guessable name
 ///
-/// Era `temp_dir().join(format!("norte-rar-{pid}"))` con `create_dir_all`, y
-/// eso son dos cosas malas juntas (revisión de seguridad del ADR 0082): el pid
-/// se adivina —o se precrea en lote—, y `create_dir_all` tiene ÉXITO si el
-/// directorio ya existe, sin mirar dueño ni modo. En un `/tmp` que escribe
-/// cualquiera, el cwd del delegado podía ser un directorio de otro con lo que
-/// ese otro quisiera dentro. `TempDir` crea con nombre aleatorio, en exclusiva
-/// y a 0700.
+/// It used to be `temp_dir().join(format!("norte-rar-{pid}"))` with
+/// `create_dir_all`, and that is two bad things together (ADR 0082 security
+/// review): the pid is guessable —or pre-created in bulk—, and
+/// `create_dir_all` SUCCEEDS if the directory already exists, without
+/// checking owner or mode. On a `/tmp` anyone can write to, the delegate's
+/// cwd could be someone else's directory with whatever that someone wanted
+/// inside. `TempDir` creates with a random name, exclusively, at 0700.
 ///
-/// El `TempDir` se filtra a propósito dentro del `OnceLock`: vive lo que el
-/// proceso, y borrarlo mientras un hijo lo tiene de cwd sería peor que dejarlo.
+/// The `TempDir` is deliberately leaked inside the `OnceLock`: it lives as
+/// long as the process, and deleting it while a child has it as cwd would
+/// be worse than leaving it.
 fn sandbox_dir() -> Option<&'static Path> {
     static DIR: OnceLock<Option<tempfile::TempDir>> = OnceLock::new();
     DIR.get_or_init(|| tempfile::Builder::new().prefix("norte-rar-").tempdir().ok())
@@ -117,44 +120,45 @@ fn sandbox_dir() -> Option<&'static Path> {
         .map(tempfile::TempDir::path)
 }
 
-/// El programa externo que hace de lector de RAR.
+/// The external program acting as the RAR reader.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Delegate {
-    /// `7z` o `7zz` (p7zip). Preferido: conserva los bytes crudos del nombre.
+    /// `7z` or `7zz` (p7zip). Preferred: preserves the name's raw bytes.
     SevenZip(PathBuf),
     /// `unrar`.
     Unrar(PathBuf),
 }
 
-/// Los ejecutables que se sondean, **en orden de preferencia**.
+/// The executables that get probed, **in order of preference**.
 ///
-/// El orden está medido, no elegido por gusto: `unrar` TRUNCA un nombre no
-/// UTF-8 en su listado (`cp437-\xa4\xa5.txt` sale como `cp437-`, sin
-/// extensión), y `7z -slt` lo entrega entero. Un provider que pierde la
-/// extensión de un fichero no es aceptable mientras haya alternativa.
+/// The order is measured, not chosen by taste: `unrar` TRUNCATES a non-UTF8
+/// name in its listing (`cp437-\xa4\xa5.txt` comes out as `cp437-`, no
+/// extension), and `7z -slt` delivers it whole. A provider that loses a
+/// file's extension is not acceptable while there is an alternative.
 const CANDIDATES: [&str; 3] = ["7z", "7zz", "unrar"];
 
 impl Delegate {
-    /// Sondea `PATH` en busca de un lector: `7z`, `7zz`, `unrar`.
+    /// Probes `PATH` for a reader: `7z`, `7zz`, `unrar`.
     ///
-    /// Toca el sistema de ficheros (un `is_file` por candidato y directorio de
-    /// `PATH`), así que se llama UNA vez fuera del camino async — al construir
-    /// el provider —, nunca por operación.
+    /// Touches the filesystem (one `is_file` per candidate and `PATH`
+    /// directory), so it is called ONCE outside the async path — when
+    /// building the provider —, never per operation.
     ///
     /// # Errors
     ///
-    /// [`RarError::NoDelegate`] si ninguno está instalado.
+    /// [`RarError::NoDelegate`] if none is installed.
     pub fn discover() -> Result<Self, RarError> {
         let path = std::env::var_os("PATH").unwrap_or_default();
         let mut found = Vec::new();
         for dir in std::env::split_paths(&path) {
-            // Solo entradas ABSOLUTAS del `PATH`. Una relativa —o la vacía,
-            // que significa «el directorio actual»— resolvería el delegado
-            // contra un directorio que nadie ha avalado, y el hijo se lanza
-            // además con `current_dir` puesto: abrir un `.rar` ejecutaría el
-            // `7z` que hubiera ahí (revisión de seguridad del ADR 0082, misma
-            // regla que `openers::resolve_program`).
+            // Only ABSOLUTE `PATH` entries. A relative one —or the empty
+            // one, which means "the current directory"— would resolve the
+            // delegate against a directory nobody vouched for, and the
+            // child is also launched with `current_dir` set: opening a
+            // `.rar` would execute whatever `7z` was sitting there (ADR
+            // 0082 security review, same rule as
+            // `openers::resolve_program`).
             if !dir.is_absolute() {
                 continue;
             }
@@ -168,24 +172,25 @@ impl Delegate {
         Self::discover_in(&found)
     }
 
-    /// La mitad pura de [`discover`](Self::discover): elige entre candidatos ya
-    /// resueltos, respetando el orden de preferencia y no el de llegada.
+    /// The pure half of [`discover`](Self::discover): picks among
+    /// already-resolved candidates, honoring the preference order and not
+    /// the arrival order.
     ///
     /// # Errors
     ///
-    /// [`RarError::NoDelegate`] si la lista viene vacía o no trae ningún
-    /// nombre conocido.
+    /// [`RarError::NoDelegate`] if the list comes empty or carries no known
+    /// name.
     ///
     /// ```
     /// use std::path::PathBuf;
     /// use norte_vfs_rar::Delegate;
     ///
-    /// let elegido = Delegate::discover_in(&[
+    /// let chosen = Delegate::discover_in(&[
     ///     ("unrar", PathBuf::from("/usr/bin/unrar")),
     ///     ("7z", PathBuf::from("/usr/bin/7z")),
     /// ])
-    /// .expect("hay candidatos");
-    /// assert!(matches!(elegido, Delegate::SevenZip(_)));
+    /// .expect("there are candidates");
+    /// assert!(matches!(chosen, Delegate::SevenZip(_)));
     /// ```
     pub fn discover_in(candidates: &[(&str, PathBuf)]) -> Result<Self, RarError> {
         for exe in CANDIDATES {
@@ -199,13 +204,13 @@ impl Delegate {
         Err(RarError::NoDelegate)
     }
 
-    /// El delegado FIJADO por configuración (`[archive] rar_delegate`).
+    /// The delegate PINNED by configuration (`[archive] rar_delegate`).
     ///
-    /// El dialecto se decide por el nombre del ejecutable —`unrar` habla
-    /// `vt`/`p`, cualquier otra cosa se trata como `7z`—, y un binario que no
-    /// exista no falla aquí sino al usarlo, con un error que lo NOMBRA: fijar
-    /// una ruta rota y no enterarse hasta abrir un `.rar` es peor que
-    /// enterarse abriendo un `.rar`.
+    /// The dialect is decided by the executable's name —`unrar` speaks
+    /// `vt`/`p`, anything else is treated as `7z`—, and a binary that does
+    /// not exist does not fail here but when used, with an error that NAMES
+    /// it: pinning a broken path and not finding out until a `.rar` is
+    /// opened is worse than finding out by opening a `.rar`.
     ///
     /// ```
     /// use std::path::PathBuf;
@@ -226,7 +231,7 @@ impl Delegate {
         }
     }
 
-    /// La ruta absoluta del ejecutable elegido.
+    /// The absolute path of the chosen executable.
     #[must_use]
     pub fn program(&self) -> &Path {
         match self {
@@ -234,9 +239,9 @@ impl Delegate {
         }
     }
 
-    /// `argv` del LISTADO. Todo argumento va tras `--` y la contraseña va
-    /// vacía en la propia línea de órdenes: una pregunta por `stdin` no puede
-    /// ocurrir si nadie va a preguntar.
+    /// `argv` for the LISTING. Every argument goes after `--` and the
+    /// password is empty on the command line itself: a `stdin` prompt cannot
+    /// happen if nobody is going to ask.
     #[must_use]
     pub fn list_argv(&self, archive: &Path) -> Vec<OsString> {
         let mut argv: Vec<OsString> = match self {
@@ -251,12 +256,12 @@ impl Delegate {
         argv
     }
 
-    /// `argv` de la LECTURA de UNA entrada a `stdout`.
+    /// `argv` for READING ONE entry to `stdout`.
     ///
-    /// El nombre viaja en **bytes**, sin pasar por `String`: un nombre que no
-    /// es UTF-8 es un nombre igualmente (regla 1). Que el delegado trate ese
-    /// nombre como un patrón es problema del provider, que rehúsa antes de
-    /// llegar aquí.
+    /// The name travels in **bytes**, without going through `String`: a name
+    /// that is not UTF-8 is still a name (rule 1). Whether the delegate
+    /// treats that name as a pattern is the provider's problem, which
+    /// refuses before getting here.
     #[must_use]
     pub fn read_argv(&self, archive: &Path, entry: &[u8]) -> Vec<OsString> {
         let mut argv: Vec<OsString> = match self {
@@ -272,30 +277,32 @@ impl Delegate {
         argv
     }
 
-    /// Construye el proceso hijo con la regla 9 puesta. Cada línea carga peso:
+    /// Builds the child process with rule 9 applied. Every line carries
+    /// weight:
     ///
-    /// - `stdin` a `null`: una pregunta de contraseña no puede colgar el
-    ///   daemon, porque no hay nadie a quien preguntar;
-    /// - `stderr` capturado: los mensajes del delegado no contaminan el flujo
-    ///   de datos ni el log del proceso;
-    /// - `current_dir` en un directorio vacío: nunca el árbol del usuario;
-    /// - `env_clear`: el hijo no hereda ni credenciales ni `LD_PRELOAD`;
-    /// - `kill_on_drop`: soltar el futuro mata al hijo, que es lo que hace
-    ///   que cancelar signifique algo.
+    /// - `stdin` to `null`: a password prompt cannot hang the daemon,
+    ///   because there is nobody to ask;
+    /// - `stderr` captured: the delegate's messages do not contaminate the
+    ///   data stream nor the process log;
+    /// - `current_dir` in an empty directory: never the user's tree;
+    /// - `env_clear`: the child inherits neither credentials nor
+    ///   `LD_PRELOAD`;
+    /// - `kill_on_drop`: dropping the future kills the child, which is what
+    ///   makes cancelling mean something.
     fn command(&self, argv: &[OsString]) -> tokio::process::Command {
-        // La ruta se hace ABSOLUTA aquí, con el cwd de norte todavía puesto.
-        // `discover` ya solo mira entradas absolutas del `PATH`, pero
-        // `[archive] rar_delegate` acepta lo que el lector escriba, y en unix
-        // `current_dir` se aplica ANTES de resolver el programa: un `7z`
-        // relativo lo resolvería el hijo contra el sandbox, no contra donde el
-        // lector creía (revisión de seguridad del ADR 0082).
-        let programa = if self.program().is_absolute() {
+        // The path is made ABSOLUTE here, with norte's cwd still in place.
+        // `discover` already only looks at absolute `PATH` entries, but
+        // `[archive] rar_delegate` accepts whatever the reader writes, and on
+        // unix `current_dir` is applied BEFORE resolving the program: a
+        // relative `7z` would be resolved by the child against the sandbox,
+        // not against where the reader thought (ADR 0082 security review).
+        let program = if self.program().is_absolute() {
             self.program().to_path_buf()
         } else {
             std::env::current_dir()
                 .map_or_else(|_| self.program().to_path_buf(), |c| c.join(self.program()))
         };
-        let mut cmd = tokio::process::Command::new(&programa);
+        let mut cmd = tokio::process::Command::new(&program);
         cmd.args(argv)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -308,25 +315,30 @@ impl Delegate {
         cmd
     }
 
-    /// Lanza el hijo, espera su salida COMPLETA y la devuelve en bytes.
+    /// Launches the child, waits for its COMPLETE output and returns it as
+    /// bytes.
     ///
-    /// Para el listado, que es pequeño y hay que parsear entero. Pasado
-    /// `timeout` el hijo muere y el error lo dice.
+    /// For the listing, which is small and must be parsed whole. Once
+    /// `timeout` passes the child dies and the error says so.
     ///
     /// # Errors
     ///
-    /// [`RarError::Spawn`] si el ejecutable no arranca, [`RarError::Timeout`]
-    /// si agota el plazo, [`RarError::Failed`] si termina con estado no cero.
+    /// [`RarError::Spawn`] if the executable does not start,
+    /// [`RarError::Timeout`] if the deadline runs out, [`RarError::Failed`]
+    /// if it exits with a non-zero status.
     ///
     /// # Panics
     ///
-    /// Si el semáforo de hijos se cerrase, cosa que este crate nunca hace.
+    /// If the children semaphore were closed, which this crate never does.
     pub async fn run_capture(
         &self,
         argv: &[OsString],
         timeout: Duration,
     ) -> Result<Vec<u8>, RarError> {
-        let _permit = CHILDREN.acquire().await.expect("el semáforo no se cierra");
+        let _permit = CHILDREN
+            .acquire()
+            .await
+            .expect("the semaphore never closes");
         let child = self
             .command(argv)
             .spawn()
@@ -334,8 +346,9 @@ impl Delegate {
                 program: self.program().display().to_string(),
                 source,
             })?;
-        // El hijo vive DENTRO del futuro: si el timeout lo suelta, `kill_on_drop`
-        // lo mata. No hay camino en el que quede un proceso huérfano.
+        // The child lives INSIDE the future: if the timeout drops it,
+        // `kill_on_drop` kills it. There is no path that leaves an orphaned
+        // process.
         let out = tokio::time::timeout(timeout, child.wait_with_output())
             .await
             .map_err(|_| RarError::Timeout(timeout))?
@@ -353,31 +366,32 @@ impl Delegate {
         }
     }
 
-    /// Lanza el hijo y devuelve su `stdout` como flujo, sin acumularlo.
+    /// Launches the child and returns its `stdout` as a stream, without
+    /// accumulating it.
     ///
-    /// Cancelar el token mata al hijo (regla 3): el flujo termina en
-    /// [`Error::Cancelled`] y el permiso del semáforo se libera.
+    /// Cancelling the token kills the child (rule 3): the stream ends in
+    /// [`Error::Cancelled`] and the semaphore permit is released.
     ///
     /// # Errors
     ///
-    /// [`RarError::Spawn`] si el ejecutable no arranca.
+    /// [`RarError::Spawn`] if the executable does not start.
     ///
     /// # Panics
     ///
-    /// Si el semáforo de hijos se cerrase, cosa que este crate nunca hace, o
-    /// si `stdout` no viniese como tubería habiéndolo pedido así.
+    /// If the children semaphore were closed, which this crate never does,
+    /// or if `stdout` did not come as a pipe having been requested as such.
     pub async fn run_stream(
         &self,
         argv: &[OsString],
         cancel: CancellationToken,
     ) -> Result<ByteStream, RarError> {
-        // El permiso se OLVIDA aquí y se devuelve a mano cuando la task de
-        // abajo termina: el flujo sobrevive a esta función, así que no puede
-        // atarse a un guard con el ámbito de ella.
+        // The permit is FORGOTTEN here and returned by hand when the task
+        // below finishes: the stream outlives this function, so it cannot be
+        // tied to a guard scoped to it.
         CHILDREN
             .acquire()
             .await
-            .expect("el semáforo no se cierra")
+            .expect("the semaphore never closes")
             .forget();
         let mut child = self.command(argv).spawn().map_err(|source| {
             CHILDREN.add_permits(1);
@@ -386,7 +400,7 @@ impl Delegate {
                 source,
             }
         })?;
-        let mut stdout = child.stdout.take().expect("stdout pedido como pipe");
+        let mut stdout = child.stdout.take().expect("stdout requested as a pipe");
         let (tx, rx) = tokio::sync::mpsc::channel::<Result<bytes::Bytes, Error>>(4);
         tokio::spawn(async move {
             let mut buf = vec![0u8; 64 * 1024];
@@ -400,8 +414,9 @@ impl Delegate {
                 };
                 match read {
                     Ok(0) => {
-                        // EOF: el veredicto lo da el estado de salida, no el
-                        // silencio. Un `.rar` cifrado da cero bytes y error.
+                        // EOF: the verdict comes from the exit status, not
+                        // the silence. An encrypted `.rar` gives zero bytes
+                        // and an error.
                         match child.wait().await {
                             Ok(st) if st.success() => {}
                             Ok(_) | Err(_) => {
@@ -416,7 +431,7 @@ impl Delegate {
                             .await
                             .is_err()
                         {
-                            break; // el consumidor se fue: `kill_on_drop` remata
+                            break; // consumer left: `kill_on_drop` finishes it off
                         }
                     }
                     Err(_) => {
@@ -425,29 +440,29 @@ impl Delegate {
                     }
                 }
             }
-            drop(child); // kill_on_drop: ni cancelado ni roto deja proceso vivo
+            drop(child); // kill_on_drop: neither cancelled nor broken leaves a live process
             CHILDREN.add_permits(1);
         });
         Ok(tokio_stream::wrappers::ReceiverStream::new(rx).boxed())
     }
 }
 
-/// Un nombre en bytes crudos a `OsString`, sin pasar por `String`.
+/// A name in raw bytes to `OsString`, without going through `String`.
 #[cfg(unix)]
 fn os_from_bytes(bytes: &[u8]) -> OsString {
     use std::os::unix::ffi::OsStrExt;
     OsStr::from_bytes(bytes).to_os_string()
 }
 
-/// En Windows el `argv` es UTF-16 y no hay forma de pasar bytes arbitrarios:
-/// la conversión lossy es del sistema operativo, no una decisión nuestra.
+/// On Windows `argv` is UTF-16 and there is no way to pass arbitrary bytes:
+/// the lossy conversion is the operating system's, not a decision of ours.
 #[cfg(not(unix))]
 fn os_from_bytes(bytes: &[u8]) -> OsString {
     OsString::from(String::from_utf8_lossy(bytes).into_owned())
 }
 
-/// Las primeras líneas de `stderr` en lossy, acotadas: es diagnóstico para el
-/// log, no un canal de datos.
+/// `stderr`'s first lines in lossy, bounded: it is diagnostics for the log,
+/// not a data channel.
 fn first_lines(stderr: &[u8]) -> String {
     let cut = stderr.len().min(512);
     String::from_utf8_lossy(&stderr[..cut])
@@ -463,62 +478,63 @@ mod tests {
     use super::*;
 
     #[test]
-    fn argv_de_listado_lleva_separador_y_sin_password() {
+    fn listing_argv_carries_separator_and_no_password() {
         let d = Delegate::SevenZip(PathBuf::from("/usr/bin/7z"));
         let argv = d.list_argv(Path::new("/tmp/a.rar"));
         assert!(
             argv.contains(&OsString::from("--")),
-            "todo argumento va tras `--`"
+            "every argument goes after `--`"
         );
         assert!(
             argv.iter().any(|a| a == "-p"),
-            "password vacía: jamás una pregunta por stdin"
+            "empty password: never a stdin prompt"
         );
         assert_eq!(argv.last().unwrap(), "/tmp/a.rar");
     }
 
     #[test]
-    fn argv_de_listado_de_unrar_tambien_calla_la_password() {
+    fn unrar_listing_argv_also_silences_the_password() {
         let d = Delegate::Unrar(PathBuf::from("/usr/bin/unrar"));
         let argv = d.list_argv(Path::new("/tmp/a.rar"));
-        assert!(argv.iter().any(|a| a == "-p-"), "unrar: password vacía");
-        let sep = argv.iter().position(|a| a == "--").expect("hay separador");
-        assert_eq!(sep, argv.len() - 2, "el archivo va DESPUÉS del separador");
+        assert!(argv.iter().any(|a| a == "-p-"), "unrar: empty password");
+        let sep = argv.iter().position(|a| a == "--").expect("has separator");
+        assert_eq!(sep, argv.len() - 2, "the archive goes AFTER the separator");
     }
 
     #[test]
-    fn argv_de_lectura_pasa_el_nombre_en_bytes() {
+    fn read_argv_passes_the_name_in_bytes() {
         use std::os::unix::ffi::OsStrExt;
         let d = Delegate::SevenZip(PathBuf::from("/usr/bin/7z"));
         let argv = d.read_argv(Path::new("/tmp/a.rar"), b"cp437-\xa4\xa5.txt");
         assert_eq!(argv.last().unwrap().as_bytes(), b"cp437-\xa4\xa5.txt");
         assert!(
             argv.iter().any(|a| a == "-so"),
-            "el contenido sale por stdout"
+            "content comes out via stdout"
         );
     }
 
-    /// La propiedad es «no se cuelga». Con `stdin` ABIERTO este test tarda
-    /// para siempre; con `stdin` a null, el hijo muere solo.
+    /// The property is "does not hang". With `stdin` OPEN this test takes
+    /// forever; with `stdin` set to null, the child dies on its own.
     #[tokio::test]
-    async fn el_hijo_nunca_espera_en_stdin() {
-        let d = Delegate::Unrar(PathBuf::from("/bin/cat")); // cat lee stdin hasta EOF
+    async fn the_child_never_waits_on_stdin() {
+        let d = Delegate::Unrar(PathBuf::from("/bin/cat")); // cat reads stdin until EOF
         let out = tokio::time::timeout(
             Duration::from_secs(5),
             d.run_capture(&[], Duration::from_secs(30)),
         )
         .await;
-        assert!(out.is_ok(), "stdin abierto: el hijo se quedó esperando");
+        assert!(out.is_ok(), "stdin open: the child was left waiting");
     }
 
-    /// Un hijo que no termina se MATA, y el error lo dice en vez de callar.
+    /// A child that does not finish gets KILLED, and the error says so
+    /// instead of staying silent.
     #[tokio::test]
-    async fn el_plazo_de_pared_mata_al_hijo() {
+    async fn the_wall_deadline_kills_the_child() {
         let d = Delegate::Unrar(PathBuf::from("/bin/sleep"));
         let err = d
             .run_capture(&[OsString::from("30")], Duration::from_millis(200))
             .await
-            .expect_err("30s no caben en 200ms");
+            .expect_err("30s does not fit in 200ms");
         assert!(matches!(err, RarError::Timeout(_)), "{err}");
         assert_eq!(
             Error::from(err),
@@ -527,123 +543,123 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cancelar_mata_al_hijo() {
+    async fn cancelling_kills_the_child() {
         let token = CancellationToken::new();
         let d = Delegate::Unrar(PathBuf::from("/bin/sleep"));
         let stream = d
             .run_stream(&[OsString::from("30")], token.clone())
             .await
-            .expect("sleep arranca");
+            .expect("sleep starts");
         token.cancel();
         let items = tokio::time::timeout(Duration::from_secs(5), stream.collect::<Vec<_>>())
             .await
-            .expect("el hijo sobrevivió a la cancelación");
+            .expect("the child survived cancellation");
         assert_eq!(
             items.last().and_then(|r| r.as_ref().err().cloned()),
             Some(Error::Cancelled),
-            "el flujo termina DICIENDO que se canceló"
+            "the stream ends SAYING it was cancelled"
         );
     }
 
-    /// Un ejecutable que no existe no es un panic ni un listado vacío: es un
-    /// error que NOMBRA el programa.
+    /// An executable that does not exist is neither a panic nor an empty
+    /// listing: it is an error that NAMES the program.
     #[tokio::test]
-    async fn un_ejecutable_ausente_nombra_el_programa() {
+    async fn a_missing_executable_names_the_program() {
         let d = Delegate::SevenZip(PathBuf::from("/nonexistent/7z"));
         let err = d
             .run_capture(&[], Duration::from_secs(5))
             .await
-            .expect_err("no existe");
+            .expect_err("does not exist");
         assert!(err.to_string().contains("/nonexistent/7z"), "{err}");
         assert!(matches!(err, RarError::Spawn { .. }));
     }
 
-    /// Un hijo que sale con estado no cero es `Corrupt`: el delegado responde
-    /// y dice que ese contenedor no vale.
+    /// A child that exits with a non-zero status is `Corrupt`: the delegate
+    /// responds and says that container is no good.
     #[tokio::test]
-    async fn un_estado_no_cero_es_corrupt() {
+    async fn a_non_zero_status_is_corrupt() {
         let d = Delegate::SevenZip(PathBuf::from("/bin/false"));
         let err = d
             .run_capture(&[], Duration::from_secs(5))
             .await
-            .expect_err("false siempre falla");
+            .expect_err("false always fails");
         assert!(matches!(err, RarError::Failed { .. }), "{err}");
         assert_eq!(Error::from(err), Error::Corrupt);
     }
 
-    /// El hijo NO hereda el entorno: nada de credenciales en variables, nada
-    /// de `LD_PRELOAD`. `env` imprime lo que tenga, y no debe tener nada —
-    /// `PATH` está puesto en cualquier entorno de test.
+    /// The child does NOT inherit the environment: no credentials in
+    /// variables, no `LD_PRELOAD`. `env` prints whatever it has, and it must
+    /// have nothing — `PATH` is set in any test environment.
     #[tokio::test]
-    async fn el_hijo_no_hereda_el_entorno() {
+    async fn the_child_does_not_inherit_the_environment() {
         assert!(
             std::env::var_os("PATH").is_some(),
-            "el padre SÍ tiene entorno"
+            "the parent DOES have an environment"
         );
         let d = Delegate::SevenZip(PathBuf::from("/usr/bin/env"));
         let out = d
             .run_capture(&[], Duration::from_secs(5))
             .await
-            .expect("env arranca");
+            .expect("env starts");
         let text = String::from_utf8_lossy(&out);
-        assert!(text.trim().is_empty(), "entorno heredado: {text}");
+        assert!(text.trim().is_empty(), "inherited environment: {text}");
     }
 
-    /// El hijo corre en un directorio VACÍO y propio, jamás en el árbol del
-    /// usuario: `pwd` lo dice.
+    /// The child runs in an EMPTY directory of its own, never in the user's
+    /// tree: `pwd` says so.
     #[tokio::test]
-    async fn el_hijo_corre_fuera_del_arbol_del_usuario() {
+    async fn the_child_runs_outside_the_users_tree() {
         let d = Delegate::SevenZip(PathBuf::from("/bin/pwd"));
         let out = d
             .run_capture(&[], Duration::from_secs(5))
             .await
-            .expect("pwd arranca");
+            .expect("pwd starts");
         let cwd = String::from_utf8_lossy(&out).trim().to_string();
         assert_eq!(
             Some(std::path::Path::new(&cwd)),
             sandbox_dir(),
-            "el hijo no corre donde está el usuario"
+            "the child does not run where the user is"
         );
         assert_eq!(
             std::fs::read_dir(&cwd).unwrap().count(),
             0,
-            "y el directorio está vacío"
+            "and the directory is empty"
         );
     }
 
     #[test]
-    fn sin_delegado_el_error_nombra_el_ejecutable() {
-        let err = Delegate::discover_in(&[]).expect_err("sin candidatos falla");
+    fn without_a_delegate_the_error_names_the_executable() {
+        let err = Delegate::discover_in(&[]).expect_err("no candidates fails");
         let msg = err.to_string();
         assert!(
             msg.contains("7z") && msg.contains("unrar"),
-            "el error debe decir QUÉ instalar: {msg}"
+            "the error must say WHAT to install: {msg}"
         );
     }
 
     #[test]
-    fn se_prefiere_7z_a_unrar() {
-        // Orden medido, no gusto: unrar TRUNCA un nombre no-UTF8 en el listado.
+    fn seven_zip_is_preferred_over_unrar() {
+        // Order is measured, not taste: unrar TRUNCATES a non-UTF8 name in the listing.
         let found = Delegate::discover_in(&[
             ("unrar", PathBuf::from("/usr/bin/unrar")),
             ("7z", PathBuf::from("/usr/bin/7z")),
         ])
-        .expect("hay candidatos");
-        assert!(matches!(found, Delegate::SevenZip(_)), "7z gana a unrar");
+        .expect("there are candidates");
+        assert!(matches!(found, Delegate::SevenZip(_)), "7z beats unrar");
     }
 
     #[test]
-    fn siete_zeta_zeta_tambien_vale_y_va_antes_que_unrar() {
+    fn seven_zip_zip_also_counts_and_goes_before_unrar() {
         let found = Delegate::discover_in(&[
             ("unrar", PathBuf::from("/usr/bin/unrar")),
             ("7zz", PathBuf::from("/opt/7zz")),
         ])
-        .expect("hay candidatos");
+        .expect("there are candidates");
         assert_eq!(found, Delegate::SevenZip(PathBuf::from("/opt/7zz")));
     }
 
     #[test]
-    fn un_delegado_fijado_elige_dialecto_por_su_nombre() {
+    fn a_pinned_delegate_picks_its_dialect_by_its_name() {
         assert_eq!(
             Delegate::pinned(PathBuf::from("/usr/local/bin/7zz")),
             Delegate::SevenZip(PathBuf::from("/usr/local/bin/7zz"))
@@ -652,9 +668,9 @@ mod tests {
             Delegate::pinned(PathBuf::from("/opt/unrar")),
             Delegate::Unrar(PathBuf::from("/opt/unrar"))
         );
-        // Un nombre que no dice nada se trata como 7z: es el dialecto que
-        // conserva los bytes crudos, o sea el que menos pierde si acertamos
-        // a medias.
+        // A name that says nothing is treated as 7z: it is the dialect that
+        // preserves raw bytes, i.e. the one that loses least if we guess
+        // halfway right.
         assert_eq!(
             Delegate::pinned(PathBuf::from("/opt/lector")),
             Delegate::SevenZip(PathBuf::from("/opt/lector"))
@@ -662,9 +678,9 @@ mod tests {
     }
 
     #[test]
-    fn solo_unrar_se_acepta() {
+    fn only_unrar_is_accepted() {
         let found = Delegate::discover_in(&[("unrar", PathBuf::from("/usr/bin/unrar"))])
-            .expect("unrar sirve");
+            .expect("unrar works");
         assert_eq!(found, Delegate::Unrar(PathBuf::from("/usr/bin/unrar")));
     }
 }

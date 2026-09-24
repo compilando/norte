@@ -177,10 +177,7 @@ export function paintExtensions(this: Screen, ext: ExtensionsView | null): void 
     errors.setAttribute("role", "listbox");
     errors.setAttribute("aria-labelledby", title2.id);
     if (ext.cursor >= ext.rows.length) {
-      errors.setAttribute(
-        "aria-activedescendant",
-        `extension-row-${String(ext.cursor)}`,
-      );
+      errors.setAttribute("aria-activedescendant", `extension-row-${String(ext.cursor)}`);
     }
     for (const [j, e] of ext.errors.entries()) {
       // One more row: pointed to with a click, and its card has the only
@@ -396,13 +393,9 @@ export function extensionPaneHead(
     );
   }
 
-  const uninstall = button(
-    "extensions-action-uninstall",
-    this.t("ext-uninstall"),
-    () => {
-      this.send({ action: "extension_govern", row, id: r.id, change: "uninstall" });
-    },
-  );
+  const uninstall = button("extensions-action-uninstall", this.t("ext-uninstall"), () => {
+    this.send({ action: "extension_govern", row, id: r.id, change: "uninstall" });
+  });
   uninstall.dataset["destructive"] = "true";
   actions.append(uninstall);
   header.append(actions);

@@ -286,7 +286,9 @@ export function paintMenu(
     this.menuBarHeight = height;
     this.viewportSucio = true;
   }
-  if (sinCambios(this.menuRoot, JSON.stringify({ menu, botones: buttons, propia: custom }))) {
+  if (
+    sinCambios(this.menuRoot, JSON.stringify({ menu, botones: buttons, propia: custom }))
+  ) {
     return;
   }
   if (!hasBar && menu.open === null) {
@@ -802,9 +804,7 @@ function descartarLasQueNoCaben(
   const floor = slot.columns.find((c) => c.id === "name")?.width ?? 10;
   const headers = [...dom.header.querySelectorAll<HTMLElement>(".col")];
   const widthOf = (c: ColumnHeader, i: number): number =>
-    c.width === null
-      ? (headers[i]?.getBoundingClientRect().width ?? 0)
-      : c.width * cellW;
+    c.width === null ? (headers[i]?.getBoundingClientRect().width ?? 0) : c.width * cellW;
   // Row padding (6px each side), the slot's border, the mark checkbox
   // (1.1em ≈ a cell and a half) and one gap cell per column.
   let free = total - 14 - cellW * 1.5 - cellW * slot.columns.length;

@@ -1,6 +1,6 @@
 [package]
 name = "norte-ai"
-description = "Abstracción de proveedores de modelos (AiProvider): chat streaming, embeddings y capabilities — Anthropic, Ollama y OpenAI-compatible (ADR 0031)"
+description = "Model provider abstraction (AiProvider): streaming chat, embeddings and capabilities — Anthropic, Ollama and OpenAI-compatible (ADR 0031)"
 license = "AGPL-3.0-only"
 version.workspace = true
 edition.workspace = true
@@ -9,7 +9,7 @@ repository.workspace = true
 authors.workspace = true
 
 [features]
-# Utilidades de test compartidas (FakeEmbed). Solo dev-deps de otros crates.
+# Shared test utilities (FakeEmbed). Only other crates' dev-deps.
 testutil = []
 
 [dependencies]
@@ -22,14 +22,15 @@ tokio = { workspace = true, features = ["rt", "net", "io-util", "time"] }
 bytes.workspace = true
 async-trait.workspace = true
 bitflags = { workspace = true }
-# Cliente HTTP (ADR 0031, regla 8): reqwest ya vive en el árbol como
-# transitiva de opendal con la MISMA pila rustls/aws-lc-rs; aquí pasa a dep
-# directa (streaming SSE/NDJSON de los proveedores). default-features=false:
-# solo json+stream+rustls — sin cookies, sin proxies del sistema, sin gzip.
+# HTTP client (ADR 0031, rule 8): reqwest already lives in the tree
+# transitively via opendal with the SAME rustls/aws-lc-rs stack; here it
+# becomes a direct dep (the providers' SSE/NDJSON streaming).
+# default-features=false: only json+stream+rustls — no cookies, no system
+# proxies, no gzip.
 reqwest = { workspace = true }
-# El Secret zeroizing se INYECTA desde el core (spec §9: las credenciales
-# jamás viven en config ni las lee este crate; resolución env→keyring→age en
-# norte-connect, que ya es AGPL como este crate).
+# The zeroizing Secret is INJECTED from the core (spec §9: credentials never
+# live in config nor are read by this crate; env→keyring→age resolution
+# lives in norte-connect, which is already AGPL like this crate).
 norte-connect.workspace = true
 
 [dev-dependencies]

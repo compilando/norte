@@ -1,7 +1,8 @@
-//! CLI de humo de M0: `ls`, `cp`, `mv`, `rm` sobre el core embebido.
+//! M0 smoke-test CLI: `ls`, `cp`, `mv`, `rm` over the embedded core.
 //!
-//! Frontend SIN lógica de negocio (regla dura 7): todo pasa por `Engine`.
-//! Strings hardcodeados a propósito: Fluent llega en M1 (deuda registrada).
+//! Frontend WITHOUT business logic (hard rule 7): everything goes through
+//! `Engine`. Strings are hardcoded on purpose: Fluent arrives in M1
+//! (recorded debt).
 #![forbid(unsafe_code)]
 
 use std::path::PathBuf;
@@ -20,11 +21,11 @@ mod paths;
 mod task;
 mod theme;
 
-/// Ruta del binario de frontend a lanzar: el HERMANO de `exe` si existe,
-/// si no el nombre pelado (que el `PATH` resolverá). Puro para poder
-/// fijarlo en un test — el orden importa: un `norte` recién instalado tiene
-/// que preferir el `norte-tui` de su propia tanda antes que uno más viejo
-/// que ande antes en el `PATH`.
+/// Path of the frontend binary to launch: `exe`'s SIBLING if it exists,
+/// otherwise the bare name (which `PATH` will resolve). Pure so it can be
+/// fixed in a test — order matters: a freshly installed `norte` has to
+/// prefer the `norte-tui` from its own batch over an older one that comes
+/// earlier in `PATH`.
 fn frontend_program(exe: Option<&std::path::Path>, bin: &str) -> PathBuf {
     exe.and_then(std::path::Path::parent)
         .map(|d| d.join(bin))
@@ -32,55 +33,55 @@ fn frontend_program(exe: Option<&std::path::Path>, bin: &str) -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(bin))
 }
 
-/// Nombre del binario del frontend de TERMINAL.
+/// Name of the TERMINAL frontend's binary.
 ///
-/// Una constante y no un literal en el `match`: es la MISMA cadena que el
-/// `[[bin]]` de `crates/norte-tui/Cargo.toml`, y un test las cruza
-/// (`tui_lanza_el_binario_que_el_manifiesto_construye`). Sin ese cruce, el
-/// nombre es un string que compila igual de bien esté bien o mal y falla en el
-/// `exec`, con el usuario delante.
+/// A constant and not a literal in the `match`: it is the SAME string as
+/// `crates/norte-tui/Cargo.toml`'s `[[bin]]`, and a test cross-checks them
+/// (`tui_launches_the_binary_the_manifest_builds`). Without that
+/// cross-check, the name is a string that compiles equally well whether
+/// right or wrong and fails at `exec`, with the user watching.
 const TUI_BIN: &str = "ntc";
 
-/// Localiza un binario HERMANO (hoy solo `ntc`) y le cede el
-/// proceso. Busca primero JUNTO a este ejecutable —así un `norte` recién
-/// instalado usa el `norte-tui` de la misma tanda, y no otro más viejo que
-/// haya antes en el `PATH`— y si no está, deja que el `PATH` decida.
+/// Locates a SIBLING binary (today only `ntc`) and hands it the process.
+/// Looks first NEXT TO this executable — so a freshly installed `norte`
+/// uses the `norte-tui` from the same batch, and not an older one earlier
+/// in `PATH` — and if it is not there, lets `PATH` decide.
 ///
-/// En unix hace `exec`: el frontend HEREDA el proceso (mismo pid, misma
-/// terminal, mismas señales), así que Ctrl-C, el tamaño del terminal y el
-/// código de salida se comportan como si se hubiera lanzado directamente,
-/// sin un `norte` de más esperando en medio. En el resto de plataformas se
-/// lanza como hijo y se propaga su código de salida.
+/// On unix it does `exec`: the frontend INHERITS the process (same pid,
+/// same terminal, same signals), so Ctrl-C, the terminal size and the
+/// exit code behave as if it had been launched directly, with no extra
+/// `norte` waiting in between. On other platforms it is launched as a
+/// child and its exit code is propagated.
 fn exec_frontend(bin: &str, args: &[std::ffi::OsString]) -> anyhow::Result<ExitCode> {
-    let programa = frontend_program(std::env::current_exe().ok().as_deref(), bin);
-    let mut cmd = std::process::Command::new(&programa);
+    let program = frontend_program(std::env::current_exe().ok().as_deref(), bin);
+    let mut cmd = std::process::Command::new(&program);
     cmd.args(args);
 
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt as _;
-        // `exec` solo VUELVE si falló: el error de abajo es el único camino.
+        // `exec` only RETURNS if it failed: the error below is the only path.
         let e = cmd.exec();
         Err(anyhow::Error::new(e).context(format!(
             "no se pudo ejecutar `{bin}` ({}) — instálalo con `cargo install --path crates/{bin}`",
-            programa.display()
+            program.display()
         )))
     }
     #[cfg(not(unix))]
     {
-        let estado = cmd.status().with_context(|| {
+        let status = cmd.status().with_context(|| {
             format!(
                 "no se pudo ejecutar `{bin}` ({}) — instálalo con `cargo install --path crates/{bin}`",
-                programa.display()
+                program.display()
             )
         })?;
         Ok(ExitCode::from(
-            u8::try_from(estado.code().unwrap_or(1)).unwrap_or(1),
+            u8::try_from(status.code().unwrap_or(1)).unwrap_or(1),
         ))
     }
 }
 
-/// Código de salida convencional para "interrumpido por SIGINT".
+/// Conventional exit code for "interrupted by SIGINT".
 const EXIT_CANCELLED: u8 = 130;
 
 #[derive(Parser)]
@@ -346,9 +347,10 @@ impl From<SyncModeArg> for norte_proto::methods::SyncMode {
     }
 }
 
-/// Las opciones de `norte sync` tal como llegan de `clap`, agrupadas para no
-/// pasarle a `sync_cmd` sus ocho campos sueltos (`clippy::too_many_arguments`
-/// corta en 7, y `source`/`dest`/`backend` ya ocupan los otros tres).
+/// `norte sync`'s options as they arrive from `clap`, grouped so as not to
+/// pass `sync_cmd` its eight loose fields (`clippy::too_many_arguments`
+/// cuts off at 7, and `source`/`dest`/`backend` already take up the other
+/// three).
 struct SyncCliOpts<'a> {
     mode: SyncModeArg,
     dry_run: bool,
@@ -539,7 +541,7 @@ enum SymlinksArg {
     Follow,
 }
 
-/// `--resume` → política (opt-in; sin el flag, contrato de M1).
+/// `--resume` → policy (opt-in; without the flag, M1's contract).
 fn resume_policy(on: bool) -> norte_proto::ResumePolicy {
     if on {
         norte_proto::ResumePolicy::On
@@ -582,94 +584,101 @@ fn main() -> ExitCode {
     }
 }
 
-/// El aviso de «esta sesión no queda registrada» a stderr, EN EL ACTO (#177).
+/// The "this session is not being recorded" warning to stderr, ON THE SPOT
+/// (#177).
 ///
-/// Por `eprintln!` y no por el `tracing::warn!` que el core emitiría si nadie
-/// instalara sink: el default de `logging::init` es INFO pero respeta
-/// `RUST_LOG`, así que un `RUST_LOG=error norte mv a b` con un daemon vivo
-/// movería el fichero, no registraría nada y no diría NADA. Es el mismo
-/// criterio que `report_degradations` (ADR 0015 F, «nunca silencioso») y el que
-/// tenía el `abrir_journal_embebido` que #177 borró.
+/// Via `eprintln!` and not the `tracing::warn!` the core would emit if
+/// nobody installed a sink: `logging::init`'s default is INFO but it
+/// respects `RUST_LOG`, so a `RUST_LOG=error norte mv a b` with a live
+/// daemon would move the file, record nothing and say NOTHING. It is the
+/// same criterion as `report_degradations` (ADR 0015 F, "never silent")
+/// and the one the `abrir_journal_embebido` that #177 deleted used to
+/// have.
 ///
-/// Directo, sin canal: el aviso nace dentro de la mutación en curso y este
-/// binario no tiene run loop donde drenarlo — que salga cuando ocurre es
-/// justamente lo que se quiere.
-struct AvisoDeJournalPorStderr;
+/// Direct, no channel: the warning is born inside the mutation in
+/// progress and this binary has no run loop to drain it from — that it
+/// comes out as it happens is exactly what is wanted.
+struct JournalWarningStderr;
 
-impl norte_core::embedded::JournalWarningSink for AvisoDeJournalPorStderr {
+impl norte_core::embedded::JournalWarningSink for JournalWarningStderr {
     fn on_no_journal(&self, why: &norte_core::embedded::NoJournal) {
-        aviso(&why.text());
+        warn_line(&why.text());
     }
 
-    /// Un `norte cp` hace una mutación y se muere, así que la recuperación de
-    /// #179 aquí es casi teórica — pero un `norte ai rename --yes` de cuarenta
-    /// ficheros dura lo bastante como para que el ocupante suelte a mitad, y
-    /// entonces el aviso de arriba se quedó dicho sobre unos ficheros y no
-    /// sobre los otros. Decirlo cuesta una línea.
+    /// A `norte cp` makes one mutation and dies, so #179's recovery here is
+    /// almost theoretical — but a `norte ai rename --yes` over forty files
+    /// takes long enough for the occupant to let go halfway through, and
+    /// then the warning above was said about some files and not the
+    /// others. Saying so costs one line.
     ///
-    /// Por Fluent, a diferencia de su hermano: `NoJournal::text()` está
-    /// documentado como la frase SIN traducir del log del operador, y esta no
-    /// tiene esa excusa — es interfaz, y un `LANG=en` no puede leerla en
-    /// castellano.
+    /// Via Fluent, unlike its sibling: `NoJournal::text()` is documented
+    /// as the operator log's UNTRANSLATED sentence, and this one has no
+    /// such excuse — it is interface, and a `LANG=en` cannot read it in
+    /// Spanish.
     fn on_journal_recovered(&self) {
-        aviso(&norte_i18n::t("msg-journal-recovered"));
+        warn_line(&norte_i18n::t("msg-journal-recovered"));
     }
 
-    /// #203: lleva minutos ocupado y no hay daemon que lo explique. Frase
-    /// propia, porque la de siempre («no queda registrado») es la que el
-    /// usuario ya aprendió a ignorar — sale igual cuando no pasa nada.
+    /// #203: it has been busy for minutes and there is no daemon to
+    /// explain it. Its own sentence, because the usual one ("not being
+    /// recorded") is the one the user already learned to ignore — it
+    /// comes out the same when nothing is wrong.
     fn on_journal_squatted(&self) {
-        aviso(&norte_i18n::t("msg-journal-squatted"));
+        warn_line(&norte_i18n::t("msg-journal-squatted"));
     }
 }
 
-/// Una línea de aviso a stderr que NO puede tumbar la operación que la produjo.
+/// A warning line to stderr that must NOT be able to bring down the
+/// operation that produced it.
 ///
-/// `eprintln!` PANICA si stderr falla (cerrado, o lleno en un pipeline), y este
-/// sink corre dentro del `on_mutation` de una mutación que ya se aplicó: ese
-/// pánico haría fallar la Task de algo que funcionó, que es exactamente lo que
-/// el rustdoc de `JournalWarningSink` prohíbe. Además se emite con locks del
-/// engine tomados.
-fn aviso(frase: &str) {
+/// `eprintln!` PANICS if stderr fails (closed, or full in a pipeline), and
+/// this sink runs inside a mutation's `on_mutation` that has ALREADY been
+/// applied: that panic would fail the Task for something that worked,
+/// which is exactly what `JournalWarningSink`'s rustdoc forbids. It is
+/// also emitted with engine locks held.
+fn warn_line(phrase: &str) {
     use std::io::Write as _;
-    let _ = writeln!(std::io::stderr(), "aviso: {frase}");
+    let _ = writeln!(std::io::stderr(), "aviso: {phrase}");
 }
 
-#[expect(clippy::too_many_lines, reason = "un brazo por subcomando")]
+#[expect(clippy::too_many_lines, reason = "one arm per subcommand")]
 async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
-    // Tracing con el cap de seguridad `suppaftp=info` (issue #43, regla 10):
-    // sin esto un `RUST_LOG=trace` volcaría `PASS <password>` de suppaftp.
+    // Tracing with the `suppaftp=info` security cap (issue #43, hard rule
+    // 10): without this a `RUST_LOG=trace` would dump suppaftp's
+    // `PASS <password>`.
     //
-    // El guard SE SOSTIENE hasta el final de `run` (roadmap ítem 9): el writer
-    // del fichero es no bloqueante y su hilo vacía la cola al soltarlo, así que
-    // dejarlo caer aquí tiraría justo las últimas líneas — las del fallo que
-    // alguien está diagnosticando.
-    // `[log]` sale de la config, así que se carga ANTES del subscriber. Es una
-    // lectura de ficheros pequeños y sin ella la CLI y el daemon escribirían en
-    // un sitio distinto del que escriben los frontends — con `norte doctor`
-    // señalando uno de los dos, que es peor que no señalar ninguno.
+    // The guard IS HELD until the end of `run` (roadmap item 9): the
+    // file's writer is non-blocking and its thread drains the queue when
+    // dropped, so letting it drop here would throw away exactly the last
+    // lines — the ones for the failure someone is diagnosing.
+    // `[log]` comes from the config, so it is loaded BEFORE the
+    // subscriber. It is a read of small files and without it the CLI and
+    // the daemon would write somewhere different from where the frontends
+    // write — with `norte doctor` pointing at one of the two, which is
+    // worse than pointing at neither.
     let cfg_log = norte_config::load(&norte_config::standard_layers()).ok();
     let log_cfg = norte_core::logging::LogConfig {
         dir: cfg_log.as_ref().and_then(|c| c.log.dir.as_deref()),
         retain: cfg_log.as_ref().and_then(|c| c.log.retain),
-        // El fichero compartido: es el que lee `norte doctor`.
+        // The shared file: it is the one `norte doctor` reads.
         prefix: None,
         format: cfg_log.as_ref().map(|c| c.log.format).unwrap_or_default(),
     };
-    // `norte daemon run` —y solo él— monta además un anillo en memoria (#328,
-    // ADR 0092): es el registro que `log.tail` sirve a un frontend que vive en
-    // otro proceso, y sin él la ventana pinta el anillo del proceso
-    // equivocado (#326). Todo lo demás sigue con `init` a secas, porque no
-    // tiene a quién enseñárselo y pagaría dos mil líneas de memoria por nadie
-    // — y eso incluye `norte daemon stop`, que es un cliente que manda una
-    // petición y se muere.
+    // `norte daemon run` — and only it — also sets up an in-memory ring
+    // (#328, ADR 0092): it is the registry `log.tail` serves to a
+    // frontend living in another process, and without it the window
+    // paints the wrong process's ring (#326). Everything else keeps plain
+    // `init`, because it has nobody to show it to and would pay two
+    // thousand lines of memory for nobody — and that includes `norte
+    // daemon stop`, which is a client that sends one request and dies.
     //
-    // `init_with_ring` y no `init_to_file_with_ring`: este camino ya montaba
-    // `init`, o sea CON stderr, así que la otra función no habría añadido un
-    // anillo sino QUITADO una capa. Quien arranca `norte daemon run` en una
-    // terminal para ver por qué no levanta dejaría de leer nada.
+    // `init_with_ring` and not `init_to_file_with_ring`: this path already
+    // set up `init`, i.e. WITH stderr, so the other function would not
+    // have added a ring but REMOVED a layer. Whoever starts `norte daemon
+    // run` in a terminal to see why it won't come up would stop reading
+    // anything.
     #[cfg(unix)]
-    let anillo_de_registro = if matches!(
+    let log_ring = if matches!(
         cli.cmd,
         Cmd::Daemon {
             cmd: DaemonCmd::Run { .. }
@@ -683,14 +692,15 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
     #[cfg(not(unix))]
     norte_core::logging::init(log_cfg);
 
-    // El daemon construye SU PROPIO engine (con journal+policy, M3-4): el
-    // embebido de abajo es solo para el resto de subcomandos.
+    // The daemon builds ITS OWN engine (with journal+policy, M3-4): the
+    // embedded one below is only for the rest of the subcommands.
     #[cfg(unix)]
     if let Cmd::Daemon { cmd } = cli.cmd {
-        return cmd::daemon::daemon_cmd(cmd, anillo_de_registro).await;
+        return cmd::daemon::daemon_cmd(cmd, log_ring).await;
     }
-    // MCP/policy/undo hablan al daemon directamente como cliente (no van por
-    // el Backend embebido): el daemon es el dueño del journal y la policy.
+    // MCP/policy/undo talk to the daemon directly as a client (they do not
+    // go through the embedded Backend): the daemon owns the journal and
+    // the policy.
     #[cfg(unix)]
     match cli.cmd {
         Cmd::Mcp { cmd } => return cmd::daemon::mcp_cmd(cmd, cli.socket).await,
@@ -699,29 +709,31 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         Cmd::Ai { cmd } => return cmd::ai::ai_cmd(cmd).await,
         _ => {}
     }
-    // Audit lee la DB del journal directamente (solo-lectura, daemon parado).
+    // Audit reads the journal DB directly (read-only, daemon stopped).
     if let Cmd::Audit { cmd } = cli.cmd {
         return cmd::audit::audit_cmd(cmd).await;
     }
-    // Un frontend es un proceso APARTE (el TUI toma la terminal; el gráfico,
-    // cuando lo haya, abrirá ventana): este CLI solo lo localiza y le cede el
-    // proceso — nada de engine ni daemon aquí.
+    // A frontend is a SEPARATE process (the TUI takes over the terminal;
+    // the graphical one, when there is one, will open a window): this CLI
+    // only locates it and hands it the process — no engine or daemon
+    // here.
     if let Cmd::Tui { ref args } = cli.cmd {
         return exec_frontend(TUI_BIN, args);
     }
-    // Doctor es solo-lectura sobre config/keymaps (H2): ni engine ni daemon.
+    // Doctor is read-only over config/keymaps (H2): neither engine nor daemon.
     if let Cmd::Doctor { json } = cli.cmd {
         return cmd::entorno::doctor_cmd(json).await;
     }
-    // `paths` resuelve rutas y las statea, nada más: mismo sitio por el mismo
-    // motivo. Y ANTES de construir engine: la pregunta «dónde está mi config»
-    // se hace justo cuando algo de eso está roto.
+    // `paths` resolves paths and stats them, nothing more: same place for
+    // the same reason. And BEFORE building an engine: the question "where
+    // is my config" is asked exactly when something about it is broken.
     if let Cmd::Paths { json } = cli.cmd {
         return cmd::entorno::paths_cmd(json, cli.socket.clone()).await;
     }
-    // La ayuda es el corpus EMBEBIDO más el keymap del usuario (H3g): ni
-    // engine, ni daemon, ni red. Va aquí arriba por eso — construir un engine
-    // para imprimir documentación sería trabajo que el lector paga sin verlo.
+    // Help is the EMBEDDED corpus plus the user's keymap (H3g): no
+    // engine, no daemon, no network. It goes up here for that reason —
+    // building an engine to print documentation would be work the reader
+    // pays for without seeing it.
     if let Cmd::Help {
         ref topic,
         list,
@@ -736,43 +748,47 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
     if let Cmd::ShellInit { ref shell } = cli.cmd {
         return Ok(cmd::entorno::shell_init_cmd(shell));
     }
-    // `theme import` lee un JSON y escribe un TOML en el dir de config: ni
-    // engine ni daemon, y todo síncrono, así que a `spawn_blocking` (regla 2).
+    // `theme import` reads a JSON and writes a TOML into the config dir:
+    // no engine or daemon, and all synchronous, so `spawn_blocking` (hard
+    // rule 2).
     if let Cmd::Theme { ref cmd } = cli.cmd {
         let cmd = cmd.clone();
         return tokio::task::spawn_blocking(move || theme::run(&cmd)).await?;
     }
 
-    // Índice de búsqueda (M4, ADR 0034): el MISMO fichero que el daemon
-    // (config_dir/index.db), así `norte index build` en embebido persiste y una
-    // query posterior lo lee. SOLO se abre en modo embebido: con `--daemon` el
-    // dueño del índice es el daemon (se accede por RPC), y abrirlo aquí solo
-    // arriesgaría contención de escritura. Si no abre, se sigue sin él.
+    // Search index (M4, ADR 0034): the SAME file the daemon uses
+    // (config_dir/index.db), so an embedded `norte index build` persists
+    // and a later query reads it. It is ONLY opened in embedded mode:
+    // with `--daemon` the index's owner is the daemon (accessed via RPC),
+    // and opening it here would only risk write contention. If it does
+    // not open, it continues without it.
     let mut avisos = Vec::new();
     let engine = if cli.daemon {
         Engine::new()
     } else {
-        // #167: regla dura 4 — lo que MUTA el árbol se registra. El journal es
-        // el MISMO fichero que abriría el daemon (`config_dir()/journal.db`),
-        // y esa igualdad es el punto: `norte undo` contra el daemon tiene que
-        // ver lo que hizo un `norte mv` embebido. Si otro proceso tiene el
-        // lock, se sigue sin registro y con aviso — ver `norte_core::embedded`.
+        // #167: hard rule 4 — whatever MUTATES the tree gets recorded. The
+        // journal is the SAME file the daemon would open
+        // (`config_dir()/journal.db`), and that equality is the point:
+        // `norte undo` against the daemon has to see what an embedded
+        // `norte mv` did. If another process holds the lock, it continues
+        // without recording and with a warning — see `norte_core::embedded`.
         //
-        // Se arma para TODOS los subcomandos, incluido `norte ls`, y eso no le
-        // quita el journal a nadie: desde #177 el fichero no se abre hasta la
-        // primera mutación. Aquí había una lista de subcomandos «que mutan»
-        // mantenida a mano —con `norte ai rename` ya fuera de ella, abriendo su
-        // journal por su cuenta— y es la que ese cambio hizo innecesaria.
+        // It is set up for ALL subcommands, including `norte ls`, and that
+        // takes nobody's journal away: since #177 the file is not opened
+        // until the first mutation. There used to be a hand-maintained
+        // list of subcommands "that mutate" here — with `norte ai rename`
+        // already outside it, opening its own journal on its own — and
+        // that is the list this change made unnecessary.
         let dir = norte_core::connect::config_dir();
         let base = norte_core::embedded::engine_in(&dir);
         norte_core::equipo::con_indice(base, &dir, &mut avisos).await
     };
     if !cli.daemon {
-        // Proveedor local, conector y —solo para los dos comandos que los
-        // usan— los embeddings: lo que lleva todo engine
-        // (`norte_core::equipo`). Cargar `[ai]` resuelve secretos, y eso
-        // jamás lo paga un `ls`. Con `--daemon` el dueño de todo esto es el
-        // daemon.
+        // Local provider, connector and — only for the two commands that
+        // use them — the embeddings: what every engine carries
+        // (`norte_core::equipo`). Loading `[ai]` resolves secrets, and an
+        // `ls` never pays for that. With `--daemon` the daemon owns all
+        // of this.
         let ia = norte_core::equipo::Ia {
             renombrado: false,
             embeddings: matches!(
@@ -784,40 +800,42 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         };
         let dir = norte_core::connect::config_dir();
         avisos.extend(norte_core::equipo::equipar(&engine, &dir, ia).await.avisos);
-        // `[archive]` también en embebido: sin esto un `norte ls` dentro de un
-        // zip usaba los límites por defecto aunque `norte.toml` fijara otros.
-        // Roto, aquí es un aviso; en el daemon, un error de arranque.
+        // `[archive]` also in embedded mode: without this a `norte ls`
+        // inside a zip used the default limits even if `norte.toml` set
+        // others. Broken, here it is a warning; in the daemon, a startup
+        // error.
         if let Err(e) = norte_core::archive_config::aplicar(&engine).await {
             avisos.push(norte_core::equipo::Aviso::ArchivoInvalido(e.to_string()));
         }
     }
     for aviso in &avisos {
-        eprintln!("{}", cmd::daemon::texto_del_aviso(aviso));
+        eprintln!("{}", cmd::daemon::warning_text(aviso));
     }
 
-    // #177: si esta sesión acaba mutando sin journal, se dice a stderr y en el
-    // acto. No-op sobre el engine de `--daemon` (ese no puede quedarse sin
-    // journal: el dueño es el daemon, al otro lado del socket).
-    engine.set_journal_warning_sink(Arc::new(AvisoDeJournalPorStderr));
-    // `sync.plan`/`sync.apply` retienen el plan aprobado en un spool en disco
-    // (ADR 0049); sin instalarlo el brazo embebido contesta `Unsupported` —
-    // ver la rustdoc de `Backend::is_journalled`. Solo se instala para `norte
-    // sync`, con el mismo criterio LAZY que `[ai]` arriba: los demás
-    // subcomandos no lo necesitan, y ningún barrido hace falta aquí (a
-    // diferencia del arranque del daemon) porque el TTL de cada plan se
-    // reapa solo, en `Spool::open`/`Spool::create`.
+    // #177: if this session ends up mutating without a journal, it is
+    // said to stderr, on the spot. No-op on `--daemon`'s engine (that one
+    // cannot end up without a journal: the owner is the daemon, on the
+    // other side of the socket).
+    engine.set_journal_warning_sink(Arc::new(JournalWarningStderr));
+    // `sync.plan`/`sync.apply` retain the approved plan in an on-disk
+    // spool (ADR 0049); without installing it the embedded arm answers
+    // `Unsupported` — see `Backend::is_journalled`'s rustdoc. It is only
+    // installed for `norte sync`, with the same LAZY criterion as `[ai]`
+    // above: the other subcommands do not need it, and no sweep is needed
+    // here (unlike the daemon's startup) because each plan's TTL reaps
+    // itself, in `Spool::open`/`Spool::create`.
     if !cli.daemon && matches!(cli.cmd, Cmd::Sync { .. }) {
         engine.set_spool(norte_core::sync::Spool::new(
             norte_core::connect::config_dir(),
         ));
     }
     let mut backend = cmd::daemon::make_backend(engine, cli.daemon, cli.socket.clone()).await?;
-    // #44: toma el canal de avisos de degradación ANTES de correr el comando
-    // (en embebido esto INSTALA el observer, que dispara síncrono dentro del
-    // establecimiento; en remoto toma el receptor del pump del daemon). Se
-    // drena a stderr tras el comando — "nunca silencioso" (ADR 0015 F). En
-    // remoto es best-effort: el pump es concurrente y el aviso también queda
-    // en el `tracing::warn!` del daemon.
+    // #44: takes the degradation-warning channel BEFORE running the
+    // command (in embedded mode this INSTALLS the observer, which fires
+    // synchronously within the setup; remotely it takes the daemon's pump
+    // receiver). Drained to stderr after the command — "never silent"
+    // (ADR 0015 F). Remotely it is best-effort: the pump is concurrent
+    // and the warning also stays in the daemon's `tracing::warn!`.
     let mut degraded = backend.take_degraded();
     let result = match cli.cmd {
         Cmd::Ls { path, json, attrs } => cmd::ls::ls(&backend, &path, json, &attrs).await,
@@ -829,8 +847,8 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             max_depth,
             mtime_tolerance_ms,
         } => {
-            // Un `Err` de estos dos comandos NO puede salir por el
-            // `ExitCode::FAILURE` de `main`: ver `codigo_de_no_se_pudo`.
+            // An `Err` from these two commands must NOT exit via `main`'s
+            // `ExitCode::FAILURE`: see `code_for_could_not`.
             Ok(cmd::compare::compare_cmd(
                 &backend,
                 &a,
@@ -841,7 +859,7 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                 mtime_tolerance_ms,
             )
             .await
-            .unwrap_or_else(|e| cmd::compare::codigo_de_no_se_pudo(&e)))
+            .unwrap_or_else(|e| cmd::compare::code_for_could_not(&e)))
         }
         Cmd::Sync {
             source,
@@ -852,8 +870,8 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             criteria,
             mtime_tolerance_ms,
         } => {
-            // Mismo motivo que en `Cmd::Compare`: aquí el 1 significa «se
-            // aplicó», así que ningún error puede compartirlo.
+            // Same reason as in `Cmd::Compare`: here 1 means "applied", so
+            // no error can share it.
             Ok(cmd::sync::sync_cmd(
                 &backend,
                 &source,
@@ -867,7 +885,7 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                 },
             )
             .await
-            .unwrap_or_else(|e| cmd::compare::codigo_de_no_se_pudo(&e)))
+            .unwrap_or_else(|e| cmd::compare::code_for_could_not(&e)))
         }
         Cmd::Connect { target } => cmd::connect::connect_cmd(&backend, &target, cli.daemon).await,
         Cmd::Cp {
@@ -883,7 +901,7 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                 ..TransferOptions::default()
             };
             let task = match backend.copy(&from, &to, opts).await {
-                // Primer contacto TOFU: confirmar y reintentar UNA vez.
+                // First TOFU contact: confirm and retry ONCE.
                 Err(e) if cmd::connect::tofu_confirm(&backend, &e).await? => {
                     backend.copy(&from, &to, opts).await
                 }
@@ -957,19 +975,20 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         | Cmd::Help { .. }
         | Cmd::ShellInit { .. }
         | Cmd::Theme { .. }
-        | Cmd::Tui { .. } => unreachable!("manejado arriba"),
+        | Cmd::Tui { .. } => unreachable!("handled above"),
         #[cfg(unix)]
         Cmd::Daemon { .. } | Cmd::Mcp { .. } | Cmd::Policy { .. } | Cmd::Undo { .. } => {
-            unreachable!("manejado arriba")
+            unreachable!("handled above")
         }
     };
     report_degradations(&mut degraded);
     result
 }
 
-/// Drena a stderr los avisos de degradación TLS acumulados (#44) — "nunca
-/// silencioso" (ADR 0015 F). Best-effort en modo daemon (el pump es concurrente
-/// y el aviso también queda en el `tracing::warn!` del daemon).
+/// Drains the accumulated TLS degradation warnings (#44) to stderr —
+/// "never silent" (ADR 0015 F). Best-effort in daemon mode (the pump is
+/// concurrent and the warning also stays in the daemon's
+/// `tracing::warn!`).
 fn report_degradations(
     degraded: &mut Option<
         tokio::sync::mpsc::UnboundedReceiver<norte_proto::methods::ConnectionDegraded>,
@@ -992,54 +1011,53 @@ fn report_degradations(
 mod frontend_tests {
     use super::frontend_program;
 
-    /// El CLI lanza el frontend por NOMBRE DE BINARIO, así que el nombre que
-    /// pasa tiene que ser el que el manifiesto construye. Un string que no
-    /// corresponde a ningún binario compila igual de bien y falla en el
-    /// `exec`, con el usuario delante: `norte tui` deja de funcionar y nada lo
-    /// dice antes.
+    /// The CLI launches the frontend by BINARY NAME, so the name it passes
+    /// has to be the one the manifest builds. A string that matches no
+    /// binary compiles equally well and fails at `exec`, with the user
+    /// watching: `norte tui` stops working and nothing says so beforehand.
     ///
-    /// El nombre esperado se LEE del `Cargo.toml` del crate hermano, no se
-    /// escribe aquí: una constante en el test se renombraría con el mismo
-    /// buscar-y-reemplazar que rompería el código, y entonces el test
-    /// acompañaría al defecto en vez de cazarlo.
+    /// The expected name is READ from the sibling crate's `Cargo.toml`,
+    /// not written here: a constant in the test would get renamed by the
+    /// same find-and-replace that would break the code, and then the test
+    /// would keep the defect company instead of catching it.
     #[test]
-    fn tui_lanza_el_binario_que_el_manifiesto_construye() {
+    fn tui_launches_the_binary_the_manifest_builds() {
         let manifest =
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../norte-tui/Cargo.toml");
-        let toml = std::fs::read_to_string(&manifest).expect("el manifiesto del TUI");
-        let esperado = toml
+        let toml = std::fs::read_to_string(&manifest).expect("the TUI's manifest");
+        let expected = toml
             .split("[[bin]]")
             .nth(1)
             .and_then(|s| s.lines().find_map(|l| l.trim().strip_prefix("name = ")))
             .map(|n| n.trim_matches('"').to_owned())
-            .expect("el manifiesto declara [[bin]] name");
+            .expect("the manifest declares [[bin]] name");
         assert_eq!(
             super::TUI_BIN,
-            esperado,
-            "el CLI lanza `{}` y el manifiesto construye `{esperado}`",
+            expected,
+            "the CLI launches `{}` and the manifest builds `{expected}`",
             super::TUI_BIN
         );
     }
 
-    /// El hermano de al lado GANA al `PATH`: `norte` y `norte-tui` se
-    /// instalan juntos, y mezclarlos con otra tanda es justo el fallo que
-    /// costó una sesión de depuración (un binario de julio leyendo una
-    /// config de agosto).
+    /// The sibling next door WINS over `PATH`: `norte` and `norte-tui` are
+    /// installed together, and mixing them with another batch is exactly
+    /// the failure that cost a debugging session (a July binary reading
+    /// an August config).
     #[test]
-    fn prefiere_el_binario_hermano_y_si_no_cae_al_path() {
+    fn prefers_the_sibling_binary_and_falls_back_to_path() {
         let d = tempfile::tempdir().expect("tempdir");
         let exe = d.path().join("norte");
         std::fs::write(&exe, b"#!/bin/true\n").expect("write");
-        // Sin hermano todavía: nombre pelado para que resuelva el PATH.
+        // No sibling yet: bare name so PATH resolves it.
         assert_eq!(
             frontend_program(Some(&exe), "norte-tui"),
             std::path::PathBuf::from("norte-tui")
         );
-        // Con hermano: ruta absoluta a ESE.
-        let hermano = d.path().join("norte-tui");
-        std::fs::write(&hermano, b"#!/bin/true\n").expect("write");
-        assert_eq!(frontend_program(Some(&exe), "norte-tui"), hermano);
-        // Sin saber dónde estamos: el PATH decide.
+        // With a sibling: absolute path to THAT one.
+        let sibling = d.path().join("norte-tui");
+        std::fs::write(&sibling, b"#!/bin/true\n").expect("write");
+        assert_eq!(frontend_program(Some(&exe), "norte-tui"), sibling);
+        // Without knowing where we are: PATH decides.
         assert_eq!(
             frontend_program(None, "otro-frontend"),
             std::path::PathBuf::from("otro-frontend")

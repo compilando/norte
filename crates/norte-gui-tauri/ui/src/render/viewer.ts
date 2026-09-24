@@ -29,7 +29,11 @@ export function paintViewer(this: Screen, viewer: ViewerView | null): void {
     return;
   }
   this.visorPintado = { viewer, firma: signature };
-  if (previous !== null && previous.firma === signature && desplazado(previous.viewer, viewer)) {
+  if (
+    previous !== null &&
+    previous.firma === signature &&
+    desplazado(previous.viewer, viewer)
+  ) {
     // Only SCROLLED: same file, same header, same size. The body, the marks
     // and the bars are swapped in place. Redoing the whole box on every
     // wheel step, and measuring the new body — a reflow — is what made
@@ -253,8 +257,8 @@ export function paintMetadata(this: Screen, dom: SlotDom, slot: MetadataSlotView
   // A HARD space behind the separator: `.slot-title` is a flex, and a normal
   // space at the end of a text node collapses against the span next to it —
   // "Details ·⟨file⟩/…" glued together.
-  const label = document.createTextNode(`${this.t("metadata-title")} · `);
-  const path = document.createElement("span");
+  const label = document.createTextNode(`${this.t("metadata-title")} ·\xa0`);
+const path = document.createElement("span");
   path.className = "title-path";
   path.textContent = slot.follows_display;
   dom.title.replaceChildren(label, path);

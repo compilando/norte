@@ -1,15 +1,15 @@
-//! `provider_contract!` sobre `services-fs` de opendal (ADR 0016 J): la MISMA
-//! suite que pasan Mem/Local/Sftp/Ftp, contra la lógica completa del provider
-//! (validación de keys, modelo de dirs, sink, mapeo de errores) sin HTTP. Lo
-//! S3-específico que este harness no ejercita (multipart, conditional write,
-//! delimiter real) vive en tests/s3.rs contra s3s-fs, y el nightly (`reals3`)
-//! valida contra `MinIO`.
+//! `provider_contract!` against opendal's `services-fs` (ADR 0016 J): the
+//! SAME suite Mem/Local/Sftp/Ftp pass, against the provider's full logic
+//! (key validation, dir model, sink, error mapping) without HTTP. The
+//! S3-specific bits this harness does not exercise (multipart, conditional
+//! write, real delimiter) live in tests/s3.rs against s3s-fs, and the
+//! nightly job (`reals3`) validates against `MinIO`.
 //!
-//! Solo-Linux (como sftp/ftp): el harness se respalda en el FS del host y
-//! solo es fiel en POSIX (case-sensitive, byte-preserving)… con una
-//! asimetría CONSCIENTE: las keys S3 son UTF-8-only, así que las fixtures
-//! no-UTF8 del corpus se rechazan limpio en el provider (skip del contrato),
-//! no llegan al FS.
+//! Linux-only (like sftp/ftp): the harness relies on the host's FS and is
+//! only faithful on POSIX (case-sensitive, byte-preserving)… with one
+//! DELIBERATE asymmetry: S3 keys are UTF-8-only, so the corpus's non-UTF8
+//! fixtures are cleanly rejected by the provider (a contract skip), they
+//! never reach the FS.
 #![cfg(target_os = "linux")]
 
 mod common;
@@ -17,8 +17,9 @@ mod common;
 use norte_proto::Authority;
 use norte_vfs_object::ObjectProvider;
 
-/// Provider fresco sobre un tempdir vía `services-fs` (con `atomic_write_dir`
-/// FUERA de la raíz listable: un `.tmp` del writer no es una entrada).
+/// A fresh provider over a tempdir via `services-fs` (with
+/// `atomic_write_dir` OUTSIDE the listable root: a writer's `.tmp` is not an
+/// entry).
 fn fresh() -> ObjectProvider {
     let dir = tempfile::tempdir().expect("tempdir");
     let root = dir.path().join("root");
@@ -26,7 +27,7 @@ fn fresh() -> ObjectProvider {
     std::fs::create_dir_all(&root).expect("root");
     std::fs::create_dir_all(&atomic).expect("staging");
     let op = common::fs_operator(&root, &atomic);
-    // El tempdir vive tanto como el provider (tests efímeros; el SO limpia /tmp).
+    // The tempdir lives as long as the provider (ephemeral tests; the OS cleans /tmp).
     std::mem::forget(dir);
     ObjectProvider::new(op, "s3")
 }
@@ -35,13 +36,13 @@ fn hostile_names() -> Vec<Vec<u8>> {
     norte_testkit::corpus::hostile_names()
         .into_iter()
         .map(|n| n.bytes)
-        // Los fixtures name_max (255/256 bytes) son keys S3 LEGALES (límite
-        // 1024, sin tope por segmento) que este harness de FS no puede
-        // almacenar: NAME_MAX POSIX = 255 y el atomic_write_dir de opendal
-        // añade ".XXXXXXXX" (9 bytes) al tempfile → tope efectivo 246.
-        // Limitación del harness, no del provider — el fs revienta DESPUÉS
-        // del open y el contrato exige rechazo limpio o éxito. Los cubre el
-        // nightly contra `MinIO` real (tests/reals3.rs).
+        // The name_max fixtures (255/256 bytes) are LEGAL S3 keys (1024
+        // limit, no per-segment cap) this FS harness cannot store: POSIX
+        // NAME_MAX = 255 and opendal's atomic_write_dir adds ".XXXXXXXX"
+        // (9 bytes) to the tempfile → effective cap 246. A harness
+        // limitation, not the provider's — fs blows up AFTER the open and
+        // the contract demands a clean rejection or success. The nightly
+        // job covers them against real `MinIO` (tests/reals3.rs).
         .filter(|bytes| bytes.len() <= 246)
         .collect()
 }
@@ -49,39 +50,39 @@ fn hostile_names() -> Vec<Vec<u8>> {
 norte_vfs::provider_contract! {
     mod object_fs,
     factory: fresh(),
-    root: ObjectProvider::root("s3", Authority::new("norte-test").expect("authority válida")),
+    root: ObjectProvider::root("s3", Authority::new("norte-test").expect("valid authority")),
     hostile_names: hostile_names(),
 }
 
-/// El mismo provider con la papelera lógica ENCENDIDA (ADR 0019).
+/// The same provider with the logical trash TURNED ON (ADR 0019).
 fn fresh_con_papelera() -> ObjectProvider {
     fresh().with_logical_trash(true)
 }
 
-// La suite entera, otra vez, con la papelera lógica puesta (#168).
+// The whole suite, again, with the logical trash set (#168).
 //
-// No es duplicación: es la ÚNICA configuración en la que corre la rama del
-// contrato que dice «el destino existe y se restaura» — la que exige que
-// `trash()` nombre lo que entierra, que `reversal_ref` sea `Some`, y que
-// `restore_from` devuelva el nodo exacto con sus bytes y su nombre, nombres
-// no-UTF8 incluidos.
+// It is not duplication: it is the ONLY configuration in which the
+// contract branch that says "the destination exists and restores" runs —
+// the one that demands `trash()` name what it buries, that `reversal_ref`
+// be `Some`, and that `restore_from` return the exact node with its bytes
+// and its name, non-UTF8 names included.
 //
-// Esta pasada existe porque su ausencia ya costó un fallo real: este provider
-// devolvía `Some` de `trash()` y nunca sobreescribió `trash_restorable()`,
-// que por defecto es `false`. Una sincronización contra S3 con la papelera
-// encendida se habría planificado ENTERA como irreversible —cada paso, las
-// copias incluidas— tirando su `reversal_ref`, mientras la papelera era
-// perfectamente restaurable. El plan le habría dicho al humano «nada de esto
-// se puede deshacer» y luego habría enterrado cosas en un sitio que sabía
-// alcanzar.
+// This pass exists because its absence already cost a real bug: this
+// provider returned `Some` from `trash()` and never overrode
+// `trash_restorable()`, which defaults to `false`. A sync against S3 with
+// the trash on would have been planned ENTIRELY as irreversible —every
+// step, copies included— throwing away its `reversal_ref`, while the trash
+// was perfectly restorable. The plan would have told the human "none of
+// this can be undone" and then would have buried things somewhere it knew
+// how to reach.
 norte_vfs::provider_contract! {
     mod object_fs_papelera,
     factory: fresh_con_papelera(),
-    root: ObjectProvider::root("s3", Authority::new("norte-test").expect("authority válida")),
+    root: ObjectProvider::root("s3", Authority::new("norte-test").expect("valid authority")),
     hostile_names: hostile_names(),
 }
 
-// ---------- attrs s3 (#108 bloque 2) ----------
+// ---------- s3 attrs (#108 block 2) ----------
 
 #[tokio::test]
 async fn attrs_s3_etag_y_content_type() {
@@ -90,40 +91,38 @@ async fn attrs_s3_etag_y_content_type() {
     use norte_vfs::{AttrRequest, ListOptions, Provider};
 
     let p = fresh();
-    let root = ObjectProvider::root(
-        "s3",
-        Authority::new("norte-test").expect("authority válida"),
-    );
-    let f = root.join(Segment::new(b"o.txt".to_vec()).expect("segmento válido"));
+    let root = ObjectProvider::root("s3", Authority::new("norte-test").expect("valid authority"));
+    let f = root.join(Segment::new(b"o.txt".to_vec()).expect("valid segment"));
     {
-        let mut sink = p.write(&f).await.expect("write abre");
+        let mut sink = p.write(&f).await.expect("write opens");
         norte_vfs::ByteSink::write(&mut *sink, bytes::Bytes::from_static(b"x"))
             .await
-            .expect("chunk entra");
-        sink.commit().await.expect("commit publica");
+            .expect("chunk goes in");
+        sink.commit().await.expect("commit publishes");
     }
     let opt = ListOptions {
         attrs: AttrRequest::sanitized(["s3.etag", "s3.content_type"].map(str::to_owned)),
     };
-    // services-fs puede no dar etag/content_type: si están, son Text acotado
-    // (la forma la pinea el contrato; el valor REAL lo cubre el nightly MinIO).
+    // services-fs may not give an etag/content_type: if present, they are
+    // capped Text (the contract pins the shape; the REAL value is covered
+    // by the nightly MinIO job).
     let e = p.stat_with(&f, &opt).await.expect("stat_with");
     for id in ["s3.etag", "s3.content_type"] {
         if let Some(v) = e.attrs.get(id) {
             let AttrValue::Text(s) = v else {
-                panic!("{id} debe ser Text, fue {v:?}");
+                panic!("{id} must be Text, was {v:?}");
             };
             assert!(s.len() <= norte_proto::ATTR_TEXT_MAX);
         }
     }
-    // list_with: mismas reglas por entrada, y jamás un id no pedido.
+    // list_with: same rules per entry, and never an unrequested id.
     let mut s = p.list_with(&root, &opt).await.expect("list_with");
     while let Some(e) = s.next().await {
-        let e = e.expect("entrada");
+        let e = e.expect("entry");
         for id in e.attrs.keys() {
-            assert!(opt.attrs.wants(id), "id no pedido: {id}");
+            assert!(opt.attrs.wants(id), "unrequested id: {id}");
         }
     }
-    // Sin pedir → nada.
+    // No request → nothing.
     assert!(p.stat(&f).await.expect("stat").attrs.is_empty());
 }

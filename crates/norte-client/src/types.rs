@@ -1,96 +1,98 @@
-//! Los valores que el SDK necesita nombrar por su cuenta.
+//! The values the SDK needs to name on its own.
 //!
-//! Ninguno es una copia por comodidad: son las cosas que un cliente remoto
-//! usa y que vivían en `norte-core` solo porque el cliente vivía allí. Cada
-//! una está aquí por un motivo distinto, y el motivo está escrito al lado.
+//! None of these is a convenience copy: they are the things a remote client
+//! uses and that lived in `norte-core` only because the client lived there.
+//! Each one is here for a different reason, and the reason is written beside
+//! it.
 
 use std::time::Duration;
 
 use norte_proto::{CollisionPolicy, Entry, Error, ResumePolicy, SymlinkPolicy, VerifyPolicy};
 
-/// Timeout de llamadas de IA: el proveedor (modelo remoto) tarda
-/// legítimamente mucho más que un `fs.*`.
+/// Timeout for AI calls: the provider (remote model) legitimately takes much
+/// longer than an `fs.*`.
 pub const AI_CALL_TIMEOUT: Duration = Duration::from_mins(2);
 
-/// El stream de un listado paginado.
+/// The stream of a paginated listing.
 ///
-/// Alias PROPIO y no el de `norte-vfs` (que es idéntico) porque arrastrar el
-/// crate del contrato de providers a un cliente que solo habla por socket
-/// sería pagar un árbol entero por un alias (ADR 0066).
+/// Its OWN alias and not `norte-vfs`'s (which is identical) because dragging
+/// the provider contract crate into a client that only talks over a socket
+/// would be paying for a whole tree for one alias (ADR 0066).
 pub type EntryStream = futures::stream::BoxStream<'static, Result<Entry, Error>>;
 
-/// Copiar o mover: los dos verbos de una transferencia (#270).
+/// Copy or move: a transfer's two verbs (#270).
 ///
-/// Un enum, y no el nombre del método como cadena, porque cuando el verbo era
-/// una `&str` el despacho era `if method == FS_COPY { … } else { … }`: todo lo
-/// que no fuera exactamente `fs.copy` se convertía en un MOVIMIENTO, que
-/// además borra el origen. El fallo de un typo no era un error visible sino la
-/// otra operación. `norte-ui-host` ya interponía un enum propio por su lado
-/// para no poder equivocarse; el SDK no lo tenía.
+/// An enum, not the method name as a string, because when the verb was a
+/// `&str` the dispatch was `if method == FS_COPY { … } else { … }`: anything
+/// that was not exactly `fs.copy` turned into a MOVE, which also deletes the
+/// source. A typo's failure was not a visible error but the other operation.
+/// `norte-ui-host` already interposed its own enum on its side to make this
+/// mistake impossible; the SDK did not have one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Transfer {
     /// `fs.copy`.
     Copy,
-    /// `fs.move` — BORRA el origen.
+    /// `fs.move` — DELETES the source.
     Move,
 }
 
-/// Las opciones de una transferencia, tal como viajan por el wire.
+/// A transfer's options, as they travel over the wire.
 ///
-/// Gemela de `norte_core::engine::TransferOptions`, y a propósito: la del
-/// core es la entrada del ENGINE y puede crecer con cosas que solo el motor
-/// entiende; esta es lo que un cliente remoto pone en los params. El core
-/// convierte entre las dos con un `From` exhaustivo, así que un campo nuevo
-/// en cualquiera de ellas es un error de compilación y no una opción que se
-/// pierde en silencio.
+/// A twin of `norte_core::engine::TransferOptions`, deliberately: the core's
+/// is the ENGINE's input and can grow with things only the engine
+/// understands; this one is what a remote client puts in the params. The
+/// core converts between the two with an exhaustive `From`, so a new field in
+/// either one is a compile error, not an option silently lost.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct TransferOptions {
-    /// Qué hacer si el destino ya existe.
+    /// What to do if the destination already exists.
     pub on_collision: CollisionPolicy,
-    /// Qué hacer con los symlinks del origen.
+    /// What to do with the source's symlinks.
     pub symlinks: SymlinkPolicy,
-    /// Reanudación de transferencias interrumpidas (ADR 0012).
+    /// Resuming interrupted transfers (ADR 0012).
     pub resume: ResumePolicy,
-    /// Verificación del parcial al reanudar (solo con `resume=On`).
+    /// Verifying the partial file on resume (only with `resume=On`).
     pub verify: VerifyPolicy,
-    /// A la COLA en vez de en paralelo (ADR 0149): de una en una.
+    /// Into the QUEUE instead of in parallel (ADR 0149): one at a time.
     pub queued: bool,
 }
 
-/// Lo que un `sync.plan` va emitiendo.
+/// What a `sync.plan` keeps emitting.
 ///
-/// Vive en el SDK y `norte_core::sync` lo re-exporta —en vez de tener cada
-/// uno el suyo— porque sus dos variantes SON tipos del wire: el plan
-/// embebido y el remoto emiten exactamente lo mismo, y dos definiciones
-/// serían dos sitios donde añadir una variante.
+/// Lives in the SDK and `norte_core::sync` re-exports it — instead of each
+/// having its own — because its two variants ARE wire types: the embedded
+/// plan and the remote one emit exactly the same thing, and two definitions
+/// would be two places to add a variant.
 #[derive(Debug, Clone, PartialEq)]
 pub enum SyncPlanEvent {
-    /// Un lote de pasos, acotado por `SYNC_STEPS_MAX_BATCH`.
+    /// A batch of steps, bounded by `SYNC_STEPS_MAX_BATCH`.
     Steps(norte_proto::methods::SyncStepsBatch),
-    /// El cierre del plan. Como mucho UNO por Task, y siempre el último.
+    /// The plan's close. At most ONE per Task, and always the last.
     Done(norte_proto::methods::SyncPlanDone),
 }
 
-/// Evento de conexión del backend remoto (para la barra de mensajes).
+/// Connection event of the remote backend (for the message bar).
 ///
-/// `#[non_exhaustive]`: este crate es la superficie publicable del SDK (ADR
-/// 0066), y añadir `GoingAway` ya obligó a tocar todos los `match` de fuera.
-/// El siguiente evento tiene que poder ser aditivo.
+/// `#[non_exhaustive]`: this crate is the SDK's publishable surface (ADR
+/// 0066), and adding `GoingAway` already forced touching every `match`
+/// outside it. The next event has to be able to be additive.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConnEvent {
-    /// La conexión con el daemon se perdió; reconectando en background.
+    /// The connection to the daemon was lost; reconnecting in the
+    /// background.
     Lost,
-    /// Reconectado (y resincronizado vía `task.list`).
+    /// Reconnected (and resynced via `task.list`).
     Restored,
-    /// El daemon avisó de que se va (`daemon.going_away`, 0.46.0).
+    /// The daemon warned it is leaving (`daemon.going_away`, 0.46.0).
     ///
-    /// Llega ANTES de que la conexión se cierre, y es lo único que distingue
-    /// un relevo de una parada: desde el corte las dos se ven igual. El
-    /// frontend lo necesita para decir cuál de las dos está pasando en vez de
-    /// pintar «reconectando…» sobre un daemon que no va a volver.
+    /// Arrives BEFORE the connection closes, and is the only thing that
+    /// distinguishes a handoff from a stop: from the disconnect on, the two
+    /// look the same. The frontend needs it to say which of the two is
+    /// happening instead of painting "reconnecting…" over a daemon that is
+    /// not coming back.
     GoingAway {
-        /// El daemon dice que vuelve (un relevo, p. ej. una actualización).
+        /// The daemon says it is coming back (a handoff, e.g. an update).
         reconnect: bool,
     },
 }

@@ -1,96 +1,99 @@
-//! La revisión de un plan de ORGANIZAR (fase 8 del programa WOW): el árbol
-//! que va a quedar, para que un humano lo lea antes de decir que sí.
+//! The review of an ORGANIZE plan (phase 8 of the WOW program): the tree
+//! that will result, for a human to read before saying yes.
 //!
-//! Un plan de renombrar se revisa como una lista de parejas porque eso es lo
-//! que es. Uno de organizar no: lo que cambia es la FORMA del directorio, y
-//! una lista de `a.pdf → facturas/2026/a.pdf` repetida cuarenta veces no
-//! deja ver esa forma — ni cuántas carpetas nuevas aparecen, ni cuáles, ni
-//! qué acaba dentro de cada una. De ahí este árbol.
+//! A rename plan is reviewed as a list of pairs because that is what it
+//! is. An organize plan is not: what changes is the directory's SHAPE, and
+//! a list of `a.pdf → invoices/2026/a.pdf` repeated forty times does not
+//! let that shape be seen — not how many new folders appear, nor which
+//! ones, nor what ends up inside each one. Hence this tree.
 //!
-//! El modelo es de los dos frontends. Cada uno pinta las líneas a su manera;
-//! lo que NO puede decidirse dos veces es qué carpetas son nuevas y qué
-//! cuelga de cada una, porque de eso depende lo que el humano cree que va a
-//! pasar.
+//! The model belongs to both frontends. Each paints the lines its own way;
+//! what CANNOT be decided twice is which folders are new and what hangs
+//! from each one, because what the human believes will happen depends on
+//! it.
 
 use std::collections::BTreeMap;
 
 use norte_proto::methods::OrganizeMove;
 
-/// Cuántas líneas del árbol se enseñan de una vez.
+/// How many tree lines are shown at once.
 ///
-/// Es el gemelo de [`crate::AI_RENAME_PAIR_LIMIT`] y está aquí por la misma
-/// razón: la ventana decide cuándo el lector «ha llegado al final», y eso
-/// gatea el aprobar ([`crate::approval_ready`]). Dos superficies con ventanas
-/// distintas aprobarían con distinta cantidad leída.
+/// It is the twin of [`crate::AI_RENAME_PAIR_LIMIT`] and is here for the
+/// same reason: the window decides when the reader "has reached the end",
+/// and that gates approving ([`crate::approval_ready`]). Two surfaces with
+/// different windows would approve with a different amount read.
 pub const ORGANIZE_LINE_LIMIT: usize = 10;
 
-/// Una línea del árbol de revisión.
+/// A review tree line.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TreeLine {
-    /// Cuánto se sangra: 0 es hijo directo del directorio del plan.
+    /// How much it is indented: 0 is a direct child of the plan's
+    /// directory.
     pub depth: usize,
-    /// Lo que se pinta en esa línea. Ya pintable; lo enmascara quien
-    /// construye el árbol, que es quien sabe de dónde vienen esos bytes.
+    /// What gets painted on that line. Already paintable; masked by
+    /// whoever builds the tree, which is the one that knows where those
+    /// bytes come from.
     pub text: String,
-    /// Qué es esta línea.
+    /// What this line is.
     pub kind: TreeKind,
 }
 
-/// Qué representa una línea del árbol.
+/// What a tree line represents.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TreeKind {
-    /// Una carpeta que el plan va a CREAR. Es la línea que más importa: son
-    /// las que no existían, y las que el undo se llevará.
+    /// A folder the plan is going to CREATE. It is the line that matters
+    /// most: these are the ones that did not exist, and the ones undo will
+    /// take away.
     NewDir,
-    /// Una carpeta que YA existe y a la que el plan mete algo.
+    /// A folder that ALREADY exists and that the plan puts something into.
     ExistingDir,
-    /// Un fichero que se mueve hasta ahí.
+    /// A file that gets moved there.
     Moved,
 }
 
-/// El árbol de un plan, en líneas listas para pintar.
+/// A plan's tree, in lines ready to paint.
 ///
-/// `existentes` son los nombres de las entradas que YA hay en el directorio,
-/// para distinguir una carpeta nueva de una que estaba. Sin esa lista todo
-/// se pintaría como nuevo, que es la mentira cómoda: enseña un plan más
-/// espectacular de lo que es y esconde que algo va a caer dentro de una
-/// carpeta que el humano ya tenía.
+/// `existing` is the names of the entries ALREADY in the directory, to
+/// tell a new folder apart from one that was there. Without that list
+/// everything would be painted as new, which is the comfortable lie: it
+/// shows off a plan more spectacular than it is and hides that something
+/// is going to land inside a folder the human already had.
 #[must_use]
-pub fn tree_lines(moves: &[OrganizeMove], existentes: &[String]) -> Vec<TreeLine> {
-    /// Un nodo del árbol mientras se construye.
+pub fn tree_lines(moves: &[OrganizeMove], existing: &[String]) -> Vec<TreeLine> {
+    /// A tree node while it is being built.
     #[derive(Default)]
-    struct Nodo {
-        hijos: BTreeMap<String, Nodo>,
-        ficheros: Vec<String>,
+    struct Node {
+        children: BTreeMap<String, Node>,
+        files: Vec<String>,
     }
 
-    /// Recorre el árbol ya construido dejando una línea por nodo, padres
-    /// antes que hijos y carpetas antes que ficheros.
-    fn recorrer(
-        nodo: &Nodo,
+    /// Walks the already-built tree leaving one line per node, parents
+    /// before children and folders before files.
+    fn walk(
+        node: &Node,
         depth: usize,
-        prefijo_existente: bool,
-        existentes: &[String],
+        existing_prefix: bool,
+        existing: &[String],
         out: &mut Vec<TreeLine>,
     ) {
-        for (nombre, hijo) in &nodo.hijos {
-            // Una carpeta es EXISTENTE sólo si está en la raíz y ya estaba.
-            // Una que cuelga de una carpeta nueva no puede existir, y decir
-            // que sí sería prometer que algo se conserva cuando en realidad
-            // se crea.
-            let existe = prefijo_existente && depth == 0 && existentes.iter().any(|e| e == nombre);
+        for (name, child) in &node.children {
+            // A folder is EXISTING only if it is at the root and was
+            // already there. One hanging from a new folder cannot exist,
+            // and saying it does would be promising that something is
+            // kept when it is really being created.
+            let exists = existing_prefix && depth == 0 && existing.iter().any(|e| e == name);
             out.push(TreeLine {
                 depth,
-                text: nombre.clone(),
-                kind: if existe {
+                text: name.clone(),
+                kind: if exists {
                     TreeKind::ExistingDir
                 } else {
                     TreeKind::NewDir
                 },
             });
-            recorrer(hijo, depth + 1, existe, existentes, out);
+            walk(child, depth + 1, exists, existing, out);
         }
-        for f in &nodo.ficheros {
+        for f in &node.files {
             out.push(TreeLine {
                 depth,
                 text: f.clone(),
@@ -99,35 +102,35 @@ pub fn tree_lines(moves: &[OrganizeMove], existentes: &[String]) -> Vec<TreeLine
         }
     }
 
-    let mut raiz = Nodo::default();
+    let mut root = Node::default();
     for m in moves {
-        let mut trozos: Vec<&str> = m.proposed_rel.split('/').collect();
-        // El último es el nombre del fichero; lo de delante, carpetas.
-        let Some(fichero) = trozos.pop() else {
+        let mut parts: Vec<&str> = m.proposed_rel.split('/').collect();
+        // The last one is the file's name; the ones before it, folders.
+        let Some(file) = parts.pop() else {
             continue;
         };
-        let mut nodo = &mut raiz;
-        for t in trozos {
-            nodo = nodo.hijos.entry(t.to_owned()).or_default();
+        let mut node = &mut root;
+        for t in parts {
+            node = node.children.entry(t.to_owned()).or_default();
         }
-        nodo.ficheros.push(fichero.to_owned());
+        node.files.push(file.to_owned());
     }
 
     let mut out = Vec::new();
-    recorrer(&raiz, 0, true, existentes, &mut out);
+    walk(&root, 0, true, existing, &mut out);
     out
 }
 
-/// Cuántas carpetas NUEVAS crea el plan, y cuántos ficheros mueve.
+/// How many NEW folders the plan creates, and how many files it moves.
 ///
-/// Es el resumen que va delante de la pregunta: «esto crea 3 carpetas y
-/// mueve 12 ficheros» es lo que un humano necesita para decidir sin contar
-/// líneas.
+/// It is the summary that goes ahead of the question: "this creates 3
+/// folders and moves 12 files" is what a human needs to decide without
+/// counting lines.
 #[must_use]
 pub fn resumen(lineas: &[TreeLine]) -> (usize, usize) {
-    let carpetas = lineas.iter().filter(|l| l.kind == TreeKind::NewDir).count();
-    let ficheros = lineas.iter().filter(|l| l.kind == TreeKind::Moved).count();
-    (carpetas, ficheros)
+    let folders = lineas.iter().filter(|l| l.kind == TreeKind::NewDir).count();
+    let files = lineas.iter().filter(|l| l.kind == TreeKind::Moved).count();
+    (folders, files)
 }
 
 #[cfg(test)]
@@ -142,9 +145,9 @@ mod tests {
         }
     }
 
-    /// El árbol agrupa por carpeta en vez de repetir la ruta entera en cada
-    /// fila: lo que cambia es la FORMA del directorio, y eso es lo que hay
-    /// que poder leer.
+    /// The tree groups by folder instead of repeating the whole path on
+    /// every row: what changes is the directory's SHAPE, and that is what
+    /// has to be readable.
     #[test]
     fn el_arbol_agrupa_por_carpeta() {
         let lineas = tree_lines(
@@ -155,10 +158,10 @@ mod tests {
             ],
             &[],
         );
-        let pintado: Vec<(usize, &str)> =
+        let painted: Vec<(usize, &str)> =
             lineas.iter().map(|l| (l.depth, l.text.as_str())).collect();
         assert_eq!(
-            pintado,
+            painted,
             vec![
                 (0, "facturas"),
                 (1, "2026"),
@@ -170,9 +173,10 @@ mod tests {
         );
     }
 
-    /// Una carpeta que YA existe se marca como tal. Pintarlo todo como nuevo
-    /// es la mentira cómoda: enseña un plan más espectacular de lo que es y
-    /// esconde que algo cae dentro de algo que ya estaba.
+    /// A folder that ALREADY exists is marked as such. Painting everything
+    /// as new is the comfortable lie: it shows off a plan more spectacular
+    /// than it is and hides that something lands inside something that was
+    /// already there.
     #[test]
     fn una_carpeta_que_ya_existe_no_se_pinta_como_nueva() {
         let lineas = tree_lines(
@@ -185,20 +189,24 @@ mod tests {
         assert_eq!(lineas[2].kind, TreeKind::NewDir);
     }
 
-    /// Y una carpeta que cuelga de una NUEVA no puede existir, aunque haya
-    /// una con ese nombre en la raíz: `nueva/facturas` no es `facturas`.
+    /// And a folder that hangs from a NEW one can never be existing, even
+    /// if there is one with that name at the root: `nueva/facturas` is not
+    /// `facturas`.
     #[test]
     fn una_carpeta_bajo_una_nueva_nunca_es_existente() {
         let lineas = tree_lines(
             &[mov("a.pdf", "nueva/facturas/a.pdf")],
             &["facturas".to_owned()],
         );
-        let facturas = lineas.iter().find(|l| l.text == "facturas").expect("está");
+        let facturas = lineas
+            .iter()
+            .find(|l| l.text == "facturas")
+            .expect("is there");
         assert_eq!(facturas.kind, TreeKind::NewDir);
     }
 
-    /// El resumen cuenta carpetas nuevas y ficheros movidos, que es lo que va
-    /// delante de la pregunta.
+    /// The summary counts new folders and moved files, which is what goes
+    /// ahead of the question.
     #[test]
     fn el_resumen_cuenta_lo_que_se_va_a_crear_y_lo_que_se_mueve() {
         let lineas = tree_lines(
@@ -208,14 +216,11 @@ mod tests {
             ],
             &[],
         );
-        assert_eq!(
-            resumen(&lineas),
-            (3, 2),
-            "facturas, 2026 y notas son nuevas"
-        );
+        assert_eq!(resumen(&lineas), (3, 2), "facturas, 2026 and notas are new");
     }
 
-    /// Un destino SIN carpeta —un renombrado de paso— se pinta en la raíz.
+    /// A destination WITHOUT a folder — a plain rename — is painted at the
+    /// root.
     #[test]
     fn un_destino_sin_carpeta_va_en_la_raiz() {
         let lineas = tree_lines(&[mov("a.txt", "b.txt")], &[]);

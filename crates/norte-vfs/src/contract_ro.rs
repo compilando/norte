@@ -1,35 +1,36 @@
-//! [`readonly_provider_contract!`]: la suite contractual de providers
-//! SOLO-LECTURA (ADR 0018). La suite RW (`provider_contract!`) siembra vía
-//! `write` del propio provider en casi todos sus casos — un provider
-//! `READ_ONLY` no puede pasarla. Esta variante exige al factory un árbol
-//! canónico PRE-SEMBRADO y verifica el contrato de lectura + que TODA
-//! mutación responda `Unsupported`.
+//! [`readonly_provider_contract!`]: the contract suite for READ-ONLY
+//! providers (ADR 0018). The RW suite (`provider_contract!`) seeds via
+//! the provider's own `write` in almost every case — a `READ_ONLY`
+//! provider can't pass it. This variant requires the factory to hand it a
+//! PRE-SEEDED canonical tree and verifies the read contract + that EVERY
+//! mutation answers `Unsupported`.
 
-/// Genera la suite contractual read-only dentro de un módulo de test.
+/// Generates the read-only contract suite inside a test module.
 ///
-/// Requisitos del crate invocante (dev-dependencies): `tokio` (features
-/// `macros`, `rt`) — el resto llega vía re-exports internos de `norte-vfs`.
+/// Requirements of the invoking crate (dev-dependencies): `tokio`
+/// (features `macros`, `rt`) — the rest arrives via `norte-vfs`'s internal
+/// re-exports.
 ///
-/// - `mod`: nombre del módulo generado.
-/// - `factory`: expresión que construye un provider FRESCO ya sembrado con
-///   el árbol canónico (se evalúa una vez por test).
-/// - `root`: expresión que construye el `VPath` raíz del provider.
-/// - `hostile_names`: expresión `Vec<Vec<u8>>` con los nombres hostiles que
-///   el factory garantiza presentes (subconjunto del corpus si el formato
-///   tiene límites — p. ej. tar ≤ 100 bytes).
+/// - `mod`: name of the generated module.
+/// - `factory`: expression that builds a FRESH provider already seeded
+///   with the canonical tree (evaluated once per test).
+/// - `root`: expression that builds the provider's root `VPath`.
+/// - `hostile_names`: `Vec<Vec<u8>>` expression with the hostile names the
+///   factory guarantees are present (a subset of the corpus if the format
+///   has limits — e.g. tar ≤ 100 bytes).
 ///
-/// Árbol canónico que el factory DEBE sembrar:
+/// Canonical tree the factory MUST seed:
 ///
 /// ```text
 /// /docs/hello.txt      → b"hola norte\n"
 /// /docs/sub/nested.bin → b"\x00\x01\x02\xff"
-/// /vacio.txt           → b""  (archivo vacío)
-/// /hostile/<name>      → contenido = los bytes del nombre  (por cada
+/// /vacio.txt           → b""  (empty file)
+/// /hostile/<name>      → content = the name's bytes  (for every
 ///                        hostile_name)
 /// ```
 ///
 /// ```ignore
-/// // En tests de integración de un provider read-only.
+/// // In a read-only provider's integration tests.
 /// norte_vfs::readonly_provider_contract! {
 ///     mod contract_ro_zip,
 ///     factory: fixture_zip_provider(),
@@ -49,8 +50,8 @@ macro_rules! readonly_provider_contract {
         hostile_names: $hostile:expr $(,)?
     ) => {
         mod $name {
-            // Las expresiones `factory`/`root`/`hostile_names` se evalúan en
-            // este módulo: importa el scope del invocante.
+            // The `factory`/`root`/`hostile_names` expressions are
+            // evaluated in this module: imports the caller's scope.
             #[allow(unused_imports)]
             use super::*;
 
@@ -61,7 +62,7 @@ macro_rules! readonly_provider_contract {
             use $crate::{AttrRequest, ListOptions, Provider};
 
             fn seg(bytes: &[u8]) -> Segment {
-                Segment::new(bytes.to_vec()).expect("segmento válido de contrato")
+                Segment::new(bytes.to_vec()).expect("valid contract segment")
             }
 
             fn child(base: &VPath, name: &[u8]) -> VPath {
@@ -85,12 +86,12 @@ macro_rules! readonly_provider_contract {
                 let mut names: Vec<Vec<u8>> = p
                     .list(dir)
                     .await
-                    .expect("list abre")
+                    .expect("list opens")
                     .map(|e| {
-                        e.expect("entrada ok")
+                        e.expect("ok entry")
                             .path
                             .file_name()
-                            .expect("con nombre")
+                            .expect("has a name")
                             .as_bytes()
                             .to_vec()
                     })
@@ -106,7 +107,7 @@ macro_rules! readonly_provider_contract {
             async fn ro_stat_root_is_dir() {
                 let p = $factory;
                 let root: VPath = $root;
-                let e = p.stat(&root).await.expect("la raíz siempre existe");
+                let e = p.stat(&root).await.expect("the root always exists");
                 assert_eq!(e.kind, EntryKind::Dir);
             }
 
@@ -115,10 +116,10 @@ macro_rules! readonly_provider_contract {
                 let p = $factory;
                 let root: VPath = $root;
                 assert_eq!(
-                    p.stat(&child(&root, b"no-existe")).await.unwrap_err(),
+                    p.stat(&child(&root, b"does-not-exist")).await.unwrap_err(),
                     Error::NotFound
                 );
-                // También bajo un subdirectorio real.
+                // Also under a real subdirectory.
                 assert_eq!(
                     p.stat(&child(&child(&root, b"docs"), b"no"))
                         .await
@@ -134,10 +135,10 @@ macro_rules! readonly_provider_contract {
                 let f = p
                     .stat(&child(&child(&root, b"docs"), b"hello.txt"))
                     .await
-                    .expect("hello.txt existe");
+                    .expect("hello.txt exists");
                 assert_eq!(f.kind, EntryKind::File);
-                assert_eq!(f.size, Some(11), "b\"hola norte\\n\" son 11 bytes");
-                let d = p.stat(&child(&root, b"docs")).await.expect("docs existe");
+                assert_eq!(f.size, Some(11), "b\"hola norte\\n\" is 11 bytes");
+                let d = p.stat(&child(&root, b"docs")).await.expect("docs exists");
                 assert_eq!(d.kind, EntryKind::Dir);
             }
 
@@ -154,16 +155,16 @@ macro_rules! readonly_provider_contract {
                     list_names(&p, &docs).await,
                     vec![b"hello.txt".to_vec(), b"sub".to_vec()]
                 );
-                // Los kinds del listado coinciden con stat.
+                // The listing's kinds match stat's.
                 let entries: Vec<_> = p
                     .list(&docs)
                     .await
                     .expect("list docs")
-                    .map(|e| e.expect("entrada ok"))
+                    .map(|e| e.expect("ok entry"))
                     .collect()
                     .await;
                 for e in entries {
-                    let via_stat = p.stat(&e.path).await.expect("stat de lo listado");
+                    let via_stat = p.stat(&e.path).await.expect("stat of the listed entry");
                     assert_eq!(e.kind, via_stat.kind, "{:?}", e.path);
                 }
             }
@@ -173,7 +174,7 @@ macro_rules! readonly_provider_contract {
                 let p = $factory;
                 let root: VPath = $root;
                 assert_eq!(
-                    p.list(&child(&root, b"no-existe")).await.err(),
+                    p.list(&child(&root, b"does-not-exist")).await.err(),
                     Some(Error::NotFound)
                 );
             }
@@ -184,8 +185,8 @@ macro_rules! readonly_provider_contract {
                 let root: VPath = $root;
                 match p.list(&child(&root, b"vacio.txt")).await {
                     Err(Error::Conflict { .. } | Error::NotFound | Error::Io { .. }) => {}
-                    Ok(_) => panic!("listar un archivo no puede ser Ok"),
-                    Err(e) => panic!("error inesperado listando archivo: {e:?}"),
+                    Ok(_) => panic!("listing a file can't be Ok"),
+                    Err(e) => panic!("unexpected error listing a file: {e:?}"),
                 }
             }
 
@@ -196,7 +197,7 @@ macro_rules! readonly_provider_contract {
                 assert_eq!(
                     read_all(&p, &child(&child(&root, b"docs"), b"hello.txt"), None)
                         .await
-                        .expect("leer hello.txt"),
+                        .expect("read hello.txt"),
                     b"hola norte\n"
                 );
                 assert_eq!(
@@ -206,13 +207,13 @@ macro_rules! readonly_provider_contract {
                         None
                     )
                     .await
-                    .expect("leer nested.bin"),
+                    .expect("read nested.bin"),
                     b"\x00\x01\x02\xff"
                 );
                 assert_eq!(
                     read_all(&p, &child(&root, b"vacio.txt"), None)
                         .await
-                        .expect("leer vacío"),
+                        .expect("read empty"),
                     b""
                 );
             }
@@ -227,36 +228,34 @@ macro_rules! readonly_provider_contract {
                     len: Some(3),
                 };
                 assert_eq!(
-                    read_all(&p, &f, Some(mid)).await.expect("rango medio"),
+                    read_all(&p, &f, Some(mid)).await.expect("mid range"),
                     b"la "
                 );
-                let cola = ByteRange {
+                let tail = ByteRange {
                     offset: 8,
                     len: None,
                 };
                 assert_eq!(
-                    read_all(&p, &f, Some(cola)).await.expect("hasta EOF"),
+                    read_all(&p, &f, Some(tail)).await.expect("until EOF"),
                     b"te\n"
                 );
-                let pasado = ByteRange {
+                let past = ByteRange {
                     offset: 100,
                     len: Some(4),
                 };
                 assert_eq!(
-                    read_all(&p, &f, Some(pasado))
-                        .await
-                        .expect("pread past-EOF"),
+                    read_all(&p, &f, Some(past)).await.expect("pread past-EOF"),
                     b"",
-                    "offset más allá de EOF = stream vacío, no error"
+                    "offset past EOF = empty stream, not an error"
                 );
-                let sobra = ByteRange {
+                let excess = ByteRange {
                     offset: 7,
                     len: Some(100),
                 };
                 assert_eq!(
-                    read_all(&p, &f, Some(sobra))
+                    read_all(&p, &f, Some(excess))
                         .await
-                        .expect("len recortado a EOF"),
+                        .expect("len trimmed to EOF"),
                     b"rte\n"
                 );
             }
@@ -266,7 +265,7 @@ macro_rules! readonly_provider_contract {
                 let p = $factory;
                 let root: VPath = $root;
                 assert_eq!(
-                    read_all(&p, &child(&root, b"no-existe"), None)
+                    read_all(&p, &child(&root, b"does-not-exist"), None)
                         .await
                         .unwrap_err(),
                     Error::NotFound
@@ -279,11 +278,11 @@ macro_rules! readonly_provider_contract {
                 let root: VPath = $root;
                 assert!(
                     read_all(&p, &child(&root, b"docs"), None).await.is_err(),
-                    "leer un dir es error"
+                    "reading a dir is an error"
                 );
             }
 
-            // ---------- nombres hostiles (byte-exactos, sin reparar) ----------
+            // ---------- hostile names (byte-exact, unrepaired) ----------
 
             #[tokio::test]
             async fn ro_hostile_names_listed_and_read_byte_exact() {
@@ -295,24 +294,24 @@ macro_rules! readonly_provider_contract {
                 assert_eq!(
                     list_names(&p, &dir).await,
                     expected,
-                    "el listado preserva los bytes del corpus tal cual"
+                    "the listing preserves the corpus's bytes as is"
                 );
                 for name in &expected {
                     let got = read_all(&p, &child(&dir, name), None)
                         .await
-                        .expect("leer entrada hostil");
-                    assert_eq!(&got, name, "contenido = bytes del nombre");
+                        .expect("read hostile entry");
+                    assert_eq!(&got, name, "content = the name's bytes");
                 }
             }
 
-            // ---------- capabilities / mutaciones ----------
+            // ---------- capabilities / mutations ----------
 
             #[tokio::test]
             async fn ro_caps_declare_read_only() {
                 let p = $factory;
                 let flags = p.capabilities().flags;
                 assert!(flags.contains(CapabilityFlags::READ_ONLY));
-                for prohibido in [
+                for forbidden in [
                     CapabilityFlags::RENAME_ATOMIC,
                     CapabilityFlags::SERVER_COPY,
                     CapabilityFlags::APPEND,
@@ -320,8 +319,8 @@ macro_rules! readonly_provider_contract {
                     CapabilityFlags::TRASH,
                 ] {
                     assert!(
-                        !flags.contains(prohibido),
-                        "READ_ONLY excluye {prohibido:?}"
+                        !flags.contains(forbidden),
+                        "READ_ONLY excludes {forbidden:?}"
                     );
                 }
             }
@@ -331,47 +330,49 @@ macro_rules! readonly_provider_contract {
                 use $crate::SymlinkKind;
                 let p = $factory;
                 let root: VPath = $root;
-                let nuevo = child(&root, b"nuevo");
-                let existente = child(&root, b"vacio.txt");
+                let new_path = child(&root, b"new");
+                let existing = child(&root, b"vacio.txt");
                 assert!(matches!(
-                    p.write(&nuevo).await.err(),
+                    p.write(&new_path).await.err(),
                     Some(Error::Unsupported)
                 ));
-                // También sobre un path que EXISTE: Unsupported, no Conflict —
-                // la operación está vetada antes de mirar el destino.
+                // Also over a path that EXISTS: Unsupported, not Conflict —
+                // the operation is vetoed before looking at the destination.
                 assert!(matches!(
-                    p.write(&existente).await.err(),
-                    Some(Error::Unsupported)
-                ));
-                assert!(matches!(
-                    p.open_resumable(&nuevo).await.err(),
+                    p.write(&existing).await.err(),
                     Some(Error::Unsupported)
                 ));
                 assert!(matches!(
-                    p.mkdir(&nuevo).await.err(),
+                    p.open_resumable(&new_path).await.err(),
                     Some(Error::Unsupported)
                 ));
                 assert!(matches!(
-                    p.remove(&existente).await.err(),
+                    p.mkdir(&new_path).await.err(),
                     Some(Error::Unsupported)
                 ));
                 assert!(matches!(
-                    p.rename(&existente, &nuevo).await.err(),
+                    p.remove(&existing).await.err(),
                     Some(Error::Unsupported)
                 ));
                 assert!(matches!(
-                    p.trash(&existente, &$crate::trash::TrashId::new(0, 0))
+                    p.rename(&existing, &new_path).await.err(),
+                    Some(Error::Unsupported)
+                ));
+                assert!(matches!(
+                    p.trash(&existing, &$crate::trash::TrashId::new(0, 0))
                         .await
                         .err(),
                     Some(Error::Unsupported)
                 ));
                 assert!(matches!(
-                    p.symlink(&nuevo, b"target", SymlinkKind::File).await.err(),
+                    p.symlink(&new_path, b"target", SymlinkKind::File)
+                        .await
+                        .err(),
                     Some(Error::Unsupported)
                 ));
                 assert!(
-                    p.copy_native(&existente, &nuevo).await.is_none(),
-                    "sin SERVER_COPY, copy_native = None"
+                    p.copy_native(&existing, &new_path).await.is_none(),
+                    "without SERVER_COPY, copy_native = None"
                 );
             }
 
@@ -379,22 +380,21 @@ macro_rules! readonly_provider_contract {
             async fn ro_read_link_errors() {
                 let p = $factory;
                 let root: VPath = $root;
-                // Sobre un archivo normal: TypeMismatch o Unsupported.
+                // Over a normal file: TypeMismatch or Unsupported.
                 match p.read_link(&child(&root, b"vacio.txt")).await {
                     Err(Error::Unsupported | Error::Conflict { .. }) => {}
-                    other => panic!("esperaba Unsupported/TypeMismatch, fue {other:?}"),
+                    other => panic!("expected Unsupported/TypeMismatch, was {other:?}"),
                 }
-                // Sobre un inexistente: NotFound o Unsupported.
-                match p.read_link(&child(&root, b"no-existe")).await {
+                // Over a nonexistent one: NotFound or Unsupported.
+                match p.read_link(&child(&root, b"does-not-exist")).await {
                     Err(Error::Unsupported | Error::NotFound) => {}
-                    other => panic!("esperaba Unsupported/NotFound, fue {other:?}"),
+                    other => panic!("expected Unsupported/NotFound, was {other:?}"),
                 }
             }
 
-            // ---------- attrs (#108 bloque 2, ADR 0039) ----------
-            // Aserciones compartidas con la suite RW:
-            // `__private::contract_attrs` (una divergencia debilitaría una
-            // suite en silencio).
+            // ---------- attrs (#108 block 2, ADR 0039) ----------
+            // Assertions shared with the RW suite:
+            // `__private::contract_attrs` (a divergence would silently weaken a suite).
             use $crate::__private::contract_attrs::{assert_attrs_contract, assert_catalog_sane};
 
             #[tokio::test]
@@ -407,7 +407,7 @@ macro_rules! readonly_provider_contract {
             async fn ro_attrs_values_match_declared_types() {
                 let p = $factory;
                 if p.attrs().is_empty() {
-                    eprintln!("skip: catálogo de attrs vacío");
+                    eprintln!("skip: empty attrs catalogue");
                     return;
                 }
                 let root: VPath = $root;
@@ -417,20 +417,20 @@ macro_rules! readonly_provider_contract {
                 };
                 let catalog = p.attrs().to_vec();
 
-                // stat_with sobre un archivo del árbol canónico.
+                // stat_with over a file of the canonical tree.
                 let probe = child(&child(&root, b"docs"), b"hello.txt");
                 let e = p.stat_with(&probe, &opt).await.expect("stat_with");
                 assert_attrs_contract(&catalog, &opt.attrs, &e);
 
-                // list_with sobre la raíz: TODA entrada cumple.
+                // list_with over the root: EVERY entry complies.
                 let mut stream = p.list_with(&root, &opt).await.expect("list_with");
                 let mut n = 0usize;
                 while let Some(e) = stream.next().await {
-                    let e = e.expect("entrada del listado");
+                    let e = e.expect("listing entry");
                     assert_attrs_contract(&catalog, &opt.attrs, &e);
                     n += 1;
                 }
-                assert!(n >= 1, "el listado canónico no está vacío");
+                assert!(n >= 1, "the canonical listing isn't empty");
             }
 
             #[tokio::test]
@@ -442,12 +442,12 @@ macro_rules! readonly_provider_contract {
                     .stat_with(&child(&root, b"vacio.txt"), &opt)
                     .await
                     .expect("stat_with");
-                assert!(e.attrs.is_empty(), "sin petición no hay attrs");
+                assert!(e.attrs.is_empty(), "no request means no attrs");
                 let mut stream = p.list_with(&root, &opt).await.expect("list_with");
                 while let Some(e) = stream.next().await {
                     assert!(
-                        e.expect("entrada").attrs.is_empty(),
-                        "sin petición no hay attrs"
+                        e.expect("entry").attrs.is_empty(),
+                        "no request means no attrs"
                     );
                 }
             }
@@ -462,7 +462,7 @@ macro_rules! readonly_provider_contract {
                 let e = p
                     .stat_with(&child(&root, b"vacio.txt"), &opt)
                     .await
-                    .expect("id desconocido jamás es error");
+                    .expect("an unknown id is never an error");
                 assert!(!e.attrs.contains_key("zz.does-not-exist"));
             }
         }

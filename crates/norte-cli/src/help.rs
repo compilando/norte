@@ -837,7 +837,7 @@ fn echo(arg: &str) -> String {
 /// matched", on stderr, with stdout left empty so a pipeline sees no page.
 pub fn run(topic: Option<&str>, list: bool, search: Option<&str>, json: bool) -> ExitCode {
     let lang = norte_i18n::active();
-    // Las teclas en el idioma de la página, como en el TUI y la ventana.
+    // The keys in the page's language, like the TUI and the window.
     let _ = norte_frontend::keymap::set_chord_lang(lang);
     let chords = CliChords::from_config(lang);
 
@@ -947,14 +947,14 @@ mod tests {
     }
 
     #[test]
-    fn el_acorde_es_el_del_usuario_y_un_comando_sin_binding_no_inventa_tecla() {
+    fn the_chord_is_the_users_and_a_command_without_a_binding_invents_no_key() {
         let chords = CliChords::from_preset("orthodox", Lang::En);
         assert_eq!(chords.chord("pane.copy").as_deref(), Some("F5"));
         assert_eq!(chords.chord("no.such.command"), None);
     }
 
     #[test]
-    fn la_etiqueta_sale_del_catalogo_y_falla_a_vacio() {
+    fn the_label_comes_from_the_catalog_and_falls_back_to_empty() {
         let chords = CliChords::from_preset("orthodox", Lang::En);
         assert_eq!(
             chords.label("app.quit"),
@@ -968,7 +968,7 @@ mod tests {
     }
 
     #[test]
-    fn en_la_cli_todo_esta_disponible() {
+    fn in_the_cli_everything_is_available() {
         let chords = CliChords::from_preset("orthodox", Lang::En);
         assert!(chords.availability("pane.copy").is_available());
         assert!(
@@ -979,7 +979,7 @@ mod tests {
     }
 
     #[test]
-    fn un_preset_desconocido_cae_al_default_en_vez_de_fallar() {
+    fn an_unknown_preset_falls_back_to_default_instead_of_failing() {
         let chords = CliChords::from_preset("no-such-preset", Lang::En);
         assert!(
             chords.chord("pane.copy").is_some(),
@@ -989,7 +989,7 @@ mod tests {
     }
 
     #[test]
-    fn una_pagina_se_imprime_con_titulo_cuerpo_y_filas() {
+    fn a_page_prints_with_title_body_and_rows() {
         let topic = norte_help::topic(Lang::En, "copying").expect("corpus topic");
         let out = render_topic(topic, Lang::En, &Fixed);
         assert!(out.starts_with(&topic.title), "the title leads: {out:.60}");
@@ -1003,7 +1003,7 @@ mod tests {
     }
 
     #[test]
-    fn los_enlaces_se_nombran_por_su_titulo_no_por_su_id() {
+    fn links_are_named_by_their_title_not_their_id() {
         let topic = norte_help::topic(Lang::En, "copying").expect("corpus topic");
         assert!(
             !topic.see_also.is_empty(),
@@ -1020,7 +1020,7 @@ mod tests {
     }
 
     #[test]
-    fn no_se_emite_ningun_peligro_de_terminal() {
+    fn no_terminal_hazard_is_emitted() {
         // The whole shipped corpus, both locales: this command writes straight
         // to a terminal, so an ESC in a code fence would be an ANSI injection.
         for lang in [Lang::Es, Lang::En] {
@@ -1043,7 +1043,7 @@ mod tests {
     }
 
     #[test]
-    fn una_pagina_de_plugin_declara_su_procedencia() {
+    fn a_plugin_page_declares_its_provenance() {
         // Not reachable from this command today, but the renderer takes a
         // `Topic` and must not be the place that forgets.
         let parsed = norte_help::parse_untrusted(b"body", "acme.ftp", None);
@@ -1052,7 +1052,7 @@ mod tests {
     }
 
     #[test]
-    fn la_hoja_de_teclado_cubre_las_tres_pantallas() {
+    fn the_keyboard_sheet_covers_the_three_screens() {
         let chords = CliChords::from_preset("orthodox", Lang::En);
         let out = keys_page(&chords, Lang::En);
         for section in [
@@ -1081,7 +1081,7 @@ mod tests {
     /// asserts is now an ordinary built one. What has to hold either way is
     /// that the key a migrant looks for IS on the page, named in prose.
     #[test]
-    fn una_tecla_no_construida_es_una_fila_que_dice_por_que() {
+    fn a_not_built_key_is_a_row_that_says_why() {
         let chords = CliChords::from_preset("total-commander", Lang::En);
         let out = keys_page(&chords, Lang::En);
         let row = out
@@ -1102,7 +1102,7 @@ mod tests {
     /// what the catalogue calls it) would otherwise silently retire a
     /// consumer's `state === "not-built"` branch with the whole suite green.
     #[test]
-    fn las_palabras_del_contrato_v2_son_literales() {
+    fn the_v2_contract_words_are_literal() {
         let json = |a: &JsonAvailability| serde_json::to_string(a).expect("serializa");
         assert_eq!(json(&JsonAvailability::Built), r#"{"state":"built"}"#);
         assert_eq!(
@@ -1119,19 +1119,19 @@ mod tests {
         );
     }
 
-    // El test que llevaba aquí —una fila `not-built` de verdad llegando al
-    // JSON con su issue— se retiró con #132: construida la última capacidad
-    // `Planned`, el catálogo no tiene con qué producir esa fila, y un test
-    // sobre datos que ya no existen no prueba nada. Las PALABRAS del contrato
-    // («not-built» incluida) las sigue pineando
-    // `las_palabras_del_contrato_v2_son_literales`, que es lo que impide que
-    // un renombrado de la variante retire en silencio la rama de un consumidor.
+    // The test that used to be here — a real `not-built` row reaching the
+    // JSON with its issue — was retired with #132: with the last
+    // `Planned` capability built, the catalog has nothing left to produce
+    // that row with, and a test over data that no longer exists proves
+    // nothing. The contract's WORDS ("not-built" included) are still
+    // pinned by `the_v2_contract_words_are_literal`, which is what stops
+    // a variant rename from silently retiring a consumer's branch.
 
     /// Interleaved in key order, never a section of leftovers at the bottom:
     /// the sheet answers "what does this key do", and a reader scanning the
     /// F-keys must find the unavailable one between its neighbours.
     #[test]
-    fn las_filas_no_disponibles_no_se_agrupan_al_final() {
+    fn unavailable_rows_are_not_grouped_at_the_end() {
         let chords = CliChords::from_preset("total-commander", Lang::En);
         let out = keys_page(&chords, Lang::En);
         let lines: Vec<&str> = out.lines().collect();
@@ -1162,7 +1162,7 @@ mod tests {
     }
 
     #[test]
-    fn list_da_id_y_titulo_de_cada_pagina() {
+    fn list_gives_id_and_title_of_every_page() {
         let out = list_page(Lang::En);
         for topic in norte_help::topics(Lang::En) {
             assert!(
@@ -1176,7 +1176,7 @@ mod tests {
     }
 
     #[test]
-    fn search_encuentra_por_titulo_cuerpo_comando_y_etiqueta() {
+    fn search_finds_by_title_body_command_and_label() {
         let chords = CliChords::from_preset("orthodox", Lang::En);
         let hits = search_pages(Lang::En, "copy", &chords);
         assert!(
@@ -1199,7 +1199,7 @@ mod tests {
     }
 
     #[test]
-    fn cada_hit_dice_por_que_coincidio() {
+    fn each_hit_says_why_it_matched() {
         let chords = CliChords::from_preset("orthodox", Lang::En);
         for hit in search_pages(Lang::En, "copy", &chords) {
             assert!(!hit.line.trim().is_empty(), "{} has a blank reason", hit.id);

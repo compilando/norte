@@ -43,8 +43,8 @@ enum Node {
 }
 
 impl Node {
-    /// Identidad del nodo (issue #16): asignada al crear, estable bajo
-    /// rename (el nodo se mueve de clave, no se recrea).
+    /// The node's identity (issue #16): assigned on creation, stable across
+    /// rename (the node moves key, it is not recreated).
     fn id(&self) -> u64 {
         match self {
             Node::File { id, .. } | Node::Dir { id, .. } | Node::Symlink { id, .. } => *id,
@@ -54,18 +54,17 @@ impl Node {
 
 #[derive(Debug)]
 struct Tree {
-    /// Nodos por path de segmentos; la raíz es implícita (siempre Dir).
+    /// Nodes by segment path; the root is implicit (always Dir).
     nodes: BTreeMap<SegPath, Node>,
-    /// Staging de resume por destino (ADR 0012): bytes CONSERVADOS por un
-    /// `keep` que un `open_resumable` posterior reanuda. Se limpia en
-    /// commit/abort.
+    /// Per-destination resume staging (ADR 0012): bytes KEPT by a `keep`
+    /// that a later `open_resumable` resumes. Cleared on commit/abort.
     partials: BTreeMap<SegPath, Vec<u8>>,
-    /// Permisos POSIX por ruta (#314). Ausente = el default de abajo, que es
-    /// lo que un fichero recién creado tendría con `umask` 022.
+    /// POSIX permissions by path (#314). Absent = the default below, which
+    /// is what a freshly-created file would have with `umask` 022.
     modes: BTreeMap<SegPath, u32>,
-    /// Reloj lógico: avanza 1 por mutación → mtimes deterministas.
+    /// Logical clock: advances by 1 per mutation → deterministic mtimes.
     clock: i64,
-    /// Siguiente identidad de nodo (0 es la raíz implícita).
+    /// Next node identity (0 is the implicit root).
     next_id: u64,
 }
 
@@ -94,28 +93,30 @@ impl Tree {
     }
 }
 
-/// Provider en memoria para tests. Determinista: mismo guion de operaciones →
-/// mismo árbol, mismos mtimes (reloj lógico), mismo orden de listado (orden
-/// de bytes del `BTreeMap`).
+/// In-memory provider for tests. Deterministic: the same operation script →
+/// the same tree, the same mtimes (logical clock), the same listing order
+/// (`BTreeMap`'s byte order).
 ///
-/// # Límites del simulador (léelos antes de escribir tests de colisión)
+/// # Simulator limits (read before writing collision tests)
 ///
-/// - **El fold de caja es ASCII puro** (`eq_ignore_ascii_case`). `Ñ` y `ñ` NO
-///   colisionan aquí, pero SÍ en NTFS (`$UpCase`) y APFS (fold Unicode). Un byte
-///   trail de multibyte legacy (p. ej. Shift-JIS `83 65`) puede producir una
-///   `CaseCollision` espuria contra `83 45`. NO escribas tests que dependan
-///   de colisión/no-colisión de caja Unicode contra este simulador.
-/// - **No simula insensibilidad a normalización** (APFS: é NFC y NFD son el
-///   mismo archivo). Ese eje llegará como knob propio (issue de deuda M0).
-/// - El scheme/authority del `VPath` de entrada no se valida: todas las
-///   authorities comparten el mismo árbol.
-/// - **La travesía de symlinks intermedios solo cubre LECTURAS**
-///   (stat/list/read/`read_link`/`node_id`): las mutaciones
-///   (write/mkdir/remove/rename/symlink) exigen ancestros Dir literales —
-///   en POSIX real, mutar a través de un dir-symlink funciona. El copy
-///   engine nunca muta vía paths a través de links (las creaciones van al
-///   árbol destino real; de un link expandido se borra EL LINK), así que
-///   el testkit no lo necesita todavía.
+/// - **Case folding is pure ASCII** (`eq_ignore_ascii_case`). `Ñ` and `ñ` do
+///   NOT collide here, but they DO on NTFS (`$UpCase`) and APFS (Unicode
+///   fold). A trailing byte of a legacy multibyte encoding (e.g. Shift-JIS
+///   `83 65`) can produce a spurious `CaseCollision` against `83 45`. Do NOT
+///   write tests that depend on Unicode case collision/non-collision against
+///   this simulator.
+/// - **Does not simulate normalization-insensitivity** (APFS: é NFC and NFD
+///   are the same file). That axis will arrive as its own knob (M0 debt
+///   issue).
+/// - The input `VPath`'s scheme/authority is not validated: all authorities
+///   share the same tree.
+/// - **Traversal of intermediate symlinks only covers READS**
+///   (stat/list/read/`read_link`/`node_id`): mutations
+///   (write/mkdir/remove/rename/symlink) require literal Dir ancestors —
+///   on real POSIX, mutating through a dir-symlink works. The copy engine
+///   never mutates via paths through links (creations go to the real
+///   destination tree; from an expanded link, THE LINK is what gets
+///   deleted), so the testkit does not need it yet.
 ///
 /// ```
 /// use norte_testkit::MemProvider;
@@ -127,69 +128,70 @@ impl Tree {
 pub struct MemProvider {
     caps: Capabilities,
     norm: Normalization,
-    /// `false` = simula un backend sin identidad estable (`node_id` = None).
+    /// `false` = simulates a backend with no stable identity (`node_id` =
+    /// None).
     node_ids: bool,
-    /// Valor fijo que devuelve `list_skipped` (#93): simula un provider
-    /// archive que omitió entradas de su índice. `None` (default) = backend
-    /// que lista todo lo que existe.
+    /// Fixed value `list_skipped` returns (#93): simulates an archive
+    /// provider that omitted entries from its index. `None` (default) =
+    /// a backend that lists everything that exists.
     list_skipped: Option<u64>,
-    /// El rename SIN pisar ve el pliegue del destino, como los sistemas de
-    /// ficheros de verdad (#274).
+    /// A rename WITHOUT clobbering sees the destination's fold, like real
+    /// filesystems do (#274).
     ///
-    /// Por defecto este provider PERMITE `a → A` cuando el destino resuelve al
-    /// propio origen: modela un `rename(2)` de APFS, que reemplaza y por tanto
-    /// cambia la ortografía sin quejarse. Pero norte no renombra con
-    /// `rename(2)`: renombra sin pisar —`renameat2(RENAME_NOREPLACE)` en
-    /// Linux, `renamex_np(RENAME_EXCL)` en macOS, `MoveFileExW` sin replace en
-    /// Windows— y ahí el destino que resuelve al mismo nodo **existe**, así
-    /// que el rename falla con `EEXIST`.
+    /// By default this provider ALLOWS `a → A` when the destination
+    /// resolves to the source itself: it models an APFS `rename(2)`, which
+    /// replaces and therefore changes the spelling without complaint. But
+    /// norte does not rename with `rename(2)`: it renames without
+    /// clobbering —`renameat2(RENAME_NOREPLACE)` on Linux,
+    /// `renamex_np(RENAME_EXCL)` on macOS, `MoveFileExW` without replace on
+    /// Windows— and there, a destination that resolves to the same node
+    /// **exists**, so the rename fails with `EEXIST`.
     ///
-    /// Esa diferencia es la que dejaba #274 sin poder probarse: el camino que
-    /// la issue nombra no se reproducía porque el doble era más permisivo que
-    /// cualquier disco. Con este mando, `Foo.txt → foo.txt` contesta lo que
-    /// contestaría un ext4 `+F` o un APFS.
-    noreplace_ve_el_pliegue: bool,
-    /// Papelera LÓGICA (#99, cierra deuda H2): con ella, `trash` mueve la
-    /// víctima a `.norte-trash/<id>/payload` y devuelve `Some(payload)`
-    /// (destino recuperable) en vez de la papelera "vanish" (`None`). Modela un
-    /// provider remoto con `logical_trash` (sftp/object) para probar la
-    /// idempotencia y la recuperación del `reversal_ref`.
+    /// That difference is what left #274 untestable: the path the issue
+    /// names did not reproduce because the double was more permissive than
+    /// any real disk. With this knob, `Foo.txt → foo.txt` answers what an
+    /// ext4 `+F` or an APFS would answer.
+    noreplace_sees_fold: bool,
+    /// LOGICAL trash (#99, closes debt H2): with it, `trash` moves the
+    /// victim to `.norte-trash/<id>/payload` and returns `Some(payload)`
+    /// (recoverable destination) instead of "vanish" trash (`None`). Models
+    /// a remote provider with `logical_trash` (sftp/object) to test the
+    /// idempotency and recovery of `reversal_ref`.
     logical_trash: bool,
-    /// Catálogo sintético de attrs (#108 bloque 2): vacío (default) = provider
-    /// sin attrs; [`Self::with_synthetic_attrs`] lo puebla con valores
-    /// deterministas y deliberadamente hostiles.
+    /// Synthetic attr catalogue (#108 block 2): empty (default) = a
+    /// provider with no attrs; [`Self::with_synthetic_attrs`] populates it
+    /// with deterministic, deliberately hostile values.
     attr_defs: Vec<norte_proto::AttrInfo>,
-    /// Capabilities guionizadas POR UBICACIÓN (ADR 0054): simula un backend
-    /// que sirve más de un filesystem tras un scheme — la raíz en ext4 y un
-    /// `/usb` en exFAT, o un directorio ext4 en `+F`. Vacío (default) = todas
-    /// las ubicaciones responden [`Self::capabilities`].
+    /// Capabilities scripted PER LOCATION (ADR 0054): simulates a backend
+    /// that serves more than one filesystem behind a scheme — the root on
+    /// ext4 and a `/usb` on exFAT, or an ext4 directory under `+F`. Empty
+    /// (default) = every location answers [`Self::capabilities`].
     caps_at: Arc<Mutex<BTreeMap<SegPath, Capabilities>>>,
-    /// Rutas por las que alguien preguntó con `capabilities_at`, en orden.
-    /// Costura de test: es la única forma de comprobar que un camino pregunta
-    /// por la UBICACIÓN y no por el provider, cuando las dos respuestas
-    /// coinciden.
+    /// Paths someone asked about with `capabilities_at`, in order. Test
+    /// seam: it is the only way to check that a path asks about the
+    /// LOCATION and not the provider, when the two answers coincide.
     caps_at_asked: Arc<Mutex<Vec<SegPath>>>,
     tree: Arc<Mutex<Tree>>,
     faults: Arc<Faults>,
 }
 
-/// Eje de normalización Unicode del FS simulado (issue #7).
+/// The simulated FS's Unicode normalization axis (issue #7).
 ///
-/// Límite documentado: con caja Y normalización insensibles a la vez, un
-/// nombre que difiera en AMBAS cosas no se pliega (los ejes se evalúan por
-/// separado; APFS real los combina). Suficiente para el testkit.
+/// Documented limit: with BOTH case AND normalization insensitive, a name
+/// that differs in BOTH does not fold (the axes are evaluated separately;
+/// real APFS combines them). Enough for the testkit.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum Normalization {
-    /// Bytes tal cual (ext4): NFC y NFD son nombres DISTINTOS.
+    /// Bytes as-is (ext4): NFC and NFD are DIFFERENT names.
     #[default]
     ByteExact,
-    /// Insensible preservando bytes (APFS): NFC y NFD resuelven al mismo
-    /// nodo; la colisión solo-por-normalización se etiqueta
+    /// Byte-preserving insensitive (APFS): NFC and NFD resolve to the same
+    /// node; a normalization-only collision is labeled
     /// [`ConflictKind::Normalization`].
     Insensitive,
 }
 
-/// Config de resolución de nombres: los dos ejes juntos.
+/// Name resolution config: both axes together.
 #[derive(Debug, Clone, Copy)]
 struct Lookup {
     case_sensitive: bool,
@@ -197,7 +199,7 @@ struct Lookup {
 }
 
 impl MemProvider {
-    /// Provider con las capabilities por defecto de un FS "unix-like":
+    /// Provider with the default capabilities of a "unix-like" FS:
     /// `RENAME_ATOMIC | CASE_SENSITIVE | CASE_PRESERVING`.
     #[must_use]
     pub fn new() -> Self {
@@ -207,15 +209,16 @@ impl MemProvider {
                 | CapabilityFlags::CASE_PRESERVING
                 | CapabilityFlags::SYMLINKS
                 | CapabilityFlags::TRASH
-                // #314: tiene permisos POSIX y se pueden cambiar. Con esto la
-                // Task de `fs.set_mode` y su undo se prueban sin tocar disco.
+                // #314: has POSIX permissions and they can be changed. This
+                // is what lets `fs.set_mode`'s Task and its undo be tested
+                // without touching disk.
                 | CapabilityFlags::POSIX_MODE,
         )
     }
 
-    /// Provider con flags a medida (p. ej. sin `CASE_SENSITIVE` para simular
-    /// NTFS/APFS — con el límite de que el fold es ASCII, ver doc del tipo —
-    /// o con `SERVER_COPY` para probar `copy_native`).
+    /// Provider with custom flags (e.g. without `CASE_SENSITIVE` to simulate
+    /// NTFS/APFS — with the limit that folding is ASCII, see the type's doc
+    /// — or with `SERVER_COPY` to test `copy_native`).
     #[must_use]
     pub fn with_flags(flags: CapabilityFlags) -> Self {
         Self {
@@ -227,10 +230,11 @@ impl MemProvider {
             node_ids: true,
             list_skipped: None,
             logical_trash: false,
-            noreplace_ve_el_pliegue: false,
-            // #314: `posix.mode` va SIEMPRE, porque este provider lo emite
-            // de verdad (no es sintético) y declara `POSIX_MODE`. Los `mem.*`
-            // los añade `with_synthetic_attrs` a quien los quiera.
+            noreplace_sees_fold: false,
+            // #314: `posix.mode` is ALWAYS present, because this provider
+            // really emits it (it is not synthetic) and declares
+            // `POSIX_MODE`. `with_synthetic_attrs` adds the `mem.*` ones for
+            // whoever wants them.
             attr_defs: vec![norte_proto::AttrInfo {
                 id: "posix.mode".to_owned(),
                 label: "Mode".to_owned(),
@@ -244,56 +248,56 @@ impl MemProvider {
         }
     }
 
-    /// Guioniza las capabilities de UNA ubicación (ADR 0054): a partir de aquí
-    /// `capabilities_at(p)` responde `caps` en vez de la declaración del
-    /// backend. Es la costura con la que se prueba un `+F` o un exFAT montado
-    /// sin tener ninguno — ningún CI de este proyecto los tiene.
+    /// Scripts ONE location's capabilities (ADR 0054): from here on
+    /// `capabilities_at(p)` answers `caps` instead of the backend's
+    /// declaration. It is the seam that lets a `+F` or a mounted exFAT be
+    /// tested without having either — no CI in this project has them.
     ///
-    /// Solo afecta a la ubicación EXACTA: un hijo suyo sigue respondiendo la
-    /// declaración, porque el testkit no simula herencia por mount y fingirla
-    /// escondería justo el fallo que #153 describe.
+    /// Only affects the EXACT location: one of its children still answers
+    /// the declaration, because the testkit does not simulate mount
+    /// inheritance and faking it would hide exactly the bug #153 describes.
     ///
     /// # Panics
     ///
-    /// Si el mutex del guion quedó envenenado por un panic previo — en un
-    /// testkit eso ya es un test roto.
+    /// If the script's mutex was poisoned by an earlier panic — in a
+    /// testkit that already means a broken test.
     pub fn set_caps_at(&self, p: &VPath, caps: Capabilities) {
         self.caps_at
             .lock()
-            .expect("caps_at lock sano")
+            .expect("sound caps_at lock")
             .insert(seg_path(p), caps);
     }
 
-    /// ¿Alguien preguntó por la ubicación `p` con `capabilities_at`?
+    /// Did anyone ask about location `p` with `capabilities_at`?
     ///
     /// # Panics
-    /// Si el mutex quedó envenenado por un panic previo — en un testkit eso ya
-    /// es un test roto.
+    /// If the mutex was poisoned by an earlier panic — in a testkit that
+    /// already means a broken test.
     #[must_use]
     pub fn was_asked_about(&self, p: &VPath) -> bool {
         self.caps_at_asked
             .lock()
-            .expect("caps_at lock sano")
+            .expect("sound caps_at lock")
             .contains(&seg_path(p))
     }
 
-    /// Olvida quién preguntó, para que un test pueda separar dos fases (lo que
-    /// preguntó el plan de lo que pregunta el undo).
+    /// Forgets who asked, so a test can separate two phases (what the plan
+    /// asked from what the undo asks).
     ///
     /// # Panics
-    /// Si el mutex quedó envenenado por un panic previo.
+    /// If the mutex was poisoned by an earlier panic.
     pub fn forget_who_asked(&self) {
         self.caps_at_asked
             .lock()
-            .expect("caps_at lock sano")
+            .expect("sound caps_at lock")
             .clear();
     }
 
-    /// Atributos SINTÉTICOS deterministas (#108 bloque 2) con valores
-    /// deliberadamente hostiles: dueño no-UTF-8 (`Bytes`), texto con RTL
-    /// override + ZWJ, texto ANCHO (CJK + familia emoji ZWJ, #117
-    /// encoding-audit L2). Para probar plumbing y render sin un provider
-    /// real.
+    /// Deterministic SYNTHETIC attributes (#108 block 2) with deliberately
+    /// hostile values: a non-UTF-8 owner (`Bytes`), text with an RTL
+    /// override + ZWJ, WIDE text (CJK + a ZWJ emoji family, #117
+    /// encoding-audit L2). For testing plumbing and rendering without a
+    /// real provider.
     #[must_use]
     pub fn with_synthetic_attrs(mut self) -> Self {
         use norte_proto::{AttrHint, AttrInfo, AttrType};
@@ -303,9 +307,10 @@ impl MemProvider {
             ty,
             hint,
         };
-        // Se AÑADEN a lo que ya hay (`posix.mode`, #314), no lo reemplazan:
-        // este provider sigue emitiendo el modo con o sin attrs sintéticos, y
-        // dejar de anunciarlo lo pondría a emitir lo que no declara.
+        // ADDED to what is already there (`posix.mode`, #314), not
+        // replacing it: this provider keeps emitting the mode with or
+        // without synthetic attrs, and no longer announcing it would make
+        // it emit what it does not declare.
         self.attr_defs.extend([
             mk("mem.owner", "Owner", AttrType::Bytes, AttrHint::Identity),
             mk("mem.note", "Note", AttrType::Text, AttrHint::Opaque),
@@ -316,49 +321,51 @@ impl MemProvider {
         self
     }
 
-    /// Activa la papelera LÓGICA (#99): `trash` mueve a
-    /// `.norte-trash/<id>/payload` y devuelve `Some(payload)` en vez de la
-    /// papelera "vanish". Requiere la capability `TRASH` (la trae [`Self::new`]).
+    /// Turns on LOGICAL trash (#99): `trash` moves to
+    /// `.norte-trash/<id>/payload` and returns `Some(payload)` instead of
+    /// "vanish" trash. Requires the `TRASH` capability (which [`Self::new`]
+    /// carries).
     #[must_use]
     pub fn with_logical_trash(mut self) -> Self {
         self.logical_trash = true;
         self
     }
 
-    /// El rename sin pisar ve el pliegue del destino (#274): `Foo.txt →
-    /// foo.txt` sobre un provider que no distingue caja contesta
-    /// `Conflict{Exists}`, que es lo que contesta un disco de verdad.
+    /// A rename without clobbering sees the destination's fold (#274):
+    /// `Foo.txt → foo.txt` on a provider that is not case-sensitive answers
+    /// `Conflict{Exists}`, which is what a real disk answers.
     ///
-    /// Ver el campo `noreplace_ve_el_pliegue` para por qué el defecto es el
-    /// otro.
+    /// See the `noreplace_sees_fold` field for why the default is the other
+    /// way.
     #[must_use]
     pub fn with_folding_noreplace(mut self) -> Self {
-        self.noreplace_ve_el_pliegue = true;
+        self.noreplace_sees_fold = true;
         self
     }
 
-    /// Simula un provider de CONTENEDOR que omitió `n` entradas de su índice
-    /// (#93): `list_skipped` devuelve `Ok(Some(n))` para cualquier path. Para
-    /// testear el plumbing daemon/Backend/frontends sin un archive real.
+    /// Simulates a CONTAINER provider that omitted `n` entries from its
+    /// index (#93): `list_skipped` returns `Ok(Some(n))` for any path. For
+    /// testing the daemon/Backend/frontends plumbing without a real archive.
     #[must_use]
     pub fn with_list_skipped(mut self, n: u64) -> Self {
         self.list_skipped = Some(n);
         self
     }
 
-    /// Simula un backend SIN identidad de nodo estable (object storage,
-    /// ftp): `node_id` devuelve `Ok(None)` siempre. Para testear los
-    /// caminos degradados del engine (heurísticas, Follow → Unsupported).
+    /// Simulates a backend WITHOUT a stable node identity (object storage,
+    /// ftp): `node_id` always returns `Ok(None)`. For testing the engine's
+    /// degraded paths (heuristics, Follow → Unsupported).
     #[must_use]
     pub fn without_node_ids(mut self) -> Self {
         self.node_ids = false;
         self
     }
 
-    /// Inspección de test (issue #18): el kind ALMACENADO del symlink en
-    /// `p`, ya resuelto si se creó con [`SymlinkKind`](norte_vfs::SymlinkKind)
-    /// `::Unknown`. `None` si no existe o no es symlink. Los providers
-    /// reales no exponen esto.
+    /// Test inspection (issue #18): the STORED kind of the symlink at `p`,
+    /// already resolved if it was created with
+    /// [`SymlinkKind`](norte_vfs::SymlinkKind) `::Unknown`. `None` if it
+    /// does not exist or is not a symlink. Real providers do not expose
+    /// this.
     #[must_use]
     pub fn symlink_kind_of(&self, p: &VPath) -> Option<norte_vfs::SymlinkKind> {
         let key = seg_path(p);
@@ -371,7 +378,7 @@ impl MemProvider {
         }
     }
 
-    /// Fija el eje de normalización (default: [`Normalization::ByteExact`]).
+    /// Sets the normalization axis (default: [`Normalization::ByteExact`]).
     ///
     /// ```
     /// use norte_testkit::{MemProvider, Normalization};
@@ -384,15 +391,15 @@ impl MemProvider {
         self
     }
 
-    /// Handle de inyección de fallos (compartible con el test mientras el
-    /// provider está en uso).
+    /// Fault-injection handle (shareable with the test while the provider
+    /// is in use).
     #[must_use]
     pub fn faults(&self) -> Arc<Faults> {
         Arc::clone(&self.faults)
     }
 
-    /// Cuerpo compartido de `stat`/`stat_with` (#108 bloque 2): jamás
-    /// delegar entre ellos vía los defaults del trait (recursión).
+    /// Shared body of `stat`/`stat_with` (#108 block 2): never delegate
+    /// between them via the trait's defaults (recursion).
     async fn stat_inner(&self, p: &VPath, req: &norte_vfs::AttrRequest) -> Result<Entry, Error> {
         self.faults.op_gate().await?;
         let key = seg_path(p);
@@ -410,12 +417,12 @@ impl MemProvider {
         let real = resolve_traversing(&tree, lk, &key).ok_or(Error::NotFound)?;
         let node = tree.nodes.get(&real).ok_or(Error::NotFound)?;
         let mut entry = entry_for(p, &real, node, &self.attr_defs, req);
-        // #314: los permisos POSIX, que este provider SÍ tiene desde que
-        // declara `POSIX_MODE`. Van fuera de `synthetic_attrs` porque no son
-        // sintéticos: es estado de verdad que `set_mode` escribe, y el undo de
-        // un cambio de permisos se prueba leyéndolo.
+        // #314: the POSIX permissions, which this provider DOES have since
+        // it declares `POSIX_MODE`. They stay outside `synthetic_attrs`
+        // because they are not synthetic: it is real state that `set_mode`
+        // writes, and a permission change's undo is tested by reading it.
         if req.wants("posix.mode") {
-            let mode = tree.modes.get(&real).copied().unwrap_or(MODE_POR_DEFECTO);
+            let mode = tree.modes.get(&real).copied().unwrap_or(DEFAULT_MODE);
             entry.attrs.insert(
                 "posix.mode".to_owned(),
                 norte_proto::AttrValue::Uint(u64::from(mode)),
@@ -424,7 +431,7 @@ impl MemProvider {
         Ok(entry)
     }
 
-    /// Cuerpo compartido de `list`/`list_with` (#108 bloque 2).
+    /// Shared body of `list`/`list_with` (#108 block 2).
     async fn list_inner(
         &self,
         p: &VPath,
@@ -435,15 +442,15 @@ impl MemProvider {
         if self.faults.list_fails_for(&key) {
             return Err(Error::Io { retryable: true });
         }
-        // Se cuenta el listado que SÍ se atiende: un test que cancela «tras el
-        // n-ésimo list» quiere decir n listados de verdad, no n intentos.
+        // Only a listing that IS served gets counted: a test that cancels
+        // "after the n-th list" means n real listings, not n attempts.
         self.faults.tick_list();
         let lk = self.lookup();
         let tree = self.lock();
-        // El filtro de hijos usa la clave REAL: listar con otra caja debe
-        // ver lo mismo que stat (coherencia con el FS simulado). Como un
-        // opendir de verdad, la travesía sigue symlinks intermedios Y el
-        // link final.
+        // The child filter uses the REAL key: listing with different case
+        // must see the same thing as stat (coherence with the simulated
+        // FS). Like a real opendir, the traversal follows intermediate
+        // symlinks AND the final link.
         let real = if key.is_empty() {
             key
         } else {
@@ -458,29 +465,29 @@ impl MemProvider {
             }
             real
         };
-        // Los paths de los hijos cuelgan del path PEDIDO (con el nombre
-        // REAL de la hoja): listar a través de un link debe dar paths
-        // utilizables bajo ese link, como en un FS real.
+        // Children's paths hang off the REQUESTED path (with the leaf's
+        // REAL name): listing through a link must give usable paths under
+        // that link, as on a real FS.
         let entries: Vec<Result<Entry, Error>> = tree
             .nodes
             .iter()
             .filter(|(k, _)| k.len() == real.len() + 1 && k.starts_with(&real))
             .map(|(k, node)| {
-                let name = k.last().expect("clave de hijo no vacía").clone();
-                let seg = norte_proto::Segment::new(name).expect("clave del árbol ya validada");
+                let name = k.last().expect("non-empty child key").clone();
+                let seg = norte_proto::Segment::new(name).expect("tree key already validated");
                 Ok(entry_for_child(p.join(seg), node, &self.attr_defs, req))
             })
             .collect();
         Ok(futures::stream::iter(entries).boxed())
     }
 
-    /// La raíz de este provider: `mem:///`.
+    /// This provider's root: `mem:///`.
     ///
     /// # Panics
-    /// Nunca: el scheme es constante y válido.
+    /// Never: the scheme is constant and valid.
     #[must_use]
     pub fn root() -> VPath {
-        VPath::root(Scheme::new("mem").expect("scheme constante válido"), None)
+        VPath::root(Scheme::new("mem").expect("valid constant scheme"), None)
     }
 
     fn lookup(&self) -> Lookup {
@@ -491,8 +498,8 @@ impl MemProvider {
     }
 
     fn lock(&self) -> MutexGuard<'_, Tree> {
-        // Invariante: nadie panica con el lock tomado.
-        self.tree.lock().expect("tree lock sano")
+        // Invariant: nobody panics with the lock held.
+        self.tree.lock().expect("sound tree lock")
     }
 }
 
@@ -502,15 +509,15 @@ impl Default for MemProvider {
     }
 }
 
-/// Igualdad con fold ASCII (los límites están documentados en [`MemProvider`]).
+/// Equality with ASCII folding (the limits are documented on [`MemProvider`]).
 fn fold_eq_path(a: &SegPath, b: &SegPath) -> bool {
     a.len() == b.len() && a.iter().zip(b).all(|(x, y)| x.eq_ignore_ascii_case(y))
 }
 
-/// La `.norte-info` en `info_key` decodifica exactamente a `p` (misma
-/// víctima): la entrada de papelera es NUESTRA, no una colisión ajena con el
-/// mismo id (#99, review rust MAJOR). `info_decode` ya exige mismo
-/// scheme+authority; aquí se compara la ruta original completa.
+/// `info_key`'s `.norte-info` decodes to exactly `p` (same victim): the
+/// trash entry is OURS, not someone else's collision with the same id (#99,
+/// rust review MAJOR). `info_decode` already requires the same
+/// scheme+authority; here the full original path is compared.
 fn info_matches(tree: &Tree, info_key: &SegPath, p: &VPath) -> bool {
     matches!(
         tree.nodes.get(info_key),
@@ -520,7 +527,7 @@ fn info_matches(tree: &Tree, info_key: &SegPath, p: &VPath) -> bool {
     )
 }
 
-/// ¿Misma forma NFC segmento a segmento? Solo si ambos son UTF-8 válido.
+/// Same NFC shape, segment by segment? Only if both are valid UTF-8.
 fn nfc_eq_path(a: &SegPath, b: &SegPath) -> bool {
     use unicode_normalization::UnicodeNormalization;
     a.len() == b.len()
@@ -532,8 +539,8 @@ fn nfc_eq_path(a: &SegPath, b: &SegPath) -> bool {
         )
 }
 
-/// Resuelve `key` contra el árbol según los ejes de caja y normalización.
-/// Devuelve la clave REAL almacenada (puede diferir en caja o en forma).
+/// Resolves `key` against the tree per the case and normalization axes.
+/// Returns the REAL stored key (may differ in case or shape).
 fn resolve(tree: &Tree, lk: Lookup, key: &SegPath) -> Option<SegPath> {
     if tree.nodes.contains_key(key) {
         return Some(key.clone());
@@ -549,13 +556,13 @@ fn resolve(tree: &Tree, lk: Lookup, key: &SegPath) -> Option<SegPath> {
     None
 }
 
-/// Resolución de un path completo con TRAVESÍA de symlinks en los
-/// componentes intermedios (semántica POSIX: un FS real resuelve
-/// `link/hijo` a través del link). Un nivel de link por componente — las
-/// cadenas link→link dan `None`, mismo límite documentado que
-/// [`resolve_symlink`]. La HOJA no se sigue (semántica lstat, como `stat`).
+/// Resolution of a full path with symlink TRAVERSAL on intermediate
+/// components (POSIX semantics: a real FS resolves `link/child` through the
+/// link). One level of link per component — link→link chains give `None`,
+/// same documented limit as [`resolve_symlink`]. The LEAF is not followed
+/// (lstat semantics, like `stat`).
 fn resolve_traversing(tree: &Tree, lk: Lookup, key: &SegPath) -> Option<SegPath> {
-    // Atajo: la clave exacta existe (el caso abrumadoramente común).
+    // Shortcut: the exact key exists (the overwhelmingly common case).
     if tree.nodes.contains_key(key) {
         return Some(key.clone());
     }
@@ -579,12 +586,12 @@ fn resolve_traversing(tree: &Tree, lk: Lookup, key: &SegPath) -> Option<SegPath>
     Some(canon)
 }
 
-/// Canonicaliza `key` respecto a la caja ALMACENADA: cada ancestro adopta la
-/// caja real de su Dir (y debe existir como Dir); la hoja conserva la caja
-/// pedida (case-preserving). Sin esto, una inserción vía caja distinta crearía
-/// huérfanos invisibles para `list` — imposible en un FS real.
+/// Canonicalizes `key` with respect to the STORED case: every ancestor
+/// adopts its Dir's real case (and must exist as a Dir); the leaf keeps the
+/// requested case (case-preserving). Without this, an insert via different
+/// case would create orphans invisible to `list` — impossible on a real FS.
 ///
-/// `None` si algún ancestro falta o no es Dir.
+/// `None` if some ancestor is missing or is not a Dir.
 fn canonical_key(tree: &Tree, lk: Lookup, key: &SegPath) -> Option<SegPath> {
     let mut canon: SegPath = Vec::with_capacity(key.len());
     for (i, seg) in key.iter().enumerate() {
@@ -603,10 +610,11 @@ fn canonical_key(tree: &Tree, lk: Lookup, key: &SegPath) -> Option<SegPath> {
     Some(canon)
 }
 
-/// Resolución mínima de un symlink de Mem: `target` relativo al PADRE del
-/// link, segmentos separados por `/`. Sin `..`, sin absolutos, y las CADENAS
-/// symlink→symlink dan `NotFound` (un FS real las seguiría): con eso basta
-/// para el testkit — los targets exóticos se testean en el provider real.
+/// Minimal resolution of a Mem symlink: `target` relative to the link's
+/// PARENT, segments separated by `/`. No `..`, no absolutes, and
+/// symlink→symlink CHAINS give `NotFound` (a real FS would follow them):
+/// that is enough for the testkit — exotic targets are tested on the real
+/// provider.
 fn resolve_symlink(
     tree: &Tree,
     lk: Lookup,
@@ -623,8 +631,8 @@ fn resolve_symlink(
     resolve(tree, lk, &key).ok_or(Error::NotFound)
 }
 
-/// Clasifica una colisión: byte-exacta = `Exists`; misma forma NFC =
-/// `Normalization` (issue #8); si no, variante de caja = `CaseCollision`.
+/// Classifies a collision: byte-exact = `Exists`; same NFC shape =
+/// `Normalization` (issue #8); otherwise, a case variant = `CaseCollision`.
 fn collision_kind(real: &SegPath, requested: &SegPath) -> ConflictKind {
     if real == requested {
         ConflictKind::Exists
@@ -635,9 +643,9 @@ fn collision_kind(real: &SegPath, requested: &SegPath) -> ConflictKind {
     }
 }
 
-/// Valores sintéticos DETERMINISTAS por nodo (#108 bloque 2): función pura
-/// de (catálogo, petición, kind, mtime). Los valores son deliberadamente
-/// hostiles — el masking es problema de los frontends, no del provider.
+/// Per-node DETERMINISTIC synthetic values (#108 block 2): a pure function
+/// of (catalogue, request, kind, mtime). The values are deliberately
+/// hostile — masking is the frontends' problem, not the provider's.
 fn synthetic_attrs(
     defs: &[norte_proto::AttrInfo],
     req: &norte_vfs::AttrRequest,
@@ -648,40 +656,40 @@ fn synthetic_attrs(
     if defs.is_empty() || req.is_empty() {
         return out;
     }
-    let quiere = |id: &str| defs.iter().any(|d| d.id == id) && req.wants(id);
-    if quiere("mem.owner") {
-        // Dueño NO-UTF-8: bytes crudos, jamás String (regla 1).
+    let wants = |id: &str| defs.iter().any(|d| d.id == id) && req.wants(id);
+    if wants("mem.owner") {
+        // NON-UTF-8 owner: raw bytes, never a String (rule 1).
         out.insert(
             "mem.owner".to_owned(),
             AttrValue::Bytes(b"due\xf1o-\xff\xfe".to_vec()),
         );
     }
-    if quiere("mem.note") {
-        // RTL override + ZWJ: humo para el masking de los frontends.
+    if wants("mem.note") {
+        // RTL override + ZWJ: smoke test for the frontends' masking.
         out.insert(
             "mem.note".to_owned(),
             AttrValue::Text("\u{202e}atón\u{202c} a\u{200d}b".to_owned()),
         );
     }
-    if quiere("mem.wide") {
-        // Texto ANCHO (#117 encoding-audit L2): CJK double-width + la
-        // MISMA familia emoji ZWJ del corpus (`emoji_zwj_family`, fuente
-        // única) — grapheme multi-codepoint para pinear que una celda
-        // ancha jamás desplaza la columna vecina en los frontends.
-        let familia = crate::corpus::hostile_names()
+    if wants("mem.wide") {
+        // WIDE text (#117 encoding-audit L2): CJK double-width + the SAME
+        // ZWJ emoji family from the corpus (`emoji_zwj_family`, single
+        // source) — a multi-codepoint grapheme to pin that a wide cell
+        // never shifts the neighboring column in the frontends.
+        let family = crate::corpus::hostile_names()
             .into_iter()
             .find(|n| n.id == "emoji_zwj_family")
-            // El corpus embebido siempre trae la fixture (UTF-8 puro);
-            // si algún día se renombrara, el valor queda solo-CJK y los
-            // pins de anchura de los frontends lo delatarían.
+            // The embedded corpus always carries the fixture (pure UTF-8);
+            // if it were ever renamed, the value stays CJK-only and the
+            // frontends' width pins would give it away.
             .and_then(|n| String::from_utf8(n.bytes).ok())
             .unwrap_or_default();
         out.insert(
             "mem.wide".to_owned(),
-            AttrValue::Text(format!("日本語{familia}")),
+            AttrValue::Text(format!("日本語{family}")),
         );
     }
-    if quiere("mem.mode") {
+    if wants("mem.mode") {
         let mode = match node {
             Node::Dir { .. } => 0o040_755,
             Node::File { .. } => 0o100_644,
@@ -689,7 +697,7 @@ fn synthetic_attrs(
         };
         out.insert("mem.mode".to_owned(), AttrValue::Uint(mode));
     }
-    if quiere("mem.stamp") {
+    if wants("mem.stamp") {
         let mtime = match node {
             Node::File { mtime, .. } | Node::Dir { mtime, .. } | Node::Symlink { mtime, .. } => {
                 *mtime
@@ -700,8 +708,8 @@ fn synthetic_attrs(
     out
 }
 
-/// [`Entry`] de un hijo con path YA construido (listados: el padre es el
-/// path PEDIDO, no la clave canónica — ver `list`).
+/// A child's [`Entry`] with its path ALREADY built (listings: the parent is
+/// the REQUESTED path, not the canonical key — see `list`).
 fn entry_for_child(
     path: VPath,
     node: &Node,
@@ -734,9 +742,9 @@ fn entry_for_child(
     }
 }
 
-/// Reconstruye la [`Entry`] de una clave del árbol sobre el scheme y la
-/// authority de `base` (la authority se preserva: la identidad del path en el
-/// wire no puede cambiar por pasar por el provider).
+/// Rebuilds a tree key's [`Entry`] over `base`'s scheme and authority (the
+/// authority is preserved: a path's wire identity cannot change just by
+/// going through the provider).
 fn entry_for(
     base: &VPath,
     key: &SegPath,
@@ -746,23 +754,23 @@ fn entry_for(
 ) -> Entry {
     let authority = base
         .authority()
-        .map(|a| Authority::new(a).expect("authority ya validada por VPath"));
+        .map(|a| Authority::new(a).expect("authority already validated by VPath"));
     let mut p = VPath::root(
-        Scheme::new(base.scheme()).expect("scheme ya validado"),
+        Scheme::new(base.scheme()).expect("scheme already validated"),
         authority,
     );
     for seg in key {
-        p = p.join(norte_proto::Segment::new(seg.clone()).expect("clave del árbol ya validada"));
+        p = p.join(norte_proto::Segment::new(seg.clone()).expect("tree key already validated"));
     }
     entry_for_child(p, node, defs, req)
 }
 
 #[async_trait]
 impl Provider for MemProvider {
-    // La firma del trait es `-> &str`; devolver un literal aquí es correcto.
+    // The trait's signature is `-> &str`; returning a literal here is correct.
     #[expect(
         clippy::unnecessary_literal_bound,
-        reason = "la firma del trait es `-> &str`"
+        reason = "the trait's signature is `-> &str`"
     )]
     fn scheme(&self) -> &str {
         "mem"
@@ -776,12 +784,12 @@ impl Provider for MemProvider {
         let key = seg_path(p);
         self.caps_at_asked
             .lock()
-            .expect("caps_at lock sano")
+            .expect("sound caps_at lock")
             .push(key.clone());
         Ok(self
             .caps_at
             .lock()
-            .expect("caps_at lock sano")
+            .expect("sound caps_at lock")
             .get(&key)
             .copied()
             .unwrap_or(self.caps))
@@ -807,7 +815,7 @@ impl Provider for MemProvider {
         let key = seg_path(p);
         let lk = self.lookup();
         let tree = self.lock();
-        // La raíz implícita tiene la identidad reservada 0.
+        // The implicit root has the reserved identity 0.
         if key.is_empty() {
             return Ok(Some(norte_vfs::NodeId {
                 volume: 0,
@@ -820,8 +828,8 @@ impl Provider for MemProvider {
             (norte_vfs::FollowLinks::Yes, Node::Symlink { target, .. }) => {
                 let resolved = resolve_symlink(&tree, lk, &real, target)?;
                 match tree.nodes.get(&resolved) {
-                    // Cadena link→link: coherente con read() — NotFound
-                    // (la resolución mínima de Mem no sigue cadenas).
+                    // link→link chain: consistent with read() — NotFound
+                    // (Mem's minimal resolution does not follow chains).
                     Some(Node::Symlink { .. }) | None => return Err(Error::NotFound),
                     Some(n) => n,
                 }
@@ -851,10 +859,10 @@ impl Provider for MemProvider {
         self.list_inner(p, &opt.attrs).await
     }
 
-    /// El catálogo incluye SIEMPRE `posix.mode` (#314): este provider lo emite
-    /// y declara `POSIX_MODE`, y el contrato compartido exige que lo que se
-    /// emite esté anunciado — un doble que incumpliera el acuerdo que
-    /// verifica no serviría para verificar nada.
+    /// The catalogue ALWAYS includes `posix.mode` (#314): this provider
+    /// emits it and declares `POSIX_MODE`, and the shared contract requires
+    /// that whatever gets emitted be announced — a double that broke the
+    /// agreement it verifies would not be good for verifying anything.
     fn attrs(&self) -> &[norte_proto::AttrInfo] {
         &self.attr_defs
     }
@@ -872,9 +880,10 @@ impl Provider for MemProvider {
         let real = resolve_traversing(&tree, lk, &key).ok_or(Error::NotFound)?;
         let content = match tree.nodes.get(&real) {
             Some(Node::File { content, .. }) => content.clone(),
-            // Como un FS real: read() SIGUE el symlink. Resolución mínima
-            // (target relativo al padre del link, separado por '/', sin
-            // `..`): suficiente para testear la política Follow del engine.
+            // Like a real FS: read() FOLLOWS the symlink. Minimal
+            // resolution (target relative to the link's parent, separated
+            // by '/', no `..`): enough for testing the engine's Follow
+            // policy.
             Some(Node::Symlink { target, .. }) => {
                 let resolved = resolve_symlink(&tree, lk, &real, target)?;
                 match tree.nodes.get(&resolved) {
@@ -896,8 +905,8 @@ impl Provider for MemProvider {
         };
         drop(tree);
 
-        // Rango (ADR 0005): pread — offset pasado de EOF = vacío, len se
-        // recorta a EOF. El fallo inyectado cuenta bytes DEL STREAM.
+        // Range (ADR 0005): pread — an offset past EOF = empty, len is
+        // clamped to EOF. The injected fault counts bytes FROM THE STREAM.
         let content: Vec<u8> = match range {
             None => content,
             Some(r) => {
@@ -912,7 +921,7 @@ impl Provider for MemProvider {
             }
         };
 
-        // Snapshot del fallo: el stream truncará en el byte exacto.
+        // Fault snapshot: the stream will truncate at the exact byte.
         let fail_at = self.faults.read_fault_for(&key);
         let mut chunks: Vec<Result<Bytes, Error>> = Vec::new();
         let mut emitted = 0usize;
@@ -970,9 +979,9 @@ impl Provider for MemProvider {
         let lk = self.lookup();
         let tree = self.lock();
         let canon = canonical_key(&tree, lk, &key).ok_or(Error::NotFound)?;
-        // Sin staging = sin digest (el engine degrada a Length). Con staging,
-        // hashea EXACTAMENTE los primeros `len` bytes (`len` jamás excede lo
-        // que open_resumable reportó, así que el slice es válido).
+        // No staging = no digest (the engine degrades to Length). With
+        // staging, hashes EXACTLY the first `len` bytes (`len` never
+        // exceeds what open_resumable reported, so the slice is valid).
         let Some(buffer) = tree.partials.get(&canon) else {
             return Ok(None);
         };
@@ -992,13 +1001,13 @@ impl Provider for MemProvider {
         let lk = self.lookup();
         let tree = self.lock();
         let canon = canonical_key(&tree, lk, &key).ok_or(Error::NotFound)?;
-        // El destino final debe seguir sin existir (mismo contrato que write).
+        // The final destination must still not exist (same contract as write).
         if let Some(real) = resolve(&tree, lk, &canon) {
             return Err(Error::Conflict {
                 conflict: collision_kind(&real, &canon),
             });
         }
-        // Reanuda desde el staging conservado, si lo hay.
+        // Resumes from the kept staging, if any.
         let buffer = tree.partials.get(&canon).cloned().unwrap_or_default();
         let already = buffer.len() as u64;
         drop(tree);
@@ -1016,9 +1025,9 @@ impl Provider for MemProvider {
         ))
     }
 
-    /// #314: escribe el modo en el mapa lateral. Es estado de verdad, no una
-    /// simulación: el undo de un cambio de permisos se comprueba leyéndolo por
-    /// `posix.mode`.
+    /// #314: writes the mode into the side map. It is real state, not a
+    /// simulation: a permission change's undo is checked by reading it back
+    /// through `posix.mode`.
     async fn set_mode(&self, p: &VPath, mode: u32) -> Result<(), Error> {
         self.faults.op_gate().await?;
         let key = seg_path(p);
@@ -1076,9 +1085,9 @@ impl Provider for MemProvider {
             }
         }
         tree.nodes.remove(&real);
-        // #314: y su modo. Dejarlo haría que un fichero creado después con ese
-        // mismo nombre heredara los permisos del que ya no está, y un test de
-        // undo afirmaría un modo que este provider se inventó.
+        // #314: and its mode. Leaving it would make a file later created
+        // under that same name inherit the permissions of the one that is
+        // gone, and an undo test would assert a mode this provider made up.
         tree.modes.remove(&real);
         tree.tick();
         drop(tree);
@@ -1089,7 +1098,7 @@ impl Provider for MemProvider {
         self.faults.op_gate().await?;
         let from_key = seg_path(from);
         let to_key = seg_path(to);
-        // ANTES de tocar el árbol: un fallo inyectado no aplica su efecto.
+        // BEFORE touching the tree: an injected fault does not apply its effect.
         if self.faults.rename_fails_from(&from_key) {
             return Err(Error::Io { retryable: false });
         }
@@ -1100,24 +1109,24 @@ impl Provider for MemProvider {
         let mut tree = self.lock();
         let real_from = resolve(&tree, lk, &from_key).ok_or(Error::NotFound)?;
         let canon_to = canonical_key(&tree, lk, &to_key).ok_or(Error::NotFound)?;
-        // Mover un dir DENTRO de sí mismo es imposible en cualquier FS (EINVAL).
+        // Moving a dir INSIDE itself is impossible on any FS (EINVAL).
         if canon_to.len() > real_from.len() && canon_to.starts_with(&real_from) {
             return Err(Error::InvalidPath);
         }
-        // El destino puede "existir" solo como el propio origen con otra caja
-        // (rename a→A en FS case-insensitive-preserving): permitido, salvo que
-        // este provider vea el pliegue al renombrar SIN pisar (#274), que es lo
-        // que hace un disco de verdad.
+        // The destination can "exist" only as the source itself with
+        // different case (rename a→A on a case-insensitive-preserving FS):
+        // allowed, unless this provider sees the fold when renaming WITHOUT
+        // clobbering (#274), which is what a real disk does.
         if let Some(real_to) = resolve(&tree, lk, &canon_to)
-            && (real_to != real_from || (self.noreplace_ve_el_pliegue && canon_to != real_from))
+            && (real_to != real_from || (self.noreplace_sees_fold && canon_to != real_from))
         {
             if !self.faults.renames_clobber() {
                 return Err(Error::Conflict {
                     conflict: collision_kind(&real_to, &canon_to),
                 });
             }
-            // Provider que PISA (fallo inyectado): el destino y su subárbol
-            // desaparecen, como haría un posix-rename.
+            // A provider that CLOBBERS (injected fault): the destination and
+            // its subtree disappear, as a posix-rename would.
             let victims: Vec<SegPath> = tree
                 .nodes
                 .keys()
@@ -1128,7 +1137,7 @@ impl Provider for MemProvider {
                 tree.nodes.remove(&k);
             }
         }
-        // Mueve el nodo y todo su subárbol.
+        // Moves the node and its whole subtree.
         let moved: Vec<(SegPath, Node)> = tree
             .nodes
             .iter()
@@ -1146,17 +1155,17 @@ impl Provider for MemProvider {
             | Node::File { mtime: m, .. }
             | Node::Symlink { mtime: m, .. }) = &mut node;
             *m = mtime;
-            // #314: el modo viaja con el nodo, como el id — un rename cambia
-            // el nombre, no los permisos.
+            // #314: the mode travels with the node, like the id — a rename
+            // changes the name, not the permissions.
             if let Some(m) = tree.modes.remove(&k) {
                 tree.modes.insert(new_key.clone(), m);
             }
-            // El id viaja DENTRO del nodo: rename preserva identidad.
+            // The id travels INSIDE the node: rename preserves identity.
             tree.nodes.insert(new_key, node);
         }
         drop(tree);
-        // El efecto ya está aplicado: si el test pidió cancelar tras el
-        // n-ésimo rename, es AHORA (#274).
+        // The effect is already applied: if the test asked to cancel after
+        // the n-th rename, this is IT (#274).
         self.faults.tick_rename();
         self.ambiguous_gate()
     }
@@ -1171,7 +1180,7 @@ impl Provider for MemProvider {
         }
         self.faults.op_gate().await?;
         let key = seg_path(p);
-        // La raíz no se trashea: el path es el problema (como local).
+        // The root is not trashed: the path is the problem (same as local).
         if key.is_empty() {
             return Err(Error::InvalidPath);
         }
@@ -1181,8 +1190,8 @@ impl Provider for MemProvider {
         let lk = self.lookup();
         let mut tree = self.lock();
         let real = resolve(&tree, lk, &key).ok_or(Error::NotFound)?;
-        // Papelera lógica del testkit: el subárbol desaparece de la vista
-        // (list/restore de verdad = M3 sobre el provider real).
+        // Testkit's logical trash: the subtree disappears from view (real
+        // list/restore = M3, on the real provider).
         let victims: Vec<SegPath> = tree
             .nodes
             .keys()
@@ -1194,17 +1203,17 @@ impl Provider for MemProvider {
         }
         tree.tick();
         drop(tree);
-        // Papelera "vanish" de test: el subárbol desaparece de la vista, sin
-        // destino recuperable expuesto (como la papelera nativa del OS). El
-        // `ambiguous_gate` simula el transitorio-tras-efecto (#17/#99): el
-        // reintento verá la víctima ausente y `trash_retrying` degrada a
-        // `Ok(None)` (sin `reversal_ref`, como la papelera nativa).
+        // Test "vanish" trash: the subtree disappears from view, with no
+        // recoverable destination exposed (like the OS's native trash). The
+        // `ambiguous_gate` simulates the transient-after-effect (#17/#99):
+        // the retry will see the victim absent and `trash_retrying`
+        // degrades to `Ok(None)` (no `reversal_ref`, like native trash).
         self.ambiguous_gate()?;
         Ok(None)
     }
 
-    /// Solo la papelera LÓGICA del testkit nombra su destino; la "vanish"
-    /// imita a la nativa de macOS/Windows y no promete nada.
+    /// Only the testkit's LOGICAL trash names its destination; "vanish"
+    /// mimics macOS/Windows' native one and promises nothing.
     fn trash_restorable(&self) -> bool {
         self.logical_trash
     }
@@ -1243,8 +1252,8 @@ impl Provider for MemProvider {
                 conflict: collision_kind(&real, &canon),
             });
         }
-        // `Unknown` (issue #18): el provider resuelve el kind contra SU
-        // árbol, best-effort — roto o irresoluble degrada a File.
+        // `Unknown` (issue #18): the provider resolves the kind against ITS
+        // tree, best-effort — broken or unresolvable degrades to File.
         let kind = match kind {
             norte_vfs::SymlinkKind::Unknown => match resolve_symlink(&tree, lk, &canon, target) {
                 Ok(resolved) => match tree.nodes.get(&resolved) {
@@ -1279,9 +1288,10 @@ impl Provider for MemProvider {
 }
 
 impl MemProvider {
-    /// Puerta de salida de cada mutación puntual: si hay una carga de
-    /// [`Faults::ambiguous_mutations`] armada, el efecto YA se aplicó y aun
-    /// así se devuelve error transitorio (issue #17).
+    /// Exit gate for every point mutation: if a
+    /// [`Faults::ambiguous_mutations`] charge is armed, the effect has
+    /// ALREADY been applied and a transient error is returned anyway (issue
+    /// #17).
     fn ambiguous_gate(&self) -> Result<(), Error> {
         if self.faults.take_ambiguous() {
             Err(Error::ProviderUnavailable { retryable: true })
@@ -1290,14 +1300,15 @@ impl MemProvider {
         }
     }
 
-    /// Papelera LÓGICA (#99): mueve la víctima a `.norte-trash/<id>/payload` y
-    /// devuelve el destino recuperable. El `id` determinista la hace
-    /// IDEMPOTENTE — si la víctima ya no está pero el payload sí, esta op ya
-    /// aplicó en un intento transitorio anterior → `Some(payload)` (sin víctima
-    /// ni payload = `NotFound` genuino). Dir markers e info se insertan
-    /// directamente (sin consumir faults); el movimiento reusa la re-clave de
-    /// `rename`; un único [`Self::ambiguous_gate`] al final simula el
-    /// transitorio-tras-efecto que `trash_retrying` recupera.
+    /// LOGICAL trash (#99): moves the victim to `.norte-trash/<id>/payload`
+    /// and returns the recoverable destination. The deterministic `id`
+    /// makes it IDEMPOTENT — if the victim is gone but the payload is there,
+    /// this op already applied in an earlier transient attempt →
+    /// `Some(payload)` (no victim and no payload = genuine `NotFound`). Dir
+    /// markers and info are inserted directly (without consuming faults);
+    /// the move reuses `rename`'s re-keying; a single
+    /// [`Self::ambiguous_gate`] at the end simulates the
+    /// transient-after-effect that `trash_retrying` recovers from.
     fn trash_logical(
         &self,
         p: &VPath,
@@ -1314,11 +1325,12 @@ impl MemProvider {
         {
             let mut tree = self.lock();
             let Some(real_from) = resolve(&tree, lk, &victim_key) else {
-                // Víctima ausente. Idempotencia: payload presente = ya aplicó,
-                // pero SOLO si la `.norte-info` de la entrada es NUESTRA (misma
-                // víctima). Una entrada AJENA con el mismo id no se reclama
-                // (review rust MAJOR): se reporta colisión, no un payload que
-                // no es de `p`. Sin payload = `NotFound` genuino.
+                // Victim absent. Idempotency: payload present = it already
+                // applied, but ONLY if the entry's `.norte-info` is OURS
+                // (same victim). A FOREIGN entry with the same id is not
+                // claimed (rust review MAJOR): a collision is reported, not
+                // a payload that is not `p`'s. No payload = genuine
+                // `NotFound`.
                 if resolve(&tree, lk, &payload_key).is_none() {
                     return Err(Error::NotFound);
                 }
@@ -1330,23 +1342,24 @@ impl MemProvider {
                     })
                 };
             };
-            // La entrada `<id>` ya existe con una info AJENA (otra víctima, mismo
-            // id): colisión real — no se pisa su `.norte-info` ni se mezcla el
-            // árbol. Ausente o nuestra = seguimos (nuestro parcial).
+            // The `<id>` entry already exists with FOREIGN info (a different
+            // victim, same id): a real collision — its `.norte-info` is not
+            // overwritten and the tree is not mixed. Absent or ours = keep
+            // going (our partial).
             if tree.nodes.contains_key(&info_key) && !info_matches(&tree, &info_key, p) {
                 return Err(Error::Conflict {
                     conflict: ConflictKind::Exists,
                 });
             }
             let mtime = tree.tick();
-            // Markers `.norte-trash` y `.norte-trash/<id>` (idempotentes).
+            // `.norte-trash` and `.norte-trash/<id>` markers (idempotent).
             for dkey in [&root_key, &dir_key] {
                 if !tree.nodes.contains_key(dkey) {
                     let id = tree.new_id();
                     tree.nodes.insert(dkey.clone(), Node::Dir { mtime, id });
                 }
             }
-            // `.norte-info` (sobrescribir un parcial es benigno).
+            // `.norte-info` (overwriting a partial one is benign).
             let content = norte_vfs::trash::info_encode(p, id.deleted_ms());
             let info_id = tree.new_id();
             tree.nodes.insert(
@@ -1357,7 +1370,7 @@ impl MemProvider {
                     id: info_id,
                 },
             );
-            // Mueve el subárbol víctima → payload preservando identidad.
+            // Moves the victim subtree → payload, preserving identity.
             let moved: Vec<(SegPath, Node)> = tree
                 .nodes
                 .iter()
@@ -1377,15 +1390,15 @@ impl MemProvider {
                 tree.nodes.insert(new_key, node);
             }
         }
-        // El movimiento YA se aplicó; el transitorio llega DESPUÉS (#17).
+        // The move has ALREADY been applied; the transient comes AFTER (#17).
         self.ambiguous_gate()?;
         Ok(Some(paths.payload))
     }
 
     async fn copy_native_inner(&self, from: &VPath, to: &VPath) -> Result<(), Error> {
         self.faults.op_gate().await?;
-        // Gate específico (#51): simula el multipart copy largo de S3 — se
-        // queda pendiente hasta que el test lo suelte o el caller cancele.
+        // Specific gate (#51): simulates S3's long multipart copy — stays
+        // pending until the test releases it or the caller cancels.
         self.faults.copy_native_gate().await;
         let from_key = seg_path(from);
         let to_key = seg_path(to);
@@ -1397,8 +1410,8 @@ impl MemProvider {
         let real_from = resolve(&tree, lk, &from_key).ok_or(Error::NotFound)?;
         let content = match tree.nodes.get(&real_from) {
             Some(Node::File { content, .. }) => content.clone(),
-            // copy_native es de UN archivo; árboles (y symlinks, que tienen
-            // política propia) los compone el core.
+            // copy_native is for ONE file; trees (and symlinks, which have
+            // their own policy) are composed by the core.
             Some(Node::Dir { .. } | Node::Symlink { .. }) => {
                 return Err(Error::Conflict {
                     conflict: ConflictKind::TypeMismatch,
@@ -1447,10 +1460,11 @@ impl ByteSink for MemSink {
     }
 
     async fn commit(self: Box<Self>) -> Result<(), Error> {
-        // Invariante: nadie panica con el lock tomado.
-        let mut tree = self.tree.lock().expect("tree lock sano");
-        // Re-validación completa: entre write() y commit() pudo desaparecer
-        // el padre (→ NotFound, jamás huérfanos) o aparecer una colisión.
+        // Invariant: nobody panics with the lock held.
+        let mut tree = self.tree.lock().expect("sound tree lock");
+        // Full re-validation: between write() and commit() the parent could
+        // have disappeared (→ NotFound, never orphans) or a collision could
+        // have appeared.
         let canon = canonical_key(&tree, self.lookup, &self.key).ok_or(Error::NotFound)?;
         if let Some(real) = resolve(&tree, self.lookup, &canon) {
             return Err(Error::Conflict {
@@ -1469,9 +1483,9 @@ impl ByteSink for MemSink {
             },
         );
         drop(tree);
-        // El commit YA aplicó (rename staging→final): si hay una carga
-        // ambigua armada, devuelve transitorio DESPUÉS del efecto (#32.1) —
-        // el "timeout tras rename" de un provider remoto.
+        // The commit has ALREADY applied (staging→final rename): if an
+        // ambiguous charge is armed, return transient AFTER the effect
+        // (#32.1) — the "timeout after rename" of a remote provider.
         if self.faults.take_ambiguous() {
             return Err(Error::ProviderUnavailable { retryable: true });
         }
@@ -1479,20 +1493,20 @@ impl ByteSink for MemSink {
     }
 
     async fn abort(self: Box<Self>) -> Result<(), Error> {
-        // Descarta también el staging conservado (si lo había).
+        // Also discards the kept staging (if there was any).
         self.tree
             .lock()
-            .expect("tree lock sano")
+            .expect("sound tree lock")
             .partials
             .remove(&self.key);
         Ok(())
     }
 
     async fn keep(self: Box<Self>) -> Result<(), Error> {
-        // Conserva los bytes para un open_resumable posterior (ADR 0012).
+        // Keeps the bytes for a later open_resumable (ADR 0012).
         self.tree
             .lock()
-            .expect("tree lock sano")
+            .expect("sound tree lock")
             .partials
             .insert(self.key.clone(), self.buffer.clone());
         Ok(())

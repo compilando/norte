@@ -796,24 +796,24 @@ mod plan_step_lines_tests {
 
     fn seg(b: &[u8]) -> norte_proto::methods::RelPath {
         norte_proto::methods::RelPath::new(vec![
-            norte_proto::Segment::new(b.to_vec()).expect("segmento"),
+            norte_proto::Segment::new(b.to_vec()).expect("segment"),
         ])
     }
 
-    /// La fila del plan con las DOS ortografías: cada campo en su línea.
+    /// The plan row with BOTH spellings: each field on its own line.
     ///
-    /// Antes iban unidas por ` → ` en la misma línea, y ese carácter es un
-    /// imprimible corriente que `display_name_with` no enmascara — o sea que
-    /// un nombre que lo lleve dentro (corpus `arrow_join_spoof`) fingía la
-    /// pareja SIN que saltara el `!` de `rel_marked`. Esto es la pantalla
-    /// donde se teclea `y` para borrar.
+    /// They used to be joined by ` → ` on the same line, and that
+    /// character is an ordinary printable `display_name_with` does not
+    /// mask — meaning a name carrying it inside (corpus
+    /// `arrow_join_spoof`) faked the pair WITHOUT `rel_marked`'s `!`
+    /// tripping. This is the screen where `y` is typed to delete.
     #[test]
-    fn las_dos_ortografias_no_comparten_linea() {
-        let paso = norte_proto::methods::SyncStep {
+    fn the_two_spellings_do_not_share_a_line() {
+        let step = norte_proto::methods::SyncStep {
             id: 1,
             kind: norte_proto::methods::SyncStepKind::Overwrite,
             rel: seg(b"a \xe2\x86\x92 mem_b.txt"),
-            dest_rel: Some(seg(b"otro.txt")),
+            dest_rel: Some(seg(b"other.txt")),
             size: Some(10),
             criterion: norte_proto::methods::CompareCriterion::Size,
             confidence: norte_proto::methods::CompareConfidence::Certain,
@@ -821,36 +821,37 @@ mod plan_step_lines_tests {
             reason: None,
         };
         let cells = norte_frontend::sync::render_step(
-            &paso,
+            &step,
             norte_proto::methods::DestTrash::Restorable,
             norte_frontend::sync::SyncEncodings::default(),
         );
-        let lineas = plan_step_lines(&cells);
-        let primera = &lineas[0];
+        let lines = plan_step_lines(&cells);
+        let first = &lines[0];
         assert!(
-            primera.contains("mem_b.txt"),
-            "el nombre del origen va entero: {primera:?}"
+            first.contains("mem_b.txt"),
+            "the source name goes whole: {first:?}"
         );
         assert!(
-            !primera.contains("otro.txt"),
-            "la ortografía del DESTINO no comparte línea con el nombre: {primera:?}"
+            !first.contains("other.txt"),
+            "the DESTINATION spelling does not share a line with the name: {first:?}"
         );
         assert!(
-            lineas.iter().skip(1).any(|l| l.contains("otro.txt")),
-            "pero sí se dice, en su propia línea: {lineas:?}"
+            lines.iter().skip(1).any(|l| l.contains("other.txt")),
+            "but it is said, on its own line: {lines:?}"
         );
     }
 
-    /// Y el ancla se PINTA. `render_failure`/`render_step` la calculan y la
-    /// CLI era el único painter de los tres que la tiraba: en una lista donde
-    /// una ruta sin calificar significa «del origen», callar un `Dest` lo
-    /// afirma — y el `rel` de un `DeleteTree` cuelga del destino.
+    /// And the anchor IS painted. `render_failure`/`render_step` compute
+    /// it and the CLI was the only one of the three painters dropping it:
+    /// in a list where an unqualified path means "from the source",
+    /// staying silent about a `Dest` affirms it — and a `DeleteTree`'s
+    /// `rel` hangs off the destination.
     #[test]
-    fn un_delete_tree_dice_que_su_ruta_es_del_destino() {
-        let paso = norte_proto::methods::SyncStep {
+    fn a_delete_tree_says_its_path_is_from_the_destination() {
+        let step = norte_proto::methods::SyncStep {
             id: 2,
             kind: norte_proto::methods::SyncStepKind::DeleteTree,
-            rel: seg(b"viejo"),
+            rel: seg(b"old"),
             dest_rel: None,
             size: None,
             criterion: norte_proto::methods::CompareCriterion::Presence,
@@ -859,25 +860,25 @@ mod plan_step_lines_tests {
             reason: None,
         };
         let cells = norte_frontend::sync::render_step(
-            &paso,
+            &step,
             norte_proto::methods::DestTrash::Restorable,
             norte_frontend::sync::SyncEncodings::default(),
         );
         assert_eq!(cells.anchor, norte_frontend::sync::RelAnchor::Dest);
-        let lineas = plan_step_lines(&cells);
-        let esperado = norte_frontend::sync::anchor_label(cells.anchor, norte_i18n::active())
-            .expect("Dest tiene calificador");
+        let lines = plan_step_lines(&cells);
+        let expected = norte_frontend::sync::anchor_label(cells.anchor, norte_i18n::active())
+            .expect("Dest has a qualifier");
         assert!(
-            lineas.iter().skip(1).any(|l| l.contains(&esperado)),
-            "el calificador del ancla se pinta: {lineas:?}"
+            lines.iter().skip(1).any(|l| l.contains(&expected)),
+            "the anchor's qualifier is painted: {lines:?}"
         );
     }
 
-    /// Un par NFC/NFD (#192) pinta la misma cadena en las dos líneas de
-    /// ortografía, y sin la nota el lector no tiene forma de distinguir eso
-    /// de un renombrado que no hizo nada.
+    /// An NFC/NFD pair (#192) paints the same string on both spelling
+    /// lines, and without the note the reader has no way to tell that
+    /// apart from a rename that did nothing.
     #[test]
-    fn un_par_nfc_nfd_lleva_su_propia_nota() {
+    fn an_nfc_nfd_pair_carries_its_own_note() {
         let fixtures = norte_testkit::corpus::hostile_names();
         let nfc = fixtures
             .iter()
@@ -887,7 +888,7 @@ mod plan_step_lines_tests {
             .iter()
             .find(|f| f.id == "nfd_e_acute")
             .expect("corpus");
-        let paso = norte_proto::methods::SyncStep {
+        let step = norte_proto::methods::SyncStep {
             id: 3,
             kind: norte_proto::methods::SyncStepKind::Overwrite,
             rel: seg(&nfc.bytes),
@@ -899,17 +900,17 @@ mod plan_step_lines_tests {
             reason: None,
         };
         let cells = norte_frontend::sync::render_step(
-            &paso,
+            &step,
             norte_proto::methods::DestTrash::Restorable,
             norte_frontend::sync::SyncEncodings::default(),
         );
         assert!(cells.dest_rel_twin);
-        let lineas = plan_step_lines(&cells);
-        let esperado = norte_frontend::sync::dest_twin_label(true, norte_i18n::active())
-            .expect("hay nota cuando twin es true");
+        let lines = plan_step_lines(&cells);
+        let expected = norte_frontend::sync::dest_twin_label(true, norte_i18n::active())
+            .expect("there is a note when twin is true");
         assert!(
-            lineas.iter().any(|l| l.contains(&esperado)),
-            "la nota se pinta: {lineas:?}"
+            lines.iter().any(|l| l.contains(&expected)),
+            "the note is painted: {lines:?}"
         );
     }
 }

@@ -49,29 +49,33 @@
 # transcribed KEYBOARD.TXT itemises no such action, and it lives on the
 # `[/]` layout button, the Panels menu and the palette.
 
-# `pane.compare-files` (#312) se queda SIN ATAR aquí. Total Commander tiene la
-# función («Compare files by content»), pero `tc-11.58-KEYBOARD.TXT` —la fuente
-# de este fichero— no le da acorde, y este preset solo transcribe lo que la
-# fuente dice. Ver la nota equivalente en `krusader.toml`; los tres presets
-# nativos lo llevan en `alt+C`.
+# `pane.compare-files` (#312) is left UNBOUND here. Total Commander has the
+# feature ("Compare files by content"), but `tc-11.58-KEYBOARD.TXT` —this
+# file's source— gives it no chord, and this preset only transcribes what
+# the source says. See the equivalent note in `krusader.toml`; the three
+# native presets carry it on `alt+C`.
 
-# La historia (spec 2026-09-15): Alt+←/→ y Alt+↓ vienen de la fuente.
-# `Alt+Shift+↓` —la misma lista sin quitar los directorios «de paso»— NO se
-# ata: norte no quita ninguno, así que sería la misma lista con otra tecla. El
-# punto de salto, los populares y la historia de un lado no tienen tecla en la
-# fuente: están en el menú Ir y en la paleta.
+# History (spec 2026-09-15): Alt+←/→ and Alt+↓ come from the source.
+# `Alt+Shift+↓` —the same list without dropping the "pass-through"
+# directories— is NOT bound: norte drops none, so it would be the same list
+# with a different key. The jump point, the favourites and one side's
+# history have no key in the source: they are in the Go menu and the
+# palette.
 #
-# `app.goto` («ir a cualquier sitio», fase 6) se queda con ellas. Total
-# Commander tiene piezas sueltas de lo que esa pantalla junta —`ctrl+d` para
-# los favoritos, la historia en su propio desplegable— pero ninguna tecla
-# que las junte, y atar `ctrl+g` a algo que la fuente no dice es lo que este
-# fichero no hace. `ctrl+g` está libre en los siete presets y lo llevan
-# orthodox, cua y vim; aquí, el menú Ir (F9), donde está el primero.
+# `app.goto` ("go anywhere", phase 6) stays with them. Total Commander has
+# loose pieces of what that screen brings together —`ctrl+d` for the
+# favourites, history in its own dropdown— but no key that brings them
+# together, and binding `ctrl+g` to something the source does not say is
+# what this file does not do. `ctrl+g` is free in all seven presets and
+# orthodox, cua and vim carry it; here, the Go menu (F9), where it is
+# first.
 #
-# `task.pause` (ADR 0147), `task.retry` (ADR 0148) y los tres de la cola
-# (`task.queue`, `task.up`, `task.down`, ADR 0149) se quedan SIN ATAR aquí,
-# igual que `task.cancel`:
-# Total Commander pausa desde el diálogo de la transferencia en segundo plano (su botón «Pausa»), no desde una tecla de panel que su documentación nombre. Los dos se alcanzan desde la paleta.
+# `task.pause` (ADR 0147), `task.retry` (ADR 0148) and the three queue ones
+# (`task.queue`, `task.up`, `task.down`, ADR 0149) are left UNBOUND here,
+# just like `task.cancel`:
+# Total Commander pauses from the background transfer dialog (its "Pause"
+# button), not from a panel key its documentation names. Both are reached
+# from the palette.
 
 dialog_from = "orthodox"
 
@@ -80,46 +84,48 @@ keymap = [
     { on = ["tab"], run = "pane.switch" },
     { on = ["f1"], run = "app.help" },
     { on = ["alt+f4"], run = "app.quit" },
-    # Las superficies PROPIAS de norte, que este gestor no tenía y por
-    # tanto no hay nada que transcribir: ajustes, extensiones y paleta.
-    # Sin ellas la configuración no se alcanza desde el teclado, que es
-    # lo que pasaba hasta ahora en este preset. F11/F12 están libres
-    # aquí y son lo que usan orthodox/vim/cua; para la paleta, ctrl+P (la P mayúscula ES el shift: la gramática
-    # de acordes no combina shift con un carácter)
-    # (Ctrl+P es `pane.copy-path` en Total Commander).
+    # Surfaces of norte's OWN, which this manager did not have and so there
+    # is nothing to transcribe: settings, extensions and the palette.
+    # Without them, configuration cannot be reached from the keyboard,
+    # which is what happened in this preset until now. F11/F12 are free
+    # here and are what orthodox/vim/cua use; for the palette, ctrl+P (the
+    # uppercase P IS the shift: the chord grammar does not combine shift
+    # with a character)
+    # (Ctrl+P is `pane.copy-path` in Total Commander).
     { on = ["f11"], run = "app.settings" },
     { on = ["f12"], run = "app.extensions" },
-    # El tema, en `alt+9`, el mismo que los otros tres presets importados.
-    # Ver la nota larga en krusader.toml.
+    # The theme, on `alt+9`, the same as the other three imported presets.
+    # See the long note in krusader.toml.
     { on = ["alt+9"], run = "app.theme" },
     # F9 = menu bar, attested ("Activate left/right menu"); see the header.
     { on = ["f9"], run = "app.menu" },
-    # `alt+p` y no `ctrl+P`: la mayúscula es el shift en la gramática y NO en
-    # el cable — mismo byte que `ctrl+p`, que aquí es `pane.copy-path`. Ver la
-    # nota larga en krusader.toml. Hay test.
+    # `alt+p` and not `ctrl+P`: the uppercase letter is the shift in the
+    # grammar and NOT on the wire — same byte as `ctrl+p`, which here is
+    # `pane.copy-path`. See the long note in krusader.toml. There is a test.
     { on = ["alt+p"], run = "app.palette" },
     { on = ["alt+m"], run = "app.menu" },
     { on = ["alt+b"], run = "layout.places" },
     { on = ["alt+q"], run = "layout.preview" },
-    # El anillo de paneles y el panel de procesos. Ver la nota larga en
-    # orthodox.toml: son superficies propias de norte y no hay nada que
-    # transcribir de Total Commander sobre ellas.
+    # The pane ring and the process panel. See the long note in
+    # orthodox.toml: these are surfaces of norte's own and there is nothing
+    # to transcribe from Total Commander about them.
     { on = ["alt+o"], run = "layout.focus-next" },
     { on = ["alt+O"], run = "layout.focus-prev" },
     { on = ["alt+j"], run = "layout.processes" },
-    # El registro (#323): no lo atestigua TC, se ata igual porque es de norte
-    # y `alt+l` está libre. Ver el bloque de divergencias de la cabecera.
+    # The log (#323): TC does not attest it, it is bound anyway because it
+    # is norte's own and `alt+l` is free. See the header's divergences block.
     { on = ["alt+l"], run = "layout.log" },
-    # El mapa de disco (fase 4). Total Commander no atestigua acorde para esto
-    # —su equivalente más cercano es un diálogo, no un panel—, así que no se
-    # transcribe: `alt+z`, la única letra libre en los siete. Ver orthodox.toml.
+    # The disk map (phase 4). Total Commander attests no chord for this —its
+    # closest equivalent is a dialog, not a panel—, so nothing is
+    # transcribed: `alt+z`, the one letter free across all seven. See
+    # orthodox.toml.
     { on = ["alt+z"], run = "layout.disk-map" },
-    # El panel de terminal (#362). Total Commander no acopla un terminal: abre
-    # uno aparte, que en norte es `app.terminal`. No es una transcripción, y va
-    # el acorde común de norte. Ver orthodox.toml.
+    # The terminal panel (#362). Total Commander does not dock a terminal:
+    # it opens a separate one, which in norte is `app.terminal`. This is not
+    # a transcription, and norte's common chord goes here. See orthodox.toml.
     { on = ["ctrl+alt+s"], run = "layout.terminal" },
-    # El resto de la familia `layout.*`, con los mismos acordes que en los
-    # otros seis presets: ver la nota larga en `orthodox.toml`.
+    # The rest of the `layout.*` family, with the same chords as in the
+    # other six presets: see the long note in `orthodox.toml`.
     { on = ["alt+x"], run = "layout.close-slot" },
     { on = ["alt+["], run = "layout.shrink" },
     { on = ["alt+]"], run = "layout.grow" },
@@ -129,9 +135,9 @@ keymap = [
 
 [pane]
 keymap = [
-    # Total Commander no tiene navegación sincronizada (su «sincronizar
-    # carpetas» es comparar y copiar, otra cosa): va el nuestro, igual en los
-    # siete (ver `orthodox`).
+    # Total Commander has no synchronized navigation (its "synchronize
+    # folders" is comparing and copying, a different thing): ours goes
+    # here, the same in all seven (see `orthodox`).
     { on = ["ctrl+e"], run = "pane.sync-nav" },
     { on = ["up"], run = "cursor.up" },
     { on = ["down"], run = "cursor.down" },
@@ -152,10 +158,10 @@ keymap = [
     { on = ["f6"], run = "pane.move" },
     { on = ["f7"], run = "pane.mkdir" },
     { on = ["shift+f6"], run = "pane.rename" },
-    # `Ctrl+M` es el Multi-Rename Tool de la fuente, que hasta ahora estaba en
-    # la lista de omisiones de arriba por no haber a qué atarlo: norte no tenía
-    # renombrado en lote por plantilla. Ahora sí (#310), así que la tecla
-    # atestiguada vuelve a su comando.
+    # `Ctrl+M` is the source's Multi-Rename Tool, which until now was on the
+    # omissions list above for having nothing to bind it to: norte had no
+    # template batch rename. Now it does (#310), so the attested key
+    # returns to its command.
     { on = ["ctrl+m"], run = "pane.rename-batch" },
     { on = ["f8"], run = "pane.delete" },
     { on = ["shift+f8"], run = "pane.delete-permanent" },
@@ -173,7 +179,7 @@ keymap = [
     { on = ["ctrl+l"], run = "pane.dir-size" },
     { on = ["ctrl+d"], run = "pane.hotlist" },
     { on = ["ctrl+f"], run = "pane.connect" },
-    # `alt+f`: `ctrl+F` no llega (mismo byte que `ctrl+f`, que es `pane.connect`).
+    # `alt+f`: `ctrl+F` does not arrive (same byte as `ctrl+f`, which is `pane.connect`).
     { on = ["alt+f"], run = "pane.disconnect" },
     { on = ["ctrl+p"], run = "pane.copy-path" },
     { on = ["ctrl+s"], run = "pane.quick-search" },
@@ -196,11 +202,11 @@ keymap = [
     { on = ["ctrl+-"], run = "mark.clear" },
     { on = ["plus"], run = "mark.pattern-add" },
     { on = ["-"], run = "mark.pattern-remove" },
-    # Marcar MOVIÉNDOSE. `Shift`+flechas y `Shift`+página no están en
-    # KEYBOARD.TXT —la fuente documenta lo que TC AÑADE sobre el
-    # comportamiento de la lista de Windows, y esto es de la lista— así que se
-    # atan como los ata orthodox, la misma divergencia ya anotada arriba para
-    # las flechas, PgUp/PgDn e Inicio/Fin.
+    # Marking WHILE MOVING. `Shift`+arrows and `Shift`+page are not in
+    # KEYBOARD.TXT —the source documents what TC ADDS on top of the Windows
+    # list's own behaviour, and this belongs to the list— so they are bound
+    # the way orthodox binds them, the same divergence already noted above
+    # for the arrows, PgUp/PgDn and Home/End.
     { on = ["shift+down"], run = "mark.toggle" },
     { on = ["shift+up"], run = "mark.toggle-up" },
     { on = ["shift+pgdn"], run = "mark.toggle-page-down" },
@@ -208,19 +214,20 @@ keymap = [
     { on = ["shift+home"], run = "mark.to-top" },
     { on = ["shift+end"], run = "mark.to-bottom" },
     { on = ["*"], run = "mark.invert" },
-    # #313: `Alt+NUM+`/`Alt+NUM-` de la fuente —la selección por EXTENSIÓN—,
-    # que estaban en la lista de omisiones de arriba por no haber comando al
-    # que atarlas. Ahora lo hay. `NUM/` («restore selection») es `/`: el
-    # teclado numérico no se distingue en esta gramática, y `/` está libre en
-    # este preset porque TC manda una letra suelta a la línea de comandos y no
-    # a un quick search.
+    # #313: the source's `Alt+NUM+`/`Alt+NUM-` —selection by EXTENSION—,
+    # which were on the omissions list above for having no command to bind
+    # them to. Now there is one. `NUM/` ("restore selection") is `/`: the
+    # numeric keypad is not distinguished in this grammar, and `/` is free
+    # in this preset because TC sends a bare letter to the command line and
+    # not to a quick search.
     { on = ["alt+plus"], run = "mark.extension-add" },
     { on = ["alt+-"], run = "mark.extension-remove" },
     { on = ["/"], run = "mark.restore" },
-    # Las sumas (#311). Krusader las tiene en su menú File y ninguno de los
-    # cuatro importados les da acorde, así que la tecla se ELIGE: `alt+k`
-    # calcula y `alt+K` comprueba — libre en los siete, y la mayúscula
-    # para la variante, como `alt+o`/`alt+O` en el anillo de paneles.
+    # Checksums (#311). Krusader has them in its File menu and none of the
+    # four imported managers gives them a chord, so the key is CHOSEN:
+    # `alt+k` computes and `alt+K` verifies — free in all seven, and the
+    # uppercase letter for the variant, as with `alt+o`/`alt+O` in the pane
+    # ring.
     { on = ["alt+k"], run = "pane.checksum" },
     { on = ["alt+K"], run = "pane.checksum-verify" },
     { on = ["alt+h"], run = "layout.split-h" },
@@ -239,9 +246,9 @@ keymap = [
     { on = ["end"], run = "viewer.bottom" },
     { on = ["left"], run = "viewer.left" },
     { on = ["right"], run = "viewer.right" },
-    # Superficie propia de norte: Total Commander no atesta un zoom en su
-    # visor, así que estas tres son elección nuestra y van igual en los
-    # siete presets (ver `orthodox.toml`).
+    # A surface of norte's own: Total Commander attests no zoom in its
+    # viewer, so these three are our own choice and are the same across
+    # all seven presets (see `orthodox.toml`).
     { on = ["f5"], run = "viewer.zoom-out" },
     { on = ["f6"], run = "viewer.zoom-in" },
     { on = ["f7"], run = "viewer.zoom-fit" },

@@ -1,14 +1,14 @@
-# Preset vim-like. Prefix-free (ADR 0006): sin pares tipo `d`/`d d` — los
-# modos visual/normal de la spec llegarán como CONTEXTOS, no timeouts.
+# vim-like preset. Prefix-free (ADR 0006): no pairs like `d`/`d d` — the
+# spec's visual/normal modes will arrive as CONTEXTS, not timeouts.
 #
-# `layout.flip` (ADR 0138) va sin tecla a propósito, como en los siete: vive
-# en el botón `[/]` de la barra de disposición, el menú Paneles y la paleta.
+# `layout.flip` (ADR 0138) deliberately ships with no key, as in all seven: it
+# lives on the `[/]` button of the layout bar, the Panes menu and the palette.
 
-# Prefijo numérico (`5j`): vim lo tiene, así que este preset lo tiene. Es
-# opt-in POR PRESET y no por gusto: encenderlo aquí le quita a `1`..`9` la
-# posibilidad de ser teclas (regla de carga K2a), y `orthodox`/`cua` las
-# necesitan libres — sus originales no cuentan, y robarles los dígitos a
-# espaldas del usuario sería exactamente el silencio que K1 quitó.
+# Numeric prefix (`5j`): vim has it, so this preset has it. It is opt-in PER
+# PRESET and not a matter of taste: turning it on here takes away `1`..`9`'s
+# chance of being keys (K2a's load rule), and `orthodox`/`cua` need them
+# free — their originals do not count, and stealing the digits from the user
+# behind their back would be exactly the silence K1 removed.
 counts = true
 
 [global]
@@ -17,45 +17,46 @@ keymap = [
     { on = ["ctrl+c"], run = "app.quit" },
     { on = ["tab"], run = "pane.switch" },
     { on = ["f1"], run = "app.help" },
-    # F9 abre el MENÚ (spec 2026-09-10), como en orthodox; el tema, en alt+9.
+    # F9 opens the MENU (spec 2026-09-10), as in orthodox; the theme, on alt+9.
     { on = ["f9"], run = "app.menu" },
     { on = ["alt+9"], run = "app.theme" },
     { on = ["f11"], run = "app.settings" },
     { on = ["f12"], run = "app.extensions" },
     { on = ["?"], run = "app.help" },
     { on = ["ctrl+p"], run = "app.palette" },
-    # `:` libre en [global]/[pane] (H1 T4): la palette es el análogo del
-    # command-line mode de vim — muscle memory obvia.
+    # `:` free in [global]/[pane] (H1 T4): the palette is the analogue of
+    # vim's command-line mode — obvious muscle memory.
     { on = [":"], run = "app.palette" },
-    # `ctrl+g` en vim dice DÓNDE estás; aquí lleva a donde quieras estar.
-    # No choca: ese `ctrl+g` de vim no tiene análogo en un gestor, donde la
-    # ruta está siempre pintada en la cabecera del panel.
+    # `ctrl+g` in vim tells you WHERE you are; here it takes you to wherever
+    # you want to be. No clash: vim's `ctrl+g` has no analogue in a manager,
+    # where the path is always painted on the pane's header.
     { on = ["ctrl+g"], run = "app.goto" },
     { on = ["alt+m"], run = "app.menu" },
     { on = ["alt+b"], run = "layout.places" },
     { on = ["alt+q"], run = "layout.preview" },
-    # El anillo de paneles y el panel de procesos. Ver la nota larga en
-    # orthodox.toml: son superficies propias de norte y ningún gestor de
-    # referencia tiene qué decir sobre ellas.
+    # The pane ring and the process panel. See the long note in
+    # orthodox.toml: these are surfaces of norte's own and no reference
+    # manager has anything to say about them.
     { on = ["alt+o"], run = "layout.focus-next" },
     { on = ["alt+O"], run = "layout.focus-prev" },
     { on = ["alt+j"], run = "layout.processes" },
-    # El registro (#323). `alt+l` de «log», libre en los siete presets.
+    # The log (#323). `alt+l` for "log", free in all seven presets.
     { on = ["alt+l"], run = "layout.log" },
-    # El mapa de disco (fase 4), `alt+z`: la única letra libre en los siete.
-    # Ver la nota en orthodox.toml.
+    # The disk map (phase 4), `alt+z`: the one letter free in all seven.
+    # See the note in orthodox.toml.
     { on = ["alt+z"], run = "layout.disk-map" },
-    # El panel de terminal (#362), con el acorde común de norte. Ver
-    # orthodox.toml para por qué `ctrl+alt+s` y no `ctrl+alt+t`.
+    # The terminal panel (#362), with norte's common chord. See
+    # orthodox.toml for why `ctrl+alt+s` and not `ctrl+alt+t`.
     #
-    # No se ata a `:terminal` ni a una secuencia al estilo de vim, y es la
-    # misma regla que el subshell: la tecla que SALE de un terminal tiene que
-    # ser un acorde SUELTO. Una secuencia obligaría a robarle su primera tecla
-    # al shell justo donde el lector está tecleando.
+    # It is not bound to `:terminal` nor to a vim-style sequence, and it is
+    # the same rule as the subshell: the key that LEAVES a terminal has to
+    # be a STANDALONE chord. A sequence would force stealing its first key
+    # from the shell exactly where the reader is typing.
     { on = ["ctrl+alt+s"], run = "layout.terminal" },
-    # El resto de la familia `layout.*`, con los mismos acordes que en los
-    # otros seis presets: ver la nota larga en `orthodox.toml`. Aquí valen
-    # además porque no son dígitos sueltos: este preset SÍ tiene contadores.
+    # The rest of the `layout.*` family, with the same chords as in the
+    # other six presets: see the long note in `orthodox.toml`. They also
+    # work here because they are not bare digits: this preset DOES have
+    # counts.
     { on = ["alt+x"], run = "layout.close-slot" },
     { on = ["alt+["], run = "layout.shrink" },
     { on = ["alt+]"], run = "layout.grow" },
@@ -65,8 +66,9 @@ keymap = [
 
 [pane]
 keymap = [
-    # Ver la cabecera de `orthodox`: el acorde es nuestro y va igual en los
-    # siete. `alt+s` habría sido el natural aquí, pero este preset ya lo usa.
+    # See `orthodox`'s header: this chord is ours and is the same in all
+    # seven. `alt+s` would have been the natural one here, but this preset
+    # already uses it.
     { on = ["ctrl+e"], run = "pane.sync-nav" },
     { on = ["k"], run = "cursor.up" },
     { on = ["j"], run = "cursor.down" },
@@ -82,25 +84,25 @@ keymap = [
     { on = ["backspace"], run = "nav.parent" },
     { on = ["alt+left"], run = "nav.back" },
     { on = ["alt+right"], run = "nav.forward" },
-    # `H`/`L`: atrás y adelante en la historia, como en ranger y yazi, que son
-    # el vim de los gestores de ficheros. `h`/`l` siguen siendo subir y entrar.
-    # El punto de salto, los populares y la historia de un lado van por el menú
-    # Ir y la paleta: ninguno de los dos les da tecla.
+    # `H`/`L`: back and forward in history, as in ranger and yazi, which are
+    # the vim of file managers. `h`/`l` remain go-up and enter. The jump
+    # point, the favourites and one side's history go through the Go menu
+    # and the palette: neither one gives them a key.
     { on = ["H"], run = "nav.back" },
     { on = ["L"], run = "nav.forward" },
     { on = ["alt+i"], run = "pane.mirror" },
     { on = ["alt+u"], run = "pane.pull" },
-    # `ctrl+u` (el chord de los otros dos presets para pane.swap) ya es
-    # `cursor.page-up` aquí arriba: el idioma vim manda en su propio preset,
-    # así que el intercambio se va a `alt+s`.
+    # `ctrl+u` (the other two presets' chord for pane.swap) is already
+    # `cursor.page-up` above: the vim idiom rules in its own preset, so the
+    # swap moves to `alt+s`.
     { on = ["alt+s"], run = "pane.swap" },
     { on = ["f5"], run = "pane.copy" },
     { on = ["f6"], run = "pane.move" },
     { on = ["f7"], run = "pane.mkdir" },
     { on = ["shift+f6"], run = "pane.rename" },
-    # El lote por plantilla (#310). Sin tecla atestiguada aquí —TC lo pone
-    # en `ctrl+m` y Krusader en `shift+f2`, y los dos presets la llevan—,
-    # así que se elige: `alt+r` de «rename», libre en los siete.
+    # Template batch rename (#310). No attested key here —TC puts it on
+    # `ctrl+m` and Krusader on `shift+f2`, and both presets carry it—, so
+    # one is chosen: `alt+r` for "rename", free in all seven.
     { on = ["alt+r"], run = "pane.rename-batch" },
     { on = ["f8"], run = "pane.delete" },
     { on = ["shift+f8"], run = "pane.delete-permanent" },
@@ -117,11 +119,11 @@ keymap = [
     # No vim idiom to borrow — vim has no two-pane diff verb — so the
     # function-key default stands, as it does for F5/F6/F7/F8 above.
     { on = ["shift+f2"], run = "pane.compare-dirs" },
-    # #312: comparar DOS FICHEROS, que es otra pregunta que comparar dos
-    # árboles. `alt+C` porque `alt+c` ya es el diálogo de columnas y la
-    # mayúscula es la variante, como en las sumas. NO es una tecla de
-    # función con modificador, por lo mismo que `ctrl+y`: bajo tmux no
-    # llegan (#159).
+    # #312: comparing TWO FILES, which is a different question than
+    # comparing two trees. `alt+C` because `alt+c` is already the columns
+    # dialog and the uppercase letter is the variant, as with the checksums.
+    # NOT a function key with a modifier, for the same reason as `ctrl+y`:
+    # they do not arrive under tmux (#159).
     { on = ["alt+C"], run = "pane.compare-files" },
     { on = ["ctrl+y"], run = "pane.sync-dirs" },
     { on = ["alt+e"], run = "pane.names-encoding" },
@@ -129,37 +131,40 @@ keymap = [
     { on = ["ctrl+h"], run = "pane.toggle-hidden" },
     { on = ["alt+."], run = "pane.toggle-hidden" },
     { on = ["alt+c"], run = "pane.columns" },
-    # ctrl+d ya es cursor.page-down (vim half-page) en este preset — colisión;
-    # ctrl+b (libre aquí) para pane.hotlist. Anotado en la spec (navTC T3/T6).
+    # ctrl+d is already cursor.page-down (vim half-page) in this preset —
+    # collision; ctrl+b (free here) for pane.hotlist. Noted in the spec
+    # (navTC T3/T6).
     { on = ["ctrl+b"], run = "pane.hotlist" },
     { on = ["insert"], run = "mark.toggle" },
     { on = ["space"], run = "mark.toggle" },
-    # `v` visual-select muscle memory, además de `insert` (#103).
+    # `v` visual-select muscle memory, alongside `insert` (#103).
     { on = ["v"], run = "mark.toggle" },
     { on = ["ctrl+a"], run = "mark.all" },
-    # #314: cambiar los permisos POSIX. `alt+A` porque `ctrl+a` es marcar
-    # todo en este preset y la mayúscula queda para la variante, como en
-    # las sumas; en FAR sí hay acorde atestiguado y allí es el suyo.
+    # #314: change POSIX permissions. `alt+A` because `ctrl+a` is mark-all
+    # in this preset and the uppercase letter is left for the variant, as
+    # with the checksums; FAR does have an attested chord and there it is
+    # its own.
     { on = ["alt+A"], run = "pane.chmod" },
-    # `alt+a`: `ctrl+A` no llega (mismo byte que `ctrl+a`). Ver orthodox.
+    # `alt+a`: `ctrl+A` does not arrive (same byte as `ctrl+a`). See orthodox.
     { on = ["alt+a"], run = "mark.clear" },
     { on = ["*"], run = "mark.invert" },
-    # #313: los tres huecos de la familia Gray de Total Commander, que norte
-    # no tenía. `alt+plus`/`alt+-` son los acordes que TC atestigua para la
-    # selección por EXTENSIÓN; ficheros/carpetas y restaurar son mayúsculas
-    # de su inicial, porque las de TC (`Shift+Gray+`, `NUM/`) no se pueden
-    # escribir en esta gramática o ya significan otra cosa aquí.
+    # #313: the three gaps in Total Commander's Gray family, which norte did
+    # not have. `alt+plus`/`alt+-` are the chords TC attests for selecting
+    # by EXTENSION; files/dirs and restore are the uppercase of their
+    # initial, because TC's (`Shift+Gray+`, `NUM/`) cannot be written in
+    # this grammar or already mean something else here.
     { on = ["alt+plus"], run = "mark.extension-add" },
     { on = ["alt+-"], run = "mark.extension-remove" },
-    # Minúscula: `alt+f` estaba libre (ver la nota en orthodox.toml).
+    # Lowercase: `alt+f` was free (see the note in orthodox.toml).
     { on = ["alt+f"], run = "mark.files" },
     { on = ["alt+D"], run = "mark.dirs" },
     { on = ["alt+R"], run = "mark.restore" },
     { on = ["plus"], run = "mark.pattern-add" },
     { on = ["-"], run = "mark.pattern-remove" },
-    # Marcar MOVIÉNDOSE. `Shift`+flechas y no `V`+movimiento: el modo visual
-    # de vim es un estado con ancla, y norte no lo tiene — fingirlo con
-    # `v`/`V` daría una tecla que parece vim y se comporta de otra manera.
+    # Marking WHILE MOVING. `Shift`+arrows and not `V`+movement: vim's
+    # visual mode is an anchored state, and norte does not have it — faking
+    # it with `v`/`V` would give a key that looks like vim and behaves
+    # differently.
     { on = ["shift+down"], run = "mark.toggle" },
     { on = ["shift+up"], run = "mark.toggle-up" },
     { on = ["shift+pgdn"], run = "mark.toggle-page-down" },
@@ -170,10 +175,11 @@ keymap = [
     { on = ["ctrl+w"], run = "pane.tab-close" },
     { on = ["alt+n"], run = "pane.tab-next" },
     { on = ["alt+p"], run = "pane.tab-prev" },
-    # Las sumas (#311). Krusader las tiene en su menú File y ninguno de los
-    # cuatro importados les da acorde, así que la tecla se ELIGE: `alt+k`
-    # calcula y `alt+K` comprueba — libre en los siete, y la mayúscula
-    # para la variante, como `alt+o`/`alt+O` en el anillo de paneles.
+    # Checksums (#311). Krusader has them in its File menu and none of the
+    # four imported managers gives them a chord, so the key is CHOSEN:
+    # `alt+k` computes and `alt+K` verifies — free in all seven, and the
+    # uppercase letter for the variant, as with `alt+o`/`alt+O` in the pane
+    # ring.
     { on = ["alt+k"], run = "pane.checksum" },
     { on = ["alt+K"], run = "pane.checksum-verify" },
     { on = ["alt+h"], run = "layout.split-h" },
@@ -203,7 +209,7 @@ keymap = [
     { on = ["l"], run = "viewer.right" },
     { on = ["g", "g"], run = "viewer.top" },
     { on = ["G"], run = "viewer.bottom" },
-    # Superficie propia: mismas tres teclas en los siete presets (ver
+    # A surface of our own: same three keys in all seven presets (see
     # `orthodox.toml`).
     { on = ["f5"], run = "viewer.zoom-out" },
     { on = ["f6"], run = "viewer.zoom-in" },
@@ -228,11 +234,11 @@ keymap = [
     { on = ["pgdn"], run = "dialog.page-down" },
     { on = ["home"], run = "dialog.top" },
     { on = ["end"], run = "dialog.bottom" },
-    # `G` y no `g g`: sobre un overlay no hay secuencias (se descartan en el
-    # primer `g`), así que el principio queda en Inicio.
+    # `G` and not `g g`: over an overlay there are no sequences (they are
+    # dropped on the first `g`), so the top stays on Home.
     { on = ["G"], run = "dialog.bottom" },
-    # `{`/`}` son los saltos de párrafo de vim; `[`/`]` los de los demás
-    # presets. Los dos, que sobre la ayuda no hay otra cosa que atar ahí.
+    # `{`/`}` are vim's paragraph jumps; `[`/`]` are the other presets'.
+    # Both, since over the help screen there is nothing else to bind there.
     { on = ["["], run = "dialog.section-prev" },
     { on = ["]"], run = "dialog.section-next" },
     { on = ["{"], run = "dialog.section-prev" },
@@ -253,8 +259,8 @@ keymap = [
     { on = ["backspace"], run = "dialog.back" },
     { on = ["/"], run = "dialog.filter" },
     { on = ["ctrl+o"], run = "dialog.back" },
-    # Las listas de historia (spec 2026-09-15 D2): las mismas que orthodox, que
-    # explica de dónde salen.
+    # The history lists (spec 2026-09-15 D2): the same as orthodox, which
+    # explains where they come from.
     { on = ["delete"], run = "dialog.remove" },
     { on = ["shift+delete"], run = "dialog.clear" },
     { on = ["alt+enter"], run = "dialog.confirm-other" },

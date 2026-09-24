@@ -1,7 +1,7 @@
-//! Fuzz corto (proptest) del provider zip (spec §12, threat model §14): un
-//! contenedor de bytes ARBITRARIOS jamás hace `panic` —Ok o `Error` tipado— y
-//! un nombre de entrada arbitrario sobrevive byte-a-byte (regla 1). Corre en el
-//! gate de PR; el nightly amplía casos.
+//! Short fuzz (proptest) of the zip provider (spec §12, threat model §14): a
+//! container of ARBITRARY bytes never `panic`s — Ok or a typed `Error` — and
+//! an arbitrary entry name survives byte for byte (rule 1). Runs in the PR
+//! gate; nightly widens the cases.
 
 use std::sync::Arc;
 
@@ -13,7 +13,7 @@ use norte_vfs::Provider;
 use norte_vfs_archive::{ArchiveProvider, Format};
 use proptest::prelude::*;
 
-/// Un provider zip sobre `bytes` sembrados en un Mem, con su raíz interior.
+/// A zip provider over `bytes` seeded in a Mem, with its inner root.
 async fn zip_provider(bytes: &[u8]) -> (ArchiveProvider, VPath) {
     let mem = Arc::new(MemProvider::new());
     let path = MemProvider::root().join(Segment::new(b"f.zip".to_vec()).expect("seg"));
@@ -26,8 +26,8 @@ async fn zip_provider(bytes: &[u8]) -> (ArchiveProvider, VPath) {
     (ArchiveProvider::new(mem, Format::Zip, "zip+mem"), root)
 }
 
-/// Recorre TODO el árbol interior (list recursivo), forzando la decodificación
-/// de cada nombre. Devuelve los nombres finales o el primer error.
+/// Walks the WHOLE inner tree (recursive list), forcing the decoding of
+/// each name. Returns the final names or the first error.
 async fn walk(p: &ArchiveProvider, dir: &VPath) -> Result<Vec<Vec<u8>>, norte_proto::Error> {
     let mut out = Vec::new();
     let mut stream = p.list(dir).await?;
@@ -44,39 +44,41 @@ async fn walk(p: &ArchiveProvider, dir: &VPath) -> Result<Vec<Vec<u8>>, norte_pr
 }
 
 proptest! {
-    /// Bytes arbitrarios como "zip": construir + listar NUNCA hace panic. El
-    /// resultado es Ok (zip válido por casualidad) o un Error tipado, jamás un
-    /// crash (anti-bomba/anti-malformado de la spec).
+    /// Arbitrary bytes as a "zip": build + list NEVER panics. The result is
+    /// Ok (a valid zip by chance) or a typed Error, never a crash
+    /// (anti-bomb/anti-malformed per the spec).
     #[test]
     fn arbitrary_bytes_never_panic(data in proptest::collection::vec(any::<u8>(), 0..8192)) {
         let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
         rt.block_on(async {
             let (p, root) = zip_provider(&data).await;
-            // list de la raíz + walk: Ok o Err, nunca panic.
+            // list of the root + walk: Ok or Err, never panic.
             let _ = walk(&p, &root).await;
         });
     }
 }
 
 proptest! {
-    // Menos casos: cada uno construye un zip real + runtime.
+    // Fewer cases: each one builds a real zip + runtime.
     #![proptest_config(ProptestConfig::with_cases(64))]
 
-    /// Un nombre de entrada arbitrario (sin `/` ni `\0`, no vacío, no `.`/`..`,
-    /// no el marcador reservado `!`) vuelve del listado BYTE A BYTE — el bit
-    /// 11/cp437 es metadato, el nombre crudo manda (regla 1, ADR 0018).
+    /// An arbitrary entry name (no `/` or `\0`, not empty, not `.`/`..`,
+    /// not the reserved `!` marker) comes back from the listing BYTE FOR
+    /// BYTE — bit 11/cp437 is metadata, the raw name rules (rule 1, ADR
+    /// 0018).
     ///
-    /// El segmento `!` queda FUERA a sabiendas: ADR 0018 lo reserva como marcador
-    /// del scheme compuesto, así que `archive_compose` lo rechaza
-    /// (`ArchiveAddressing`) y el índice lo omite como indireccionable
-    /// (`index.rs`, "componente `!` (marcador ADR 0018)"). Un `!` a solas no es
-    /// direccionable en una ruta compuesta —limitación documentada, no pérdida
-    /// silenciosa (se registra y se cuenta como `skipped`)—, y el generador debe
-    /// respetar el mismo invariante que ya respeta para `.`/`..`.
+    /// The `!` segment is left OUT on purpose: ADR 0018 reserves it as the
+    /// compound scheme's marker, so `archive_compose` rejects it
+    /// (`ArchiveAddressing`) and the index omits it as unaddressable
+    /// (`index.rs`, "`!` component (ADR 0018 marker)"). A lone `!` isn't
+    /// addressable in a compound path — a documented limitation, not a
+    /// silent loss (it's logged and counted as `skipped`) —, and the
+    /// generator has to respect the same invariant it already respects for
+    /// `.`/`..`.
     #[test]
     fn arbitrary_name_roundtrips_byte_exact(
         raw in proptest::collection::vec(any::<u8>(), 1..40)
-            .prop_filter("nombre legal de segmento (no marcador `!`)", |b| {
+            .prop_filter("legal segment name (not the `!` marker)", |b| {
                 !b.contains(&b'/')
                     && !b.contains(&0)
                     && b.as_slice() != b"."
@@ -86,12 +88,12 @@ proptest! {
     ) {
         let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
         rt.block_on(async {
-            let zip = ZipSmith::new().file(&raw, b"contenido").build();
+            let zip = ZipSmith::new().file(&raw, b"content").build();
             let (p, root) = zip_provider(&zip).await;
-            let names = walk(&p, &root).await.expect("zip válido lista");
+            let names = walk(&p, &root).await.expect("a valid zip lists");
             prop_assert!(
                 names.iter().any(|n| n == &raw),
-                "nombre {raw:?} no volvió byte-exacto; llegó {names:?}"
+                "name {raw:?} did not come back byte-exact; got {names:?}"
             );
             Ok(())
         })?;

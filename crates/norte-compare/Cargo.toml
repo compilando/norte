@@ -9,46 +9,46 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
-# `Stream` + `StreamExt`: el walk PRODUCE un flujo de filas y CONSUME los
-# `EntryStream` de los dos providers. Ya es dependencia de norte-vfs.
+# `Stream` + `StreamExt`: the walk PRODUCES a stream of rows and CONSUMES the
+# two providers' `EntryStream`s. Already a dependency of norte-vfs.
 futures.workspace = true
-# La clave de emparejamiento (ADR 0051, #151): compartida con
-# `norte-core::rename::plan`, relicenciada MIT/Apache porque es un primitivo
-# de texto puro y ambos consumidores ya dependían de este crate.
+# The pairing key (ADR 0051, #151): shared with `norte-core::rename::plan`,
+# relicensed MIT/Apache because it is a pure-text primitive and both
+# consumers already depended on this crate.
 norte-encoding.workspace = true
 norte-proto.workspace = true
 norte-vfs.workspace = true
-# El rung caro: sha256 en streaming. YA en el workspace (norte-core, norte-index,
-# norte-plugin-host), así que la regla dura 8 no pide justificación.
+# The expensive rung: streaming sha256. ALREADY in the workspace (norte-core,
+# norte-index, norte-plugin-host), so hard rule 8 needs no justification.
 sha2.workspace = true
-# Errores tipados de librería (regla dura 6).
+# Typed library errors (hard rule 6).
 thiserror.workspace = true
-# `CancellationToken`: el MISMO tipo que el scheduler de norte-core arma para
-# cada Task (regla dura 3). Traerlo aquí evita que el motor invente un segundo
-# mecanismo de cancelación que C6 tendría que puentear.
+# `CancellationToken`: the SAME type norte-core's scheduler assembles for
+# every Task (hard rule 3). Bringing it in here keeps the engine from
+# inventing a second cancellation mechanism C6 would have to bridge.
 tokio-util.workspace = true
-# YA en el workspace (norte-frontend, norte-core, norte-vfs-local, norte-testkit):
-# no es dependencia nueva, así que la regla dura 8 no pide justificación.
+# ALREADY in the workspace (norte-frontend, norte-core, norte-vfs-local,
+# norte-testkit): not a new dependency, so hard rule 8 needs no
+# justification.
 unicode-normalization.workspace = true
 
 [dev-dependencies]
-# El provider MENTIROSO del test de frontera: implementa `Provider`, que es un
-# trait `#[async_trait]`. Solo en tests — el motor no lo necesita.
+# The boundary test's LYING provider: implements `Provider`, which is an
+# `#[async_trait]` trait. Tests only — the engine does not need it.
 async-trait.workspace = true
 bytes.workspace = true
 norte-testkit.workspace = true
-# El test que le exige `Unknown` a un provider que de VERDAD no puede
-# contestar: un tar real indexado por el provider archive, no un mock al que se
-# le dice qué responder.
+# The test that demands `Unknown` from a provider that TRULY cannot answer: a
+# real tar indexed by the archive provider, not a mock told what to answer.
 norte-vfs-archive.workspace = true
-# EL provider que la gente usa, y el único de este árbol que NO rellena
-# `size`/`mtime_ms` en su listado (#52, stat lazy). Sin él en la suite, la
-# hidratación bajo demanda se prueba solo contra providers que ya traen los
-# campos — que es exactamente cómo el bug de C7b pasó C2–C5 en verde.
+# THE provider people use, and the only one in this tree that does NOT fill
+# in `size`/`mtime_ms` in its listing (#52, lazy stat). Without it in the
+# suite, on-demand hydration is only tested against providers that already
+# bring the fields — which is exactly how C7b's bug passed C2-C5 green.
 norte-vfs-local.workspace = true
-# Los dos directorios de verdad contra los que compara ese test. Ya es
-# dev-dependency de doce crates del workspace (regla dura 8 no pide
-# justificación).
+# The two real directories that test compares against. Already a
+# dev-dependency of twelve workspace crates (hard rule 8 needs no
+# justification).
 tempfile.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "time"] }
 

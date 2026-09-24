@@ -1,20 +1,20 @@
-//! `norte ai rename` y `norte gc` (M4-A2 / #11, ADR 0031 / ADR 0012).
+//! `norte ai rename` and `norte gc` (M4-A2 / #11, ADR 0031 / ADR 0012).
 
 use std::process::ExitCode;
 use std::sync::Arc;
 
 use norte_core::backend::Backend;
 
-use crate::cmd::compare::marcado;
+use crate::cmd::compare::masked;
 use crate::cmd::connect::vpath;
-use crate::{AiCmd, AvisoDeJournalPorStderr};
+use crate::{AiCmd, JournalWarningStderr};
 
-/// `norte ai rename`: sugiere un rename por lote REVISABLE (M4-A2, ADR
-/// 0031). Embebido: construye un engine con el proveedor de `[ai]`, pide el
-/// plan (el gate opt-in/local-only/denied-paths corta ANTES de que ningún
-/// nombre salga), lo IMPRIME y confirma antes de aplicar. Aplicar = UN lote
-/// `fs.rename_batch` (una Task, una unidad de undo), como en la TUI y la
-/// ventana — el plan es el producto.
+/// `norte ai rename`: suggests a REVIEWABLE batch rename (M4-A2, ADR
+/// 0031). Embedded: builds an engine with `[ai]`'s provider, asks for the
+/// plan (the opt-in/local-only/denied-paths gate cuts BEFORE any name
+/// comes out), PRINTS it and confirms before applying. Applying = ONE
+/// `fs.rename_batch` batch (one Task, one undo unit), as in the TUI and
+/// the window — the plan is the product.
 pub(crate) async fn ai_cmd(cmd: AiCmd) -> anyhow::Result<ExitCode> {
     let AiCmd::Rename {
         dir,
@@ -22,10 +22,10 @@ pub(crate) async fn ai_cmd(cmd: AiCmd) -> anyhow::Result<ExitCode> {
         yes,
     } = cmd;
     let dir = vpath(&dir)?;
-    // Desde aquí todo va por `Backend`, el mismo camino que la TUI y la
-    // ventana: la IA propone, `fs.rename_batch_plan` decide si se puede y
-    // `fs.rename_batch` aplica (regla 7).
-    let backend = backend_con_ia().await?;
+    // From here everything goes through `Backend`, the same path as the
+    // TUI and the window: the AI proposes, `fs.rename_batch_plan` decides
+    // whether it can happen and `fs.rename_batch` applies (rule 7).
+    let backend = backend_with_ia().await?;
 
     let plan = backend
         .ai_rename_plan(&dir, &instruction, &[])
@@ -37,17 +37,17 @@ pub(crate) async fn ai_cmd(cmd: AiCmd) -> anyhow::Result<ExitCode> {
         return Ok(ExitCode::SUCCESS);
     }
     println!("{}", norte_i18n::t("cli-ai-rename-plan"));
-    // Nombres controlados por el MODELO: enmascarar hazards de terminal
-    // (bidi/invisibles → �) y MARCAR el enmascarado, como TUI/GUI. Un reply
-    // UTF-8 válido puede traer RLO y spoofear el prompt de confirmación.
-    let masked = |bytes: &[u8]| {
-        let (texto, hostil) = norte_frontend::display_name(bytes);
-        marcado(&texto, hostil)
+    // Names controlled by the MODEL: mask terminal hazards (bidi/invisibles
+    // → �) and MARK the masked one, like TUI/GUI. A valid UTF-8 reply can
+    // carry an RLO and spoof the confirmation prompt.
+    let mask = |bytes: &[u8]| {
+        let (text, hostile) = norte_frontend::display_name(bytes);
+        masked(&text, hostile)
     };
-    // Un nombre por línea, con las mismas claves que el modal de la TUI:
-    // `a → b` en una sola dejaba que un fichero llamado `x → y` —imprimible
-    // corriente, `display_name` no lo enmascara— fingiera la pareja entera,
-    // justo en la pantalla que se lee antes de contestar «sí».
+    // One name per line, with the same keys as the TUI's modal: `a → b`
+    // on a single line let a file named `x → y` — an ordinary printable,
+    // `display_name` does not mask it — fake the whole pair, right on the
+    // screen read before answering "yes".
     for (i, e) in plan.entries.iter().enumerate() {
         println!(
             "  {}",
@@ -55,71 +55,70 @@ pub(crate) async fn ai_cmd(cmd: AiCmd) -> anyhow::Result<ExitCode> {
                 "modal-ai-rename-pair-from",
                 &[
                     ("n", &(i + 1).to_string()),
-                    ("from", &masked(e.from.as_bytes()))
+                    ("from", &mask(e.from.as_bytes()))
                 ],
             )
         );
         println!(
             "     {}",
-            norte_i18n::ta(
-                "modal-ai-rename-pair-to",
-                &[("to", &masked(e.to.as_bytes()))]
-            )
+            norte_i18n::ta("modal-ai-rename-pair-to", &[("to", &mask(e.to.as_bytes()))])
         );
     }
 
-    // El plan de la IA es INTENCIÓN; si se puede ejecutar lo decide el
-    // planificador de lotes del core, que es el que sabe romper un ciclo
-    // (`a↔b`) con un temporal y el que ve las colisiones con lo que ya hay.
-    // Aplicar entrada a entrada fallaba en cada intercambio y dejaba a medias
-    // cualquier otro plan con un choque.
+    // The AI's plan is INTENT; whether it can run is decided by the
+    // core's batch planner, which is the one that knows how to break a
+    // cycle (`a↔b`) with a temp name and the one that sees collisions
+    // with what already exists. Applying entry by entry used to fail on
+    // every swap and leave any other plan with a clash half-done.
     //
-    // Códigos: 2 es «rehusado, no se tocó nada» (plan inválido, colisiones,
-    // journal ilegible, plan caducado), como en `norte sync`; 1 es «el lote
-    // corrió y falló o se deshizo».
+    // Codes: 2 is "refused, nothing was touched" (invalid plan,
+    // collisions, unreadable journal, stale plan), as in `norte sync`; 1
+    // is "the batch ran and failed or was undone".
     let Some(pairs) = norte_frontend::rename_pairs(&plan.entries) else {
         eprintln!("norte: {}", norte_i18n::t("cli-ai-rename-invalid"));
         return Ok(ExitCode::from(2));
     };
-    let lote = backend
+    let batch = backend
         .rename_batch_plan(&dir, &pairs)
         .await
         .map_err(|e| anyhow::anyhow!("{e}"))?;
-    if !lote.executable {
+    if !batch.executable {
         eprintln!("norte: {}", norte_i18n::t("cli-ai-rename-collisions"));
-        let revisado = norte_frontend::BatchPlan::Ready(Box::new(lote));
-        for parte in revisado.detail_parts(pairs.len(), norte_i18n::active()) {
-            for linea in detalle(parte) {
-                eprintln!("  {linea}");
+        let reviewed = norte_frontend::BatchPlan::Ready(Box::new(batch));
+        for part in reviewed.detail_parts(pairs.len(), norte_i18n::active()) {
+            for line in detail(part) {
+                eprintln!("  {line}");
             }
         }
         return Ok(ExitCode::from(2));
     }
-    let reales = lote.steps.iter().filter(|s| !s.temp).count();
+    let real = batch.steps.iter().filter(|s| !s.temp).count();
 
-    // El journal se abre AQUÍ, antes de preguntar y antes de renombrar, y no en
-    // el primer rename: lo que se está decidiendo es si un modelo renombra un
-    // directorio entero, y «esto no se va a poder deshacer» es parte de la
-    // pregunta, no una nota a pie después del sí. FUERA del `if !yes`: con
-    // `--yes` no hay pregunta que completar, pero sigue habiendo un humano (o
-    // un script cuyo log alguien lee) al que le toca enterarse, y ese es
-    // justamente el camino donde nadie está mirando la pantalla.
+    // The journal is opened HERE, before asking and before renaming, and
+    // not on the first rename: what is being decided is whether a model
+    // renames a whole directory, and "this cannot be undone" is part of
+    // the question, not a footnote after the yes. OUTSIDE the `if !yes`:
+    // with `--yes` there is no question to complete, but there is still a
+    // human (or a script whose log someone reads) who needs to find out,
+    // and that is exactly the path where nobody is watching the screen.
     //
-    // El motivo lo acaba de decir el sink de stderr; aquí va la consecuencia —
-    // y desde #178 hay DOS consecuencias distintas, que un `bool` confundía.
+    // The stderr sink just said the reason; here comes the consequence —
+    // and since #178 there are TWO different consequences, which a `bool`
+    // used to confuse.
     //
-    // Con `Failed` los renombrados no van a ocurrir: `Engine::gate` los rehúsa
-    // uno a uno. Preguntar «¿seguro? no se podrán deshacer» y renombrar cero
-    // ficheros saliendo con éxito es lo peor de los dos mundos: un `norte ai
-    // rename --yes && <lo siguiente>` en un cron seguiría adelante sobre un
-    // no-op silencioso. Así que se para aquí, con el código de los rechazos.
+    // With `Failed` the renames are not going to happen:
+    // `Engine::gate` refuses them one by one. Asking "are you sure? they
+    // cannot be undone" and renaming zero files while exiting
+    // successfully is the worst of both worlds: a `norte ai rename --yes
+    // && <next thing>` in a cron job would keep going over a silent
+    // no-op. So it stops here, with the rejections' code.
     match backend.journal_obstacle().await {
         Some(norte_core::embedded::NoJournal::Failed(_)) => {
             eprintln!("norte: {}", norte_i18n::t("cli-ai-rename-refused"));
             return Ok(ExitCode::from(2));
         }
-        // `Busy` (y cualquier motivo futuro) sí muta, sin quedar registrado:
-        // eso es un aviso, no un motivo para no renombrar.
+        // `Busy` (and any future reason) DOES mutate, without being
+        // recorded: that is a warning, not a reason not to rename.
         Some(_) => eprintln!("norte: {}", norte_i18n::t("cli-ai-rename-unjournalled")),
         None => {}
     }
@@ -137,12 +136,13 @@ pub(crate) async fn ai_cmd(cmd: AiCmd) -> anyhow::Result<ExitCode> {
         }
     }
 
-    // UN lote, UNA Task y UNA unidad deshacible del journal (ADR 0042), con el
-    // `plan_hash` de lo que se acaba de enseñar: si el directorio cambió
-    // mientras el humano leía, el core contesta `PlanStale` y no toca nada.
-    // La policy no entra: este engine embebido gatea con `AllowAll` — quien
-    // decide aquí es el humano que acaba de decir que sí al plan.
-    let task = match backend.rename_batch(&dir, &pairs, &lote.plan_hash).await {
+    // ONE batch, ONE Task and ONE undoable journal unit (ADR 0042), with
+    // the `plan_hash` of what was just shown: if the directory changed
+    // while the human was reading, the core answers `PlanStale` and
+    // touches nothing. Policy does not enter: this embedded engine gates
+    // with `AllowAll` — who decides here is the human who just said yes
+    // to the plan.
+    let task = match backend.rename_batch(&dir, &pairs, &batch.plan_hash).await {
         Ok(task) => task,
         Err(norte_proto::Error::PlanStale) => {
             eprintln!("norte: {}", norte_i18n::t("cli-ai-rename-stale"));
@@ -151,91 +151,91 @@ pub(crate) async fn ai_cmd(cmd: AiCmd) -> anyhow::Result<ExitCode> {
         Err(e) => return Err(anyhow::anyhow!("{e}")),
     };
     let id = task.id();
-    let salida = crate::task::run_task(task, false).await;
-    informar_del_lote(&backend, id, salida, reales).await
+    let outcome = crate::task::run_task(task, false).await;
+    report_batch(&backend, id, outcome, real).await
 }
 
-/// `run_task` dice cómo terminó la Task; lo que de verdad pasó en el disco
-/// lo dice el INFORME, y se pide siempre: un lote `Completed` con un paso
-/// atascado es justo lo que el desenlace de la Task no cuenta. Las líneas son
-/// las mismas que el diálogo de la ventana (`batch_report_lines`), y cada ruta
-/// va sola en la suya.
-async fn informar_del_lote(
+/// `run_task` says how the Task ended; what actually happened on disk is
+/// said by the REPORT, and it is always requested: a `Completed` batch
+/// with one stuck step is exactly what the Task's outcome does not tell.
+/// The lines are the same as the window's dialog (`batch_report_lines`),
+/// and each path stands alone on its own.
+async fn report_batch(
     backend: &Backend,
     id: norte_proto::TaskId,
-    salida: ExitCode,
-    reales: usize,
+    outcome: ExitCode,
+    real: usize,
 ) -> anyhow::Result<ExitCode> {
     match backend.rename_batch_report(id).await {
-        Ok(informe) if norte_frontend::batch_report_is_clean(&informe) => {
-            if salida == ExitCode::SUCCESS {
+        Ok(report) if norte_frontend::batch_report_is_clean(&report) => {
+            if outcome == ExitCode::SUCCESS {
                 println!(
                     "{}",
-                    norte_i18n::ta("cli-ai-rename-done", &[("n", &reales.to_string())])
+                    norte_i18n::ta("cli-ai-rename-done", &[("n", &real.to_string())])
                 );
             }
         }
-        Ok(informe) => {
-            for linea in norte_frontend::batch_report_lines(&informe, norte_i18n::active()) {
-                match linea {
-                    norte_frontend::ReportLine::Phrase(texto) => eprintln!("norte: {texto}"),
+        Ok(report) => {
+            for line in norte_frontend::batch_report_lines(&report, norte_i18n::active()) {
+                match line {
+                    norte_frontend::ReportLine::Phrase(text) => eprintln!("norte: {text}"),
                     norte_frontend::ReportLine::Path(p) => {
-                        let (texto, hostil) = norte_frontend::path_display(&p);
-                        eprintln!("    {}", marcado(&texto, hostil));
+                        let (text, hostile) = norte_frontend::path_display(&p);
+                        eprintln!("    {}", masked(&text, hostile));
                     }
                 }
             }
             return Ok(ExitCode::FAILURE);
         }
-        Err(_) if salida != ExitCode::SUCCESS => {
+        Err(_) if outcome != ExitCode::SUCCESS => {
             eprintln!("norte: {}", norte_i18n::t("modal-batch-report-failed"));
         }
         Err(_) => {}
     }
-    Ok(salida)
+    Ok(outcome)
 }
 
-/// El engine embebido de `norte ai rename`, con el proveedor de `[ai]`.
+/// `norte ai rename`'s embedded engine, with `[ai]`'s provider.
 ///
-/// #167: este subcomando NO pasa por `make_backend` —arma su propio engine—
-/// y renombra un directorio entero con los nombres que propuso un MODELO. Es,
-/// de todos los caminos embebidos, el que más falta le hace quedar
-/// registrado, así que lleva journal como los demás. Perezoso como los demás
-/// también (#177): planificar es leer, y leer no le quita el journal a nadie;
-/// el lock se toma a un paso de renombrar.
-async fn backend_con_ia() -> anyhow::Result<Backend> {
+/// #167: this subcommand does NOT go through `make_backend` — it builds
+/// its own engine — and renames a whole directory with the names a MODEL
+/// proposed. Of all the embedded paths, it is the one that most needs to
+/// end up recorded, so it carries a journal like the others. Lazy like
+/// the others too (#177): planning is reading, and reading takes nobody's
+/// journal away; the lock is taken one step before renaming.
+async fn backend_with_ia() -> anyhow::Result<Backend> {
     let dir = norte_core::connect::config_dir();
     let engine = norte_core::embedded::engine_in(&dir);
-    // Este brazo no pasa por `run`, así que instala el suyo — ver
-    // `AvisoDeJournalPorStderr`.
-    engine.set_journal_warning_sink(Arc::new(AvisoDeJournalPorStderr));
-    // Lo que lleva todo engine, IA incluida (`norte_core::equipo`). El core
-    // resuelve el secreto (env → keyring → age) y construye el proveedor; la
-    // CLI no toca norte-connect ni ve la clave (regla 10).
-    // Solo el de renombrado: el de embeddings resolvería otro secreto que este
-    // comando no usa.
+    // This branch does not go through `run`, so it installs its own — see
+    // `JournalWarningStderr`.
+    engine.set_journal_warning_sink(Arc::new(JournalWarningStderr));
+    // What every engine carries, AI included (`norte_core::equipo`). The
+    // core resolves the secret (env → keyring → age) and builds the
+    // provider; the CLI never touches norte-connect nor sees the key
+    // (rule 10). Only the renaming one: the embeddings one would resolve
+    // another secret this command does not use.
     let ia = norte_core::equipo::Ia {
         renombrado: true,
         embeddings: false,
     };
-    let hecho = norte_core::equipo::equipar(&engine, &dir, ia).await;
+    let done = norte_core::equipo::equipar(&engine, &dir, ia).await;
     if let Err(e) = norte_core::archive_config::aplicar(&engine).await {
         eprintln!(
             "{}",
-            crate::cmd::daemon::texto_del_aviso(&norte_core::equipo::Aviso::ArchivoInvalido(
+            crate::cmd::daemon::warning_text(&norte_core::equipo::Aviso::ArchivoInvalido(
                 e.to_string()
             ))
         );
     }
-    if hecho.ia_renombrado {
+    if done.ia_renombrado {
         return Ok(Backend::Embedded(Arc::new(engine)));
     }
-    // Aquí la IA no es opcional: es el comando. Lo que en los demás es un
-    // aviso, aquí es el motivo de no poder hacer nada — y si hay un motivo
-    // concreto (`[ai]` roto, un secreto que no se resuelve), ESE es el error:
-    // decirle «define un proveedor» a quien ya lo definió le manda a buscar
-    // donde no está.
-    if let Some(motivo) = hecho.avisos.iter().find(|a| {
+    // Here the AI is not optional: it is the command. What is a warning
+    // elsewhere is, here, the reason nothing can be done — and if there
+    // is a specific reason (`[ai]` broken, a secret that does not
+    // resolve), THAT is the error: telling "define a provider" to someone
+    // who already defined one sends them looking where it isn't.
+    if let Some(reason) = done.avisos.iter().find(|a| {
         matches!(
             a,
             norte_core::equipo::Aviso::IaInvalida(_)
@@ -243,7 +243,7 @@ async fn backend_con_ia() -> anyhow::Result<Backend> {
                 | norte_core::equipo::Aviso::IaNoDisponible(_)
         )
     }) {
-        anyhow::bail!("{}", crate::cmd::daemon::texto_del_aviso(motivo));
+        anyhow::bail!("{}", crate::cmd::daemon::warning_text(reason));
     }
     anyhow::bail!(
         "sin proveedor de IA para el rename: define [ai.providers.<n>] y \
@@ -251,19 +251,20 @@ async fn backend_con_ia() -> anyhow::Result<Backend> {
     );
 }
 
-/// Las líneas de una parte del detalle de un plan no aplicable, con el mismo
-/// saneado que el modal (`norte_frontend::BatchPlan::detail_parts`): el nombre
-/// ofensor es de un tercero y ya viene enmascarado; aquí solo se le pone la
-/// marca.
+/// The lines of one part of an unexecutable plan's detail, with the same
+/// sanitizing as the modal (`norte_frontend::BatchPlan::detail_parts`):
+/// the offending name is a third party's and already arrives masked; here
+/// it just gets the mark added.
 ///
-/// El nombre va en SU PROPIA línea, como en la TUI (#273): `display_name` no
-/// enmascara `✗`, dígitos ni `:`, así que un fichero llamado
-/// `✗ 4. ya existe: otro.txt` pegado a su etiqueta fingiría otra entrada.
-/// El nombre sale recortado al ancho del modal (`middle_ellipsis`): basta
-/// para reconocerlo, y el plan entero ya se imprimió arriba sin recortar.
-fn detalle(parte: norte_frontend::DetailPart) -> Vec<String> {
+/// The name goes on ITS OWN line, as in the TUI (#273): `display_name`
+/// does not mask `✗`, digits or `:`, so a file named
+/// `✗ 4. already exists: other.txt` stuck to its label would fake another
+/// entry. The name comes out trimmed to the modal's width
+/// (`middle_ellipsis`): enough to recognize it, and the whole plan was
+/// already printed above without trimming.
+fn detail(part: norte_frontend::DetailPart) -> Vec<String> {
     use norte_i18n::{t, ta};
-    match parte {
+    match part {
         norte_frontend::DetailPart::Temp { count } => {
             vec![ta("modal-rename-batch-temp", &[("n", &count.to_string())])]
         }
@@ -274,7 +275,7 @@ fn detalle(parte: norte_frontend::DetailPart) -> Vec<String> {
             hostile,
         } => {
             let kind = t(kind_key);
-            let prefijo = match index {
+            let prefix = match index {
                 Some(n) => ta(
                     "modal-rename-batch-collision-prefix",
                     &[("n", &n.to_string()), ("kind", &kind)],
@@ -284,13 +285,13 @@ fn detalle(parte: norte_frontend::DetailPart) -> Vec<String> {
                     &[("kind", &kind)],
                 ),
             };
-            vec![prefijo, format!("  {}", marcado(&name, hostile))]
+            vec![prefix, format!("  {}", masked(&name, hostile))]
         }
         norte_frontend::DetailPart::More {
             shown,
             total,
             hostile,
-        } => vec![marcado(
+        } => vec![masked(
             &ta(
                 "modal-rename-batch-collision-more",
                 &[("shown", &shown.to_string()), ("total", &total.to_string())],
@@ -300,9 +301,9 @@ fn detalle(parte: norte_frontend::DetailPart) -> Vec<String> {
     }
 }
 
-/// `norte gc`: barre staging `.norte-partial` huérfano (#11, ADR 0012).
-/// Solo embebido: el wire no expone (aún) el GC — con `--daemon` el error
-/// es accionable, no un `Unsupported` seco.
+/// `norte gc`: sweeps orphaned `.norte-partial` staging (#11, ADR 0012).
+/// Embedded only: the wire does not (yet) expose GC — with `--daemon` the
+/// error is actionable, not a bare `Unsupported`.
 pub(crate) async fn gc_cmd(
     backend: &Backend,
     daemon: bool,

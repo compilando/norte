@@ -311,10 +311,7 @@ export function paintCompare(this: Screen, compare: CompareView | null): void {
     list.append(row);
   }
   if (compare.selected !== null) {
-    list.setAttribute(
-      "aria-activedescendant",
-      `compare-row-${String(compare.selected)}`,
-    );
+    list.setAttribute("aria-activedescendant", `compare-row-${String(compare.selected)}`);
   }
   box.append(list);
 

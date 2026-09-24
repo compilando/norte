@@ -49,8 +49,7 @@ export function paintTimeline(this: Screen, dom: SlotDom, slot: TimelineSlotView
     // Yours gets undone from here; an agent's, through another door.
     const dot = document.createElement("span");
     dot.className = "timeline-dot";
-    dot.dataset["actor"] =
-      r.actor === "user" || r.actor === "agent" ? r.actor : "other";
+    dot.dataset["actor"] = r.actor === "user" || r.actor === "agent" ? r.actor : "other";
     dot.setAttribute("aria-hidden", "true");
     dot.textContent = "●";
     row.append(time, dot);

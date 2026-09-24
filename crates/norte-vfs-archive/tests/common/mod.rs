@@ -1,9 +1,9 @@
-//! Utilidades compartidas: sembrar un contenedor en un `MemProvider` y
-//! envolverlo en el `ArchiveProvider` (composición pura, sin FS del host —
-//! la primera suite de provider 100 % portable, ADR 0018).
+//! Shared utilities: seeding a container in a `MemProvider` and wrapping
+//! it in `ArchiveProvider` (pure composition, no host FS — the first
+//! provider suite that's 100% portable, ADR 0018).
 //!
-//! Cada binario de test compila este módulo entero; no todos usan todos
-//! los helpers.
+//! Every test binary compiles this whole module; not all of them use
+//! every helper.
 #![allow(dead_code)]
 
 use std::sync::Arc;
@@ -14,7 +14,7 @@ use norte_testkit::MemProvider;
 use norte_vfs::Provider;
 use norte_vfs_archive::{ArchiveProvider, Format, Limits};
 
-/// Escribe `bytes` como `mem:///<name>` en un `MemProvider` nuevo.
+/// Writes `bytes` as `mem:///<name>` on a fresh `MemProvider`.
 pub async fn seed_container(name: &[u8], bytes: &[u8]) -> (Arc<MemProvider>, VPath) {
     let mem = Arc::new(MemProvider::new());
     let path = MemProvider::root().join(Segment::new(name.to_vec()).expect("seg"));
@@ -22,10 +22,10 @@ pub async fn seed_container(name: &[u8], bytes: &[u8]) -> (Arc<MemProvider>, VPa
     (mem, path)
 }
 
-/// Escribe (o reescribe) un archivo en el Mem por el camino contractual.
+/// Writes (or rewrites) a file on the Mem via the contractual path.
 pub async fn write_file(mem: &MemProvider, path: &VPath, bytes: &[u8]) {
     if mem.stat(path).await.is_ok() {
-        mem.remove(path).await.expect("remove previo");
+        mem.remove(path).await.expect("previous remove");
     }
     let mut sink = mem.write(path).await.expect("write");
     sink.write(Bytes::copy_from_slice(bytes))
@@ -34,17 +34,17 @@ pub async fn write_file(mem: &MemProvider, path: &VPath, bytes: &[u8]) {
     sink.commit().await.expect("commit");
 }
 
-/// Provider tar sobre un contenedor recién sembrado + la raíz interior.
+/// A tar provider over a freshly seeded container + the inner root.
 pub async fn tar_provider(bytes: &[u8]) -> (ArchiveProvider, VPath) {
     tar_provider_with_limits(bytes, Limits::default()).await
 }
 
-/// Provider zip sobre un contenedor recién sembrado + la raíz interior.
+/// A zip provider over a freshly seeded container + the inner root.
 pub async fn zip_provider(bytes: &[u8]) -> (ArchiveProvider, VPath) {
     zip_provider_with_limits(bytes, Limits::default()).await
 }
 
-/// Como [`zip_provider`] con límites propios (tests de bomba).
+/// Like [`zip_provider`] with custom limits (bomb tests).
 pub async fn zip_provider_with_limits(bytes: &[u8], limits: Limits) -> (ArchiveProvider, VPath) {
     let (mem, path) = seed_container(b"fixture.zip", bytes).await;
     let root = VPath::archive_compose("zip", &path, &[]).expect("compose");
@@ -52,7 +52,7 @@ pub async fn zip_provider_with_limits(bytes: &[u8], limits: Limits) -> (ArchiveP
     (provider, root)
 }
 
-/// Como [`tar_provider`] con límites propios (tests de bomba).
+/// Like [`tar_provider`] with custom limits (bomb tests).
 pub async fn tar_provider_with_limits(bytes: &[u8], limits: Limits) -> (ArchiveProvider, VPath) {
     let (mem, path) = seed_container(b"fixture.tar", bytes).await;
     let root = VPath::archive_compose("tar", &path, &[]).expect("compose");
@@ -60,8 +60,8 @@ pub async fn tar_provider_with_limits(bytes: &[u8], limits: Limits) -> (ArchiveP
     (provider, root)
 }
 
-/// Gzipea bytes ya armados (p. ej. un tar de `TarSmith`) en un único
-/// miembro gzip (#55, ADR 0028).
+/// Gzips already-built bytes (e.g. a `TarSmith` tar) into a single gzip
+/// member (#55, ADR 0028).
 pub fn gzip(bytes: &[u8]) -> Vec<u8> {
     use std::io::Write as _;
     let mut enc = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
@@ -69,13 +69,13 @@ pub fn gzip(bytes: &[u8]) -> Vec<u8> {
     enc.finish().expect("finish gz")
 }
 
-/// Provider tar.gz sobre un contenedor `gzip(tar_bytes)` recién sembrado +
-/// la raíz interior (#55, ADR 0028).
+/// A tar.gz provider over a freshly seeded `gzip(tar_bytes)` container +
+/// the inner root (#55, ADR 0028).
 pub async fn targz_provider(gz_bytes: &[u8]) -> (ArchiveProvider, VPath) {
     targz_provider_with_limits(gz_bytes, Limits::default()).await
 }
 
-/// Como [`targz_provider`] con límites propios (tests de bomba/cancelación).
+/// Like [`targz_provider`] with custom limits (bomb/cancellation tests).
 pub async fn targz_provider_with_limits(
     gz_bytes: &[u8],
     limits: Limits,

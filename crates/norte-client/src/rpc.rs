@@ -1,10 +1,10 @@
-//! El JSON-RPC ENMARCADO del daemon (ADR 0011): handshake `initialize`,
-//! requests correlacionadas por id y stream de notificaciones.
+//! The daemon's FRAMED JSON-RPC (ADR 0011): the `initialize` handshake,
+//! requests correlated by id, and a notification stream.
 //!
-//! No sabe por dónde viaja. Recibe una mitad de lectura y otra de escritura
-//! —quién las abrió y cómo autenticó al peer es asunto del módulo privado
-//! `transport`— para que un transporte nuevo no obligue a copiar la
-//! correlación ni el enmarcado (ADR 0066).
+//! Does not know what it travels over. It receives one read half and one
+//! write half — who opened them and how the peer was authenticated is the
+//! private `transport` module's business — so a new transport does not force
+//! copying the correlation or the framing (ADR 0066).
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -21,79 +21,83 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::transport::unix;
 
-/// Errores del cliente.
+/// Client errors.
 #[derive(Debug, thiserror::Error)]
 pub enum ClientError {
-    /// I/O del socket.
-    #[error("i/o del cliente: {0}")]
+    /// Socket I/O.
+    #[error("client i/o: {0}")]
     Io(#[from] std::io::Error),
-    /// El servidor respondió con error (protocolo o aplicación).
+    /// The server responded with an error (protocol or application).
     #[error(transparent)]
     Rpc(#[from] RpcError),
-    /// La conexión murió con la request en vuelo.
-    #[error("conexión cerrada con la request en vuelo")]
+    /// The connection died with the request in flight.
+    #[error("connection closed with the request in flight")]
     ConnectionClosed,
-    /// El result no deserializa al tipo esperado (server de otra versión).
-    #[error("result malformado: {0}")]
+    /// The result does not deserialize to the expected type (a server of a
+    /// different version).
+    #[error("malformed result: {0}")]
     BadResult(#[from] serde_json::Error),
-    /// No se pudo arrancar el daemon (autoarranque).
+    /// Could not start the daemon (auto-start).
     ///
-    /// Es «sigue vivo y todavía no acepta», no «no va a aceptar nunca»: lo
-    /// segundo es [`ClientError::SpawnFailed`].
-    #[error("el daemon no arrancó a tiempo")]
+    /// This is "still alive and not accepting yet", not "will never accept":
+    /// the latter is [`ClientError::SpawnFailed`].
+    #[error("the daemon did not start in time")]
     SpawnTimeout,
-    /// El daemon arrancó y MURIÓ, con lo que dijo por `stderr`.
+    /// The daemon started and DIED, with what it said on `stderr`.
     ///
-    /// Existe separado de [`ClientError::SpawnTimeout`] porque son consejos
-    /// opuestos: uno invita a esperar y el otro a leer. Un daemon que muere al
-    /// abrir un journal que no puede migrar no va a arrancar por mucho que se
-    /// reintente, y la frase que dice qué hacer solo la tiene él.
-    #[error("el daemon no pudo arrancar{}: {}",
-        match .status { Some(c) => format!(" (salió con {c})"), None => String::new() },
-        if .stderr.is_empty() { "no dijo por qué" } else { .stderr })]
+    /// Exists separately from [`ClientError::SpawnTimeout`] because they are
+    /// opposite pieces of advice: one invites waiting and the other reading.
+    /// A daemon that dies opening a journal it cannot migrate is never going
+    /// to start no matter how many times it is retried, and only it has the
+    /// sentence that says what to do.
+    #[error("the daemon could not start{}: {}",
+        match .status { Some(c) => format!(" (exited with {c})"), None => String::new() },
+        if .stderr.is_empty() { "it did not say why" } else { .stderr })]
     SpawnFailed {
-        /// Código de salida, si lo hubo (`None` = lo mató una señal).
+        /// Exit code, if there was one (`None` = killed by a signal).
         status: Option<i32>,
-        /// Lo que escribió por `stderr`, recortado. Puede venir vacío.
+        /// What it wrote to `stderr`, trimmed. May come back empty.
         stderr: String,
     },
-    /// El socket lo sirve OTRO usuario: jamás se le habla (spoof en el
-    /// fallback /tmp — hallazgo M2 del security-reviewer).
-    #[error("el daemon del socket pertenece a otro usuario")]
+    /// The socket is served by ANOTHER user: it is never talked to (a spoof
+    /// in the /tmp fallback — security-reviewer finding M2).
+    #[error("the socket's daemon belongs to another user")]
     ForeignDaemon,
 }
 
-/// Respuestas en vuelo, por id de request.
+/// Responses in flight, by request id.
 type PendingMap = Arc<Mutex<HashMap<u64, oneshot::Sender<Result<serde_json::Value, RpcError>>>>>;
 
-/// Conexión autenticada (implícitamente: mismo uid o el server la corta)
-/// con el daemon.
+/// Authenticated connection (implicitly: same uid, or the server cuts it)
+/// to the daemon.
 pub struct Client {
     frames_out: mpsc::UnboundedSender<Vec<u8>>,
     notifications: mpsc::UnboundedReceiver<Notification>,
     pending: PendingMap,
     next_id: AtomicU64,
-    /// Marcado por el reader ANTES de vaciar `pending`: una `call()`
-    /// posterior al cierre falla en vez de colgarse (B1 del rust-reviewer).
+    /// Set by the reader BEFORE draining `pending`: a `call()` after closing
+    /// fails instead of hanging (rust-reviewer B1).
     closed: Arc<AtomicBool>,
 }
 
 impl Client {
-    /// Conecta al socket del daemon (sin handshake: ver [`Self::initialize`]).
+    /// Connects to the daemon's socket (no handshake: see
+    /// [`Self::initialize`]).
     ///
     /// # Errors
-    /// I/O de conexión, o que el socket lo sirva otro usuario.
+    /// Connection I/O, or the socket being served by another user.
     pub async fn connect(socket: &Path) -> Result<Self, ClientError> {
         let (reader, writer) = unix::connect(socket).await?;
         Ok(Self::from_halves(reader, writer))
     }
 
-    /// Conecta, y si el socket no existe o nadie escucha, ARRANCA el daemon
-    /// (`spawn` produce el `Command` ya configurado — los frontends deciden
-    /// binario y flags) y reintenta con backoff hasta ~3 s.
+    /// Connects, and if the socket does not exist or nobody is listening,
+    /// STARTS the daemon (`spawn` produces the already-configured `Command`
+    /// — frontends decide the binary and flags) and retries with backoff for
+    /// up to ~3s.
     ///
     /// # Errors
-    /// I/O, o [`ClientError::SpawnTimeout`] si el daemon no llega a aceptar.
+    /// I/O, or [`ClientError::SpawnTimeout`] if the daemon never accepts.
     pub async fn connect_or_spawn(
         socket: &Path,
         spawn: impl FnOnce() -> std::process::Command,
@@ -102,7 +106,8 @@ impl Client {
         Ok(Self::from_halves(reader, writer))
     }
 
-    /// Monta el cliente sobre un transporte YA abierto y autenticado.
+    /// Assembles the client over an ALREADY open and authenticated
+    /// transport.
     fn from_halves<R, W>(mut reader: R, mut writer: W) -> Self
     where
         R: AsyncRead + Unpin + Send + 'static,
@@ -133,7 +138,7 @@ impl Client {
                 }
                 while let Some(frame) = decoder.next_frame() {
                     let Ok(msg) = serde_json::from_slice::<Message>(&frame) else {
-                        continue; // frame corrupto del server: se ignora
+                        continue; // corrupt frame from the server: ignored
                     };
                     match msg {
                         Message::Response(resp) => {
@@ -142,7 +147,7 @@ impl Client {
                             };
                             let waiter = pending_reader
                                 .lock()
-                                .expect("pending lock sano")
+                                .expect("pending lock is sound")
                                 .remove(&id);
                             if let Some(tx) = waiter {
                                 let outcome = resp.outcome().cloned();
@@ -152,16 +157,19 @@ impl Client {
                         Message::Notification(n) => {
                             let _ = notif_tx.send(n);
                         }
-                        // El server no nos manda requests en M2.
+                        // The server does not send us requests in M2.
                         Message::Request(_) => {}
                     }
                 }
             }
-            // Conexión muerta: primero el flag (una call() nueva ya no se
-            // registra), después despertar a los que esperaban. Ese orden
-            // cierra la carrera insert/clear (B1 del rust-reviewer).
+            // Dead connection: the flag first (a new call() no longer
+            // registers), then waking up those who were waiting. That order
+            // closes the insert/clear race (rust-reviewer B1).
             closed_reader.store(true, Ordering::SeqCst);
-            pending_reader.lock().expect("pending lock sano").clear();
+            pending_reader
+                .lock()
+                .expect("pending lock is sound")
+                .clear();
         });
 
         Self {
@@ -173,14 +181,14 @@ impl Client {
         }
     }
 
-    /// Handshake obligatorio (ADR 0011). Conexión HUMANA: sin
-    /// `agent_session`, el daemon la liga a `Actor::User` (sin gate de
-    /// agente). Para una conexión de agente,
-    /// [`Self::initialize_as_agent`] — ya enlazable: dejó de ser `pub(crate)`
-    /// cuando el puente MCP pasó a negociar por ella.
+    /// Mandatory handshake (ADR 0011). HUMAN connection: with no
+    /// `agent_session`, the daemon binds it to `Actor::User` (no agent
+    /// gate). For an agent connection, [`Self::initialize_as_agent`] —
+    /// already linkable: it stopped being `pub(crate)` when the MCP bridge
+    /// started negotiating through it.
     ///
     /// # Errors
-    /// [`ClientError::Rpc`] si el core rechaza versión o encoding.
+    /// [`ClientError::Rpc`] if the core rejects the version or encoding.
     pub async fn initialize(
         &mut self,
         client_info: methods::ClientInfo,
@@ -188,19 +196,21 @@ impl Client {
         self.handshake(client_info, None).await
     }
 
-    /// Handshake declarando `agent_session`: el daemon liga la conexión a
-    /// `Actor::Agent { session }` y todo lo que pase por ella queda bajo el
-    /// gate de agente (scopes por sesión, journal con ese actor).
+    /// Handshake declaring `agent_session`: the daemon binds the connection
+    /// to `Actor::Agent { session }` and everything that passes through it
+    /// falls under the agent gate (per-session scopes, journal with that
+    /// actor).
     ///
-    /// `pub` porque la usan los DOS lados de una misma sesión de agente:
-    /// `backend::remote::RemoteBackend::connect_as_agent` (el brazo que drena
-    /// notificaciones) y el puente MCP (`norte_mcp::bridge::Bridge::connect`,
-    /// su conexión de tools). Que negocien por aquí y no cada uno con su
-    /// literal es el punto: un `encodings` ampliado o una capability nueva
-    /// tiene que llegarles a los dos o a ninguno.
+    /// `pub` because BOTH sides of the same agent session use it:
+    /// `backend::remote::RemoteBackend::connect_as_agent` (the arm that
+    /// drains notifications) and the MCP bridge
+    /// (`norte_mcp::bridge::Bridge::connect`, its tools connection). That
+    /// they negotiate through here and not each with its own literal is the
+    /// point: a widened `encodings` or a new capability has to reach both of
+    /// them or neither.
     ///
     /// # Errors
-    /// Las de [`Self::initialize`], más sesión rechazada por el daemon
+    /// Those of [`Self::initialize`], plus a session rejected by the daemon
     /// (charset `[A-Za-z0-9._-]`, 1..=64).
     pub async fn initialize_as_agent(
         &mut self,
@@ -210,8 +220,8 @@ impl Client {
         self.handshake(client_info, Some(agent_session)).await
     }
 
-    /// El handshake, UNA sola vez: dos copias de estos params es como
-    /// divergen (una gana un campo nuevo y la otra no).
+    /// The handshake, in ONE single place: two copies of these params is how
+    /// they drift apart (one gains a new field and the other does not).
     async fn handshake(
         &mut self,
         client_info: methods::ClientInfo,
@@ -229,14 +239,15 @@ impl Client {
         .await
     }
 
-    /// Request con respuesta tipada.
+    /// Request with a typed response.
     ///
     /// # Errors
-    /// [`ClientError`]: I/O, error RPC del server, conexión muerta o result
-    /// que no deserializa.
+    /// [`ClientError`]: I/O, an RPC error from the server, a dead connection
+    /// or a result that does not deserialize.
     ///
     /// # Panics
-    /// Nunca: el lock interno no puede envenenarse (nadie panica con él).
+    /// Never: the internal lock cannot be poisoned (nobody panics while
+    /// holding it).
     pub async fn call<P, R>(&self, method: &str, params: &P) -> Result<R, ClientError>
     where
         P: serde::Serialize,
@@ -245,19 +256,20 @@ impl Client {
         self.call_tracked(method, params, |_| {}).await
     }
 
-    /// Como [`Self::call`], pero invoca `on_id` con el id JSON-RPC asignado
-    /// ANTES de esperar la respuesta — para que el llamante lo correlacione
-    /// (p. ej. enviar un `rpc.cancel` de esa request mientras sigue en vuelo,
-    /// #72). `on_id` corre ANTES de serializar/enviar: en los caminos de error
-    /// (conexión ya cerrada, canal muerto) el id reportado NO llegó al wire, así
-    /// que no corresponde a ninguna request en vuelo — un `rpc.cancel` de ese id
-    /// es un no-op benigno en el daemon.
+    /// Like [`Self::call`], but invokes `on_id` with the assigned JSON-RPC id
+    /// BEFORE waiting for the response — so the caller can correlate it
+    /// (e.g. sending an `rpc.cancel` for that request while it is still in
+    /// flight, #72). `on_id` runs BEFORE serializing/sending: on the error
+    /// paths (connection already closed, dead channel) the reported id did
+    /// NOT reach the wire, so it does not correspond to any request in
+    /// flight — an `rpc.cancel` for that id is a harmless no-op on the
+    /// daemon.
     ///
     /// # Errors
-    /// Iguales que [`Self::call`].
+    /// The same as [`Self::call`].
     ///
     /// # Panics
-    /// Nunca: el lock interno no puede envenenarse.
+    /// Never: the internal lock cannot be poisoned.
     pub async fn call_tracked<P, R>(
         &self,
         method: &str,
@@ -280,30 +292,37 @@ impl Client {
         let (tx, rx) = oneshot::channel();
         self.pending
             .lock()
-            .expect("pending lock sano")
+            .expect("pending lock is sound")
             .insert(id, tx);
-        // El orden importa: insertar y DESPUÉS mirar el flag — si el reader
-        // cerró entre medias, su clear() ya nos barrió o lo hacemos aquí.
+        // Order matters: insert and THEN check the flag — if the reader
+        // closed in between, its clear() already swept us or we do it here.
         if self.closed.load(Ordering::SeqCst) {
-            self.pending.lock().expect("pending lock sano").remove(&id);
+            self.pending
+                .lock()
+                .expect("pending lock is sound")
+                .remove(&id);
             return Err(ClientError::ConnectionClosed);
         }
         let frame = encode_frame(&req)?;
         if self.frames_out.send(frame).is_err() {
-            self.pending.lock().expect("pending lock sano").remove(&id);
+            self.pending
+                .lock()
+                .expect("pending lock is sound")
+                .remove(&id);
             return Err(ClientError::ConnectionClosed);
         }
         let value = rx.await.map_err(|_| ClientError::ConnectionClosed)??;
         Ok(serde_json::from_value(value)?)
     }
 
-    /// Envía una notificación JSON-RPC (sin id, sin respuesta): fire-and-forget.
-    /// La usa el puente para reenviar `rpc.cancel` (#72). Si la conexión ya
-    /// murió, se descarta en silencio (best-effort, como el propio `rpc.cancel`).
+    /// Sends a JSON-RPC notification (no id, no response): fire-and-forget.
+    /// Used by the bridge to relay `rpc.cancel` (#72). If the connection
+    /// already died, it is silently dropped (best-effort, like `rpc.cancel`
+    /// itself).
     ///
     /// # Errors
-    /// [`ClientError`] solo si los params no serializan; un canal muerto NO es
-    /// error (best-effort).
+    /// [`ClientError`] only if the params do not serialize; a dead channel is
+    /// NOT an error (best-effort).
     pub fn notify<P: serde::Serialize>(&self, method: &str, params: &P) -> Result<(), ClientError> {
         let notif = Notification {
             jsonrpc: JsonRpcVersion,
@@ -311,29 +330,29 @@ impl Client {
             params: Some(serde_json::to_value(params)?),
         };
         let frame = encode_frame(&notif)?;
-        let _ = self.frames_out.send(frame); // canal muerto = no-op best-effort
+        let _ = self.frames_out.send(frame); // dead channel = benign no-op
         Ok(())
     }
 
-    /// Siguiente notificación del server (`task.progress`…). `None` =
-    /// conexión cerrada.
+    /// The server's next notification (`task.progress`…). `None` = the
+    /// connection is closed.
     pub async fn notification(&mut self) -> Option<Notification> {
         self.notifications.recv().await
     }
 
-    /// Se lleva el receptor de notificaciones (para bombearlo desde una
-    /// task propia mientras el `Client` — en un `Arc` — sigue sirviendo
-    /// `call`). Tras esto, [`Self::notification`] devuelve `None`.
+    /// Takes the notification receiver (to pump it from its own task while
+    /// the `Client` — in an `Arc` — keeps serving `call`). After this,
+    /// [`Self::notification`] returns `None`.
     pub fn take_notifications(&mut self) -> mpsc::UnboundedReceiver<Notification> {
         let (_dead_tx, dead_rx) = mpsc::unbounded_channel();
         std::mem::replace(&mut self.notifications, dead_rx)
     }
 }
 
-/// El código RPC que señala "el server no habla nuestra versión" —
-/// distinguible para que un frontend lo explique bien.
+/// The RPC code that signals "the server does not speak our version" —
+/// distinguishable so a frontend can explain it properly.
 #[must_use]
 pub fn is_version_mismatch(e: &ClientError) -> bool {
-    // Por CÓDIGO, jamás parseando message (B1 del protocol-guardian).
+    // By CODE, never by parsing the message (protocol-guardian B1).
     matches!(e, ClientError::Rpc(rpc) if rpc.code == codes::VERSION_MISMATCH)
 }

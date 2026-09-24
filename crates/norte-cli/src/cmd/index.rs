@@ -37,8 +37,8 @@ pub(crate) async fn index_cmd(backend: &Backend, cmd: IndexCmd) -> anyhow::Resul
                     EntryKind::File => "-",
                 };
                 let size = h.size.map_or_else(|| "-".to_string(), |s| s.to_string());
-                // `display_lossy` sanea los bytes hostiles (regla 1): jamás
-                // controles/no-UTF8 crudos por stdout.
+                // `display_lossy` sanitizes hostile bytes (rule 1): never
+                // raw controls/non-UTF-8 over stdout.
                 println!("{marker}\t{size}\t{}", h.path.display_lossy());
             }
             if hits.is_empty() {
@@ -63,12 +63,12 @@ pub(crate) async fn index_cmd(backend: &Backend, cmd: IndexCmd) -> anyhow::Resul
                 .map_err(|e| anyhow::anyhow!("{e}"))
                 .context("búsqueda semántica")?;
             for h in &hits {
-                // Paths con nombres arbitrarios hacia un terminal: MISMO
-                // enmascarado marcado que el plan de `norte ai rename`
-                // (`display_name` por segmento vía `path_display`, hazards
-                // → � y el `!` delata la alteración).
-                let (texto, hostil) = norte_frontend::path_display(&h.path);
-                println!("{:.2}\t{}{texto}", h.score, if hostil { "!" } else { "" });
+                // Paths with arbitrary names toward a terminal: the SAME
+                // marked masking as `norte ai rename`'s plan
+                // (`display_name` per segment via `path_display`, hazards
+                // → � and the `!` gives away the alteration).
+                let (text, hostile) = norte_frontend::path_display(&h.path);
+                println!("{:.2}\t{}{text}", h.score, if hostile { "!" } else { "" });
             }
             if hits.is_empty() {
                 eprintln!("{}", norte_i18n::t("cli-no-results"));

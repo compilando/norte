@@ -1,42 +1,44 @@
-//! Parse de lo que IMPRIMIÓ el delegado. Puro sobre bytes: no lanza procesos,
-//! así que las reglas de encoding se prueban en una máquina sin `7z` ni
-//! `unrar` instalados.
+//! Parses what the delegate PRINTED. Pure over bytes: it spawns no
+//! processes, so the encoding rules are tested on a machine with neither
+//! `7z` nor `unrar` installed.
 //!
-//! Los nombres son [`Vec<u8>`] y jamás `String` (regla 1): que los bytes hayan
-//! llegado por una tubería no los vuelve UTF-8.
+//! Names are [`Vec<u8>`] and never `String` (rule 1): the bytes having
+//! arrived through a pipe does not make them UTF-8.
 
-/// Una entrada tal y como la imprimió el delegado, aún SIN validar como
-/// segmento de `VPath` — de eso se encarga el índice.
+/// An entry exactly as the delegate printed it, still NOT validated as a
+/// `VPath` segment — that is the index's job.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RawEntry {
-    /// Bytes crudos del nombre, tal cual salieron de la tubería.
+    /// Raw bytes of the name, exactly as they came out of the pipe.
     pub name: Vec<u8>,
-    /// Tamaño descomprimido en bytes.
+    /// Uncompressed size in bytes.
     pub size: u64,
-    /// La entrada es un directorio.
+    /// The entry is a directory.
     pub is_dir: bool,
-    /// mtime en segundos epoch, si el delegado lo imprimió y era legible.
+    /// mtime in epoch seconds, if the delegate printed it and it was
+    /// readable.
     pub mtime: Option<i64>,
-    /// La entrada está cifrada (leerla pediría contraseña; el runner NUNCA
-    /// deja que se pida).
+    /// The entry is encrypted (reading it would ask for a password; the
+    /// runner NEVER lets it be asked).
     pub encrypted: bool,
-    /// La entrada forma parte de un bloque sólido.
+    /// The entry is part of a solid block.
     pub solid: bool,
 }
 
-/// El resultado de un parse: entradas legibles y **cuántas se saltaron**.
+/// The result of a parse: readable entries and **how many were skipped**.
 ///
-/// Contar las omitidas es el mismo contrato de «omitir CON señal» de ADR 0018:
-/// un archivo con una entrada rara se explora igual, pero el usuario se entera.
+/// Counting the skipped ones is the same "skip WITH a signal" contract as
+/// ADR 0018: an archive with a weird entry is still explored, but the user
+/// finds out.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Listing {
-    /// Las entradas que se pudieron leer.
+    /// The entries that could be read.
     pub entries: Vec<RawEntry>,
-    /// Cuántos registros se descartaron por no ser interpretables.
+    /// How many records were discarded for not being interpretable.
     pub skipped: u64,
 }
 
-/// Un registro en construcción: pares clave/valor en bytes.
+/// A record under construction: key/value pairs in bytes.
 #[derive(Default)]
 struct Record<'a> {
     fields: Vec<(&'a [u8], &'a [u8])>,
@@ -56,21 +58,21 @@ impl<'a> Record<'a> {
     }
 }
 
-/// Parte una línea en `clave<sep>valor`, con el separador ya elegido por el
-/// formato. La clave se recorta por ambos lados; el valor solo por la
-/// izquierda **un** espacio y por la derecha un `\r`: un nombre puede acabar
-/// en espacio y perderlo sería mostrar un fichero que no es ese fichero.
+/// Splits a line into `key<sep>value`, with the separator already chosen by
+/// the format. The key is trimmed on both sides; the value only on the left
+/// **one** space and on the right a `\r`: a name can end in a space and
+/// losing it would show a file that is not that file.
 fn split_field<'a>(line: &'a [u8], sep: &[u8]) -> Option<(&'a [u8], &'a [u8])> {
     let (key, value) = match line.windows(sep.len()).position(|w| w == sep) {
         Some(at) => (&line[..at], &line[at + sep.len()..]),
-        // `Created =` sin valor: 7z imprime la clave y nada detrás.
+        // `Created =` with no value: 7z prints the key and nothing after it.
         None => (line.strip_suffix(trim_ascii(sep))?, &line[line.len()..]),
     };
     let key = trim_ascii(key);
-    // Las claves reales llevan espacios (`Packed Size`, `Host OS`, `NT
-    // Security`): exigir una sola palabra descartaba media salida de 7z. Lo
-    // que sí se exige es que empiece por letra y no traiga nada que un
-    // nombre de fichero continuado sí traería.
+    // Real keys carry spaces (`Packed Size`, `Host OS`, `NT Security`):
+    // requiring a single word discarded half of 7z's output. What IS
+    // required is that it starts with a letter and carries nothing that a
+    // continued filename would carry.
     if !key.first().is_some_and(u8::is_ascii_alphabetic)
         || key
             .iter()
@@ -99,9 +101,9 @@ fn trim_ascii(mut s: &[u8]) -> &[u8] {
     s
 }
 
-/// Recorre `stdout` por líneas agrupando registros separados por línea en
-/// blanco, y llama a `emit` con cada uno. Un registro con alguna línea que no
-/// parsea como campo se marca `malformed`.
+/// Walks `stdout` by lines, grouping records separated by a blank line, and
+/// calls `emit` with each one. A record with some line that does not parse
+/// as a field is marked `malformed`.
 fn for_each_record<'a>(stdout: &'a [u8], sep: &[u8], mut emit: impl FnMut(&Record<'a>)) {
     let mut current = Record::default();
     for raw in stdout.split(|b| *b == b'\n') {
@@ -130,9 +132,9 @@ fn parse_u64(v: &[u8]) -> u64 {
         .unwrap_or(0)
 }
 
-/// `YYYY-MM-DD HH:MM:SS[,fraction]` (hora local del delegado, que es lo único
-/// que imprime) a segundos epoch. Devuelve `None` ante cualquier desviación:
-/// un mtime inventado es peor que ninguno.
+/// `YYYY-MM-DD HH:MM:SS[,fraction]` (the delegate's local time, which is the
+/// only thing it prints) to epoch seconds. Returns `None` on any deviation:
+/// a made-up mtime is worse than none.
 fn parse_timestamp(value: &[u8]) -> Option<i64> {
     let text = std::str::from_utf8(trim_ascii(value)).ok()?;
     let (date, time) = text.split(',').next()?.split_once(' ')?;
@@ -162,9 +164,9 @@ fn parse_timestamp(value: &[u8]) -> Option<i64> {
     Some(days_from_civil(year, month, day) * 86_400 + hour * 3_600 + minute * 60 + second)
 }
 
-/// Días desde 1970-01-01 (algoritmo `days_from_civil` de Hinnant, dominio
-/// público). Se implementa aquí para no arrastrar una dependencia de fechas
-/// entera por un `Modified =` de un listado.
+/// Days since 1970-01-01 (Hinnant's `days_from_civil` algorithm, public
+/// domain). Implemented here so as not to drag in a whole date dependency
+/// for a listing's `Modified =`.
 fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
     let year = if month <= 2 { year - 1 } else { year };
     let era = if year >= 0 { year } else { year - 399 } / 400;
@@ -175,11 +177,11 @@ fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
     era * 146_097 + day_of_era - 719_468
 }
 
-/// Parsea la salida de `7z l -slt -- <archivo>`.
+/// Parses the output of `7z l -slt -- <archive>`.
 ///
-/// El bloque de cabecera describe el ARCHIVO (su primer `Path =` es el `.rar`,
-/// no una entrada) y termina en la línea de guiones; todo lo anterior se
-/// ignora sin contarlo como omitido.
+/// The header block describes the ARCHIVE (its first `Path =` is the
+/// `.rar`, not an entry) and ends at the dashes line; everything before it
+/// is ignored without counting it as skipped.
 ///
 /// ```
 /// let out = norte_vfs_rar::parse_7z_slt(b"----------\nPath = a.txt\nSize = 3\n");
@@ -187,7 +189,7 @@ fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
 /// ```
 #[must_use]
 pub fn parse_7z_slt(stdout: &[u8]) -> Listing {
-    // Sin la línea de guiones no hay listado que leer: 7z no llegó a empezar.
+    // Without the dashes line there is no listing to read: 7z never got started.
     let Some(body) = stdout
         .windows(10)
         .position(|w| w == b"----------")
@@ -215,10 +217,10 @@ pub fn parse_7z_slt(stdout: &[u8]) -> Listing {
     out
 }
 
-/// Parsea la salida de `unrar vt -- <archivo>`.
+/// Parses the output of `unrar vt -- <archive>`.
 ///
-/// Un registro SIN `Name:` es la cabecera del archivo (`Archive:`,
-/// `Details:`), no una entrada perdida: se ignora sin contarlo.
+/// A record WITHOUT `Name:` is the archive's header (`Archive:`,
+/// `Details:`), not a lost entry: it is ignored without counting it.
 ///
 /// ```
 /// let out = norte_vfs_rar::parse_unrar_vt(b"\n        Name: a.txt\n        Type: File\n");
@@ -228,8 +230,8 @@ pub fn parse_7z_slt(stdout: &[u8]) -> Listing {
 pub fn parse_unrar_vt(stdout: &[u8]) -> Listing {
     let mut out = Listing::default();
     for_each_record(stdout, b":", |rec| {
-        // Sin `Name:` el registro es la cabecera (el banner de unrar, el
-        // `Archive:`/`Details:`), no una entrada perdida: ignorar sin contar.
+        // Without `Name:` the record is the header (unrar's banner, the
+        // `Archive:`/`Details:`), not a lost entry: ignore without counting.
         let Some(name) = rec.get(b"Name") else {
             return;
         };
@@ -252,8 +254,8 @@ pub fn parse_unrar_vt(stdout: &[u8]) -> Listing {
     out
 }
 
-/// Quita UN espacio inicial (el del `key: value`), no los que el nombre
-/// pudiera llevar de verdad.
+/// Strips ONE leading space (the `key: value`'s), not any the name might
+/// genuinely carry.
 fn trim_leading_space(v: &[u8]) -> &[u8] {
     v.strip_prefix(b" ").unwrap_or(v)
 }
@@ -268,7 +270,7 @@ fn contains(haystack: &[u8], needle: &[u8]) -> bool {
 mod tests {
     use super::*;
 
-    /// Salida real de `7z l -slt` (7-Zip 26.02) recortada a dos entradas.
+    /// Real output from `7z l -slt` (7-Zip 26.02) trimmed to two entries.
     const SEVENZ_SLT: &[u8] = b"\
 Listing archive: t.rar\n\
 \n\
@@ -295,22 +297,22 @@ Solid = -\n\
 ";
 
     #[test]
-    fn slt_ignora_la_cabecera_del_archivo_y_conserva_bytes_crudos() {
+    fn slt_ignores_the_archives_header_and_keeps_raw_bytes() {
         let out = parse_7z_slt(SEVENZ_SLT);
-        // `Path = t.rar` es el archivo mismo, no una entrada: va antes del
-        // `----------`.
-        assert_eq!(out.entries.len(), 2, "la cabecera no es una entrada");
+        // `Path = t.rar` is the archive itself, not an entry: it comes
+        // before the `----------`.
+        assert_eq!(out.entries.len(), 2, "the header is not an entry");
         assert_eq!(out.entries[0].name, b"hello.txt");
         assert_eq!(out.entries[0].size, 11);
         assert_eq!(
             out.entries[1].name, b"cp437-\xa4\xa5.txt",
-            "bytes crudos, no lossy"
+            "raw bytes, not lossy"
         );
         assert_eq!(out.skipped, 0);
     }
 
     #[test]
-    fn slt_lee_directorio_cifrado_y_solido() {
+    fn slt_reads_an_encrypted_solid_directory() {
         let raw = b"----------\nPath = d\nFolder = +\nSize = 0\nEncrypted = +\nSolid = +\n";
         let out = parse_7z_slt(raw);
         let e = &out.entries[0];
@@ -318,14 +320,14 @@ Solid = -\n\
     }
 
     #[test]
-    fn slt_convierte_modified_a_epoch() {
+    fn slt_converts_modified_to_epoch() {
         let raw = b"----------\nPath = a\nSize = 0\nModified = 1970-01-02 00:00:01\n";
         assert_eq!(parse_7z_slt(raw).entries[0].mtime, Some(86_401));
     }
 
-    /// Salida real de `unrar vt` (UNRAR 7.23). El nombre no-UTF8 llega
-    /// TRUNCADO por el propio unrar: `cp437-` sin extensión. No es un bug del
-    /// parser, y es por lo que 7z va primero.
+    /// Real output from `unrar vt` (UNRAR 7.23). The non-UTF8 name arrives
+    /// TRUNCATED by unrar itself: `cp437-` with no extension. Not a parser
+    /// bug, and the reason 7z goes first.
     const UNRAR_VT: &[u8] = b"\
 \n\
 Archive: t.rar\n\
@@ -345,39 +347,41 @@ Details: RAR 5\n\
 ";
 
     #[test]
-    fn vt_lee_nombre_tipo_y_tamano() {
+    fn vt_reads_name_type_and_size() {
         let out = parse_unrar_vt(UNRAR_VT);
         assert_eq!(out.entries.len(), 2);
         assert_eq!(out.entries[0].name, b"hello.txt");
         assert!(!out.entries[0].is_dir);
         assert!(out.entries[1].is_dir, "Type: Directory");
-        assert_eq!(out.skipped, 0, "la cabecera del archivo no es una omitida");
+        assert_eq!(out.skipped, 0, "the archive's header is not a skip");
     }
 
     #[test]
-    fn vt_no_recorta_un_espacio_final_del_nombre() {
-        let out = parse_unrar_vt(b"\n        Name: raro \n        Type: File\n");
-        assert_eq!(out.entries[0].name, b"raro ", "el nombre acaba en espacio");
+    fn vt_does_not_trim_a_trailing_space_off_the_name() {
+        let out = parse_unrar_vt(b"\n        Name: weird \n        Type: File\n");
+        assert_eq!(out.entries[0].name, b"weird ", "the name ends in a space");
     }
 
-    /// Regresión medida contra 7-Zip 26.02: media salida real lleva claves
-    /// CON ESPACIOS (`Packed Size`, `Host OS`, `NT Security`) y claves con
-    /// valor VACÍO (`Created =`). Exigir una clave de una sola palabra
-    /// marcaba cada registro como ilegible y el listado salía vacío.
+    /// Regression measured against 7-Zip 26.02: half of a real output
+    /// carries keys WITH SPACES (`Packed Size`, `Host OS`, `NT Security`)
+    /// and keys with an EMPTY value (`Created =`). Requiring a single-word
+    /// key marked every record as unreadable and the listing came out
+    /// empty.
     #[test]
-    fn slt_claves_con_espacios_y_valor_vacio_no_rompen_el_registro() {
+    fn slt_keys_with_spaces_and_empty_value_do_not_break_the_record() {
         let raw = b"----------\nPath = a.txt\nFolder = -\nSize = 8\nPacked Size = 8\n\
 Created = \nAccessed =\nHost OS = Unix\nNT Security = \n";
         let out = parse_7z_slt(raw);
-        assert_eq!(out.skipped, 0, "ninguna de esas líneas es ilegible");
+        assert_eq!(out.skipped, 0, "none of those lines is unreadable");
         assert_eq!(out.entries.len(), 1);
         assert_eq!(out.entries[0].size, 8);
     }
 
-    /// El banner de unrar (`UNRAR 7.23 freeware  Copyright (c) …`) no parsea
-    /// como campo y NO es una entrada perdida: se ignora sin contarla.
+    /// unrar's banner (`UNRAR 7.23 freeware  Copyright (c) …`) does not parse
+    /// as a field and is NOT a lost entry: it is ignored without counting
+    /// it.
     #[test]
-    fn vt_el_banner_no_cuenta_como_omitida() {
+    fn vt_the_banner_does_not_count_as_skipped() {
         let raw = b"\nUNRAR 7.23 freeware      Copyright (c) 1993-2026 Alexander Roshal\n\
 \nArchive: t.rar\nDetails: RAR 5\n\n        Name: a.txt\n        Type: File\n";
         let out = parse_unrar_vt(raw);
@@ -386,26 +390,26 @@ Created = \nAccessed =\nHost OS = Unix\nNT Security = \n";
     }
 
     #[test]
-    fn un_nombre_con_salto_de_linea_se_salta_y_se_cuenta() {
-        // Una salida por líneas no puede llevar un `\n` dentro de un nombre
-        // sin adivinar. Adivinar aquí es enseñar un fichero que no es ese
-        // fichero.
-        let raw = b"----------\nPath = ok.txt\nSize = 1\n\nPath = mal\nnombre.txt\nSize = 2\n";
+    fn a_name_with_a_line_break_is_skipped_and_counted() {
+        // A line-based output cannot carry a `\n` inside a name without
+        // guessing. Guessing here means showing a file that is not that
+        // file.
+        let raw = b"----------\nPath = ok.txt\nSize = 1\n\nPath = bad\nname.txt\nSize = 2\n";
         let out = parse_7z_slt(raw);
         assert_eq!(out.entries.len(), 1);
-        assert_eq!(out.skipped, 1, "saltada y CONTADA, como ADR 0018");
+        assert_eq!(out.skipped, 1, "skipped and COUNTED, as ADR 0018 requires");
     }
 
     #[test]
-    fn vt_un_registro_ilegible_se_salta_y_se_cuenta() {
-        let raw = b"\n        Name: mal\nnombre.txt\n        Type: File\n";
+    fn vt_an_unreadable_record_is_skipped_and_counted() {
+        let raw = b"\n        Name: bad\nname.txt\n        Type: File\n";
         let out = parse_unrar_vt(raw);
         assert!(out.entries.is_empty());
         assert_eq!(out.skipped, 1);
     }
 
     #[test]
-    fn sin_separador_el_listado_esta_vacio_y_no_cuenta_omitidas() {
+    fn without_a_separator_the_listing_is_empty_and_counts_no_skips() {
         let out = parse_7z_slt(b"ERROR: cannot open t.rar\n");
         assert_eq!(out, Listing::default());
     }

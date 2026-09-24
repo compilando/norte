@@ -1,19 +1,18 @@
-//! Parser PROPIO del central directory de zip (#59): EOCD/EOCD64 +
-//! recorrido en streaming del CD + resolución del offset de datos desde el
-//! LOCAL header. SYNC: corre en `spawn_blocking` sobre un
-//! [`ProviderReader`](crate::blocking::ProviderReader).
+//! OUR OWN zip central directory parser (#59): EOCD/EOCD64 + streaming CD
+//! walk + resolving the data offset from the LOCAL header. SYNC: runs in
+//! `spawn_blocking` over a [`ProviderReader`](crate::blocking::ProviderReader).
 //!
-//! Reemplaza al crate `zip` en el camino de indexado/lectura:
-//! - Los nombres son los bytes CRUDOS del CD, verbatim (regla 1) — sin el
-//!   colapso lossy de nombres que decodifican igual (H1).
-//! - El extra 0x7075 (Info-ZIP unicode path) se IGNORA POR DISEÑO: jamás
-//!   sustituye el nombre ni mata el archivo (H3).
-//! - El CD JAMÁS se materializa entero: se recorre entrada a entrada bajo
-//!   un `Take` (`Limits::max_cd_bytes` queda obsoleto — no hay memoria
-//!   retenida que gobernar).
-//! - zip64: los marcadores del EOCD llevan al EOCD64 vía su locator; la
-//!   cuenta real de 64 bits entra al preflight de `max_entries` (el hueco
-//!   del preflight u16 queda cerrado).
+//! Replaces the `zip` crate on the indexing/reading path:
+//! - Names are the CD's RAW bytes, verbatim (rule 1) — no lossy collapse
+//!   of names that decode the same (H1).
+//! - The 0x7075 extra (Info-ZIP unicode path) is IGNORED BY DESIGN: it
+//!   never substitutes the name nor kills the archive (H3).
+//! - The CD is NEVER materialized whole: it's walked entry by entry under
+//!   a `Take` (`Limits::max_cd_bytes` is obsolete — there's no retained
+//!   memory left to govern).
+//! - zip64: the EOCD's markers lead to the EOCD64 via its locator; the
+//!   real 64-bit count enters `max_entries`'s preflight (the u16
+//!   preflight gap is closed).
 
 use std::io::{Read, Seek, SeekFrom};
 use std::sync::Arc;
@@ -27,78 +26,79 @@ const EOCD64_LOCATOR_SIG: [u8; 4] = [0x50, 0x4b, 0x06, 0x07];
 const CD_ENTRY_SIG: [u8; 4] = [0x50, 0x4b, 0x01, 0x02];
 const LOCAL_SIG: [u8; 4] = [0x50, 0x4b, 0x03, 0x04];
 
-/// End of central directory ya resuelto (clásico o zip64): lo que el
-/// indexado necesita para el preflight de entradas y el walk del CD.
+/// Already-resolved end of central directory (classic or zip64): what
+/// indexing needs for the entry preflight and the CD walk.
 pub(crate) struct Eocd {
-    /// Entradas que el EOCD declara (puede mentir en ambos sentidos).
+    /// Entries the EOCD declares (can lie in either direction).
     pub count: u64,
-    /// Offset del central directory en el contenedor.
+    /// The central directory's offset in the container.
     pub cd_offset: u64,
-    /// Bytes del central directory.
+    /// Bytes of the central directory.
     pub cd_size: u64,
 }
 
-/// Una entrada del central directory, con los campos zip64 YA resueltos.
+/// A central directory entry, with its zip64 fields ALREADY resolved.
 pub(crate) struct CdEntry {
-    /// Nombre en bytes CRUDOS del CD, verbatim (regla 1).
+    /// Name in RAW bytes from the CD, verbatim (rule 1).
     pub name_raw: Vec<u8>,
-    /// General purpose flags (bit 0 = cifrado).
+    /// General purpose flags (bit 0 = encrypted).
     pub flags: u16,
-    /// Método de compresión (0 stored / 8 deflate / otros).
+    /// Compression method (0 stored / 8 deflate / others).
     pub method: u16,
-    /// CRC-32 declarado de los bytes SIN comprimir.
+    /// Declared CRC-32 of the UNcompressed bytes.
     pub crc32: u32,
-    /// Tamaño comprimido.
+    /// Compressed size.
     pub comp_size: u64,
-    /// Tamaño sin comprimir.
+    /// Uncompressed size.
     pub uncomp_size: u64,
-    /// Offset del LOCAL header en el contenedor.
+    /// The LOCAL header's offset in the container.
     pub header_offset: u64,
-    /// mtime en ms desde epoch (DOS time interpretado como UTC), si el par
-    /// DOS es válido.
+    /// mtime in ms since epoch (DOS time interpreted as UTC), if the DOS
+    /// pair is valid.
     pub mtime_ms: Option<i64>,
 }
 
-/// Resultado del walk del CD: cuántas entradas se consumieron y cuántas de
-/// ellas eran hostiles (omitidas SIN entregarse a `per_entry`). `parsed`
-/// INCLUYE las hostiles: la comparación contra `Eocd::count` va sobre lo
-/// realmente consumido del CD.
+/// Result of the CD walk: how many entries were consumed and how many of
+/// them were hostile (omitted WITHOUT being handed to `per_entry`).
+/// `parsed` INCLUDES the hostile ones: the comparison against
+/// `Eocd::count` is over what was really consumed from the CD.
 pub(crate) struct ParseStats {
-    /// Entradas consumidas del CD (entregadas + hostiles).
+    /// Entries consumed from the CD (delivered + hostile).
     pub parsed: u64,
-    /// Subconjunto omitido por extra zip64 malformado (marcador sin valor).
+    /// Subset omitted for a malformed zip64 extra (a marker with no value).
     pub hostile_skipped: u64,
 }
 
-/// u16 LE en `off`. Invariante del caller: `off + 2 <= b.len()` (offsets
-/// constantes sobre buffers de tamaño fijo o pre-chequeados).
+/// u16 LE at `off`. Caller invariant: `off + 2 <= b.len()` (constant
+/// offsets over fixed-size or pre-checked buffers).
 fn le16(b: &[u8], off: usize) -> u16 {
     u16::from_le_bytes([b[off], b[off + 1]])
 }
 
-/// u32 LE en `off`. Invariante del caller: `off + 4 <= b.len()`.
+/// u32 LE at `off`. Caller invariant: `off + 4 <= b.len()`.
 fn le32(b: &[u8], off: usize) -> u32 {
     u32::from_le_bytes(
         b[off..off + 4]
             .try_into()
-            .expect("rango constante dentro del buffer"),
+            .expect("constant range inside the buffer"),
     )
 }
 
-/// u64 LE en `off`. Invariante del caller: `off + 8 <= b.len()`.
+/// u64 LE at `off`. Caller invariant: `off + 8 <= b.len()`.
 fn le64(b: &[u8], off: usize) -> u64 {
     u64::from_le_bytes(
         b[off..off + 8]
             .try_into()
-            .expect("rango constante dentro del buffer"),
+            .expect("constant range inside the buffer"),
     )
 }
 
-/// Localiza el EOCD escaneando hacia atrás la última ventana (22 bytes +
-/// comentario máximo de 65535). Un comentario puede CONTENER la firma (H9):
-/// un candidato solo vale si es autoconsistente — `cd_offset + cd_size`
-/// apunta exactamente a su posición — o si su rama zip64 (marcadores →
-/// locator → EOCD64) es consistente. Sin EOCD localizable → `Corrupt`.
+/// Locates the EOCD by scanning the last window backward (22 bytes + a
+/// 65535 max comment). A comment CAN CONTAIN the signature (H9): a
+/// candidate is only valid if it's self-consistent — `cd_offset +
+/// cd_size` points exactly at its position — or if its zip64 branch
+/// (markers → locator → EOCD64) is consistent. No locatable EOCD →
+/// `Corrupt`.
 pub(crate) fn locate_eocd<R: Read + Seek>(
     reader: &mut R,
     container_len: u64,
@@ -122,12 +122,12 @@ pub(crate) fn locate_eocd<R: Read + Seek>(
         let cd_off = le32(&buf, pos + 16);
         let candidate_pos = start + pos as u64;
         if count == u16::MAX || cd_off == u32::MAX || cd_size == u32::MAX {
-            // Marcadores zip64: cuenta/tamaño/offset reales en el EOCD64,
-            // localizado por el record de 20 bytes JUSTO antes del EOCD.
+            // zip64 markers: the real count/size/offset are in the
+            // EOCD64, located by the 20-byte record JUST BEFORE the EOCD.
             if let Some(eocd) = read_zip64(reader, candidate_pos)? {
                 return Ok(eocd);
             }
-            continue; // marcador sin cadena zip64 consistente: sigue atrás
+            continue; // marker with no consistent zip64 chain: keep going backward
         }
         if u64::from(cd_off) + u64::from(cd_size) == candidate_pos {
             return Ok(Eocd {
@@ -137,13 +137,13 @@ pub(crate) fn locate_eocd<R: Read + Seek>(
             });
         }
     }
-    tracing::warn!("sin EOCD localizable: no es un zip");
+    tracing::warn!("no locatable EOCD: not a zip");
     Err(Error::Corrupt)
 }
 
-/// `read_exact` que distingue el EOF estructural (`Ok(false)`: el candidato
-/// no es zip64, el caller sigue buscando) del IO genuino del provider
-/// interior (verbatim, #58).
+/// A `read_exact` that distinguishes a structural EOF (`Ok(false)`: the
+/// candidate isn't zip64, the caller keeps searching) from genuine IO from
+/// the inner provider (verbatim, #58).
 fn read_exact_or_eof<R: Read>(reader: &mut R, buf: &mut [u8]) -> Result<bool, Error> {
     match reader.read_exact(buf) {
         Ok(()) => Ok(true),
@@ -152,10 +152,11 @@ fn read_exact_or_eof<R: Read>(reader: &mut R, buf: &mut [u8]) -> Result<bool, Er
     }
 }
 
-/// La rama zip64 de un candidato a EOCD con marcadores: locator de 20 bytes
-/// justo antes del EOCD → offset del EOCD64 → `count`/`cd_size`/`cd_offset` de 64
-/// bits. `Ok(None)` = estructura no consistente (el caller sigue buscando
-/// hacia atrás); `Err` solo para IO genuino del interior.
+/// The zip64 branch of an EOCD candidate with markers: a 20-byte locator
+/// right before the EOCD → the EOCD64's offset → 64-bit
+/// `count`/`cd_size`/`cd_offset`. `Ok(None)` = inconsistent structure (the
+/// caller keeps searching backward); `Err` only for genuine IO from the
+/// inner provider.
 fn read_zip64<R: Read + Seek>(reader: &mut R, eocd_pos: u64) -> Result<Option<Eocd>, Error> {
     let Some(locator_pos) = eocd_pos.checked_sub(20) else {
         return Ok(None);
@@ -172,7 +173,7 @@ fn read_zip64<R: Read + Seek>(reader: &mut R, eocd_pos: u64) -> Result<Option<Eo
     }
     let eocd64_pos = le64(&locator, 8);
     if eocd64_pos >= locator_pos {
-        return Ok(None); // el EOCD64 debe vivir ANTES de su locator
+        return Ok(None); // the EOCD64 must live BEFORE its locator
     }
     reader
         .seek(SeekFrom::Start(eocd64_pos))
@@ -187,8 +188,8 @@ fn read_zip64<R: Read + Seek>(reader: &mut R, eocd_pos: u64) -> Result<Option<Eo
     let count = le64(&record, 32);
     let cd_size = le64(&record, 40);
     let cd_offset = le64(&record, 48);
-    // Consistencia (paridad con la regla clásica): el CD termina a lo sumo
-    // donde empieza el EOCD64.
+    // Consistency (parity with the classic rule): the CD ends at most
+    // where the EOCD64 starts.
     match cd_offset.checked_add(cd_size) {
         Some(end) if end <= eocd64_pos => Ok(Some(Eocd {
             count,
@@ -199,12 +200,12 @@ fn read_zip64<R: Read + Seek>(reader: &mut R, eocd_pos: u64) -> Result<Option<Eo
     }
 }
 
-/// Resuelve comp/uncomp/`header_offset` finales caminando el extra blob del
-/// CD. `None` = entrada HOSTIL (marcador zip64 sin su valor de 64 bits): se
-/// omite la ENTRADA, jamás mata el archivo. Records truncados o que
-/// desbordan el blob: se deja de caminar y valen los valores del CD
-/// (conservador — la entrada sobrevive). El id 0x7075 (Info-ZIP unicode
-/// path) se IGNORA POR DISEÑO: jamás sustituye `name_raw` (H3).
+/// Resolves the final comp/uncomp/`header_offset` by walking the CD's
+/// extra blob. `None` = a HOSTILE entry (a zip64 marker with no 64-bit
+/// value): the ENTRY is omitted, it never kills the archive. Truncated
+/// records or ones that overflow the blob: stops walking and the CD's
+/// values stand (conservative — the entry survives). Id 0x7075 (Info-ZIP
+/// unicode path) is IGNORED BY DESIGN: it never substitutes `name_raw` (H3).
 fn resolve_extra(extra: &[u8], comp32: u32, uncomp32: u32, off32: u32) -> Option<(u64, u64, u64)> {
     let mut comp = u64::from(comp32);
     let mut uncomp = u64::from(uncomp32);
@@ -217,15 +218,15 @@ fn resolve_extra(extra: &[u8], comp32: u32, uncomp32: u32, off32: u32) -> Option
         let size = usize::from(le16(extra, pos + 2));
         let end = pos + 4 + size;
         if end > extra.len() {
-            break; // record truncado: valores del CD, la entrada sobrevive
+            break; // truncated record: the CD's values stand, the entry survives
         }
         if id == 0x0001 && !resolved {
-            // zip64: valores u64 en orden APPNOTE — uncomp, comp, header
-            // offset (el nº de disco u32 va al final, ignorado) — SOLO para
-            // los campos cuyo valor del CD es el marcador 0xFFFF_FFFF.
-            // Interop documentada (estilo Go archive/zip): un writer no
-            // conforme que emita el triple completo marcando solo algunos
-            // campos se malinterpreta — estricto a propósito.
+            // zip64: u64 values in APPNOTE order — uncomp, comp, header
+            // offset (the disk number u32 goes last, ignored) — ONLY for
+            // the fields whose CD value is the 0xFFFF_FFFF marker.
+            // Documented interop (Go's archive/zip style): a non-conforming
+            // writer emitting the full triplet while marking only some
+            // fields gets misread — strict on purpose.
             let mut body = &extra[pos + 4..end];
             for (needed, slot) in [
                 (uncomp32 == u32::MAX, &mut uncomp),
@@ -234,35 +235,35 @@ fn resolve_extra(extra: &[u8], comp32: u32, uncomp32: u32, off32: u32) -> Option
             ] {
                 if needed {
                     if body.len() < 8 {
-                        return None; // marcador sin su valor: hostil
+                        return None; // a marker with no value: hostile
                     }
                     *slot = le64(body, 0);
                     body = &body[8..];
                 }
             }
-            // El PRIMER record 0x0001 manda (review #59): un segundo no
-            // puede re-escribir los valores (ambigüedad hostil).
+            // The FIRST 0x0001 record wins (review #59): a second one
+            // can't rewrite the values (hostile ambiguity).
             resolved = true;
         }
-        // 0x7075 y demás ids: ignorados (ver doc del módulo).
+        // 0x7075 and other ids: ignored (see the module doc).
         pos = end;
     }
     if any_marker && !resolved {
-        // Campos marcados 0xFFFF_FFFF sin NINGÚN record 0x0001: el CD
-        // promete zip64 y no lo entrega — hostil (antes el literal
-        // 0xFFFFFFFF se colaba como tamaño/offset mentira).
+        // Fields marked 0xFFFF_FFFF with NO 0x0001 record at all: the CD
+        // promises zip64 and doesn't deliver — hostile (previously the
+        // literal 0xFFFFFFFF snuck in as a lying 4 GiB−1 size/offset).
         return None;
     }
     Some((comp, uncomp, off))
 }
 
-/// Recorre el central directory en STREAMING (jamás materializado: `Take`
-/// de `cd_size`) entregando cada entrada a `per_entry`; el error de
-/// `per_entry` corta y se propaga. `cancel` se chequea por entrada (regla
-/// 3). Estructura rota (firma inválida, CD truncado a mitad de entrada) →
-/// `Corrupt`; una entrada hostil (extra zip64 con marcador sin valor) se
-/// OMITE con `warn!` y cuenta en [`ParseStats::hostile_skipped`], sin matar
-/// el archivo.
+/// Walks the central directory in STREAMING fashion (never materialized:
+/// a `Take` of `cd_size`) delivering each entry to `per_entry`;
+/// `per_entry`'s error cuts it short and is propagated. `cancel` is
+/// checked per entry (rule 3). Broken structure (invalid signature, CD
+/// truncated mid-entry) → `Corrupt`; a hostile entry (zip64 extra with a
+/// marker and no value) is OMITTED with `warn!` and counts in
+/// [`ParseStats::hostile_skipped`], without killing the archive.
 pub(crate) fn parse_cd<R: Read + Seek>(
     reader: &mut R,
     eocd: &Eocd,
@@ -279,13 +280,13 @@ pub(crate) fn parse_cd<R: Read + Seek>(
     };
     while cd.limit() > 0 {
         if cancel.load(Ordering::Relaxed) {
-            tracing::debug!("parse del central directory cancelado");
+            tracing::debug!("central directory parse cancelled");
             return Err(Error::Cancelled);
         }
         let mut header = [0u8; 46];
         cd.read_exact(&mut header).map_err(|e| corrupt_io(&e))?;
         if header[..4] != CD_ENTRY_SIG {
-            tracing::warn!("firma de entrada del central directory inválida");
+            tracing::warn!("invalid central directory entry signature");
             return Err(Error::Corrupt);
         }
         let flags = le16(&header, 8);
@@ -303,12 +304,12 @@ pub(crate) fn parse_cd<R: Read + Seek>(
         cd.read_exact(&mut name_raw).map_err(|e| corrupt_io(&e))?;
         let mut extra = vec![0u8; extra_len];
         cd.read_exact(&mut extra).map_err(|e| corrupt_io(&e))?;
-        // El comentario se salta sin materializar; quedarse corto es un CD
-        // truncado (#95.4: jamás silencio a mitad de estructura).
+        // The comment is skipped without materializing it; coming up
+        // short is a truncated CD (#95.4: never silence mid-structure).
         let skipped = std::io::copy(&mut (&mut cd).take(comment_len), &mut std::io::sink())
             .map_err(|e| corrupt_io(&e))?;
         if skipped != comment_len {
-            tracing::warn!("central directory truncado a mitad de un comentario");
+            tracing::warn!("central directory truncated mid-comment");
             return Err(Error::Corrupt);
         }
         stats.parsed += 1;
@@ -316,18 +317,19 @@ pub(crate) fn parse_cd<R: Read + Seek>(
             resolve_extra(&extra, comp32, uncomp32, off32)
         else {
             stats.hostile_skipped += 1;
-            // **`debug!` y sin el nombre, y eso es una decisión de tamaño.**
-            // Este `warn!` llevaba el nombre CRUDO de la entrada —hasta 64 KiB,
-            // elegidos por quien hizo el zip— y una entrada hostil mínima
-            // cuesta 46 bytes de contenedor. Mientras el log era una terminal
-            // efímera eso era ruido; desde que hay fichero (roadmap ítem 9) es
-            // amplificación: un zip de 50 MB puesto en un directorio que
-            // alguien mire —listar un archivo no pide confirmación— escribe
-            // cientos de MB en el log del día, y el escape de los bytes de
-            // control multiplica por seis. El total agregado sí se reporta
-            // (`hostile_skipped`), que es la señal operativa; el detalle por
-            // entrada vive en `debug`, como el resto de este parser ya dice.
-            tracing::debug!("extra zip64 con marcador sin valor: entrada omitida (hostil)");
+            // **`debug!` and no name, and that's a size decision.** This
+            // `warn!` used to carry the entry's RAW name — up to 64 KiB,
+            // chosen by whoever made the zip — and a minimal hostile
+            // entry costs 46 bytes of container. While the log was an
+            // ephemeral terminal that was noise; since there's a file
+            // (roadmap item 9) it's amplification: a 50 MB zip dropped in
+            // a directory someone browses — listing an archive asks for
+            // no confirmation — writes hundreds of MB to that day's log,
+            // and escaping the control bytes multiplies it by six. The
+            // aggregate total IS reported (`hostile_skipped`), which is
+            // the operational signal; the per-entry detail lives in
+            // `debug`, like the rest of this parser already says.
+            tracing::debug!("zip64 extra with a marker and no value: entry omitted (hostile)");
             continue;
         };
         per_entry(CdEntry {
@@ -344,10 +346,10 @@ pub(crate) fn parse_cd<R: Read + Seek>(
     Ok(stats)
 }
 
-/// Offset del PRIMER byte de datos de una entrada: salta el LOCAL header
-/// (30 bytes fijos + name/extra LOCALES — pueden diferir de las copias del
-/// CD). `Corrupt` si la firma no cuadra o el offset resultante sale del
-/// contenedor.
+/// Offset of an entry's FIRST data byte: skips the LOCAL header (30 fixed
+/// bytes + LOCAL name/extra — may differ from the CD's copies). `Corrupt`
+/// if the signature doesn't match or the resulting offset falls outside
+/// the container.
 pub(crate) fn data_offset<R: Read + Seek>(
     reader: &mut R,
     header_offset: u64,
@@ -359,7 +361,7 @@ pub(crate) fn data_offset<R: Read + Seek>(
     let mut local = [0u8; 30];
     reader.read_exact(&mut local).map_err(|e| corrupt_io(&e))?;
     if local[..4] != LOCAL_SIG {
-        tracing::warn!("firma de local header inválida");
+        tracing::warn!("invalid local header signature");
         return Err(Error::Corrupt);
     }
     let name_len = u64::from(le16(&local, 26));
@@ -368,13 +370,13 @@ pub(crate) fn data_offset<R: Read + Seek>(
         .checked_add(30 + name_len + extra_len)
         .ok_or(Error::Corrupt)?;
     if data > container_len {
-        tracing::warn!("local header apunta fuera del contenedor");
+        tracing::warn!("local header points outside the container");
         return Err(Error::Corrupt);
     }
     Ok(data)
 }
 
-/// Época civil → días desde 1970-01-01 (algoritmo de Howard Hinnant).
+/// Civil epoch → days since 1970-01-01 (Howard Hinnant's algorithm).
 fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
     let y = if m <= 2 { y - 1 } else { y };
     let era = if y >= 0 { y } else { y - 399 } / 400;
@@ -385,10 +387,10 @@ fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
     era * 146_097 + doe - 719_468
 }
 
-/// Par DOS crudo `(time, date)` → ms desde epoch. El DOS time no lleva
-/// zona: se interpreta como UTC (aproximación documentada; issue de deuda
-/// 8g). Mes 0/>12 o día 0 → `None` (defensivo: el par viene de bytes
-/// hostiles, no de un reloj).
+/// Raw DOS `(time, date)` pair → ms since epoch. DOS time carries no zone:
+/// interpreted as UTC (a documented approximation; phase 8g debt issue).
+/// Month 0/>12 or day 0 → `None` (defensive: the pair comes from hostile
+/// bytes, not a clock).
 pub(crate) fn dos_pair_to_ms(time: u16, date: u16) -> Option<i64> {
     let y = 1980 + i64::from(date >> 9);
     let m = i64::from((date >> 5) & 0xF);
@@ -403,14 +405,14 @@ pub(crate) fn dos_pair_to_ms(time: u16, date: u16) -> Option<i64> {
     secs.checked_mul(1000)
 }
 
-/// IO genuino del provider interior (corte de red a mitad de parseo): se
-/// propaga VERBATIM, jamás se disfraza de `Corrupt` (#58). El resto (EOF
-/// prematuro, basura) sí es estructura rota.
+/// Genuine IO from the inner provider (a network drop mid-parse): it's
+/// propagated VERBATIM, never disguised as `Corrupt` (#58). Everything
+/// else (a premature EOF, garbage) IS broken structure.
 pub(crate) fn corrupt_io(e: &std::io::Error) -> Error {
     if let Some(inner) = crate::blocking::inner_proto_error(e) {
         return inner;
     }
-    tracing::warn!(error = %e, "zip corrupto o ilegible");
+    tracing::warn!(error = %e, "corrupt or unreadable zip");
     Error::Corrupt
 }
 
@@ -439,9 +441,9 @@ mod tests {
     }
 
     #[test]
-    fn eocd_con_firma_falsa_en_el_comentario() {
-        // H9: el candidato del comentario no es autoconsistente — se sigue
-        // hacia atrás hasta el EOCD real.
+    fn eocd_with_a_fake_signature_in_the_comment() {
+        // H9: the comment's candidate isn't self-consistent — the search
+        // keeps going backward to the real EOCD.
         let mut fake = b"PK\x05\x06".to_vec();
         fake.extend_from_slice(&[0u8; 16]);
         fake.extend_from_slice(&0u16.to_le_bytes());
@@ -456,7 +458,7 @@ mod tests {
     }
 
     #[test]
-    fn zip64_roundtrip_del_final() {
+    fn zip64_roundtrip_of_the_tail() {
         let bytes = ZipSmith::new().file(b"z.txt", b"abc").build_zip64();
         let (eocd, entries, stats) = collect_cd(&bytes);
         assert_eq!(eocd.count, 1);
@@ -465,35 +467,35 @@ mod tests {
         assert_eq!(entries[0].uncomp_size, 3);
     }
 
-    /// EOCD64 de 56 bytes con `count`/`cd_size`/`cd_offset` en las posiciones
-    /// que lee [`read_zip64`]. El resto va a cero (basta para el pin).
+    /// A 56-byte EOCD64 with `count`/`cd_size`/`cd_offset` at the
+    /// positions [`read_zip64`] reads. The rest is zeroed (enough for the pin).
     fn eocd64_record(count: u64, cd_size: u64, cd_offset: u64) -> [u8; 56] {
         let mut r = [0u8; 56];
         r[..4].copy_from_slice(&EOCD64_SIG);
-        r[4..12].copy_from_slice(&44u64.to_le_bytes()); // tamaño del record
+        r[4..12].copy_from_slice(&44u64.to_le_bytes()); // size of the rest of the record
         r[32..40].copy_from_slice(&count.to_le_bytes());
         r[40..48].copy_from_slice(&cd_size.to_le_bytes());
         r[48..56].copy_from_slice(&cd_offset.to_le_bytes());
         r
     }
 
-    /// Locator de 20 bytes apuntando a `eocd64_pos`.
+    /// A 20-byte locator pointing at `eocd64_pos`.
     fn eocd64_locator(eocd64_pos: u64) -> [u8; 20] {
         let mut l = [0u8; 20];
         l[..4].copy_from_slice(&EOCD64_LOCATOR_SIG);
         l[8..16].copy_from_slice(&eocd64_pos.to_le_bytes());
-        l[16..20].copy_from_slice(&1u32.to_le_bytes()); // discos totales
+        l[16..20].copy_from_slice(&1u32.to_le_bytes()); // total disks
         l
     }
 
-    /// #100.1 (mutante superviviente del audit #59): el guard
-    /// `eocd64_pos >= locator_pos` de [`read_zip64`]. Un locator forjado
-    /// apunta ADELANTE, a un EOCD64 por lo demás consistente; el EOCD64 debe
-    /// vivir ANTES de su locator, así que la cadena se descarta (`None`) y el
-    /// scan sigue hacia el EOCD real. Sin el guard, el mutante aceptaría este
-    /// EOCD64 forjado.
+    /// #100.1 (surviving mutant from audit #59): [`read_zip64`]'s
+    /// `eocd64_pos >= locator_pos` guard. A forged locator points
+    /// FORWARD, at an otherwise consistent EOCD64; the EOCD64 must live
+    /// BEFORE its locator, so the chain gets discarded (`None`) and the
+    /// scan keeps going toward the real EOCD. Without the guard, the
+    /// mutant would accept this forged EOCD64.
     #[test]
-    fn read_zip64_rechaza_eocd64_no_anterior_a_su_locator() {
+    fn read_zip64_rejects_an_eocd64_not_before_its_locator() {
         let mut buf = vec![0u8; 128];
         buf[0..20].copy_from_slice(&eocd64_locator(20)); // locator_pos = 0
         buf[20..76].copy_from_slice(&eocd64_record(1, 0, 0)); // end 0 <= 20
@@ -502,165 +504,165 @@ mod tests {
         assert!(read_zip64(&mut r, 20).expect("io").is_none());
     }
 
-    /// #100.1 (segundo mutante del audit #59): el guard `end <= eocd64_pos`
-    /// de [`read_zip64`]. Cadena locator→EOCD64 consistente salvo que el CD
-    /// promete terminar MÁS ALLÁ del EOCD64 (`cd_offset + cd_size >
-    /// eocd64_pos`): inconsistente, se descarta. Sin el guard, el mutante
-    /// aceptaría un `cd_offset`/`cd_size` mentira.
+    /// #100.1 (second mutant from audit #59): [`read_zip64`]'s `end <=
+    /// eocd64_pos` guard. A consistent locator→EOCD64 chain except the CD
+    /// promises to end BEYOND the EOCD64 (`cd_offset + cd_size >
+    /// eocd64_pos`): inconsistent, discarded. Without the guard, the
+    /// mutant would accept a lying `cd_offset`/`cd_size`.
     #[test]
-    fn read_zip64_rechaza_cd_que_desborda_el_eocd64() {
+    fn read_zip64_rejects_a_cd_that_overflows_the_eocd64() {
         let mut buf = vec![0u8; 128];
         buf[0..56].copy_from_slice(&eocd64_record(1, 100, 0)); // end 100 > 0
         buf[56..76].copy_from_slice(&eocd64_locator(0)); // locator_pos = 56
         let mut r = Cursor::new(buf);
-        // eocd_pos = 76; eocd64_pos (0) < locator_pos (56) pasa el guard 174.
+        // eocd_pos = 76; eocd64_pos (0) < locator_pos (56) passes guard 174.
         assert!(read_zip64(&mut r, 76).expect("io").is_none());
     }
 
     #[test]
-    fn extra_zip64_resuelve_los_marcadores_en_orden() {
-        // uncomp y offset con marcador; comp normal: el blob lleva DOS u64
-        // (uncomp, offset) — orden APPNOTE saltándose comp.
+    fn extra_zip64_resolves_the_markers_in_order() {
+        // uncomp and offset marked; comp normal: the blob carries TWO
+        // u64s (uncomp, offset) — APPNOTE order skipping comp.
         let mut extra = 0x0001u16.to_le_bytes().to_vec();
         extra.extend_from_slice(&16u16.to_le_bytes());
         extra.extend_from_slice(&77u64.to_le_bytes()); // uncomp
         extra.extend_from_slice(&99u64.to_le_bytes()); // header offset
-        let got = resolve_extra(&extra, 5, u32::MAX, u32::MAX).expect("válido");
+        let got = resolve_extra(&extra, 5, u32::MAX, u32::MAX).expect("valid");
         assert_eq!(got, (5, 77, 99));
     }
 
     #[test]
-    fn extra_zip64_marcador_sin_valor_es_hostil() {
-        // uncomp marcado pero el record solo trae 4 bytes: hostil (None).
+    fn extra_zip64_marker_without_a_value_is_hostile() {
+        // uncomp marked but the record only carries 4 bytes: hostile (None).
         let mut extra = 0x0001u16.to_le_bytes().to_vec();
         extra.extend_from_slice(&4u16.to_le_bytes());
         extra.extend_from_slice(&[0u8; 4]);
         assert!(resolve_extra(&extra, 0, u32::MAX, 0).is_none());
     }
 
-    /// enc MAJOR-2 (review #59): el caso CANÓNICO — los TRES campos
-    /// marcados, tres valores distintos — pinea el orden APPNOTE completo
-    /// (uncomp, comp, offset). Una permutación de comp/uncomp aquí es
-    /// exactamente el mutante que sobrevivía a la suite.
+    /// enc MAJOR-2 (review #59): the CANONICAL case — all THREE fields
+    /// marked, three distinct values — pins down the full APPNOTE order
+    /// (uncomp, comp, offset). A comp/uncomp permutation here is exactly
+    /// the mutant that survived the suite.
     #[test]
-    fn extra_zip64_tres_marcadores_orden_canonico() {
+    fn extra_zip64_three_markers_canonical_order() {
         let mut extra = 0x0001u16.to_le_bytes().to_vec();
         extra.extend_from_slice(&24u16.to_le_bytes());
         extra.extend_from_slice(&111u64.to_le_bytes()); // uncomp
         extra.extend_from_slice(&222u64.to_le_bytes()); // comp
         extra.extend_from_slice(&333u64.to_le_bytes()); // header offset
-        let got = resolve_extra(&extra, u32::MAX, u32::MAX, u32::MAX).expect("válido");
-        assert_eq!(got, (222, 111, 333), "(comp, uncomp, off) exactos");
+        let got = resolve_extra(&extra, u32::MAX, u32::MAX, u32::MAX).expect("valid");
+        assert_eq!(got, (222, 111, 333), "exact (comp, uncomp, off)");
     }
 
-    /// Review #59: campos MARCADOS sin ningún record 0x0001 en el extra —
-    /// el CD promete zip64 y no lo entrega: hostil (antes el literal
-    /// 0xFFFFFFFF se colaba como tamaño mentira de 4 GiB−1).
+    /// Review #59: fields MARKED with no 0x0001 record at all in the
+    /// extra — the CD promises zip64 and doesn't deliver: hostile
+    /// (previously the literal 0xFFFFFFFF snuck in as a lying 4 GiB−1 size).
     #[test]
-    fn extra_zip64_marcador_sin_record_es_hostil() {
-        // Extra con solo un 0x7075 (ignorado): el marcador queda sin valor.
+    fn extra_zip64_marker_without_a_record_is_hostile() {
+        // Extra with only a 0x7075 (ignored): the marker is left with no value.
         let mut extra = 0x7075u16.to_le_bytes().to_vec();
         extra.extend_from_slice(&1u16.to_le_bytes());
         extra.push(1);
         assert!(resolve_extra(&extra, u32::MAX, 0, 0).is_none());
-        // Extra VACÍO con marcador: ídem.
+        // EMPTY extra with a marker: same thing.
         assert!(resolve_extra(&[], 0, u32::MAX, 0).is_none());
     }
 
-    /// Review #59: el PRIMER record 0x0001 manda — un segundo record no
-    /// re-escribe los valores (ambigüedad hostil resuelta conservadora).
+    /// Review #59: the FIRST 0x0001 record wins — a second record doesn't
+    /// rewrite the values (hostile ambiguity resolved conservatively).
     #[test]
-    fn extra_zip64_primer_record_gana() {
+    fn extra_zip64_first_record_wins() {
         let mut extra = Vec::new();
         for v in [77u64, 99u64] {
             extra.extend_from_slice(&0x0001u16.to_le_bytes());
             extra.extend_from_slice(&8u16.to_le_bytes());
             extra.extend_from_slice(&v.to_le_bytes());
         }
-        let got = resolve_extra(&extra, 5, u32::MAX, 7).expect("válido");
-        assert_eq!(got, (5, 77, 7), "el primer record fija uncomp");
+        let got = resolve_extra(&extra, 5, u32::MAX, 7).expect("valid");
+        assert_eq!(got, (5, 77, 7), "the first record fixes uncomp");
     }
 
     #[test]
-    fn extra_que_desborda_el_blob_es_conservador() {
-        // size promete 200 con 3 bytes: se deja de caminar, valores del CD.
+    fn extra_that_overflows_the_blob_is_conservative() {
+        // size promises 200 with 3 bytes: stops walking, uses the CD's values.
         let mut extra = 0x9999u16.to_le_bytes().to_vec();
         extra.extend_from_slice(&200u16.to_le_bytes());
         extra.extend_from_slice(&[1, 2, 3]);
         assert_eq!(resolve_extra(&extra, 10, 20, 30), Some((10, 20, 30)));
     }
 
-    /// Par DOS `(y, m, d)` en aritmética (equivale a `y<<9 | m<<5 | d`).
+    /// DOS `(y, m, d)` pair in arithmetic (equivalent to `y<<9 | m<<5 | d`).
     fn dos_date(y: u16, m: u16, d: u16) -> u16 {
         (y - 1980) * 512 + m * 32 + d
     }
 
     #[test]
-    fn dos_fechas_pineadas() {
-        // Epoch DOS: 1980-01-01 00:00:00 → 315532800000 ms.
+    fn dos_dates_pinned() {
+        // DOS epoch: 1980-01-01 00:00:00 → 315532800000 ms.
         assert_eq!(
             dos_pair_to_ms(0, dos_date(1980, 1, 1)),
             Some(315_532_800_000)
         );
-        // Bisiesto: 2024-02-29 12:30:10 → 1709209810000 ms.
-        let time = 12 * 2048 + 30 * 32 + 5; // h<<11 | min<<5 | segundos/2
+        // Leap year: 2024-02-29 12:30:10 → 1709209810000 ms.
+        let time = 12 * 2048 + 30 * 32 + 5; // h<<11 | min<<5 | seconds/2
         assert_eq!(
             dos_pair_to_ms(time, dos_date(2024, 2, 29)),
             Some(1_709_209_810_000)
         );
-        // Mes 0/13 y día 0: defensivo, None.
-        assert_eq!(dos_pair_to_ms(0, dos_date(1981, 0, 5)), None); // mes 0
-        assert_eq!(dos_pair_to_ms(0, dos_date(1981, 13, 1)), None); // mes 13
-        assert_eq!(dos_pair_to_ms(0, dos_date(1981, 1, 0)), None); // día 0
+        // Month 0/13 and day 0: defensive, None.
+        assert_eq!(dos_pair_to_ms(0, dos_date(1981, 0, 5)), None); // month 0
+        assert_eq!(dos_pair_to_ms(0, dos_date(1981, 13, 1)), None); // month 13
+        assert_eq!(dos_pair_to_ms(0, dos_date(1981, 1, 0)), None); // day 0
     }
 
     #[test]
-    fn data_offset_valida_firma_y_contenedor() {
-        let bytes = ZipSmith::new().file(b"a.txt", b"hola").build();
+    fn data_offset_validates_signature_and_container() {
+        let bytes = ZipSmith::new().file(b"a.txt", b"data").build();
         let len = bytes.len() as u64;
         let mut reader = Cursor::new(bytes.clone());
-        // Entrada única en offset 0: datos tras 30 + name_len.
+        // A single entry at offset 0: data after 30 + name_len.
         let data = data_offset(&mut reader, 0, len).expect("offset");
         assert_eq!(data, 30 + 5);
         assert_eq!(
             &bytes[usize::try_from(data).expect("small")..][..4],
-            b"hola"
+            b"data"
         );
-        // Offset que no apunta a un local header: Corrupt.
+        // An offset that doesn't point at a local header: Corrupt.
         assert_eq!(data_offset(&mut reader, 4, len), Err(Error::Corrupt));
-        // Local header cuyo fin sale del contenedor: Corrupt.
+        // A local header whose end falls outside the container: Corrupt.
         let mut fake = b"PK\x03\x04".to_vec();
         fake.extend_from_slice(&[0u8; 22]);
-        fake.extend_from_slice(&u16::MAX.to_le_bytes()); // name_len enorme
-        fake.extend_from_slice(&u16::MAX.to_le_bytes()); // extra_len enorme
+        fake.extend_from_slice(&u16::MAX.to_le_bytes()); // huge name_len
+        fake.extend_from_slice(&u16::MAX.to_le_bytes()); // huge extra_len
         let flen = fake.len() as u64;
         let mut fr = Cursor::new(fake);
         assert_eq!(data_offset(&mut fr, 0, flen), Err(Error::Corrupt));
     }
 
-    /// #100.2: una entrada del CD declara un `comment_len` que su `cd_size`
-    /// no cubre — el walk se queda corto a mitad del comentario por-entrada.
-    /// Pin de `skipped != comment_len → Corrupt` (`ZipSmith` emitía siempre
-    /// `comment_len == 0`, y el mutante que borra el chequeo sobrevivía).
+    /// #100.2: a CD entry declares a `comment_len` its `cd_size` doesn't
+    /// cover — the walk comes up short mid the per-entry comment. Pins
+    /// `skipped != comment_len → Corrupt` (`ZipSmith` always emitted
+    /// `comment_len == 0`, and the mutant that removes the check survived).
     #[test]
-    fn cd_comment_truncado_es_corrupt() {
+    fn cd_comment_truncated_is_corrupt() {
         let bytes = ZipSmith::new()
             .file(b"real.txt", b"ok")
             .cd_comment_len_lie(10)
             .build();
         let mut reader = Cursor::new(bytes.clone());
-        let eocd = locate_eocd(&mut reader, bytes.len() as u64).expect("eocd válido");
+        let eocd = locate_eocd(&mut reader, bytes.len() as u64).expect("valid eocd");
         let got = parse_cd(&mut reader, &eocd, &no_cancel(), |_| Ok(()));
         assert_eq!(got.map(|_| ()).unwrap_err(), Error::Corrupt);
     }
 
     #[test]
-    fn cancelacion_corta_el_walk() {
+    fn cancellation_cuts_the_walk_short() {
         let bytes = ZipSmith::new().file(b"a", b"x").file(b"b", b"y").build();
         let len = bytes.len() as u64;
         let mut reader = Cursor::new(bytes);
         let eocd = locate_eocd(&mut reader, len).expect("eocd");
-        let cancel = Arc::new(AtomicBool::new(true)); // armado ANTES
+        let cancel = Arc::new(AtomicBool::new(true)); // armed BEFORE
         let got = parse_cd(&mut reader, &eocd, &cancel, |_| Ok(()));
         assert_eq!(got.map(|_| ()).unwrap_err(), Error::Cancelled);
     }

@@ -1,6 +1,6 @@
 [package]
 name = "norte-vfs-rar"
-description = "Provider VFS read-only: RAR delegando en un unrar/7z instalado (ADR 0018, decisión de producto 5)"
+description = "Read-only VFS provider: RAR delegating to an installed unrar/7z (ADR 0018, product decision 5)"
 license = "MIT OR Apache-2.0"
 version.workspace = true
 edition.workspace = true
@@ -15,24 +15,24 @@ futures.workspace = true
 norte-proto.workspace = true
 norte-vfs.workspace = true
 thiserror.workspace = true
-# `process`: el delegado ES un proceso hijo (kill_on_drop, stdin a null).
-# `sync`: semáforo que acota hijos concurrentes y canal hacia el ByteStream.
-# `time`: el plazo de pared que mata a un delegado que no termina.
+# `process`: the delegate IS a child process (kill_on_drop, stdin to null).
+# `sync`: semaphore bounding concurrent children plus the channel into the ByteStream.
+# `time`: the wall deadline that kills a delegate that does not finish.
 tokio = { workspace = true, features = ["process", "rt", "sync", "time", "io-util"] }
 tokio-util.workspace = true
-# Ya en el grafo (norte-vfs-local, norte-connect): envuelve el receptor del
-# hijo como Stream sin escribir un `unfold` a mano.
+# Already in the graph (norte-vfs-local, norte-connect): wraps the child's
+# receiver as a Stream without writing an `unfold` by hand.
 tokio-stream.workspace = true
-# warn! de entradas omitidas (mismo contrato de omitir-CON-señal que ADR 0018).
+# warn! for skipped entries (same skip-WITH-a-signal contract as ADR 0018).
 tracing.workspace = true
-# El directorio de trabajo del hijo, creado en EXCLUSIVA (revisión del ADR
-# 0082): `create_dir_all` sobre un nombre derivado del pid tiene éxito si el
-# directorio ya existe, sin mirar dueño ni modo, y `/tmp` lo escribe cualquiera
-# — o sea que el cwd del delegado podía ser un directorio de otro. `tempfile`
-# crea con nombre aleatorio, `O_EXCL` y 0700, que es exactamente lo que hace
-# falta. Ya estaba aquí como dev-dependency y está en el grafo desde hace
-# tiempo (norte-config, norte-core y otros): no entra nada nuevo a compilar
-# (regla 8).
+# The child's working directory, created EXCLUSIVELY (ADR 0082 review):
+# `create_dir_all` on a pid-derived name succeeds if the directory already
+# exists, without checking owner or mode, and `/tmp` is writable by anyone —
+# meaning the delegate's cwd could be someone else's directory. `tempfile`
+# creates with a random name, `O_EXCL` and 0700, which is exactly what is
+# needed. It was already here as a dev-dependency and has been in the graph
+# for a while (norte-config, norte-core and others): nothing new enters the
+# build (rule 8).
 tempfile.workspace = true
 
 [dev-dependencies]

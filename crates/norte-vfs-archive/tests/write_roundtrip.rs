@@ -1,11 +1,12 @@
-//! Lo que este crate ESCRIBE (#132), leído por lo que este crate ya sabía
-//! leer.
+//! What this crate WRITES (#132), read by what this crate already knew
+//! how to read.
 //!
-//! El lector de aquí es el oráculo del escritor y no al revés: si el
-//! round-trip cierra, el archivo que sale es al menos tan bueno como el que
-//! norte acepta de fuera. Lo que el round-trip no puede decir —si un `unzip`
-//! ajeno lo abre— lo cubre el bit 11, que se asserta aparte porque nuestro
-//! lector se queda los bytes crudos y no lo mira.
+//! The reader here is the writer's oracle and not the other way around:
+//! if the round trip closes, the archive that comes out is at least as
+//! good as the one norte accepts from outside. What the round trip can't
+//! say — whether some other `unzip` opens it — is covered by bit 11,
+//! asserted separately because our reader keeps the raw bytes and doesn't
+//! look at it.
 
 use std::sync::Arc;
 
@@ -17,31 +18,31 @@ use norte_vfs::Provider;
 use norte_vfs_archive::write::{ArchiveWriter, PackEntry, PackFormat};
 use norte_vfs_archive::{ArchiveProvider, Format};
 
-/// Empaqueta `entradas` y devuelve los bytes del archivo.
-fn empaqueta(format: PackFormat, nivel: u32, entradas: &[(Vec<u8>, Vec<u8>)]) -> Vec<u8> {
-    let mut w = ArchiveWriter::new(format, nivel);
+/// Packs `entries` and returns the archive's bytes.
+fn pack(format: PackFormat, level: u32, entries: &[(Vec<u8>, Vec<u8>)]) -> Vec<u8> {
+    let mut w = ArchiveWriter::new(format, level);
     let mut out = Vec::new();
-    for (nombre, datos) in entradas {
-        let mut e = PackEntry::file(nombre.clone(), datos.len() as u64);
+    for (name, data) in entries {
+        let mut e = PackEntry::file(name.clone(), data.len() as u64);
         e.mtime_ms = Some(1_700_000_000_000);
-        w.begin(&e).expect("abre");
-        // A trozos, que es como llegan de un provider: el escritor tiene que
-        // dar lo mismo con un chunk que con veinte.
-        for trozo in datos.chunks(7) {
-            w.data(trozo).expect("datos");
+        w.begin(&e).expect("opens");
+        // In pieces, which is how they arrive from a provider: the writer
+        // has to behave the same with one chunk as with twenty.
+        for chunk in data.chunks(7) {
+            w.data(chunk).expect("data");
             out.extend(w.take());
         }
-        w.end().expect("cierra");
+        w.end().expect("closes");
         out.extend(w.take());
     }
-    w.finish().expect("termina");
+    w.finish().expect("finishes");
     out.extend(w.take());
     out
 }
 
-/// Lee un archivo con el provider de este crate: `(nombre, contenido)` de cada
-/// fichero del árbol.
-async fn lee(format: Format, scheme: &str, bytes: &[u8]) -> Vec<(Vec<u8>, Vec<u8>)> {
+/// Reads an archive with this crate's provider: `(name, content)` of each
+/// file in the tree.
+async fn read_archive(format: Format, scheme: &str, bytes: &[u8]) -> Vec<(Vec<u8>, Vec<u8>)> {
     let mem = Arc::new(MemProvider::new());
     let path = MemProvider::root().join(Segment::new(b"c.bin".to_vec()).expect("seg"));
     let mut sink = mem.write(&path).await.expect("write");
@@ -59,147 +60,147 @@ async fn lee(format: Format, scheme: &str, bytes: &[u8]) -> Vec<(Vec<u8>, Vec<u8
     let mut out = Vec::new();
     let mut stream = p.list(&root).await.expect("list");
     while let Some(e) = stream.next().await {
-        let e = e.expect("entrada");
+        let e = e.expect("entry");
         if e.kind != norte_proto::EntryKind::File {
             continue;
         }
-        let nombre = e
+        let name = e
             .path
             .file_name()
             .map(|s| s.as_bytes().to_vec())
-            .expect("nombre");
-        let mut datos = Vec::new();
+            .expect("name");
+        let mut data = Vec::new();
         let mut bs = p.read(&e.path, None).await.expect("read");
         while let Some(chunk) = bs.next().await {
-            datos.extend_from_slice(&chunk.expect("chunk"));
+            data.extend_from_slice(&chunk.expect("chunk"));
         }
-        out.push((nombre, datos));
+        out.push((name, data));
     }
     out.sort();
     out
 }
 
-/// El caso normal, en los tres formatos y con contenido que comprime y
-/// contenido que no.
+/// The normal case, in all three formats and with content that compresses
+/// and content that doesn't.
 #[tokio::test]
-async fn los_tres_formatos_cierran_el_round_trip() {
-    let entradas = vec![
-        (b"hola.txt".to_vec(), b"hola que tal".to_vec()),
-        (b"repe.txt".to_vec(), b"a".repeat(10_000)),
-        (b"vacio.txt".to_vec(), Vec::new()),
+async fn all_three_formats_close_the_round_trip() {
+    let entries = vec![
+        (b"hi.txt".to_vec(), b"hi there".to_vec()),
+        (b"repeat.txt".to_vec(), b"a".repeat(10_000)),
+        (b"empty.txt".to_vec(), Vec::new()),
     ];
-    let mut esperado: Vec<(Vec<u8>, Vec<u8>)> = entradas.clone();
-    esperado.sort();
+    let mut expected: Vec<(Vec<u8>, Vec<u8>)> = entries.clone();
+    expected.sort();
 
-    for (pf, f, scheme, nivel) in [
+    for (pf, f, scheme, level) in [
         (PackFormat::Zip, Format::Zip, "zip+mem", 6),
         (PackFormat::Zip, Format::Zip, "zip+mem", 0),
         (PackFormat::Tar, Format::Tar, "tar+mem", 0),
         (PackFormat::TarGz, Format::TarGz, "tar+gz+mem", 6),
     ] {
-        let bytes = empaqueta(pf, nivel, &entradas);
+        let bytes = pack(pf, level, &entries);
         assert_eq!(
-            lee(f, scheme, &bytes).await,
-            esperado,
-            "{pf:?} nivel {nivel}"
+            read_archive(f, scheme, &bytes).await,
+            expected,
+            "{pf:?} level {level}"
         );
     }
 }
 
-/// **La prueba que la regla 1 pide.** Cada nombre hostil del corpus canónico
-/// sobrevive al empaquetado byte a byte, en zip y en tar.
+/// **The test rule 1 demands.** Every hostile name from the canonical
+/// corpus survives packing byte for byte, in zip and in tar.
 ///
-/// Un nombre se empaqueta de uno en uno: el corpus tiene gemelos que
-/// colisionarían entre sí en un mismo archivo, y lo que se prueba aquí es el
-/// viaje del nombre, no la política de colisiones.
+/// A name is packed one at a time: the corpus has twins that would
+/// collide with each other in the same archive, and what's tested here is
+/// the name's trip, not the collision policy.
 #[tokio::test]
-async fn los_nombres_hostiles_sobreviven_al_empaquetado() {
+async fn hostile_names_survive_packing() {
     for name in norte_testkit::corpus::hostile_names() {
-        // Los nombres que el propio direccionamiento rechaza no llegan a ser
-        // entradas de un archivo de norte: el índice ya los OMITE al leer
-        // (ADR 0018 C2, «omitir con señal»), así que pedirle al escritor que
-        // los conserve sería pedir un round-trip que el lector no promete.
-        // El marcador `!` es el caso interesante — es un `Segment` válido y
-        // aun así no direcciona dentro de un archivo, de ahí que se compruebe
-        // aparte. Empaquetar un fichero que se llame así es cosa del OP, que
-        // lo rehúsa en vez de escribir una entrada inalcanzable.
+        // Names addressing itself rejects never become entries of a
+        // norte archive: the index already OMITS them at read time (ADR
+        // 0018 C2, "omit with a signal"), so asking the writer to keep
+        // them would be asking for a round trip the reader doesn't
+        // promise. The `!` marker is the interesting case — it's a valid
+        // `Segment` and still doesn't address inside an archive, hence it
+        // gets checked separately. Packing a file named that is the
+        // caller's business, and it refuses instead of writing an
+        // unreachable entry.
         if Segment::new(name.bytes.clone()).is_err() || name.bytes == b"!" {
             continue;
         }
-        let entradas = vec![(name.bytes.clone(), b"contenido".to_vec())];
+        let entries = vec![(name.bytes.clone(), b"content".to_vec())];
         for (pf, f, scheme) in [
             (PackFormat::Zip, Format::Zip, "zip+mem"),
             (PackFormat::Tar, Format::Tar, "tar+mem"),
         ] {
-            let bytes = empaqueta(pf, 6, &entradas);
-            let leido = lee(f, scheme, &bytes).await;
-            assert_eq!(leido, entradas, "{} no sobrevivió a {pf:?}", name.id);
+            let bytes = pack(pf, 6, &entries);
+            let read_back = read_archive(f, scheme, &bytes).await;
+            assert_eq!(read_back, entries, "{} did not survive {pf:?}", name.id);
         }
     }
 }
 
-/// El bit 11 dice la verdad, en los dos sentidos.
+/// Bit 11 tells the truth, both ways.
 ///
-/// Nuestro lector no lo mira —se queda los bytes crudos—, así que el
-/// round-trip de arriba pasaría igual con el bit puesto siempre. Pero los
-/// demás programas SÍ decodifican por él, y ponerlo sobre un nombre que no es
-/// UTF-8 convierte el nombre del usuario en caracteres de reemplazo en
-/// cualquier unzip del mundo.
+/// Our reader doesn't look at it — it keeps the raw bytes —, so the round
+/// trip above would pass just the same with the bit always set. But other
+/// programs DO decode by it, and setting it on a name that isn't UTF-8
+/// turns the user's name into replacement characters in any unzip in the world.
 #[test]
-fn el_bit_11_solo_se_pone_cuando_el_nombre_es_utf8() {
-    /// Flags del header local: bytes 6..8 del fichero.
-    fn flags_del_primer_header(bytes: &[u8]) -> u16 {
+fn bit_11_is_only_set_when_the_name_is_utf8() {
+    /// The local header's flags: bytes 6..8 of the file.
+    fn first_header_flags(bytes: &[u8]) -> u16 {
         u16::from_le_bytes([bytes[6], bytes[7]])
     }
     const BIT_UTF8: u16 = 1 << 11;
 
-    let utf8 = empaqueta(
+    let utf8 = pack(
         PackFormat::Zip,
         6,
         &[(b"caf\xc3\xa9.txt".to_vec(), b"x".to_vec())],
     );
     assert_ne!(
-        flags_del_primer_header(&utf8) & BIT_UTF8,
+        first_header_flags(&utf8) & BIT_UTF8,
         0,
-        "un nombre UTF-8 se anuncia como tal"
+        "a UTF-8 name is announced as such"
     );
 
-    let crudo = empaqueta(
+    let raw = pack(
         PackFormat::Zip,
         6,
         &[(b"caf\xe9.txt".to_vec(), b"x".to_vec())],
     );
     assert_eq!(
-        flags_del_primer_header(&crudo) & BIT_UTF8,
+        first_header_flags(&raw) & BIT_UTF8,
         0,
-        "y uno que no lo es, NO: mentir aquí es perder el nombre en todo lector ajeno"
+        "and one that isn't, NOT: lying here loses the name in any foreign reader"
     );
 }
 
-/// Un nombre de más de 100 bytes es corriente y tar lo lleva en 100: sin la
-/// extensión GNU se recortaría, y un nombre recortado es un nombre perdido.
+/// A name over 100 bytes is common and tar carries it in 100: without the
+/// GNU extension it would get trimmed, and a trimmed name is a lost name.
 #[tokio::test]
-async fn un_nombre_largo_sobrevive_al_tar() {
-    let largo = format!("{}.txt", "n".repeat(200)).into_bytes();
-    let entradas = vec![(largo.clone(), b"dentro".to_vec())];
-    let bytes = empaqueta(PackFormat::Tar, 0, &entradas);
-    assert_eq!(lee(Format::Tar, "tar+mem", &bytes).await, entradas);
+async fn a_long_name_survives_tar() {
+    let long_name = format!("{}.txt", "n".repeat(200)).into_bytes();
+    let entries = vec![(long_name.clone(), b"inside".to_vec())];
+    let bytes = pack(PackFormat::Tar, 0, &entries);
+    assert_eq!(read_archive(Format::Tar, "tar+mem", &bytes).await, entries);
 }
 
-/// Muchas entradas: el directorio central y sus offsets tienen que cuadrar
-/// más allá del caso de una.
+/// Many entries: the central directory and its offsets have to line up
+/// beyond the single-entry case.
 #[tokio::test]
-async fn un_zip_de_muchas_entradas_se_lee_entero() {
-    let entradas: Vec<(Vec<u8>, Vec<u8>)> = (0..500)
+async fn a_zip_with_many_entries_reads_whole() {
+    let entries: Vec<(Vec<u8>, Vec<u8>)> = (0..500)
         .map(|i| {
             (
                 format!("f{i:04}.txt").into_bytes(),
-                format!("contenido {i}").into_bytes(),
+                format!("content {i}").into_bytes(),
             )
         })
         .collect();
-    let mut esperado = entradas.clone();
-    esperado.sort();
-    let bytes = empaqueta(PackFormat::Zip, 6, &entradas);
-    assert_eq!(lee(Format::Zip, "zip+mem", &bytes).await, esperado);
+    let mut expected = entries.clone();
+    expected.sort();
+    let bytes = pack(PackFormat::Zip, 6, &entries);
+    assert_eq!(read_archive(Format::Zip, "zip+mem", &bytes).await, expected);
 }

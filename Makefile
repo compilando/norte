@@ -1,12 +1,12 @@
-# Envoltorio fino sobre `just` (la fuente única de comandos: humanos, Claude
-# y CI corren exactamente lo mismo — ver justfile).
+# Thin wrapper over `just` (the single source of commands: humans, Claude
+# and CI all run exactly the same thing — see justfile).
 #
-# ¿Equipo nuevo (sin cargo/just)?  ->  make setup
+# New machine (no cargo/just)?  ->  make setup
 
-# cargo/just/nextest viven en $CARGO_HOME/bin (~/.cargo/bin por defecto). Se
-# fuerza en el PATH de las recipes para que `make <lo-que-sea>` funcione JUSTO
-# tras `make setup`, sin reiniciar el shell (el instalador de rustup no toca el
-# PATH del shell en curso).
+# cargo/just/nextest live in $CARGO_HOME/bin (~/.cargo/bin by default). It is
+# forced onto the recipes' PATH so `make <whatever>` works RIGHT after
+# `make setup`, without restarting the shell (rustup's installer does not
+# touch the current shell's PATH).
 CARGO_HOME ?= $(HOME)/.cargo
 export PATH := $(CARGO_HOME)/bin:$(PATH)
 
@@ -14,55 +14,56 @@ export PATH := $(CARGO_HOME)/bin:$(PATH)
 
 all: help
 
-# Guarda: si tras el PATH ni cargo ni just están, el problema es el setup.
+# Guard: if after the PATH neither cargo nor just are there, the problem is
+# the setup.
 _need_just:
 	@command -v just >/dev/null 2>&1 || { \
-	  echo "ERROR: no encuentro 'just'. Corre 'make setup' (y si ya lo hiciste,"; \
-	  echo "       abre una terminal nueva o revisa que exista $(CARGO_HOME)/bin/just)."; \
+	  echo "ERROR: cannot find 'just'. Run 'make setup' (and if you already did,"; \
+	  echo "       open a new terminal or check that $(CARGO_HOME)/bin/just exists)."; \
 	  exit 1; }
 
-# Bootstrap del entorno: rustup + toolchain pineado + just + nextest/llvm-cov/
-# deny. Idempotente. NO necesita nada previo salvo curl.
+# Environment bootstrap: rustup + pinned toolchain + just + nextest/llvm-cov/
+# deny. Idempotent. Needs NOTHING beforehand except curl.
 setup:
 	bash scripts/setup.sh
 
-# Deja `ntc`, `norte` y `ntc-gui` en el PATH apuntando a ESTE árbol. Es lo que
-# se corre UNA vez tras `make setup`; a partir de ahí cualquier build los
-# actualiza sola, porque son symlinks al `target/` de aquí y no copias.
+# Puts `ntc`, `norte` and `ntc-gui` on the PATH pointing at THIS tree. This is
+# what is run ONCE after `make setup`; from then on any build updates them on
+# its own, because they are symlinks to this tree's `target/` and not copies.
 #
-# `make setup` prepara el TOOLCHAIN; esto prepara los COMANDOS. Son dos pasos
-# distintos y en ese orden.
+# `make setup` prepares the TOOLCHAIN; this prepares the COMMANDS. Two
+# different steps, in that order.
 link-all: _need_just
 	just link-all
 
-# Las dos mitades sueltas, por si sólo quieres una: `link` es ntc + norte (sin
-# tocar WebKitGTK ni npm), `link-gui` es la ventana.
+# The two halves on their own, in case you only want one: `link` is ntc +
+# norte (without touching WebKitGTK or npm), `link-gui` is the window.
 link: _need_just
 	just link
 
 link-gui: _need_just
 	just link-gui
 
-# La vuelta de `make link-all`. Sólo quita los enlaces que apuntan a este
-# árbol; los de otro worktree se quedan.
+# `make link-all`'s reverse. It only removes the links that point at this
+# tree; another worktree's stay.
 unlink: _need_just
 	just unlink
 
 help:
-	@echo "norte — atajos (delegan en just):"
-	@echo "  make setup    - preparar el equipo (rustup, just, nextest, deny…)"
-	@echo "  make link-all - dejar ntc, norte y ntc-gui en el PATH (tras setup)"
-	@echo "  make unlink   - quitarlos"
-	@echo "  make run      - TUI en release"
-	@echo "  make dev      - TUI en debug (iterar)"
-	@echo "  make gui      - ventana Tauri (exige 'norte daemon run')"
-	@echo "  make test     - suite completa (nextest + doctests)"
-	@echo "  make ci       - lo mismo que CI: lint + test + cobertura + docs"
-	@echo "  make fmt      - formatear"
-	@echo "  make watch    - tests en cada guardado (exige cargo-watch)"
-	@echo "  make install  - instala norte-tui y norte (CLI) en \$$CARGO_HOME/bin"
-	@echo "  make uninstall - los desinstala"
-	@echo "  just cli ls /tmp          - CLI de humo (args libres via just)"
+	@echo "norte — shortcuts (delegate to just):"
+	@echo "  make setup    - prepare the machine (rustup, just, nextest, deny…)"
+	@echo "  make link-all - put ntc, norte and ntc-gui on the PATH (after setup)"
+	@echo "  make unlink   - remove them"
+	@echo "  make run      - TUI in release"
+	@echo "  make dev      - TUI in debug (iterate)"
+	@echo "  make gui      - Tauri window (requires 'norte daemon run')"
+	@echo "  make test     - full suite (nextest + doctests)"
+	@echo "  make ci       - same as CI: lint + test + coverage + docs"
+	@echo "  make fmt      - format"
+	@echo "  make watch    - tests on every save (requires cargo-watch)"
+	@echo "  make install  - installs norte-tui and norte (CLI) into \$$CARGO_HOME/bin"
+	@echo "  make uninstall - uninstalls them"
+	@echo "  just cli ls /tmp          - smoke CLI (free args via just)"
 
 run: _need_just
 	just run

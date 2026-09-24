@@ -1,23 +1,24 @@
-//! Escribir un archivo: `zip`, `tar` y `tar.gz`, entrada a entrada y sin
-//! tocar el disco (#132).
+//! Writing an archive: `zip`, `tar` and `tar.gz`, entry by entry and
+//! without touching disk (#132).
 //!
-//! **Esto no es el provider.** `norte-vfs-archive` sigue siendo `READ_ONLY`
-//! (ADR 0018) y nada de aquí muta el interior de un contenedor: lo que hay es
-//! un codificador puro —metadatos y bytes en, bytes de archivo fuera— que el
-//! core usa para FABRICAR un fichero nuevo a través del provider del destino,
-//! sea cual sea. Por eso vive en este crate y no conoce ningún `Provider`.
+//! **This isn't the provider.** `norte-vfs-archive` is still `READ_ONLY`
+//! (ADR 0018) and nothing here mutates a container's inside: what's here
+//! is a pure encoder — metadata and bytes in, archive bytes out — that the
+//! core uses to MANUFACTURE a new file through the destination's
+//! provider, whatever it is. That's why it lives in this crate and knows
+//! no `Provider`.
 //!
-//! El contrato es incremental por la misma razón: los bytes de una entrada
-//! llegan a trozos desde un provider asíncrono, y el archivo se manda a un
-//! destino que puede ser remoto. Nada obliga a tener en memoria ni el archivo
-//! ni una entrada.
+//! The contract is incremental for the same reason: an entry's bytes
+//! arrive in pieces from an async provider, and the archive is sent to a
+//! destination that may be remote. Nothing requires keeping either the
+//! archive or an entry in memory.
 //!
 //! ```
 //! use norte_vfs_archive::write::{ArchiveWriter, PackEntry, PackFormat};
 //!
 //! let mut w = ArchiveWriter::new(PackFormat::Zip, 6);
-//! w.begin(&PackEntry::file(b"hola.txt".to_vec(), 4)).unwrap();
-//! w.data(b"hola").unwrap();
+//! w.begin(&PackEntry::file(b"hi.txt".to_vec(), 2)).unwrap();
+//! w.data(b"hi").unwrap();
 //! w.end().unwrap();
 //! w.finish().unwrap();
 //! let bytes = w.take();
@@ -30,23 +31,24 @@ mod zip;
 pub use tar::TarWriter;
 pub use zip::ZipWriter;
 
-/// Formatos que se saben ESCRIBIR.
+/// Formats that can be WRITTEN.
 ///
-/// Menos de los que se saben leer, y a propósito: `rar` se delega a un
-/// programa externo en modo lectura (ADR 0056) y 7z no se lee siquiera.
+/// Fewer than the ones that can be read, and on purpose: `rar` is
+/// delegated to an external program in read mode (ADR 0056) and 7z isn't
+/// even read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PackFormat {
-    /// zip con `deflate` (o `store` a nivel 0).
+    /// zip with `deflate` (or `store` at level 0).
     Zip,
-    /// tar plano.
+    /// plain tar.
     Tar,
-    /// tar comprimido con gzip.
+    /// tar compressed with gzip.
     TarGz,
 }
 
 impl PackFormat {
-    /// El token del formato tal y como viaja por el wire y como lo nombran
-    /// [`ARCHIVE_FORMATS`](norte_proto::ARCHIVE_FORMATS).
+    /// The format's token exactly as it travels on the wire and as
+    /// [`ARCHIVE_FORMATS`](norte_proto::ARCHIVE_FORMATS) names it.
     #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
@@ -56,67 +58,66 @@ impl PackFormat {
         }
     }
 
-    /// El formato que sugiere un NOMBRE de fichero, o `None` si no lo sugiere
-    /// ninguno.
+    /// The format a file NAME suggests, or `None` if none does.
     ///
-    /// Es azúcar para el frontend, que rellena el diálogo: lo que decide de
-    /// verdad es el campo del wire, porque adivinar el formato de un nombre en
-    /// el servidor sería decidir por el usuario sin decírselo.
+    /// It's sugar for the frontend, which fills in the dialog: what
+    /// really decides is the wire field, because guessing a name's format
+    /// on the server would be deciding for the user without telling them.
     #[must_use]
     pub fn from_name(name: &[u8]) -> Option<Self> {
-        let acaba = |suf: &[u8]| {
+        let ends_with = |suf: &[u8]| {
             name.len() >= suf.len() && name[name.len() - suf.len()..].eq_ignore_ascii_case(suf)
         };
-        if acaba(b".tar.gz") || acaba(b".tgz") {
+        if ends_with(b".tar.gz") || ends_with(b".tgz") {
             return Some(Self::TarGz);
         }
-        if acaba(b".tar") {
+        if ends_with(b".tar") {
             return Some(Self::Tar);
         }
-        if acaba(b".zip") {
+        if ends_with(b".zip") {
             return Some(Self::Zip);
         }
         None
     }
 }
 
-/// Por qué no se pudo empaquetar.
+/// Why an archive couldn't be built.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum PackError {
-    /// El nombre no cabe en el formato (zip lo lleva en 16 bits).
+    /// The name doesn't fit the format (zip carries it in 16 bits).
     #[error("entry name does not fit the format")]
     Nombre,
-    /// Se llamó fuera de orden: datos sin entrada abierta, dos entradas a la
-    /// vez, cerrar dos veces.
+    /// Called out of order: data with no entry open, two entries at once,
+    /// closing twice.
     #[error("archive writer used out of order")]
     Estado,
-    /// Los bytes entregados no cuadran con el tamaño anunciado (tar lo lleva
-    /// en la cabecera, ANTES de los datos).
+    /// The delivered bytes don't match the announced size (tar carries it
+    /// in the header, BEFORE the data).
     #[error("entry size does not match the bytes written")]
     Tamano,
-    /// El compresor falló.
+    /// The compressor failed.
     #[error("compressor failed")]
     Io,
 }
 
-/// Lo que se sabe de una entrada ANTES de escribir sus bytes.
+/// What's known about an entry BEFORE writing its bytes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PackEntry {
-    /// El nombre DENTRO del archivo, relativo y en bytes crudos (regla 1).
-    /// Quien empaqueta lo compone a partir de la base; aquí no se interpreta.
+    /// The name INSIDE the archive, relative and in raw bytes (rule 1).
+    /// Whoever packs composes it from the base; it isn't interpreted here.
     pub name: Vec<u8>,
-    /// Tamaño exacto. Tar lo necesita por delante; zip lo comprueba.
+    /// Exact size. Tar needs it upfront; zip checks it.
     pub size: u64,
-    /// `true` para un directorio (sin datos, con la barra final que zip pide).
+    /// `true` for a directory (no data, with the trailing slash zip requires).
     pub dir: bool,
-    /// Permisos, si el origen los dio.
+    /// Permissions, if the source gave them.
     pub mode: Option<u32>,
-    /// Modificación en milisegundos epoch, si el origen la dio.
+    /// Modification time in epoch milliseconds, if the source gave it.
     pub mtime_ms: Option<i64>,
 }
 
 impl PackEntry {
-    /// Una entrada de fichero con lo mínimo.
+    /// A file entry with the bare minimum.
     #[must_use]
     pub fn file(name: Vec<u8>, size: u64) -> Self {
         Self {
@@ -128,7 +129,7 @@ impl PackEntry {
         }
     }
 
-    /// Una entrada de directorio.
+    /// A directory entry.
     #[must_use]
     pub fn dir(name: Vec<u8>) -> Self {
         Self {
@@ -141,49 +142,49 @@ impl PackEntry {
     }
 }
 
-/// El escritor, sea cual sea el formato.
+/// The writer, whatever the format.
 ///
-/// Ciclo: `begin` → `data`* → `end` por entrada, `finish` al acabar, y
-/// [`ArchiveWriter::take`] cuando se quiera drenar lo producido.
+/// Cycle: `begin` → `data`* → `end` per entry, `finish` when done, and
+/// [`ArchiveWriter::take`] whenever you want to drain what's been produced.
 pub enum ArchiveWriter {
     /// zip.
     Zip(Box<ZipWriter>),
-    /// tar plano.
+    /// plain tar.
     Tar(Box<TarWriter>),
-    /// tar dentro de gzip: el tar se produce igual y se pasa por el
-    /// compresor, que es exactamente lo que `tar.gz` es.
+    /// tar inside gzip: the tar is produced the same way and piped
+    /// through the compressor, which is exactly what `tar.gz` is.
     TarGz {
-        /// El tar de dentro.
+        /// The tar inside.
         inner: Box<TarWriter>,
-        /// El compresor, drenado en cada `take`.
+        /// The compressor, drained on every `take`.
         gz: Box<flate2::write::GzEncoder<Vec<u8>>>,
     },
 }
 
 impl ArchiveWriter {
-    /// Un escritor del formato dado. `nivel` es 0..=9 y solo lo miran los
-    /// formatos comprimidos.
+    /// A writer for the given format. `level` is 0..=9 and only the
+    /// compressed formats look at it.
     #[must_use]
-    pub fn new(format: PackFormat, nivel: u32) -> Self {
-        let nivel = nivel.min(9);
+    pub fn new(format: PackFormat, level: u32) -> Self {
+        let level = level.min(9);
         match format {
-            PackFormat::Zip => Self::Zip(Box::new(ZipWriter::new(nivel))),
+            PackFormat::Zip => Self::Zip(Box::new(ZipWriter::new(level))),
             PackFormat::Tar => Self::Tar(Box::default()),
             PackFormat::TarGz => Self::TarGz {
                 inner: Box::default(),
                 gz: Box::new(flate2::write::GzEncoder::new(
                     Vec::new(),
-                    flate2::Compression::new(nivel),
+                    flate2::Compression::new(level),
                 )),
             },
         }
     }
 
-    /// Abre una entrada.
+    /// Opens an entry.
     ///
     /// # Errors
     ///
-    /// Las de [`PackError`].
+    /// [`PackError`]'s.
     pub fn begin(&mut self, entry: &PackEntry) -> Result<(), PackError> {
         match self {
             Self::Zip(w) => w.begin(entry),
@@ -191,11 +192,11 @@ impl ArchiveWriter {
         }
     }
 
-    /// Añade datos a la entrada abierta.
+    /// Adds data to the open entry.
     ///
     /// # Errors
     ///
-    /// Las de [`PackError`].
+    /// [`PackError`]'s.
     pub fn data(&mut self, chunk: &[u8]) -> Result<(), PackError> {
         match self {
             Self::Zip(w) => w.data(chunk),
@@ -203,11 +204,11 @@ impl ArchiveWriter {
         }
     }
 
-    /// Cierra la entrada abierta.
+    /// Closes the open entry.
     ///
     /// # Errors
     ///
-    /// Las de [`PackError`].
+    /// [`PackError`]'s.
     pub fn end(&mut self) -> Result<(), PackError> {
         match self {
             Self::Zip(w) => w.end(),
@@ -215,41 +216,42 @@ impl ArchiveWriter {
         }
     }
 
-    /// Cierra el archivo.
+    /// Closes the archive.
     ///
     /// # Errors
     ///
-    /// Las de [`PackError`].
+    /// [`PackError`]'s.
     pub fn finish(&mut self) -> Result<(), PackError> {
         match self {
             Self::Zip(w) => w.finish(),
             Self::Tar(w) => w.finish(),
             Self::TarGz { inner, gz } => {
                 inner.finish()?;
-                let cola = inner.take();
-                std::io::Write::write_all(gz.as_mut(), &cola).map_err(|_| PackError::Io)?;
+                let tail = inner.take();
+                std::io::Write::write_all(gz.as_mut(), &tail).map_err(|_| PackError::Io)?;
                 gz.try_finish().map_err(|_| PackError::Io)
             }
         }
     }
 
-    /// Drena lo producido hasta ahora.
+    /// Drains what's been produced so far.
     ///
     /// # Panics
     ///
-    /// Nunca: el `write_all` sobre un `Vec` en memoria no falla, y si el
-    /// compresor fallara ya lo habría dicho `data`.
+    /// Never: `write_all` over an in-memory `Vec` doesn't fail, and if the
+    /// compressor had failed, `data` would already have said so.
     pub fn take(&mut self) -> Vec<u8> {
         match self {
             Self::Zip(w) => w.take(),
             Self::Tar(w) => w.take(),
             Self::TarGz { inner, gz } => {
-                let crudo = inner.take();
-                if !crudo.is_empty() {
-                    // El tar de dentro se le pasa al compresor según sale, y
-                    // lo que el compresor lleve producido se entrega. Así ni
-                    // el tar ni el gz acumulan el archivo entero.
-                    let _ = std::io::Write::write_all(gz.as_mut(), &crudo);
+                let raw = inner.take();
+                if !raw.is_empty() {
+                    // The tar inside is handed to the compressor as it
+                    // comes out, and whatever the compressor has produced
+                    // is delivered. That way neither the tar nor the gz
+                    // accumulates the whole archive.
+                    let _ = std::io::Write::write_all(gz.as_mut(), &raw);
                 }
                 std::mem::take(gz.get_mut())
             }
@@ -261,44 +263,44 @@ impl ArchiveWriter {
 mod tests {
     use super::*;
 
-    /// El nombre lo decide el usuario, así que el formato por defecto del
-    /// diálogo sale de él — y `.tar.gz` gana a `.tar`, que es su sufijo.
+    /// The user decides the name, so the dialog's default format comes
+    /// from it — and `.tar.gz` wins over `.tar`, which is its suffix.
     #[test]
-    fn el_formato_se_sugiere_por_el_nombre() {
+    fn the_format_is_suggested_by_the_name() {
         assert_eq!(PackFormat::from_name(b"a.zip"), Some(PackFormat::Zip));
         assert_eq!(PackFormat::from_name(b"A.ZIP"), Some(PackFormat::Zip));
         assert_eq!(PackFormat::from_name(b"a.tar"), Some(PackFormat::Tar));
         assert_eq!(PackFormat::from_name(b"a.tar.gz"), Some(PackFormat::TarGz));
         assert_eq!(PackFormat::from_name(b"a.tgz"), Some(PackFormat::TarGz));
-        assert_eq!(PackFormat::from_name(b"a.rar"), None, "rar no se escribe");
-        assert_eq!(PackFormat::from_name(b"sin"), None);
+        assert_eq!(PackFormat::from_name(b"a.rar"), None, "rar isn't written");
+        assert_eq!(PackFormat::from_name(b"none"), None);
     }
 
-    /// Usar el escritor fuera de orden es un error, no un archivo raro.
+    /// Using the writer out of order is an error, not a weird archive.
     #[test]
-    fn el_orden_de_las_llamadas_se_comprueba() {
+    fn the_order_of_calls_is_checked() {
         for f in [PackFormat::Zip, PackFormat::Tar, PackFormat::TarGz] {
             let mut w = ArchiveWriter::new(f, 6);
             assert_eq!(w.data(b"x"), Err(PackError::Estado), "{f:?}");
             assert_eq!(w.end(), Err(PackError::Estado), "{f:?}");
-            w.begin(&PackEntry::file(b"a".to_vec(), 1)).expect("abre");
+            w.begin(&PackEntry::file(b"a".to_vec(), 1)).expect("opens");
             assert_eq!(
                 w.begin(&PackEntry::file(b"b".to_vec(), 1)),
                 Err(PackError::Estado),
-                "{f:?}: dos entradas a la vez, no"
+                "{f:?}: two entries at once, no"
             );
         }
     }
 
-    /// Tar lleva el tamaño en la cabecera, DELANTE de los datos: entregar
-    /// otra cosa es un tar que nadie puede leer más allá de esa entrada, así
-    /// que se dice en vez de escribirlo.
+    /// Tar carries the size in the header, BEFORE the data: delivering
+    /// something else is a tar nobody can read past that entry, so it's
+    /// said instead of written.
     #[test]
-    fn el_tar_no_deja_mentir_al_tamano() {
+    fn tar_does_not_let_the_size_lie() {
         let mut w = ArchiveWriter::new(PackFormat::Tar, 0);
-        w.begin(&PackEntry::file(b"a".to_vec(), 4)).expect("abre");
-        assert_eq!(w.data(b"12345"), Err(PackError::Tamano), "de más");
-        w.data(b"123").expect("de menos entra");
-        assert_eq!(w.end(), Err(PackError::Tamano), "y se nota al cerrar");
+        w.begin(&PackEntry::file(b"a".to_vec(), 4)).expect("opens");
+        assert_eq!(w.data(b"12345"), Err(PackError::Tamano), "too much");
+        w.data(b"123").expect("too little goes in");
+        assert_eq!(w.end(), Err(PackError::Tamano), "and it shows at close");
     }
 }

@@ -1,64 +1,65 @@
-//! Smoke tests del CLI (`assert_cmd`): los cuatro subcomandos contra un
-//! tempdir real, incluida la cancelación por SIGINT (unix).
+//! Smoke tests for the CLI (`assert_cmd`): the four subcommands against a
+//! real tempdir, including SIGINT cancellation (unix).
 
 use assert_cmd::Command;
 
-/// El directorio de estado de ESTE proceso de test, y nunca el del que corre la
-/// suite.
+/// THIS test process's state directory, and never the one running the suite.
 ///
-/// Desde #167 un `norte cp`/`mv`/`rm`/`mkdir` embebido abre
-/// `<estado>/journal.db` al mutar (#177: no antes) y se queda su lock EXCLUSIVO
-/// mientras vive. Sin este
-/// override eso sería el journal de verdad del desarrollador: la suite le
-/// escribiría filas en su cadena de hashes y le disputaría el lock a su TUI o a
-/// su daemon. El mismo criterio que las tres pruebas de shell (7b0655c) — el
-/// sujeto es el binario, jamás la configuración de quien lo ejecuta.
+/// Since #167 an embedded `norte cp`/`mv`/`rm`/`mkdir` opens
+/// `<state>/journal.db` on mutation (#177: not before) and keeps its
+/// EXCLUSIVE lock while it lives. Without this override that would be the
+/// real developer's journal: the suite would write rows into its hash chain
+/// and would fight its TUI or its daemon for the lock. Same criterion as the
+/// three shell tests (7b0655c) — the subject is the binary, never the
+/// configuration of whoever runs it.
 ///
-/// Uno por proceso: nextest da un proceso por test, así que cada test acaba con
-/// el suyo. Bajo `cargo test` (varios tests por proceso) lo comparten, y el
-/// segundo en llegar no espera: se lleva `Busy` a los 250 ms y sigue sin
-/// registrar, que es lo que este cambio tolera por diseño.
+/// One per process: nextest gives one process per test, so each test ends up
+/// with its own. Under `cargo test` (several tests per process) they share
+/// it, and the second one to arrive does not wait: it gets `Busy` at 250 ms
+/// and keeps going unregistered, which is what this change tolerates by
+/// design.
 ///
-/// Vive bajo `CARGO_TARGET_TMPDIR` y no bajo `/tmp`: un `static` no ejecuta
-/// `Drop`, así que el directorio sobrevive al proceso — ahí lo barren
-/// `cargo clean` y `just prune`, en `/tmp` no lo barre nadie.
-fn config_dir_del_test() -> &'static std::path::Path {
+/// Lives under `CARGO_TARGET_TMPDIR` and not under `/tmp`: a `static` does
+/// not run `Drop`, so the directory survives the process — `cargo clean` and
+/// `just prune` sweep it there, nobody sweeps it in `/tmp`.
+fn test_config_dir() -> &'static std::path::Path {
     static DIR: std::sync::OnceLock<tempfile::TempDir> = std::sync::OnceLock::new();
     DIR.get_or_init(|| {
-        tempfile::TempDir::new_in(env!("CARGO_TARGET_TMPDIR")).expect("tempdir de estado")
+        tempfile::TempDir::new_in(env!("CARGO_TARGET_TMPDIR")).expect("state tempdir")
     })
     .path()
 }
 
 fn norte() -> Command {
-    let mut c = Command::cargo_bin("norte").expect("binario norte compilado");
-    c.env("NORTE_CONFIG_DIR", config_dir_del_test());
+    let mut c = Command::cargo_bin("norte").expect("norte binary compiled");
+    c.env("NORTE_CONFIG_DIR", test_config_dir());
     c
 }
 
-/// #177: navegar NO abre —ni siquiera crea— el journal, y mutar SÍ.
+/// #177: browsing does NOT open — does not even create — the journal, and
+/// mutating DOES.
 ///
-/// Es la prueba a nivel de proceso de lo que #177 arregla: mientras un frontend
-/// embebido se limitaba a mirar, `journal.db` seguía suyo y ni `norte daemon
-/// run` podía arrancar ni `norte audit` leer. Los dos comandos van en el mismo
-/// test a propósito: «no lo abre» solo significa algo si se enseña al lado del
-/// que sí lo abre.
+/// This is the process-level proof of what #177 fixes: while an embedded
+/// frontend only looked, `journal.db` stayed its own and neither `norte
+/// daemon run` could start nor `norte audit` could read. The two commands run
+/// in the same test on purpose: "it does not open it" only means something if
+/// it is shown next to the one that does.
 ///
-/// Con directorio de estado PROPIO, y no el compartido de
-/// `config_dir_del_test`: lo que se afirma es que un fichero NO existe, y bajo
-/// `cargo test` —un proceso para toda la suite— el `cp` de otro test ya lo
-/// habría creado.
+/// With its OWN state directory, not the shared one from `test_config_dir`:
+/// what is asserted is that a file does NOT exist, and under `cargo test` —
+/// one process for the whole suite — another test's `cp` would already have
+/// created it.
 #[test]
-fn ls_no_abre_el_journal_y_mkdir_si() {
-    let estado = tempfile::tempdir().unwrap();
-    let arbol = tempfile::tempdir().unwrap();
-    let journal = estado.path().join("journal.db");
+fn ls_does_not_open_the_journal_and_mkdir_does() {
+    let state = tempfile::tempdir().unwrap();
+    let tree = tempfile::tempdir().unwrap();
+    let journal = state.path().join("journal.db");
 
     let out = Command::cargo_bin("norte")
-        .expect("binario norte compilado")
-        .env("NORTE_CONFIG_DIR", estado.path())
+        .expect("norte binary compiled")
+        .env("NORTE_CONFIG_DIR", state.path())
         .arg("ls")
-        .arg(arbol.path())
+        .arg(tree.path())
         .output()
         .unwrap();
     assert!(
@@ -68,14 +69,14 @@ fn ls_no_abre_el_journal_y_mkdir_si() {
     );
     assert!(
         !journal.exists(),
-        "listar un directorio no puede quedarse el journal (#177)"
+        "listing a directory cannot end up owning the journal (#177)"
     );
 
     let out = Command::cargo_bin("norte")
-        .expect("binario norte compilado")
-        .env("NORTE_CONFIG_DIR", estado.path())
+        .expect("norte binary compiled")
+        .env("NORTE_CONFIG_DIR", state.path())
         .arg("mkdir")
-        .arg(arbol.path().join("nuevo"))
+        .arg(tree.path().join("new"))
         .output()
         .unwrap();
     assert!(
@@ -85,14 +86,14 @@ fn ls_no_abre_el_journal_y_mkdir_si() {
     );
     assert!(
         journal.exists(),
-        "crear un directorio sí queda registrado (regla dura 4, #167)"
+        "creating a directory IS recorded (hard rule 4, #167)"
     );
 }
 
 #[test]
 fn ls_json_lists_entries() {
     let dir = tempfile::tempdir().unwrap();
-    std::fs::write(dir.path().join("uno.txt"), b"1").unwrap();
+    std::fs::write(dir.path().join("one.txt"), b"1").unwrap();
     std::fs::create_dir(dir.path().join("sub")).unwrap();
 
     let out = norte()
@@ -106,15 +107,15 @@ fn ls_json_lists_entries() {
         "stderr: {}",
         String::from_utf8_lossy(&out.stderr)
     );
-    let parsed: serde_json::Value = serde_json::from_slice(&out.stdout).expect("JSON válido");
-    let entries = parsed.as_array().expect("array de entradas");
+    let parsed: serde_json::Value = serde_json::from_slice(&out.stdout).expect("valid JSON");
+    let entries = parsed.as_array().expect("array of entries");
     assert_eq!(entries.len(), 2);
     let kinds: Vec<&str> = entries
         .iter()
         .map(|e| e["kind"].as_str().unwrap())
         .collect();
     assert!(kinds.contains(&"file") && kinds.contains(&"dir"));
-    // Los paths van en forma wire.
+    // Paths go out in wire form.
     assert!(
         entries
             .iter()
@@ -122,13 +123,14 @@ fn ls_json_lists_entries() {
     );
 }
 
-/// #52: el listado local es lazy (`size`/`mtime_ms` en `None`); `ls`
-/// hidrata con un stat serial antes de imprimir — MAJOR-2, restaura el
-/// output pre-#52. Cubre --json (campo no-null) y texto (columna no vacía).
+/// #52: the local listing is lazy (`size`/`mtime_ms` are `None`); `ls`
+/// hydrates with a serial stat before printing — MAJOR-2, restores the
+/// pre-#52 output. Covers --json (non-null field) and text (non-empty
+/// column).
 #[test]
-fn ls_hidrata_size_lazy() {
+fn ls_hydrates_lazy_size() {
     let dir = tempfile::tempdir().unwrap();
-    std::fs::write(dir.path().join("uno.txt"), b"contenido").unwrap();
+    std::fs::write(dir.path().join("one.txt"), b"content").unwrap();
 
     let json_out = norte()
         .arg("ls")
@@ -137,22 +139,22 @@ fn ls_hidrata_size_lazy() {
         .output()
         .unwrap();
     assert!(json_out.status.success());
-    let parsed: serde_json::Value = serde_json::from_slice(&json_out.stdout).expect("JSON válido");
-    let entries = parsed.as_array().expect("array de entradas");
+    let parsed: serde_json::Value = serde_json::from_slice(&json_out.stdout).expect("valid JSON");
+    let entries = parsed.as_array().expect("array of entries");
     assert_eq!(entries.len(), 1);
     assert_eq!(
         entries[0]["size"].as_u64(),
-        Some(9),
-        "size hidratado, no null: {entries:?}"
+        Some(7),
+        "hydrated size, not null: {entries:?}"
     );
 
     let text_out = norte().arg("ls").arg(dir.path()).output().unwrap();
     assert!(text_out.status.success());
     let stdout = String::from_utf8_lossy(&text_out.stdout);
-    let line = stdout.lines().next().expect("una línea de salida");
+    let line = stdout.lines().next().expect("one line of output");
     let cols: Vec<&str> = line.split('\t').collect();
-    assert_eq!(cols.first(), Some(&"-"), "marker de File");
-    assert_eq!(cols.get(1), Some(&"9"), "columna size no vacía: {line}");
+    assert_eq!(cols.first(), Some(&"-"), "File marker");
+    assert_eq!(cols.get(1), Some(&"7"), "non-empty size column: {line}");
 }
 
 #[test]
@@ -160,7 +162,7 @@ fn ls_missing_dir_fails() {
     let dir = tempfile::tempdir().unwrap();
     let out = norte()
         .arg("ls")
-        .arg(dir.path().join("no-existe"))
+        .arg(dir.path().join("does-not-exist"))
         .output()
         .unwrap();
     assert!(!out.status.success());
@@ -171,14 +173,14 @@ fn ls_missing_dir_fails() {
 #[test]
 fn cp_file_roundtrip() {
     let dir = tempfile::tempdir().unwrap();
-    let src = dir.path().join("origen.bin");
-    let dst = dir.path().join("copia.bin");
+    let src = dir.path().join("source.bin");
+    let dst = dir.path().join("copy.bin");
     let content = vec![0xC5u8; 100_000];
     std::fs::write(&src, &content).unwrap();
 
     norte().arg("cp").arg(&src).arg(&dst).assert().success();
     assert_eq!(std::fs::read(&dst).unwrap(), content);
-    assert_eq!(std::fs::read(&src).unwrap(), content, "el origen queda");
+    assert_eq!(std::fs::read(&src).unwrap(), content, "the source stays");
 }
 
 #[test]
@@ -186,24 +188,24 @@ fn cp_collision_refused_and_dest_intact() {
     let dir = tempfile::tempdir().unwrap();
     let src = dir.path().join("a");
     let dst = dir.path().join("b");
-    std::fs::write(&src, b"nuevo").unwrap();
-    std::fs::write(&dst, b"previo").unwrap();
+    std::fs::write(&src, b"new").unwrap();
+    std::fs::write(&dst, b"previous").unwrap();
 
     let out = norte().arg("cp").arg(&src).arg(&dst).output().unwrap();
     assert!(!out.status.success());
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(stderr.contains("conflict"), "stderr: {stderr}");
-    assert_eq!(std::fs::read(&dst).unwrap(), b"previo");
+    assert_eq!(std::fs::read(&dst).unwrap(), b"previous");
 }
 
 #[test]
 fn cp_dir_recursive() {
     let dir = tempfile::tempdir().unwrap();
-    let src = dir.path().join("arbol");
+    let src = dir.path().join("tree");
     std::fs::create_dir_all(src.join("sub")).unwrap();
     std::fs::write(src.join("f1"), b"1").unwrap();
     std::fs::write(src.join("sub/f2"), b"2").unwrap();
-    let dst = dir.path().join("copia");
+    let dst = dir.path().join("copy");
 
     norte().arg("cp").arg(&src).arg(&dst).assert().success();
     assert_eq!(std::fs::read(dst.join("f1")).unwrap(), b"1");
@@ -228,7 +230,7 @@ fn mv_moves_and_rm_deletes() {
 #[test]
 fn rm_recursive_tree() {
     let dir = tempfile::tempdir().unwrap();
-    let root = dir.path().join("arbol");
+    let root = dir.path().join("tree");
     std::fs::create_dir_all(root.join("s1/s2")).unwrap();
     std::fs::write(root.join("s1/s2/f"), b"x").unwrap();
 
@@ -240,34 +242,34 @@ fn rm_recursive_tree() {
 #[test]
 fn cp_sigint_cancels_cleanly() {
     use std::io::Write;
-    // Árbol grande para que la copia dure lo bastante como para señalarla.
+    // Large tree so the copy lasts long enough to signal it.
     let dir = tempfile::tempdir().unwrap();
-    let src = dir.path().join("grande");
+    let src = dir.path().join("large");
     std::fs::create_dir(&src).unwrap();
     let payload = vec![0x42u8; 64 * 1024];
     for i in 0..400 {
         let mut f = std::fs::File::create(src.join(format!("f{i:04}"))).unwrap();
         f.write_all(&payload).unwrap();
     }
-    let dst = dir.path().join("copia");
+    let dst = dir.path().join("copy");
 
     let bin = assert_cmd::cargo::cargo_bin("norte");
     let mut child = std::process::Command::new(bin)
-        // Este test NO pasa por `norte()` (necesita `spawn`, no `assert`), así
-        // que el override del directorio de estado se repite AQUÍ. Sin él el
-        // `cp` abriría el journal de verdad de quien corre la suite — ver
-        // `config_dir_del_test`.
-        .env("NORTE_CONFIG_DIR", config_dir_del_test())
+        // This test does NOT go through `norte()` (it needs `spawn`, not
+        // `assert`), so the state-directory override is repeated HERE.
+        // Without it the `cp` would open the real journal of whoever runs the
+        // suite — see `test_config_dir`.
+        .env("NORTE_CONFIG_DIR", test_config_dir())
         .arg("cp")
         .arg(&src)
         .arg(&dst)
         .stderr(std::process::Stdio::null())
         .spawn()
         .unwrap();
-    // Espera a que la copia haya ARRANCADO (el dst aparece) antes de señalar:
-    // un sleep fijo era flaky — bajo carga, SIGINT podía llegar ANTES de que
-    // el CLI instalara su handler de Ctrl-C, matándolo por señal (sin exit
-    // code). Cuando el dst existe, el proceso booteó y el handler está vivo.
+    // Waits for the copy to have STARTED (dst appears) before signalling: a
+    // fixed sleep was flaky — under load, SIGINT could arrive BEFORE the CLI
+    // installed its Ctrl-C handler, killing it by signal (no exit code). Once
+    // dst exists, the process booted and the handler is alive.
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     let mut started = false;
     loop {
@@ -275,7 +277,7 @@ fn cp_sigint_cancels_cleanly() {
             started = true;
             break;
         }
-        // ¿Ya terminó (400 ficheros pequeños: carrera legítima)?
+        // Did it already finish (400 small files: legitimate race)?
         if child.try_wait().unwrap().is_some() {
             break;
         }
@@ -285,22 +287,23 @@ fn cp_sigint_cancels_cleanly() {
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
     if started {
-        // SIGINT al proceso, como un Ctrl-C real.
-        // Invariante: pid de un hijo recién creado siempre es válido.
+        // SIGINT to the process, like a real Ctrl-C.
+        // Invariant: the pid of a just-created child is always valid.
         unsafe_free_kill(child.id());
     }
     let status = child.wait().unwrap();
 
     match status.code() {
         Some(130) => {
-            // Cancelado: puede haber árbol parcial, pero JAMÁS staging huérfano.
+            // Cancelled: there may be a partial tree, but NEVER orphaned
+            // staging.
             let mut pending = vec![dir.path().to_path_buf()];
             while let Some(d) = pending.pop() {
                 for e in std::fs::read_dir(&d).unwrap().flatten() {
                     let name = e.file_name().to_string_lossy().into_owned();
                     assert!(
                         !name.contains(".norte-partial"),
-                        "staging huérfano tras SIGINT: {name}"
+                        "orphaned staging after SIGINT: {name}"
                     );
                     if e.file_type().unwrap().is_dir() {
                         pending.push(e.path());
@@ -309,64 +312,65 @@ fn cp_sigint_cancels_cleanly() {
             }
         }
         Some(0) => {
-            // Carrera legítima: la copia terminó antes de la señal.
+            // Legitimate race: the copy finished before the signal.
         }
-        other => panic!("exit code inesperado tras SIGINT: {other:?}"),
+        other => panic!("unexpected exit code after SIGINT: {other:?}"),
     }
 }
 
-/// `kill(pid, SIGINT)` sin dependencias: /proc no sirve para señales, así que
-/// usamos el comando `kill` del sistema (portátil en unix).
+/// `kill(pid, SIGINT)` with no dependencies: `/proc` is no good for signals,
+/// so the system `kill` command is used (portable on unix).
 #[cfg(unix)]
 fn unsafe_free_kill(pid: u32) {
     let status = std::process::Command::new("kill")
         .arg("-INT")
         .arg(pid.to_string())
         .status()
-        .expect("kill disponible");
-    assert!(status.success(), "kill -INT falló");
+        .expect("kill available");
+    assert!(status.success(), "kill -INT failed");
 }
 
-/// ADR 0104 lo dejó escrito como hueco: `norte plugin uninstall` borraba el
-/// disco por detrás de un daemon vivo, que descubre el catálogo al arrancar y
-/// no vigila el directorio. ADR 0113: con `--daemon` va POR él; sin él borra
-/// en el directorio propio y AVISA — y jamás toca el del daemon, que puede
-/// ser otro: el socket por defecto no depende de `NORTE_CONFIG_DIR`.
+/// ADR 0104 left it written as a gap: `norte plugin uninstall` deleted from
+/// disk behind a live daemon's back, which discovers the catalog on startup
+/// and does not watch the directory. ADR 0113: with `--daemon` it goes
+/// THROUGH it; without it, it deletes in its own directory and WARNS — and
+/// never touches the daemon's, which can be a different one: the default
+/// socket does not depend on `NORTE_CONFIG_DIR`.
 ///
-/// Un plugin ROTO basta: el daemon lo cuenta en `errors` y `plugin list` lo
-/// dice por stderr («`norte doctor` dice por qué», en los dos idiomas). La
-/// afirmación de ANTES es la que hace que la de después signifique algo.
+/// One BROKEN plugin is enough: the daemon counts it in `errors` and `plugin
+/// list` says so over stderr ("`norte doctor` says why", in both languages).
+/// The assertion made BEFORE is what makes the one after mean anything.
 #[cfg(unix)]
 #[test]
-fn plugin_uninstall_va_por_el_daemon_solo_con_daemon() {
-    /// El daemon muere con el test, también si una aserción revienta.
-    struct Hijo(std::process::Child);
-    impl Drop for Hijo {
+fn plugin_uninstall_goes_through_the_daemon_only_with_daemon() {
+    /// The daemon dies with the test, even if an assertion blows up.
+    struct ChildGuard(std::process::Child);
+    impl Drop for ChildGuard {
         fn drop(&mut self) {
             let _ = self.0.kill();
             let _ = self.0.wait();
         }
     }
 
-    // Dos directorios con el MISMO plugin: el del daemon y el del CLI.
-    let con_roto = || {
-        let dir =
-            tempfile::TempDir::new_in(env!("CARGO_TARGET_TMPDIR")).expect("tempdir de estado");
-        let roto = dir.path().join("plugins").join("org.test.roto");
-        std::fs::create_dir_all(&roto).unwrap();
-        std::fs::write(roto.join("plugin.toml"), "esto no es un manifiesto").unwrap();
-        (dir, roto)
+    // Two directories with the SAME plugin: the daemon's and the CLI's.
+    let with_broken = || {
+        let dir = tempfile::TempDir::new_in(env!("CARGO_TARGET_TMPDIR")).expect("state tempdir");
+        let broken = dir.path().join("plugins").join("org.test.broken");
+        std::fs::create_dir_all(&broken).unwrap();
+        std::fs::write(broken.join("plugin.toml"), "this is not a manifest").unwrap();
+        (dir, broken)
     };
-    let (del_daemon, roto_del_daemon) = con_roto();
-    let (del_cli, roto_del_cli) = con_roto();
-    // El socket en `/tmp` y no bajo el target: `sun_path` tiene 108 bytes.
+    let (daemon_dir, daemon_broken) = with_broken();
+    let (cli_dir, cli_broken) = with_broken();
+    // The socket in `/tmp` and not under the target: `sun_path` has 108
+    // bytes.
     let run = tempfile::tempdir().unwrap();
     let socket = run.path().join("d.sock");
 
     let bin = assert_cmd::cargo::cargo_bin("norte");
-    let _daemon = Hijo(
+    let _daemon = ChildGuard(
         std::process::Command::new(&bin)
-            .env("NORTE_CONFIG_DIR", del_daemon.path())
+            .env("NORTE_CONFIG_DIR", daemon_dir.path())
             .args(["daemon", "run", "--idle-timeout", "0", "--socket"])
             .arg(&socket)
             .stdout(std::process::Stdio::null())
@@ -374,25 +378,26 @@ fn plugin_uninstall_va_por_el_daemon_solo_con_daemon() {
             .spawn()
             .unwrap(),
     );
-    // Hasta que ACEPTA, no hasta que el fichero existe: un `--daemon` que no
-    // conecta arranca otro daemon por su cuenta, y el test mediría a ese.
+    // Until it ACCEPTS, not until the file exists: a `--daemon` that does not
+    // connect starts another daemon on its own, and the test would measure
+    // that one instead.
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
     while std::os::unix::net::UnixStream::connect(&socket).is_err() {
         assert!(
             std::time::Instant::now() < deadline,
-            "el daemon no aceptó en 15 s"
+            "the daemon did not accept in 15 s"
         );
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
 
-    let norte_en = |dir: &std::path::Path| {
-        let mut c = Command::cargo_bin("norte").expect("binario norte compilado");
+    let norte_in = |dir: &std::path::Path| {
+        let mut c = Command::cargo_bin("norte").expect("norte binary compiled");
         c.env("NORTE_CONFIG_DIR", dir);
         c.arg("--socket").arg(&socket);
         c
     };
-    let rotos_segun_el_daemon = || {
-        let out = norte_en(del_daemon.path())
+    let broken_per_the_daemon = || {
+        let out = norte_in(daemon_dir.path())
             .args(["--daemon", "plugin", "list"])
             .assert()
             .success();
@@ -400,56 +405,58 @@ fn plugin_uninstall_va_por_el_daemon_solo_con_daemon() {
     };
 
     assert!(
-        rotos_segun_el_daemon(),
-        "el daemon debía contar el plugin roto antes"
+        broken_per_the_daemon(),
+        "the daemon had to count the broken plugin beforehand"
     );
 
-    // Sin `--daemon`, desde OTRO directorio: borra el suyo, avisa, y el del
-    // daemon —con el mismo id— sigue ahí. Antes de ADR 0113 esta orden iba
-    // por el daemon que escuchaba y borraba en SU directorio.
-    let sin = norte_en(del_cli.path())
-        .args(["plugin", "uninstall", "org.test.roto"])
+    // Without `--daemon`, from ANOTHER directory: deletes its own, warns, and
+    // the daemon's — with the same id — is still there. Before ADR 0113 this
+    // command went through whichever daemon was listening and deleted in ITS
+    // directory.
+    let without = norte_in(cli_dir.path())
+        .args(["plugin", "uninstall", "org.test.broken"])
         .assert()
         .success();
-    assert!(!roto_del_cli.exists(), "el plugin propio sigue en disco");
+    assert!(!cli_broken.exists(), "its own plugin is still on disk");
     assert!(
-        roto_del_daemon.exists(),
-        "sin --daemon se borró en el directorio del daemon"
+        daemon_broken.exists(),
+        "without --daemon it deleted in the daemon's directory"
     );
     assert!(
-        String::from_utf8_lossy(&sin.get_output().stderr).contains("--daemon"),
-        "avisa de que el daemon lo seguirá listando"
+        String::from_utf8_lossy(&without.get_output().stderr).contains("--daemon"),
+        "warns that the daemon will keep listing it"
     );
 
-    // Con `--daemon`: por él, en su directorio, y deja de anunciarlo.
-    norte_en(del_daemon.path())
-        .args(["--daemon", "plugin", "uninstall", "org.test.roto"])
+    // With `--daemon`: through it, in its directory, and it stops announcing
+    // it.
+    norte_in(daemon_dir.path())
+        .args(["--daemon", "plugin", "uninstall", "org.test.broken"])
         .assert()
         .success();
     assert!(
-        !roto_del_daemon.exists(),
-        "el plugin del daemon sigue en disco"
+        !daemon_broken.exists(),
+        "the daemon's plugin is still on disk"
     );
     assert!(
-        !rotos_segun_el_daemon(),
-        "el daemon sigue anunciando un plugin desinstalado"
+        !broken_per_the_daemon(),
+        "the daemon is still announcing an uninstalled plugin"
     );
 
-    // Y lo que el daemon ya no tiene se dice contra SU catálogo.
-    norte_en(del_cli.path())
-        .args(["--daemon", "plugin", "uninstall", "org.test.roto"])
+    // And what the daemon no longer has is said against ITS catalog.
+    norte_in(cli_dir.path())
+        .args(["--daemon", "plugin", "uninstall", "org.test.broken"])
         .assert()
         .failure();
 }
 
-/// M3-4 T6: `policy grant` sin daemon en marcha falla LIMPIO (sin autoarranque
-/// — conceder un scope a un daemon que no existe no tiene sentido). El socket
-/// apunta a un path muerto en un tempdir.
+/// M3-4 T6: `policy grant` without a daemon running fails CLEANLY (no
+/// auto-start — granting a scope to a daemon that does not exist makes no
+/// sense). The socket points at a dead path in a tempdir.
 #[cfg(unix)]
 #[test]
-fn policy_grant_sin_daemon_falla_claro() {
+fn policy_grant_without_daemon_fails_clearly() {
     let dir = tempfile::tempdir().unwrap();
-    let socket = dir.path().join("muerto.sock");
+    let socket = dir.path().join("dead.sock");
     let out = norte()
         .arg("--socket")
         .arg(&socket)
@@ -458,19 +465,19 @@ fn policy_grant_sin_daemon_falla_claro() {
         .arg("1")
         .output()
         .unwrap();
-    assert!(!out.status.success(), "sin daemon debe fallar");
+    assert!(!out.status.success(), "without a daemon it must fail");
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(
         err.contains("daemon") || err.contains("socket"),
-        "error orientativo, fue: {err}"
+        "an informative error, was: {err}"
     );
 }
 
-/// `mcp serve --help` lista la opción de sesión (el subcomando existe y es
-/// coherente sin necesitar un daemon).
+/// `mcp serve --help` lists the session option (the subcommand exists and is
+/// coherent without needing a daemon).
 #[cfg(unix)]
 #[test]
-fn mcp_serve_help_menciona_session() {
+fn mcp_serve_help_mentions_session() {
     let out = norte()
         .arg("mcp")
         .arg("serve")
@@ -482,66 +489,68 @@ fn mcp_serve_help_menciona_session() {
     assert!(help.contains("--session"), "help: {help}");
 }
 
-// ---------- ls --attrs (#108 bloque 2) ----------
+// ---------- ls --attrs (#108 block 2) ----------
 
 #[cfg(unix)]
 #[test]
 fn ls_attrs_posix_via_json() {
     let dir = tempfile::tempdir().expect("tempdir");
-    std::fs::write(dir.path().join("a.txt"), b"hola").expect("seed");
+    std::fs::write(dir.path().join("a.txt"), b"hello").expect("seed");
     let out = norte()
         .args(["ls", "--json", "--attrs", "posix.mode"])
         .arg(dir.path())
         .assert()
         .success();
     let v: serde_json::Value =
-        serde_json::from_slice(&out.get_output().stdout).expect("json válido");
-    // Forma wire del bloque 1: {"posix.mode": {"uint": N}}.
+        serde_json::from_slice(&out.get_output().stdout).expect("valid json");
+    // Block 1's wire form: {"posix.mode": {"uint": N}}.
     let mode = &v[0]["attrs"]["posix.mode"]["uint"];
-    assert!(mode.is_u64(), "posix.mode uint presente: {v}");
+    assert!(mode.is_u64(), "posix.mode uint present: {v}");
 
-    // Y en humano: columna `posix.mode=N` al final de la línea.
+    // And in human form: a `posix.mode=N` column at the end of the line.
     let out = norte()
         .args(["ls", "--attrs", "posix.mode"])
         .arg(dir.path())
         .assert()
         .success();
     let text = String::from_utf8_lossy(&out.get_output().stdout).into_owned();
-    assert!(text.contains("posix.mode="), "columna humana: {text}");
+    assert!(text.contains("posix.mode="), "human column: {text}");
 }
 
-// ---------- index semantic embebido cablea el proveedor (M4-IA-2) ----------
+// ---------- embedded semantic index wires the provider (M4-IA-2) ----------
 
-/// Fix follow-up M4-IA-2: el path embebido de `run()` CABLEA el proveedor de
-/// embeddings. Contraste en dos corridas sobre el mismo binario:
-/// (a) sin `[ai]` → el engine no tiene proveedor: "Unsupported";
-/// (b) con `[ai]` + `embed_provider` hacia un endpoint MUERTO → el fallo viene
-///     del PROVEEDOR (ya cableado), jamás "Unsupported". El secreto va por
-///     env (`NORTE_SECRET_AI_EMB`) para no tocar el keyring del OS en CI.
+/// Fix follow-up M4-IA-2: `run()`'s embedded path WIRES the embeddings
+/// provider. Contrast over two runs of the same binary:
+/// (a) without `[ai]` → the engine has no provider: "Unsupported";
+/// (b) with `[ai]` + `embed_provider` pointing at a DEAD endpoint → the
+///     failure comes from the PROVIDER (already wired), never "Unsupported".
+///     The secret goes through env (`NORTE_SECRET_AI_EMB`) so as not to touch
+///     the OS keyring in CI.
 #[test]
-fn index_semantic_embebido_cablea_proveedor() {
-    // (a) config dir vacío: sin [ai] no hay proveedor → Unsupported.
-    let vacio = tempfile::tempdir().expect("tempdir");
+fn index_semantic_embedded_wires_the_provider() {
+    // (a) empty config dir: without [ai] there is no provider → Unsupported.
+    let empty = tempfile::tempdir().expect("tempdir");
     let out = norte()
-        .env("NORTE_CONFIG_DIR", vacio.path())
-        .args(["index", "semantic", "hola"])
+        .env("NORTE_CONFIG_DIR", empty.path())
+        .args(["index", "semantic", "hello"])
         .output()
         .expect("run");
-    assert!(!out.status.success(), "sin [ai] debe fallar");
+    assert!(!out.status.success(), "without [ai] it must fail");
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
         stderr.to_ascii_lowercase().contains("unsupported"),
-        "sin [ai] el engine no tiene proveedor: {stderr}"
+        "without [ai] the engine has no provider: {stderr}"
     );
 
-    // (b) [ai] + embed_provider hacia un endpoint muerto: el wiring instala
-    // el proveedor y el error es SUYO (conexión), no Unsupported. Puerto
-    // HERMÉTICO: bind a :0 (el OS elige uno libre) y drop inmediato — el
-    // connect posterior es un refuse determinista y rápido, sin depender de
-    // que un puerto fijo esté libre (o peor, escuchando) en la máquina de CI.
-    let muerto = std::net::TcpListener::bind("127.0.0.1:0").expect("bind :0");
-    let addr = muerto.local_addr().expect("addr");
-    drop(muerto);
+    // (b) [ai] + embed_provider pointing at a dead endpoint: the wiring
+    // installs the provider and the error is ITS OWN (connection), not
+    // Unsupported. HERMETIC port: bind to :0 (the OS picks a free one) and
+    // drop immediately — the later connect is a deterministic, fast refusal,
+    // without depending on a fixed port being free (or worse, listening) on
+    // the CI machine.
+    let dead = std::net::TcpListener::bind("127.0.0.1:0").expect("bind :0");
+    let addr = dead.local_addr().expect("addr");
+    drop(dead);
     let cfg = tempfile::tempdir().expect("tempdir");
     std::fs::write(
         cfg.path().join("norte.toml"),
@@ -555,32 +564,34 @@ fn index_semantic_embebido_cablea_proveedor() {
     let out = norte()
         .env("NORTE_CONFIG_DIR", cfg.path())
         .env("NORTE_SECRET_AI_EMB", "x")
-        .args(["index", "semantic", "hola"])
+        .args(["index", "semantic", "hello"])
         .output()
         .expect("run");
-    assert!(!out.status.success(), "endpoint muerto debe fallar");
+    assert!(!out.status.success(), "a dead endpoint must fail");
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
         !stderr.to_ascii_lowercase().contains("unsupported"),
-        "con [ai]+embed_provider el proveedor está CABLEADO (el fallo es del \
-         proveedor, no Unsupported): {stderr}"
+        "with [ai]+embed_provider the provider IS WIRED (the failure is the \
+         provider's, not Unsupported): {stderr}"
     );
 }
 
-/// `norte paths` contesta con el directorio que MANDA, no con el de siempre.
+/// `norte paths` answers with the directory that IS IN CHARGE, not the usual
+/// one.
 ///
-/// Es todo el valor del comando: quien pregunta dónde está su config suele
-/// preguntarlo justo porque no está donde creía. Un `paths` que ignorase
-/// `NORTE_CONFIG_DIR` daría la respuesta bonita y equivocada, que es peor que
-/// no tener comando. Se comprueba a nivel de PROCESO porque la resolución vive
-/// en el entorno, que es lo único que un test de unidad no puede tocar.
+/// That is the whole point of the command: whoever asks where their config is
+/// usually asks precisely because it is not where they thought. A `paths`
+/// that ignored `NORTE_CONFIG_DIR` would give the nice, wrong answer, which is
+/// worse than having no command. Checked at the PROCESS level because the
+/// resolution lives in the environment, which is the one thing a unit test
+/// cannot touch.
 #[test]
-fn paths_respeta_el_config_dir_del_entorno() {
+fn paths_respects_the_environments_config_dir() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("connections.toml"), "").unwrap();
 
     let out = Command::cargo_bin("norte")
-        .expect("binario norte compilado")
+        .expect("norte binary compiled")
         .env("NORTE_CONFIG_DIR", dir.path())
         .args(["paths", "--json"])
         .output()
@@ -591,182 +602,185 @@ fn paths_respeta_el_config_dir_del_entorno() {
         String::from_utf8_lossy(&out.stderr)
     );
     let json: serde_json::Value = serde_json::from_slice(&out.stdout).expect("JSON");
-    let fila = |id: &str| {
+    let row = |id: &str| {
         json.as_array()
-            .expect("lista")
+            .expect("list")
             .iter()
             .find(|r| r["id"] == id)
-            .unwrap_or_else(|| panic!("falta la fila «{id}»: {json}"))
+            .unwrap_or_else(|| panic!("missing row «{id}»: {json}"))
             .clone()
     };
 
-    let conexiones = fila("connections");
+    let connections = row("connections");
     assert_eq!(
-        conexiones["path"].as_str().expect("path"),
+        connections["path"].as_str().expect("path"),
         dir.path().join("connections.toml").display().to_string(),
-        "la ruta debe salir del NORTE_CONFIG_DIR, no del dir del usuario"
+        "the path must come from NORTE_CONFIG_DIR, not the user's dir"
     );
-    // `exists` es un hecho comprobado: el que se escribió consta, el que no,
-    // no. Sin esto la columna podría ser un adorno constante.
-    assert_eq!(conexiones["exists"], serde_json::json!(true));
-    assert_eq!(fila("policy")["exists"], serde_json::json!(false));
-    // Preguntar no crea nada (mismo criterio que `doctor`).
+    // `exists` is a checked fact: the one that was written shows up, the one
+    // that was not, does not. Without this the column could be a constant
+    // decoration.
+    assert_eq!(connections["exists"], serde_json::json!(true));
+    assert_eq!(row("policy")["exists"], serde_json::json!(false));
+    // Asking creates nothing (same criterion as `doctor`).
     assert!(
         !dir.path().join("policy.toml").exists(),
-        "`paths` no puede crear lo que dice que falta"
+        "`paths` cannot create what it says is missing"
     );
 }
 
-/// `norte daemon run` arranca de punta a punta —journal, spool, policy,
-/// índice, `bind`— y `norte daemon stop` lo para limpio.
+/// `norte daemon run` starts end to end — journal, spool, policy, index,
+/// `bind` — and `norte daemon stop` stops it cleanly.
 ///
-/// Es el test de proceso de `norte_core::daemon::componer`: la composición
-/// del daemon vivía en la CLI (regla 7) y ningún test la ejercía entera. Se
-/// espera LEYENDO la línea que dice dónde escucha, no con un `sleep`: esa
-/// línea sale después del `bind`, así que su llegada es la señal exacta.
+/// This is the process test for `norte_core::daemon::compose`: the daemon's
+/// composition lived in the CLI (rule 7) and no test exercised it whole. It
+/// waits by READING the line that says where it listens, not with a `sleep`:
+/// that line comes out after the `bind`, so its arrival is the exact signal.
 #[cfg(unix)]
 #[test]
-fn daemon_run_arranca_y_stop_lo_para() {
+fn daemon_run_starts_and_stop_stops_it() {
     use std::io::BufRead as _;
     let config = tempfile::tempdir().expect("config");
-    let estado = tempfile::tempdir().expect("estado");
+    let state = tempfile::tempdir().expect("state");
     let socket = config.path().join("d.sock");
     let bin = assert_cmd::cargo::cargo_bin("norte");
-    let mut hijo = std::process::Command::new(&bin)
+    let mut child = std::process::Command::new(&bin)
         .env("NORTE_CONFIG_DIR", config.path())
-        .env("XDG_STATE_HOME", estado.path())
+        .env("XDG_STATE_HOME", state.path())
         .args(["daemon", "run", "--idle-timeout", "0", "--socket"])
         .arg(&socket)
         .stderr(std::process::Stdio::piped())
         .spawn()
-        .expect("arranca");
-    let stderr = hijo.stderr.take().expect("stderr");
+        .expect("starts");
+    let stderr = child.stderr.take().expect("stderr");
     let (tx, rx) = std::sync::mpsc::channel();
-    // Se lee HASTA EL FINAL, no hasta la línea buscada: soltar el pipe antes
-    // haría que el siguiente `eprintln!` del daemon fallara y lo tumbara.
+    // Read ALL THE WAY TO THE END, not just to the line being looked for:
+    // dropping the pipe earlier would make the daemon's next `eprintln!` fail
+    // and bring it down.
     std::thread::spawn(move || {
-        for linea in std::io::BufReader::new(stderr).lines() {
-            let Ok(linea) = linea else { break };
-            let _ = tx.send(linea);
+        for line in std::io::BufReader::new(stderr).lines() {
+            let Ok(line) = line else { break };
+            let _ = tx.send(line);
         }
     });
-    let mut visto = Vec::new();
+    let mut seen = Vec::new();
     loop {
         match rx.recv_timeout(std::time::Duration::from_secs(20)) {
             Ok(l) if l.contains(&socket.display().to_string()) => break,
-            Ok(l) => visto.push(l),
+            Ok(l) => seen.push(l),
             Err(e) => {
-                let _ = hijo.kill();
-                panic!("el daemon no llegó a escuchar ({e}): {visto:#?}");
+                let _ = child.kill();
+                panic!("the daemon never got to listen ({e}): {seen:#?}");
             }
         }
     }
-    let parada = norte()
+    let stop = norte()
         .env("NORTE_CONFIG_DIR", config.path())
         .args(["daemon", "stop", "--socket"])
         .arg(&socket)
         .output()
         .expect("stop");
     assert!(
-        parada.status.success(),
+        stop.status.success(),
         "stop: {}",
-        String::from_utf8_lossy(&parada.stderr)
+        String::from_utf8_lossy(&stop.stderr)
     );
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
-        let _ = tx.send(hijo.wait());
+        let _ = tx.send(child.wait());
     });
-    let fin = rx
+    let end = rx
         .recv_timeout(std::time::Duration::from_secs(20))
-        .expect("el daemon sale tras el stop")
+        .expect("the daemon exits after the stop")
         .expect("wait");
-    assert!(fin.success(), "sale limpio: {fin:?}");
+    assert!(end.success(), "exits cleanly: {end:?}");
 }
 
-/// La CLI embebida lee `[archive]` como el daemon y la TUI. Antes ni lo miraba:
-/// un `norte ls` dentro de un zip usaba los límites por defecto aunque
-/// `norte.toml` fijara otros. Roto, se AVISA y se sigue — que es lo único que
-/// distingue desde fuera «lo leyó» de «ni lo miró».
+/// The embedded CLI reads `[archive]` like the daemon and the TUI. Before, it
+/// did not even look at it: a `norte ls` inside a zip used the default limits
+/// even if `norte.toml` set others. Broken, it WARNS and continues — which is
+/// the only thing that, from outside, distinguishes "it read it" from "it
+/// never looked".
 #[test]
-fn un_archive_roto_se_avisa_y_ls_sigue() {
+fn a_broken_archive_warns_and_ls_continues() {
     let cfg = tempfile::tempdir().expect("tempdir");
     std::fs::write(
         cfg.path().join("norte.toml"),
-        "[archive]\nmax_entries = \"muchas\"\n",
+        "[archive]\nmax_entries = \"many\"\n",
     )
     .expect("norte.toml");
     let dir = tempfile::tempdir().expect("tempdir");
     std::fs::write(dir.path().join("a.txt"), "a").expect("a");
     let out = Command::cargo_bin("norte")
-        .expect("binario norte compilado")
+        .expect("norte binary compiled")
         .env("NORTE_CONFIG_DIR", cfg.path())
         .arg("ls")
         .arg(dir.path())
         .output()
         .expect("run");
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(out.status.success(), "ls sigue: {stderr}");
+    assert!(out.status.success(), "ls continues: {stderr}");
     assert!(
         String::from_utf8_lossy(&out.stdout).contains("a.txt"),
-        "y lista"
+        "and it lists"
     );
-    assert!(stderr.contains("[archive]"), "avisa: {stderr}");
+    assert!(stderr.contains("[archive]"), "warns: {stderr}");
 }
 
-/// Un Ollama de mentira en `127.0.0.1:0` que contesta UNA petición de
-/// `/api/chat` con `contenido` como único delta, y se cierra.
+/// A fake Ollama on `127.0.0.1:0` that answers ONE `/api/chat` request with
+/// `content` as its only delta, then closes.
 ///
-/// Lee la petición entera (cabeceras y el `Content-Length` del cuerpo) antes
-/// de contestar: cerrar con bytes sin leer en el socket hace que el kernel
-/// mande un RST, y el cliente vería un error de conexión en vez de la
-/// respuesta.
-fn ollama_de_mentira(contenido: &str) -> std::net::SocketAddr {
+/// Reads the whole request (headers and the body's `Content-Length`) before
+/// answering: closing with unread bytes still in the socket makes the kernel
+/// send an RST, and the client would see a connection error instead of the
+/// response.
+fn fake_ollama(content: &str) -> std::net::SocketAddr {
     use std::io::{BufRead as _, BufReader, Read as _, Write as _};
     let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind :0");
     let addr = listener.local_addr().expect("addr");
-    let linea = serde_json::json!({ "message": { "content": contenido } }).to_string();
+    let line = serde_json::json!({ "message": { "content": content } }).to_string();
     std::thread::spawn(move || {
         let (mut stream, _) = listener.accept().expect("accept");
-        let mut lector = BufReader::new(stream.try_clone().expect("clone"));
-        let mut largo = 0usize;
+        let mut reader = BufReader::new(stream.try_clone().expect("clone"));
+        let mut length = 0usize;
         loop {
-            let mut cabecera = String::new();
-            lector.read_line(&mut cabecera).expect("cabecera");
-            let cabecera = cabecera.trim_end();
-            if cabecera.is_empty() {
+            let mut header = String::new();
+            reader.read_line(&mut header).expect("header");
+            let header = header.trim_end();
+            if header.is_empty() {
                 break;
             }
-            if let Some((nombre, valor)) = cabecera.split_once(':')
-                && nombre.eq_ignore_ascii_case("content-length")
+            if let Some((name, value)) = header.split_once(':')
+                && name.eq_ignore_ascii_case("content-length")
             {
-                largo = valor.trim().parse().expect("content-length");
+                length = value.trim().parse().expect("content-length");
             }
         }
-        let mut peticion = vec![0u8; largo];
-        lector.read_exact(&mut peticion).expect("cuerpo");
-        let cuerpo = format!("{linea}\n{{\"done\":true}}\n");
+        let mut request = vec![0u8; length];
+        reader.read_exact(&mut request).expect("body");
+        let body = format!("{line}\n{{\"done\":true}}\n");
         write!(
             stream,
             "HTTP/1.1 200 OK\r\ncontent-type: application/x-ndjson\r\n\
-             content-length: {}\r\nconnection: close\r\n\r\n{cuerpo}",
-            cuerpo.len()
+             content-length: {}\r\nconnection: close\r\n\r\n{body}",
+            body.len()
         )
-        .expect("respuesta");
+        .expect("response");
     });
     addr
 }
 
-/// `norte ai rename` aplica el plan como UN lote del core, y no entrada a
-/// entrada (regla 7).
+/// `norte ai rename` applies the plan as ONE batch from the core, not entry by
+/// entry (rule 7).
 ///
-/// Un intercambio `a↔b` es el caso que lo distingue: el planificador de lotes
-/// lo rompe con un temporal; un bucle de `move_` intenta `a → b` con `b`
-/// todavía ahí y, o falla, o pisa `b` antes de moverlo. Es lo que la TUI y la
-/// ventana ya hacían; la CLI era el único camino que no.
+/// An `a↔b` swap is the case that tells them apart: the batch planner breaks
+/// it with a temp file; a loop of `move_` tries `a → b` with `b` still there
+/// and either fails or overwrites `b` before moving it. This is what the TUI
+/// and the window already did; the CLI was the only path that did not.
 #[test]
-fn ai_rename_aplica_un_intercambio_como_un_lote() {
+fn ai_rename_applies_a_swap_as_one_batch() {
     let plan = r#"[{"from":"a.txt","to":"b.txt"},{"from":"b.txt","to":"a.txt"}]"#;
-    let addr = ollama_de_mentira(plan);
+    let addr = fake_ollama(plan);
     let cfg = tempfile::tempdir().expect("tempdir");
     std::fs::write(
         cfg.path().join("norte.toml"),
@@ -778,45 +792,45 @@ fn ai_rename_aplica_un_intercambio_como_un_lote() {
     )
     .expect("norte.toml");
     let dir = tempfile::tempdir().expect("tempdir");
-    std::fs::write(dir.path().join("a.txt"), "era a").expect("a");
-    std::fs::write(dir.path().join("b.txt"), "era b").expect("b");
+    std::fs::write(dir.path().join("a.txt"), "was a").expect("a");
+    std::fs::write(dir.path().join("b.txt"), "was b").expect("b");
 
     let out = Command::cargo_bin("norte")
-        .expect("binario norte compilado")
+        .expect("norte binary compiled")
         .env("NORTE_CONFIG_DIR", cfg.path())
         .env("NORTE_SECRET_AI_LOC", "x")
         .args(["ai", "rename"])
         .arg(dir.path())
-        .args(["intercambia", "--yes"])
+        .args(["swap", "--yes"])
         .output()
         .expect("run");
     assert!(
         out.status.success(),
-        "el intercambio se aplica: {}",
+        "the swap is applied: {}",
         String::from_utf8_lossy(&out.stderr)
     );
     assert_eq!(
         std::fs::read_to_string(dir.path().join("a.txt")).expect("a"),
-        "era b"
+        "was b"
     );
     assert_eq!(
         std::fs::read_to_string(dir.path().join("b.txt")).expect("b"),
-        "era a"
+        "was a"
     );
     assert_eq!(
         std::fs::read_dir(dir.path()).expect("ls").count(),
         2,
-        "no queda ningún temporal"
+        "no temp file is left"
     );
-    // Un nombre por línea, como el modal de la TUI: `a → b` en una sola
-    // dejaba que un fichero llamado `x → y` fingiera la pareja entera, en la
-    // pantalla que se lee antes de contestar «sí» (`arrow_join_spoof`).
+    // One name per line, like the TUI's modal: `a → b` on one line let a file
+    // named `x → y` fake the whole pair, on the screen read before answering
+    // "yes" (`arrow_join_spoof`).
     let stdout = String::from_utf8_lossy(&out.stdout);
-    let lineas: Vec<&str> = stdout.lines().map(str::trim).collect();
-    for esperada in ["1. a.txt", "→ b.txt", "2. b.txt", "→ a.txt"] {
+    let lines: Vec<&str> = stdout.lines().map(str::trim).collect();
+    for expected in ["1. a.txt", "→ b.txt", "2. b.txt", "→ a.txt"] {
         assert!(
-            lineas.contains(&esperada),
-            "falta la línea {esperada:?}: {stdout}"
+            lines.contains(&expected),
+            "missing line {expected:?}: {stdout}"
         );
     }
 }

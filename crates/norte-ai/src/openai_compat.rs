@@ -1,7 +1,7 @@
-//! Proveedor OpenAI-compatible (ADR 0031): `/v1/chat/completions` (SSE) y
-//! `/v1/embeddings`. Cubre `OpenAI`, llama.cpp server, vLLM, Groq… La api key
-//! se INYECTA como [`norte_connect::Secret`] (zeroizing, `Debug` redactado) y
-//! jamás se loguea (regla 10).
+//! OpenAI-compatible provider (ADR 0031): `/v1/chat/completions` (SSE) and
+//! `/v1/embeddings`. Covers `OpenAI`, llama.cpp server, vLLM, Groq… The api
+//! key is INJECTED as a [`norte_connect::Secret`] (zeroizing, redacted
+//! `Debug`) and is never logged (rule 10).
 
 use async_trait::async_trait;
 use norte_connect::Secret;
@@ -10,14 +10,14 @@ use serde_json::{Value, json};
 use crate::http::{self, WireEvent};
 use crate::provider::{AiCaps, AiError, AiProvider, ChatRequest, ChatRole, ChatStream, ModelInfo};
 
-/// Cliente genérico de una API OpenAI-compatible.
+/// Generic client for an OpenAI-compatible API.
 ///
 /// - `capabilities()` = `STREAMING | EMBEDDINGS | JSON_OUTPUT`.
-/// - `is_local()` = `false` SIEMPRE, aunque `base_url` apunte a localhost:
-///   v1 no adivina; el gate `local_only` del core decide (spec §9).
-/// - Sin secreto configurado, `chat`/`embed` devuelven [`AiError::Auth`].
+/// - `is_local()` = ALWAYS `false`, even if `base_url` points to localhost:
+///   v1 does not guess; the core's `local_only` gate decides (spec §9).
+/// - With no secret configured, `chat`/`embed` return [`AiError::Auth`].
 ///
-/// # Ejemplos
+/// # Examples
 /// ```
 /// use norte_ai::AiProvider as _;
 /// use norte_ai::openai_compat::OpenAiCompatProvider;
@@ -34,18 +34,18 @@ use crate::provider::{AiCaps, AiError, AiProvider, ChatRequest, ChatRole, ChatSt
 pub struct OpenAiCompatProvider {
     base_url: String,
     model: String,
-    // El Debug derivado es seguro: `Secret` redacta su contenido (regla 10).
+    // The derived Debug is safe: `Secret` redacts its content (rule 10).
     secret: Option<Secret>,
     client: reqwest::Client,
 }
 
 impl OpenAiCompatProvider {
-    /// Construye el proveedor. `base_url` es OBLIGATORIA (no hay un default
-    /// razonable: `https://api.openai.com`, `http://localhost:8080`…); el
-    /// secreto viene INYECTADO por el core.
+    /// Builds the provider. `base_url` is MANDATORY (there is no reasonable
+    /// default: `https://api.openai.com`, `http://localhost:8080`…); the
+    /// secret arrives INJECTED by the core.
     #[must_use]
     pub fn new(mut base_url: String, model: String, secret: Option<Secret>) -> Self {
-        // Se normaliza IN PLACE (consumiendo la String recibida).
+        // Normalized IN PLACE (consuming the received String).
         while base_url.ends_with('/') {
             base_url.pop();
         }
@@ -53,21 +53,21 @@ impl OpenAiCompatProvider {
             base_url,
             model,
             secret,
-            // Client::new() solo panica si la pila TLS no inicializa; con
-            // rustls compilado estático es un invariante del build.
+            // Client::new() only panics if the TLS stack fails to init; with
+            // rustls compiled statically that is a build invariant.
             client: reqwest::Client::new(),
         }
     }
 
-    /// La api key, o [`AiError::Auth`] si no hay (fail-closed: sin
-    /// credencial no se manda nada).
+    /// The api key, or [`AiError::Auth`] if there is none (fail-closed: with
+    /// no credential nothing gets sent).
     fn secret(&self) -> Result<&Secret, AiError> {
         self.secret.as_ref().ok_or(AiError::Auth)
     }
 
-    /// Una petición de chat. Separada de `chat` para poder repetirla sin el
-    /// contrato cuando el servidor lo rechaza.
-    async fn enviar(&self, req: &ChatRequest) -> Result<reqwest::Response, AiError> {
+    /// A chat request. Separate from `chat` so it can be repeated without
+    /// the contract when the server rejects it.
+    async fn send(&self, req: &ChatRequest) -> Result<reqwest::Response, AiError> {
         let secret = self.secret()?;
         let body = self.build_body(req)?;
         let resp = self
@@ -81,8 +81,8 @@ impl OpenAiCompatProvider {
         http::check_status(resp)
     }
 
-    /// Body de `/v1/chat/completions`: `req.system` se antepone como mensaje
-    /// con rol `system` (el dialecto `OpenAI` lo acepta inline).
+    /// `/v1/chat/completions` body: `req.system` is prepended as a message
+    /// with role `system` (the `OpenAI` dialect accepts it inline).
     fn build_body(&self, req: &ChatRequest) -> Result<Value, AiError> {
         http::validate_turns(req)?;
         let mut messages = Vec::new();
@@ -105,19 +105,21 @@ impl OpenAiCompatProvider {
         if let Some(n) = req.max_tokens {
             body["max_tokens"] = json!(n);
         }
-        // El contrato de salida tipada, en el mecanismo de ESTA API: no es
-        // `output_config` como en Anthropic, es `response_format`, y aquí el
-        // nombre del contrato sí viaja porque el campo lo exige.
+        // The typed-output contract, in THIS API's mechanism: it is not
+        // `output_config` like Anthropic's, it is `response_format`, and
+        // here the contract's name does travel because the field requires
+        // it.
         //
-        // `strict: true` es lo que convierte el schema en un contrato en vez
-        // de en una sugerencia. Un servidor compatible que no lo entienda
-        // contesta texto igual: por eso la validación local no es opcional.
-        if let Some(contrato) = &req.json_schema {
+        // `strict: true` is what turns the schema into a contract instead of
+        // a suggestion. A compatible server that does not understand it
+        // still answers with text: that is why local validation is not
+        // optional.
+        if let Some(contract) = &req.json_schema {
             body["response_format"] = json!({
                 "type": "json_schema",
                 "json_schema": {
-                    "name": contrato.name,
-                    "schema": contrato.schema,
+                    "name": contract.name,
+                    "schema": contract.schema,
                     "strict": true,
                 }
             });
@@ -126,9 +128,9 @@ impl OpenAiCompatProvider {
     }
 }
 
-/// Interpreta UNA línea SSE de `/v1/chat/completions`: el delta es
-/// `.choices[0].delta.content` (los chunks sin contenido — rol, tool calls,
-/// usage — se saltan); `data: [DONE]` termina; `.error` →
+/// Interprets ONE SSE line from `/v1/chat/completions`: the delta is
+/// `.choices[0].delta.content` (content-less chunks — role, tool calls,
+/// usage — are skipped); `data: [DONE]` ends it; `.error` →
 /// [`AiError::Protocol`].
 fn parse_line(line: &str) -> Result<WireEvent, AiError> {
     let Some(payload) = http::sse_data(line) else {
@@ -138,7 +140,7 @@ fn parse_line(line: &str) -> Result<WireEvent, AiError> {
         return Ok(WireEvent::Stop);
     }
     let v: Value = serde_json::from_str(payload)
-        .map_err(|e| AiError::Protocol(format!("SSE data inválido: {e}")))?;
+        .map_err(|e| AiError::Protocol(format!("invalid SSE data: {e}")))?;
     if let Some(err) = v.get("error") {
         let msg = err
             .pointer("/message")
@@ -155,13 +157,13 @@ fn parse_line(line: &str) -> Result<WireEvent, AiError> {
     }
 }
 
-/// Respuesta de `/v1/embeddings`.
+/// `/v1/embeddings` response.
 #[derive(serde::Deserialize)]
 struct EmbeddingsResponse {
     data: Vec<EmbeddingItem>,
 }
 
-/// Un vector de la respuesta de `/v1/embeddings` (en orden de entrada).
+/// One vector from `/v1/embeddings`'s response (in input order).
 #[derive(serde::Deserialize)]
 struct EmbeddingItem {
     embedding: Vec<f32>,
@@ -183,30 +185,31 @@ impl AiProvider for OpenAiCompatProvider {
 
     #[tracing::instrument(level = "debug", skip_all, fields(provider = "openai-compat"))]
     async fn chat(&self, req: ChatRequest) -> Result<ChatStream, AiError> {
-        let resp = match self.enviar(&req).await {
+        let resp = match self.send(&req).await {
             Ok(r) => r,
-            // «Compatible con OpenAI» es un nombre, no una garantía: al otro
-            // lado hay servidores que no conocen `response_format` o que
-            // rechazan `strict`, y contestan 400. Sin esto, activar la salida
-            // tipada convertía una función que iba en un error opaco.
+            // "OpenAI-compatible" is a name, not a guarantee: on the other
+            // side there are servers that do not know `response_format` or
+            // that reject `strict`, and answer 400. Without this, enabling
+            // typed output turned a working feature into an opaque error.
             //
-            // UN reintento, y solo con contrato y solo ante un 400 —el estado
-            // de «tu petición no me vale»—: un 500 no se reintenta sin
-            // contrato porque no dice nada del contrato, y repetir a ciegas
-            // es gastar cuota del lector para volver a fallar.
+            // ONE retry, and only with a contract and only on a 400 —the
+            // "your request is no good to me" status—: a 500 is not retried
+            // without a contract because it says nothing about the
+            // contract, and retrying blindly is spending the reader's quota
+            // to fail again.
             Err(AiError::Http { status: 400 }) if req.json_schema.is_some() => {
                 tracing::info!(
                     provider = "openai-compat",
-                    "el servidor rechazó la salida tipada; se repite sin contrato"
+                    "the server rejected typed output; retrying without the contract"
                 );
-                let mut sin_contrato = req.clone();
-                sin_contrato.json_schema = None;
-                self.enviar(&sin_contrato).await?
+                let mut without_contract = req.clone();
+                without_contract.json_schema = None;
+                self.send(&without_contract).await?
             }
             Err(e) => return Err(e),
         };
-        // El stream devuelto posee el body: dropearlo aborta la petición
-        // HTTP (regla 3, cancelación drop-based).
+        // The returned stream owns the body: dropping it aborts the HTTP
+        // request (rule 3, drop-based cancellation).
         Ok(http::delta_stream(resp, parse_line))
     }
 
@@ -225,12 +228,12 @@ impl AiProvider for OpenAiCompatProvider {
         let resp = http::check_status(resp)?;
         let raw = resp.bytes().await.map_err(|e| http::transport(&e))?;
         let parsed: EmbeddingsResponse = serde_json::from_slice(&raw)
-            .map_err(|e| AiError::Protocol(format!("respuesta de /v1/embeddings inválida: {e}")))?;
+            .map_err(|e| AiError::Protocol(format!("invalid /v1/embeddings response: {e}")))?;
         Ok(parsed.data.into_iter().map(|d| d.embedding).collect())
     }
 
-    /// El modelo configurado, sin tocar la red (v1 no consulta `/v1/models`:
-    /// offline-testable, ADR 0031).
+    /// The configured model, without touching the network (v1 does not
+    /// query `/v1/models`: offline-testable, ADR 0031).
     async fn list_models(&self) -> Result<Vec<ModelInfo>, AiError> {
         Ok(vec![ModelInfo {
             id: self.model.clone(),
@@ -247,11 +250,11 @@ mod tests {
     use crate::http::testutil::{response, serve_once, serve_seq};
     use crate::provider::ChatMessage;
 
-    /// `chat()` debe fallar en el establecimiento (el `ChatStream` no es
-    /// `Debug`, así que `unwrap_err` no aplica).
+    /// `chat()` must fail at setup time (`ChatStream` is not `Debug`, so
+    /// `unwrap_err` does not apply).
     async fn chat_err(p: &OpenAiCompatProvider, req: ChatRequest) -> AiError {
         match p.chat(req).await {
-            Ok(_) => panic!("esperaba un error de establecimiento"),
+            Ok(_) => panic!("expected a setup error"),
             Err(e) => e,
         }
     }
@@ -264,16 +267,17 @@ mod tests {
         )
     }
 
-    /// SSE feliz: los chunks sin `content` (rol inicial, usage) se saltan,
-    /// `data: [DONE]` termina, y la petición lleva el bearer y el system.
+    /// Happy SSE: chunks with no `content` (initial role, usage) are
+    /// skipped, `data: [DONE]` ends it, and the request carries the bearer
+    /// and the system.
     #[tokio::test]
-    async fn chat_concatena_saltando_chunks_sin_content() {
+    async fn chat_concatenates_skipping_content_less_chunks() {
         let body = [
             r#"data: {"choices":[{"delta":{"role":"assistant"}}]}"#,
             "",
-            r#"data: {"choices":[{"delta":{"content":"Ho"}}]}"#,
+            r#"data: {"choices":[{"delta":{"content":"He"}}]}"#,
             "",
-            r#"data: {"choices":[{"delta":{"content":"la"}}]}"#,
+            r#"data: {"choices":[{"delta":{"content":"llo"}}]}"#,
             "",
             r#"data: {"choices":[{"delta":{},"finish_reason":"stop"}]}"#,
             "",
@@ -283,34 +287,36 @@ mod tests {
         .join("\n");
         let srv = serve_once(response(200, "OK", &[], &body)).await;
         let p = provider(&srv.base_url, Some("sk-oa-1"));
-        let mut req = ChatRequest::new(vec![ChatMessage::user("hola")]);
-        req.system = Some("tono seco".to_string());
+        let mut req = ChatRequest::new(vec![ChatMessage::user("hello")]);
+        req.system = Some("dry tone".to_string());
         let stream = p.chat(req).await.unwrap();
         let parts: Vec<String> = stream.map(Result::unwrap).collect().await;
-        assert_eq!(parts.concat(), "Hola");
+        assert_eq!(parts.concat(), "Hello");
 
         let raw = srv.request().await;
         assert!(raw.contains("POST /v1/chat/completions"), "{raw}");
         assert!(raw.contains("authorization: Bearer sk-oa-1"), "{raw}");
         assert!(
-            raw.contains(r#"{"content":"tono seco","role":"system"}"#),
+            raw.contains(r#"{"content":"dry tone","role":"system"}"#),
             "{raw}"
         );
-        // Sin contrato no se inventa uno.
+        // With no contract, none is invented.
         assert!(!raw.contains("response_format"), "{raw}");
     }
 
-    /// **El contrato viaja en `response_format`, con su nombre y `strict`.**
+    /// **The contract travels in `response_format`, with its name and
+    /// `strict`.**
     ///
-    /// Este camino es INCONDICIONAL —no hay lista de modelos que valga
-    /// contra un servidor arbitrario— y por eso su fixture importa más que
-    /// el de Anthropic: es el que apunta a máquinas ajenas.
+    /// This path is UNCONDITIONAL —there is no model list that would hold
+    /// against an arbitrary server— which is why its fixture matters more
+    /// than Anthropic's: it is the one that points at other people's
+    /// machines.
     #[tokio::test]
-    async fn el_contrato_viaja_en_response_format() {
+    async fn the_contract_travels_in_response_format() {
         let body = ["data: [DONE]", ""].join("\n");
         let srv = serve_once(response(200, "OK", &[], &body)).await;
         let p = provider(&srv.base_url, Some("sk-oa-1"));
-        let mut req = ChatRequest::new(vec![ChatMessage::user("hola")]);
+        let mut req = ChatRequest::new(vec![ChatMessage::user("hello")]);
         req.json_schema = Some(crate::provider::JsonContract::new(
             "norte_rename_plan",
             json!({"type": "object", "additionalProperties": false}),
@@ -321,22 +327,23 @@ mod tests {
         let raw = srv.request().await;
         assert!(raw.contains(r#""response_format""#), "{raw}");
         assert!(raw.contains(r#""type":"json_schema""#), "{raw}");
-        // El nombre viaja: este mecanismo lo exige, a diferencia del de
-        // Anthropic.
+        // The name travels: this mechanism requires it, unlike Anthropic's.
         assert!(raw.contains(r#""name":"norte_rename_plan""#), "{raw}");
-        // Y `strict`, que es lo que lo convierte en contrato y no en consejo.
+        // And `strict`, which is what turns it into a contract rather than a
+        // suggestion.
         assert!(raw.contains(r#""strict":true"#), "{raw}");
     }
 
-    /// **Un servidor que rechaza el contrato con 400 no rompe la función.**
+    /// **A server that rejects the contract with 400 does not break the
+    /// feature.**
     ///
-    /// «Compatible con `OpenAI`» es un nombre, no una garantía: al otro lado
-    /// puede haber un servidor que no conozca `response_format`. Sin este
-    /// reintento, activar la salida tipada convertía un renombrado que
-    /// funcionaba en un error opaco — y el ADR 0088 lo reconocía sin
-    /// arreglarlo.
+    /// "OpenAI-compatible" is a name, not a guarantee: on the other side
+    /// there could be a server that does not know `response_format`.
+    /// Without this retry, enabling typed output turned a rename that
+    /// worked into an opaque error — and ADR 0088 acknowledged it without
+    /// fixing it.
     #[tokio::test]
-    async fn un_400_al_contrato_se_repite_sin_el() {
+    async fn a_400_on_the_contract_retries_without_it() {
         let ok = ["data: [DONE]", ""].join("\n");
         let srv = serve_seq(vec![
             response(
@@ -349,59 +356,60 @@ mod tests {
         ])
         .await;
         let p = provider(&srv.base_url, Some("sk-oa-1"));
-        let mut req = ChatRequest::new(vec![ChatMessage::user("hola")]);
+        let mut req = ChatRequest::new(vec![ChatMessage::user("hello")]);
         req.json_schema = Some(crate::provider::JsonContract::new("plan", json!({})));
 
-        let stream = p.chat(req).await.expect("el reintento sale adelante");
+        let stream = p.chat(req).await.expect("the retry pulls through");
         let _: Vec<_> = stream.collect().await;
 
         let reqs = srv.requests().await;
-        assert_eq!(reqs.len(), 2, "un rechazo, un reintento");
+        assert_eq!(reqs.len(), 2, "one rejection, one retry");
         assert!(reqs[0].contains("response_format"), "{}", reqs[0]);
-        // Y el segundo va SIN contrato: repetir lo mismo sería gastar la
-        // cuota del lector para volver a fallar.
+        // And the second goes WITHOUT the contract: repeating the same thing
+        // would be spending the reader's quota to fail again.
         assert!(!reqs[1].contains("response_format"), "{}", reqs[1]);
     }
 
-    /// Pero un 500 NO se repite sin contrato: no dice nada del contrato.
+    /// But a 500 is NOT retried without the contract: it says nothing about
+    /// the contract.
     #[tokio::test]
-    async fn un_500_no_se_repite() {
+    async fn a_500_is_not_retried() {
         let srv = serve_seq(vec![response(500, "Server Error", &[], "boom")]).await;
         let p = provider(&srv.base_url, Some("sk-oa-1"));
-        let mut req = ChatRequest::new(vec![ChatMessage::user("hola")]);
+        let mut req = ChatRequest::new(vec![ChatMessage::user("hello")]);
         req.json_schema = Some(crate::provider::JsonContract::new("plan", json!({})));
 
         assert!(matches!(
             chat_err(&p, req).await,
             AiError::Http { status: 500 }
         ));
-        assert_eq!(srv.requests().await.len(), 1, "un solo viaje");
+        assert_eq!(srv.requests().await.len(), 1, "a single round trip");
     }
 
-    /// `/v1/embeddings`: extrae los vectores en orden.
+    /// `/v1/embeddings`: extracts the vectors in order.
     #[tokio::test]
-    async fn embed_extrae_en_orden() {
+    async fn embed_extracts_in_order() {
         let body = r#"{"object":"list","data":[{"index":0,"embedding":[0.5]},{"index":1,"embedding":[1.5,2.5]}]}"#;
         let srv = serve_once(response(200, "OK", &[], body)).await;
         let p = provider(&srv.base_url, Some("sk"));
         let vecs = p
-            .embed(&["uno".to_string(), "dos".to_string()])
+            .embed(&["one".to_string(), "two".to_string()])
             .await
             .unwrap();
         assert_eq!(vecs, vec![vec![0.5], vec![1.5, 2.5]]);
     }
 
     #[tokio::test]
-    async fn un_401_es_auth() {
+    async fn a_401_is_auth() {
         let srv = serve_once(response(401, "Unauthorized", &[], "{}")).await;
-        let p = provider(&srv.base_url, Some("sk-mala"));
+        let p = provider(&srv.base_url, Some("sk-bad"));
         let err = chat_err(&p, ChatRequest::new(vec![ChatMessage::user("x")])).await;
         assert!(matches!(err, AiError::Auth), "{err:?}");
     }
 
-    /// Sin secreto no se manda nada: `Auth` inmediato en chat Y embed.
+    /// With no secret, nothing gets sent: immediate `Auth` in chat AND embed.
     #[tokio::test]
-    async fn sin_secreto_es_auth() {
+    async fn no_secret_is_auth() {
         let p = provider("http://127.0.0.1:9", None);
         let err = chat_err(&p, ChatRequest::new(vec![ChatMessage::user("x")])).await;
         assert!(matches!(err, AiError::Auth), "{err:?}");
@@ -409,9 +417,9 @@ mod tests {
         assert!(matches!(err, AiError::Auth), "{err:?}");
     }
 
-    /// Una línea `data:` con campo `error` es `Protocol` con el mensaje.
+    /// A `data:` line with an `error` field is `Protocol` with the message.
     #[tokio::test]
-    async fn data_con_error_es_protocol() {
+    async fn data_with_error_is_protocol() {
         let body = [
             r#"data: {"choices":[{"delta":{"content":"a"}}]}"#,
             "",
@@ -434,11 +442,11 @@ mod tests {
         assert!(stream.next().await.is_none());
     }
 
-    /// El Debug del proveedor jamás filtra la api key (regla 10).
+    /// The provider's Debug never leaks the api key (rule 10).
     #[test]
-    fn debug_redacta_el_secreto() {
-        let p = provider("http://x", Some("sk-super-secreta"));
+    fn debug_redacts_the_secret() {
+        let p = provider("http://x", Some("sk-super-secret"));
         let dbg = format!("{p:?}");
-        assert!(!dbg.contains("sk-super-secreta"), "{dbg}");
+        assert!(!dbg.contains("sk-super-secret"), "{dbg}");
     }
 }

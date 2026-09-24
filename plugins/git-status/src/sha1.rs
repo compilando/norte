@@ -1,17 +1,17 @@
-//! SHA-1, lo justo para calcular el id de objeto de un blob.
+//! SHA-1, just enough to compute a blob's object id.
 //!
-//! Se implementa aquí y no se trae una dependencia porque el guest compila a
-//! `wasm32-wasip2` con `no_std` y esto son sesenta líneas de aritmética
-//! entera. Git identifica un blob por `sha1("blob <len>\0" + contenido)`, y
-//! eso es todo lo que hace falta para desempatar el caso «racy» (mismo mtime
-//! que el índice y mismo tamaño), que es el único sitio donde este parser
-//! llega a leer un fichero.
+//! Implemented here instead of pulling in a dependency because the guest
+//! compiles to `wasm32-wasip2` with `no_std` and this is sixty lines of
+//! integer arithmetic. Git identifies a blob by
+//! `sha1("blob <len>\0" + content)`, and that is all that is needed to
+//! break the "racy" tie (same mtime as the index and same size), which is
+//! the only place this parser ever reads a file.
 
 extern crate alloc;
 
 use alloc::vec::Vec;
 
-/// El id de objeto que git le daría a este contenido como blob.
+/// The object id git would give this content as a blob.
 #[must_use]
 pub fn blob_oid(content: &[u8]) -> [u8; 20] {
     let mut header = Vec::with_capacity(32 + content.len());
@@ -37,7 +37,7 @@ fn push_decimal(out: &mut Vec<u8>, mut n: u64) {
     out.extend_from_slice(&digits[at..]);
 }
 
-/// SHA-1 (RFC 3174) sobre un mensaje completo en memoria.
+/// SHA-1 (RFC 3174) over a whole in-memory message.
 #[must_use]
 pub fn sha1(msg: &[u8]) -> [u8; 20] {
     let mut h: [u32; 5] = [
@@ -100,9 +100,9 @@ pub fn sha1(msg: &[u8]) -> [u8; 20] {
 mod tests {
     use super::*;
 
-    /// Vectores de RFC 3174, que es la única fuente de verdad que hace falta.
+    /// RFC 3174 vectors, which is the only source of truth needed.
     #[test]
-    fn los_vectores_del_rfc() {
+    fn the_rfc_vectors() {
         assert_eq!(
             sha1(b"abc"),
             [
@@ -119,20 +119,20 @@ mod tests {
         );
     }
 
-    /// El id que `git hash-object --stdin` da para «hola\n». Verificado
-    /// contra el git instalado, no copiado de memoria.
+    /// The id `git hash-object --stdin` gives for «hola\n». Verified
+    /// against installed git, not copied from memory.
     #[test]
-    fn el_oid_de_un_blob_es_el_de_git() {
+    fn a_blobs_oid_is_gits() {
         let oid = blob_oid(b"hola\n");
         let hex: alloc::string::String = oid.iter().map(|b| alloc::format!("{b:02x}")).collect();
         assert_eq!(hex, "5c1b14949828006ed75a3e8858957f86a2f7e2eb");
     }
 
     #[test]
-    fn un_contenido_de_mas_de_un_bloque_tambien() {
-        // 1000 bytes cruza varios bloques de 64 y ejercita el relleno.
-        let grande = alloc::vec![b'x'; 1000];
-        assert_ne!(sha1(&grande), sha1(b"x"));
-        assert_eq!(sha1(&grande), sha1(&grande.clone()));
+    fn content_over_one_block_too() {
+        // 1000 bytes crosses several 64-byte blocks and exercises the padding.
+        let big = alloc::vec![b'x'; 1000];
+        assert_ne!(sha1(&big), sha1(b"x"));
+        assert_eq!(sha1(&big), sha1(&big.clone()));
     }
 }

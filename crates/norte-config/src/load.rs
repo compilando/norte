@@ -2937,7 +2937,7 @@ pub fn load(layers: &Layers) -> Result<CommonConfig, ConfigError> {
         if let Some(raw) = schema::read_optional(&norte)? {
             let parsed: NorteToml = match parse_layer(&raw, &norte, *kind) {
                 Ok(Some(p)) => p,
-                // Una capa de PROYECTO que no parsea se SALTA, con su motivo.
+                // A PROJECT layer that does not parse is SKIPPED, with its reason.
                 Ok(None) => {
                     project_warnings.push(layer_error(&raw, &norte).to_string());
                     continue;
@@ -4468,7 +4468,7 @@ mod persist_set_tests {
     }
 }
 
-/// Tests de [`persist_columns`] (#108 7a): el PRIMER valor array que el
+/// Tests for [`persist_columns`] (#108 7a): the FIRST array value the
 /// persister writes ever — the round trip through the real `load` is the
 /// contract's pin (the sort's key names are EXACTLY what
 /// `parse_sort_section` parses: `column`/`dir`/`dirs_first`).
@@ -5767,129 +5767,130 @@ mod persist_keymap_tests {
     }
 }
 
-/// Lo que una capa de PERFIL puede y no puede decidir (spec 2026-08-26, D2).
+/// What a PROFILE layer may and may not decide (spec 2026-08-26, D2).
 #[cfg(test)]
 mod profile_layer_tests {
     use super::*;
 
-    fn capas(usuario: &std::path::Path, perfil: &std::path::Path) -> Layers {
+    fn layers(user: &std::path::Path, profile: &std::path::Path) -> Layers {
         Layers {
             dirs: vec![
-                (usuario.to_path_buf(), Layer::User),
-                (perfil.to_path_buf(), Layer::Profile),
+                (user.to_path_buf(), Layer::User),
+                (profile.to_path_buf(), Layer::Profile),
             ],
         }
     }
 
-    /// D2: el recorte de proyecto estaba escrito como `!= Layer::Project`, así
-    /// que una cuarta variante heredaba EN SILENCIO todo lo del usuario. Este
-    /// test es el que impide que eso vuelva: un perfil no redirige el
-    /// transporte, no enciende la IA, no elige dónde se escriben los logs y no
-    /// sube los límites anti-bomba.
+    /// D2: the project carve-out used to be written as `!= Layer::Project`,
+    /// so a fourth variant SILENTLY inherited everything of the user's. This
+    /// test is what stops that from coming back: a profile does not redirect
+    /// the transport, does not enable AI, does not choose where logs are
+    /// written, and does not raise the anti-bomb limits.
     #[test]
-    fn un_perfil_no_puede_tocar_daemon_ai_log_ni_archive() {
-        let usuario = tempfile::tempdir().expect("tempdir");
-        let perfil = tempfile::tempdir().expect("tempdir");
+    fn a_profile_cannot_touch_daemon_ai_log_or_archive() {
+        let user = tempfile::tempdir().expect("tempdir");
+        let profile = tempfile::tempdir().expect("tempdir");
         std::fs::write(
-            perfil.path().join("norte.toml"),
+            profile.path().join("norte.toml"),
             r#"
 [daemon]
-socket = "/tmp/ajeno.sock"
+socket = "/tmp/foreign.sock"
 [ai]
 enabled = true
 [log]
-dir = "/tmp/logs-ajenos"
+dir = "/tmp/foreign-logs"
 [archive]
 max_entries = 999999999
 "#,
         )
         .expect("write");
 
-        let cfg = load(&capas(usuario.path(), perfil.path())).expect("carga");
+        let cfg = load(&layers(user.path(), profile.path())).expect("loads");
 
-        assert_eq!(cfg.daemon.socket, None, "el transporte no se redirige");
-        assert!(!cfg.ai.enabled, "la IA no se enciende sola");
-        assert_eq!(cfg.log.dir, None, "los logs no se mudan");
+        assert_eq!(cfg.daemon.socket, None, "the transport is not redirected");
+        assert!(!cfg.ai.enabled, "AI does not turn on by itself");
+        assert_eq!(cfg.log.dir, None, "the logs do not move");
         assert_eq!(
             cfg.archive.max_entries, None,
-            "los límites anti-bomba no suben"
+            "the anti-bomb limits do not rise"
         );
         assert_eq!(
             cfg.profile_warnings.len(),
             4,
-            "y las cuatro se DICEN: callarlas convierte el selector en un \
-             escalador de permisos"
+            "and all four ARE said: staying silent about them turns the \
+             picker into a privilege escalator"
         );
-        for seccion in ["daemon", "ai", "log", "archive"] {
+        for section in ["daemon", "ai", "log", "archive"] {
             assert!(
-                cfg.profile_warnings.iter().any(|w| w.contains(seccion)),
-                "falta el aviso de [{seccion}]: {:?}",
+                cfg.profile_warnings.iter().any(|w| w.contains(section)),
+                "missing the warning for [{section}]: {:?}",
                 cfg.profile_warnings
             );
         }
     }
 
-    /// El editor y el comparador son programas que se EJECUTAN: un perfil no
-    /// los elige, y hasta ahora los descartaba sin decirlo.
+    /// The editor and the comparator are programs that get RUN: a profile
+    /// does not choose them, and until now it dropped them without saying so.
     #[test]
-    fn un_perfil_que_pide_editor_o_comparador_avisa() {
-        let usuario = tempfile::tempdir().expect("tempdir");
-        let perfil = tempfile::tempdir().expect("tempdir");
+    fn a_profile_that_asks_for_an_editor_or_comparator_warns() {
+        let user = tempfile::tempdir().expect("tempdir");
+        let profile = tempfile::tempdir().expect("tempdir");
         std::fs::write(
-            perfil.path().join("norte.toml"),
+            profile.path().join("norte.toml"),
             "[ui]\neditor = [\"vim\"]\ndiff_detached = true\n",
         )
         .expect("write");
-        let cfg = load(&capas(usuario.path(), perfil.path())).expect("carga");
-        assert_eq!(cfg.ui_editor, None, "no se aplica");
+        let cfg = load(&layers(user.path(), profile.path())).expect("loads");
+        assert_eq!(cfg.ui_editor, None, "not applied");
         assert!(
             cfg.profile_warnings.iter().any(|w| w.contains("editor")),
-            "y se dice: {:?}",
+            "and it is said: {:?}",
             cfg.profile_warnings
         );
     }
 
-    /// Cada CLAVE de esas secciones avisa sola, no sólo las que había cuando
-    /// se escribió el aviso. `[log] format` llegó después (ADR 0127), y un
-    /// perfil que sólo traía esa clave se descartaba sin decir nada.
+    /// Every KEY of those sections warns on its own, not just the ones there
+    /// were when the warning was written. `[log] format` arrived later (ADR
+    /// 0127), and a profile that only brought that key was dropped without a
+    /// word.
     #[test]
-    fn un_perfil_que_solo_pide_el_formato_del_log_tambien_avisa() {
-        let usuario = tempfile::tempdir().expect("tempdir");
-        let perfil = tempfile::tempdir().expect("tempdir");
+    fn a_profile_that_only_asks_for_the_logs_format_also_warns() {
+        let user = tempfile::tempdir().expect("tempdir");
+        let profile = tempfile::tempdir().expect("tempdir");
         std::fs::write(
-            perfil.path().join("norte.toml"),
+            profile.path().join("norte.toml"),
             "[log]\nformat = \"json\"\n",
         )
         .expect("write");
 
-        let cfg = load(&capas(usuario.path(), perfil.path())).expect("carga");
+        let cfg = load(&layers(user.path(), profile.path())).expect("loads");
 
         assert_eq!(
             cfg.log.format,
             crate::schema::LogFormat::Text,
-            "no se aplica"
+            "not applied"
         );
         assert!(
             cfg.profile_warnings.iter().any(|w| w.contains("[log]")),
-            "y se dice: {:?}",
+            "and it is said: {:?}",
             cfg.profile_warnings
         );
     }
 
-    /// Y lo que SÍ puede: presentación entera, más el preset de keymap y los
-    /// favoritos, que la capa de proyecto no puede y ésta sí — un perfil es del
-    /// usuario, un repositorio ajeno no.
+    /// And what it CAN do: all of presentation, plus the keymap preset and
+    /// the favorites, which the project layer cannot and this one can — a
+    /// profile is the user's own, a foreign repository is not.
     #[test]
-    fn un_perfil_pisa_presentacion_keymap_y_favoritos() {
-        let usuario = tempfile::tempdir().expect("tempdir");
+    fn a_profile_overrides_presentation_keymap_and_favorites() {
+        let user = tempfile::tempdir().expect("tempdir");
         std::fs::write(
-            usuario.path().join("norte.toml"),
+            user.path().join("norte.toml"),
             "[ui]\ntheme = \"nord\"\nlayout = \"orthodox\"\n[keymap]\npreset = \"orthodox\"\n",
         )
         .expect("write");
-        let perfil = tempfile::tempdir().expect("tempdir");
+        let profile = tempfile::tempdir().expect("tempdir");
         std::fs::write(
-            perfil.path().join("norte.toml"),
+            profile.path().join("norte.toml"),
             r#"
 [ui]
 theme = "solarized"
@@ -5903,7 +5904,7 @@ path = "/home/u/src"
         )
         .expect("write");
 
-        let cfg = load(&capas(usuario.path(), perfil.path())).expect("carga");
+        let cfg = load(&layers(user.path(), profile.path())).expect("loads");
 
         assert_eq!(cfg.ui_theme.as_deref(), Some("solarized"));
         assert_eq!(cfg.ui_layout.as_deref(), Some("explorer"));
@@ -5912,25 +5913,25 @@ path = "/home/u/src"
         assert!(cfg.profile_warnings.is_empty());
     }
 
-    /// D3: `[profile.start]` es lo que hace útil un perfil recién creado. Las
-    /// claves son ids de hueco TAL Y COMO los escribe la disposición del
-    /// perfil, y los valores son [`VPath`]s en forma de cable — que es lo que
-    /// escribe `save_profile`, y lo que permite que un hueco de un perfil
-    /// abra en sftp o dentro de un contenedor.
+    /// D3: `[profile.start]` is what makes a freshly created profile useful.
+    /// The keys are slot ids EXACTLY AS the profile's own layout writes them,
+    /// and the values are [`VPath`]s in wire form — which is what
+    /// `save_profile` writes, and what lets a profile's slot open on sftp or
+    /// inside a container.
     #[test]
-    fn profile_start_se_lee_con_sus_ids() {
-        let perfil = tempfile::tempdir().expect("tempdir");
+    fn profile_start_reads_with_its_ids() {
+        let profile = tempfile::tempdir().expect("tempdir");
         std::fs::write(
-            perfil.path().join("norte.toml"),
-            "[profile]\ntitle = \"Trabajo\"\n\n[profile.start]\n\
-             1 = \"file:///home/u/src\"\n2 = \"sftp://maquina/srv\"\n",
+            profile.path().join("norte.toml"),
+            "[profile]\ntitle = \"Work\"\n\n[profile.start]\n\
+             1 = \"file:///home/u/src\"\n2 = \"sftp://machine/srv\"\n",
         )
         .expect("write");
         let layers = Layers {
-            dirs: vec![(perfil.path().to_path_buf(), Layer::Profile)],
+            dirs: vec![(profile.path().to_path_buf(), Layer::Profile)],
         };
-        let cfg = load(&layers).expect("carga");
-        assert_eq!(cfg.profile_title.as_deref(), Some("Trabajo"));
+        let cfg = load(&layers).expect("loads");
+        assert_eq!(cfg.profile_title.as_deref(), Some("Work"));
         assert_eq!(
             cfg.profile_start.get(&1).map(norte_proto::VPath::to_wire),
             Some("file:///home/u/src".to_owned())
@@ -5938,198 +5939,200 @@ path = "/home/u/src"
         assert_eq!(
             cfg.profile_start.get(&2).map(|v| v.scheme().to_owned()),
             Some("sftp".to_owned()),
-            "un hueco de un perfil no tiene por qué ser local"
+            "a profile's slot has no reason to be local"
         );
         assert_eq!(cfg.profile_start.len(), 2);
     }
 
-    /// Una ruta SIN esquema se tira con su aviso, igual que una clave mala.
+    /// A path with NO scheme is dropped with its warning, same as a bad key.
     ///
-    /// Ese aviso llega a la pantalla (`profile_warnings`), que es lo que hace
-    /// que esto sea una regla y no una trampa: quien escriba `/tmp` a mano lo
-    /// ve, en vez de quedarse con un hueco que abre donde le parece.
+    /// That warning reaches the screen (`profile_warnings`), which is what
+    /// makes this a rule and not a trap: whoever writes `/tmp` by hand sees
+    /// it, instead of being left with a slot that opens wherever it pleases.
     #[test]
-    fn una_ruta_de_start_sin_esquema_se_avisa_y_se_tira() {
-        let perfil = tempfile::tempdir().expect("tempdir");
+    fn a_start_path_with_no_scheme_warns_and_is_dropped() {
+        let profile = tempfile::tempdir().expect("tempdir");
         std::fs::write(
-            perfil.path().join("norte.toml"),
-            // Un valor con una palabra que no puede salir de ninguna otra
-            // parte del aviso: el `tempdir` de este test vive DENTRO de /tmp,
-            // así que buscar «/tmp» habría dado un falso positivo con la ruta
-            // del propio fichero.
-            "[profile.start]\n1 = \"/secreto-del-lector\"\n2 = \"file:///home/u\"\n",
+            profile.path().join("norte.toml"),
+            // A value with a word that cannot come from anywhere else in the
+            // warning: this test's `tempdir` lives INSIDE /tmp, so searching
+            // for "/tmp" would have given a false positive against the
+            // file's own path.
+            "[profile.start]\n1 = \"/readers-secret\"\n2 = \"file:///home/u\"\n",
         )
         .expect("write");
         let layers = Layers {
-            dirs: vec![(perfil.path().to_path_buf(), Layer::Profile)],
+            dirs: vec![(profile.path().to_path_buf(), Layer::Profile)],
         };
-        let cfg = load(&layers).expect("carga");
-        assert_eq!(cfg.profile_start.len(), 1, "el bueno sobrevive");
+        let cfg = load(&layers).expect("loads");
+        assert_eq!(cfg.profile_start.len(), 1, "the good one survives");
         assert!(cfg.profile_start.contains_key(&2));
-        let aviso = cfg.profile_warnings.join(" ");
+        let warning = cfg.profile_warnings.join(" ");
         assert!(
-            aviso.contains("hueco 1"),
-            "se dice qué hueco se quedó sin sembrar: {aviso}"
+            warning.contains("slot 1"),
+            "it says which slot was left unseeded: {warning}"
         );
         assert!(
-            !aviso.contains("secreto-del-lector"),
-            "y NO se cita el valor, que es una ruta y esto va a la barra: {aviso}"
+            !warning.contains("readers-secret"),
+            "and the value is NOT quoted, since it is a path and this goes to the bar: {warning}"
         );
     }
 
-    /// Una clave que no es un id de hueco no rompe el arranque: se tira y se
-    /// dice. El fichero es del usuario, pero un dedazo en un id no vale una
-    /// negativa a arrancar.
+    /// A key that is not a slot id does not break startup: it is dropped and
+    /// reported. The file is the user's own, but a typo in an id does not
+    /// earn a refusal to start.
     #[test]
-    fn una_clave_de_start_que_no_es_un_id_se_avisa_y_se_tira() {
-        let perfil = tempfile::tempdir().expect("tempdir");
+    fn a_start_key_that_is_not_an_id_warns_and_is_dropped() {
+        let profile = tempfile::tempdir().expect("tempdir");
         std::fs::write(
-            perfil.path().join("norte.toml"),
-            "[profile.start]\nizquierda = \"file:///tmp\"\n1 = \"file:///home/u\"\n",
+            profile.path().join("norte.toml"),
+            "[profile.start]\nleft = \"file:///tmp\"\n1 = \"file:///home/u\"\n",
         )
         .expect("write");
         let layers = Layers {
-            dirs: vec![(perfil.path().to_path_buf(), Layer::Profile)],
+            dirs: vec![(profile.path().to_path_buf(), Layer::Profile)],
         };
-        let cfg = load(&layers).expect("carga");
-        assert_eq!(cfg.profile_start.len(), 1, "el bueno sobrevive");
+        let cfg = load(&layers).expect("loads");
+        assert_eq!(cfg.profile_start.len(), 1, "the good one survives");
         assert!(
-            cfg.profile_warnings.iter().any(|w| w.contains("izquierda")),
-            "y el malo se dice por su nombre: {:?}",
+            cfg.profile_warnings.iter().any(|w| w.contains("left")),
+            "and the bad one is named: {:?}",
             cfg.profile_warnings
         );
     }
 
-    /// `[profile]` en una capa que NO es de perfil no significa nada, y decirlo
-    /// evita que alguien lo escriba en su norte.toml y espere que pase algo.
+    /// `[profile]` in a layer that is NOT a profile means nothing, and saying
+    /// so keeps someone from writing it into their norte.toml and expecting
+    /// something to happen.
     #[test]
-    fn profile_fuera_de_un_perfil_se_ignora_con_aviso() {
-        let usuario = tempfile::tempdir().expect("tempdir");
+    fn profile_outside_a_profile_is_ignored_with_a_warning() {
+        let user = tempfile::tempdir().expect("tempdir");
         std::fs::write(
-            usuario.path().join("norte.toml"),
-            "[profile]\ntitle = \"no soy un perfil\"\n",
+            user.path().join("norte.toml"),
+            "[profile]\ntitle = \"I am not a profile\"\n",
         )
         .expect("write");
         let layers = Layers {
-            dirs: vec![(usuario.path().to_path_buf(), Layer::User)],
+            dirs: vec![(user.path().to_path_buf(), Layer::User)],
         };
-        let cfg = load(&layers).expect("carga");
+        let cfg = load(&layers).expect("loads");
         assert_eq!(cfg.profile_title, None);
         assert_eq!(cfg.profile_warnings.len(), 1);
     }
 
-    /// Y el proyecto sigue mandando sobre el perfil (D1): esto es lo que hace
-    /// que ADR 0026 y #260 no cambien de significado.
+    /// And the project still overrides the profile (D1): this is what keeps
+    /// ADR 0026 and #260 from changing meaning.
     #[test]
-    fn proyecto_sigue_pisando_al_perfil_en_presentacion() {
-        let perfil = tempfile::tempdir().expect("tempdir");
+    fn project_still_overrides_the_profile_in_presentation() {
+        let profile = tempfile::tempdir().expect("tempdir");
         std::fs::write(
-            perfil.path().join("norte.toml"),
+            profile.path().join("norte.toml"),
             "[ui]\ntheme = \"solarized\"\n",
         )
         .expect("write");
-        let proyecto = tempfile::tempdir().expect("tempdir");
+        let project = tempfile::tempdir().expect("tempdir");
         std::fs::write(
-            proyecto.path().join("norte.toml"),
+            project.path().join("norte.toml"),
             "[ui]\ntheme = \"nord\"\n",
         )
         .expect("write");
 
         let layers = Layers {
             dirs: vec![
-                (perfil.path().to_path_buf(), Layer::Profile),
-                (proyecto.path().to_path_buf(), Layer::Project),
+                (profile.path().to_path_buf(), Layer::Profile),
+                (project.path().to_path_buf(), Layer::Project),
             ],
         };
-        let cfg = load(&layers).expect("carga");
+        let cfg = load(&layers).expect("loads");
         assert_eq!(cfg.ui_theme.as_deref(), Some("nord"));
     }
 }
 
-/// Lo que una capa de PROYECTO puede y no puede decidir (#260).
+/// What a PROJECT layer may and may not decide (#260).
 #[cfg(test)]
 mod project_layer_tests {
     use super::*;
 
-    fn capas(sistema: &std::path::Path, proyecto: &std::path::Path) -> Layers {
+    fn layers(system: &std::path::Path, project: &std::path::Path) -> Layers {
         Layers {
             dirs: vec![
-                (sistema.to_path_buf(), Layer::User),
-                (proyecto.to_path_buf(), Layer::Project),
+                (system.to_path_buf(), Layer::User),
+                (project.to_path_buf(), Layer::Project),
             ],
         }
     }
 
-    /// Un repositorio NO elige el preset de teclado.
+    /// A repository does NOT choose the keyboard preset.
     ///
-    /// Está acotado a los siete de fábrica, así que no es ejecución de
-    /// código — pero los presets discrepan sobre qué hace cada tecla:
-    /// `far` ata `shift+delete` a `pane.delete` y `orthodox` ata `shift+f8`
-    /// a `pane.delete-permanent`. Elegir cuál borra no es presentación.
+    /// It is bounded to the seven built-in ones, so it is not code execution
+    /// — but the presets DISAGREE about what each key does: `far` binds
+    /// `shift+delete` to `pane.delete` and `orthodox` binds `shift+f8` to
+    /// `pane.delete-permanent`. Choosing which one deletes is not
+    /// presentation.
     #[test]
-    fn una_capa_de_proyecto_no_elige_el_preset() {
-        let usuario = tempfile::tempdir().unwrap();
-        let proyecto = tempfile::tempdir().unwrap();
+    fn a_project_layer_does_not_choose_the_preset() {
+        let user = tempfile::tempdir().unwrap();
+        let project = tempfile::tempdir().unwrap();
         std::fs::write(
-            usuario.path().join("norte.toml"),
+            user.path().join("norte.toml"),
             "[keymap]\npreset = \"orthodox\"\n",
         )
         .unwrap();
         std::fs::write(
-            proyecto.path().join("norte.toml"),
+            project.path().join("norte.toml"),
             "[keymap]\npreset = \"far\"\n",
         )
         .unwrap();
 
-        let cfg = load(&capas(usuario.path(), proyecto.path())).expect("carga");
+        let cfg = load(&layers(user.path(), project.path())).expect("loads");
         assert_eq!(
             cfg.preset, "orthodox",
-            "el preset lo elige el usuario, no el repositorio"
+            "the preset is chosen by the user, not the repository"
         );
     }
 
-    /// Y un `.norte.toml` roto no deja a nadie sin gestor de ficheros.
+    /// And a broken `.norte.toml` does not leave anyone with no file manager.
     ///
-    /// Cualquier clave desconocida es fatal bajo `deny_unknown_fields`, así
-    /// que una errata en un repositorio ajeno rompía el arranque al hacer
-    /// `cd` ahí. Ahora la capa se salta, se DICE, y lo demás sigue.
+    /// Any unknown key is fatal under `deny_unknown_fields`, so a typo in a
+    /// foreign repository broke startup on `cd`-ing there. Now the layer is
+    /// skipped, it IS SAID, and the rest continues.
     #[test]
-    fn una_capa_de_proyecto_rota_se_salta_y_se_dice() {
-        let usuario = tempfile::tempdir().unwrap();
-        let proyecto = tempfile::tempdir().unwrap();
+    fn a_broken_project_layer_is_skipped_and_reported() {
+        let user = tempfile::tempdir().unwrap();
+        let project = tempfile::tempdir().unwrap();
+        std::fs::write(user.path().join("norte.toml"), "[ui]\ntheme = \"nord\"\n").unwrap();
         std::fs::write(
-            usuario.path().join("norte.toml"),
-            "[ui]\ntheme = \"nord\"\n",
+            project.path().join("norte.toml"),
+            "[ui]\ndoes_not_exist = 1\n",
         )
         .unwrap();
-        std::fs::write(proyecto.path().join("norte.toml"), "[ui]\nno_existe = 1\n").unwrap();
 
-        let cfg = load(&capas(usuario.path(), proyecto.path())).expect("arranca igual");
+        let cfg = load(&layers(user.path(), project.path())).expect("starts anyway");
         assert_eq!(
             cfg.ui_theme.as_deref(),
             Some("nord"),
-            "lo del usuario sigue"
+            "the user's continues"
         );
-        assert_eq!(cfg.project_warnings.len(), 1, "y se dice por qué");
+        assert_eq!(cfg.project_warnings.len(), 1, "and it says why");
         assert!(
-            cfg.project_warnings[0].contains("no_existe")
+            cfg.project_warnings[0].contains("does_not_exist")
                 || cfg.project_warnings[0].contains("norte.toml"),
-            "el aviso nombra el problema: {:?}",
+            "the warning names the problem: {:?}",
             cfg.project_warnings
         );
     }
 
-    /// La capa del USUARIO sigue siendo fatal: ésa sí es suya, y arrancar
-    /// ignorándola en silencio sería peor que no arrancar.
+    /// The USER layer stays fatal: that one IS the reader's own, and starting
+    /// while silently ignoring it would be worse than not starting.
     #[test]
-    fn una_capa_de_usuario_rota_sigue_siendo_fatal() {
-        let usuario = tempfile::tempdir().unwrap();
-        let proyecto = tempfile::tempdir().unwrap();
-        std::fs::write(usuario.path().join("norte.toml"), "[ui]\nno_existe = 1\n").unwrap();
+    fn a_broken_user_layer_stays_fatal() {
+        let user = tempfile::tempdir().unwrap();
+        let project = tempfile::tempdir().unwrap();
+        std::fs::write(user.path().join("norte.toml"), "[ui]\ndoes_not_exist = 1\n").unwrap();
 
         assert!(
-            load(&capas(usuario.path(), proyecto.path())).is_err(),
-            "una config del usuario rota se dice a gritos"
+            load(&layers(user.path(), project.path())).is_err(),
+            "a broken user config is said loudly"
         );
     }
 }

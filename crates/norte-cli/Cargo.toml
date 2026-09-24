@@ -1,6 +1,6 @@
 [package]
 name = "norte-cli"
-description = "CLI de norte: daemon, conexiones, política, undo, índice, IA y diagnóstico"
+description = "norte's CLI: daemon, connections, policy, undo, index, AI and diagnostics"
 license = "AGPL-3.0-only"
 version.workspace = true
 edition.workspace = true
@@ -12,12 +12,13 @@ authors.workspace = true
 name = "norte"
 path = "src/main.rs"
 
-# El CLI SÍ entra en el release. `dist = false` venía de M0, cuando `norte` era
-# un banco de pruebas del core embebido; hoy es la mitad no interactiva del
-# producto — `daemon`, `connect`, `mcp`, `policy`, `undo`, `index`, `ai`,
-# `audit`, `doctor` — y `norte tui` es como el README enseña a arrancar la TUI.
-# Un artefacto con `ntc` y sin `norte` deja al usuario sin daemon ni doctor;
-# `scripts/dist-smoke.sh` lo comprueba sobre el archivo construido.
+# The CLI DOES go into the release. `dist = false` dated from M0, when `norte`
+# was a test bench for the embedded core; today it is the non-interactive
+# half of the product — `daemon`, `connect`, `mcp`, `policy`, `undo`, `index`,
+# `ai`, `audit`, `doctor` — and `norte tui` is how the README teaches you to
+# start the TUI. An artifact with `ntc` and without `norte` leaves the user
+# without a daemon or a doctor; `scripts/dist-smoke.sh` checks that against
+# the built archive.
 [package.metadata.dist]
 dist = true
 
@@ -30,20 +31,20 @@ norte-connect.workspace = true
 norte-core.workspace = true
 norte-encoding.workspace = true
 norte-frontend.workspace = true
-# H3e: `doctor` juzga un `help.md` con el MISMO tope y las MISMAS reglas de
-# pertenencia de comandos que aplican en el host y en el frontend.
+# H3e: `doctor` judges a `help.md` with the SAME cap and the SAME
+# command-ownership rules that apply in the host and in the frontend.
 norte-help.workspace = true
 norte-mcp.workspace = true
 norte-i18n.workspace = true
 norte-proto.workspace = true
-# `norte theme import`: el parser de temas de VSCode y el escritor de TOML.
+# `norte theme import`: the VSCode theme parser and the TOML writer.
 norte-theme.workspace = true
 norte-vfs.workspace = true
 norte-vfs-local.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal"] }
-# `toml_edit::Value` es el tipo de `norte_config::persist_set` (`--use`).
+# `toml_edit::Value` is the type of `norte_config::persist_set` (`--use`).
 toml_edit.workspace = true
 
 [dev-dependencies]

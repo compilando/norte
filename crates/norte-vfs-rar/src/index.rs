@@ -1,6 +1,6 @@
-//! El árbol en RAM de UN `.rar`: entradas validadas como segmentos `VPath`,
-//! omitidas contadas, y la pregunta que decide si un nombre se le puede pedir
-//! al delegado sin ambigüedad.
+//! The in-RAM tree of ONE `.rar`: entries validated as `VPath` segments,
+//! skipped ones counted, and the question that decides whether a name can be
+//! asked of the delegate without ambiguity.
 
 use std::collections::{BTreeSet, HashMap};
 
@@ -10,17 +10,17 @@ use crate::RarLimits;
 use crate::delegate::RarError;
 use crate::listing::RawEntry;
 
-/// Clave del árbol: los componentes del path interior, en bytes.
+/// Tree key: the inner path's components, in bytes.
 pub(crate) type InnerPath = Vec<Vec<u8>>;
 
-/// Un nodo del árbol virtual.
+/// A node of the virtual tree.
 #[derive(Debug, Clone)]
 pub(crate) struct Node {
     pub kind: EntryKind,
     pub size: Option<u64>,
     pub mtime_ms: Option<i64>,
-    /// La entrada está cifrada: se LISTA, pero leerla pediría una contraseña
-    /// que nadie va a teclear (el hijo tiene `stdin` a null).
+    /// The entry is encrypted: it gets LISTED, but reading it would ask for a
+    /// password nobody is going to type (the child has `stdin` set to null).
     pub encrypted: bool,
 }
 
@@ -35,29 +35,30 @@ impl Node {
     }
 }
 
-/// Índice completo de UN archivo, ligado a una generación del contenedor.
+/// Full index of ONE archive, bound to a generation of the container.
 pub struct ArchiveIndex {
     pub(crate) nodes: HashMap<InnerPath, Node>,
     pub(crate) children: HashMap<InnerPath, BTreeSet<Vec<u8>>>,
     skipped: u64,
-    /// Los nombres COMPLETOS tal cual se le pedirían al delegado. Se guardan
-    /// aparte porque la prueba de ambigüedad es contra ellos, no contra el
-    /// árbol.
+    /// The FULL names exactly as they would be asked of the delegate. Kept
+    /// separately because the ambiguity test is against them, not against
+    /// the tree.
     full_names: Vec<Vec<u8>>,
-    /// `(mtime_ms, size)` del contenedor al indexar — la invalidación.
+    /// `(mtime_ms, size)` of the container at indexing time — the
+    /// invalidation key.
     pub(crate) generation: (Option<i64>, Option<u64>),
 }
 
 impl ArchiveIndex {
-    /// Construye el índice desde lo que imprimió el delegado, con los límites
-    /// por defecto. Para los tests y para quien no configura nada.
+    /// Builds the index from what the delegate printed, with the default
+    /// limits. For the tests and for whoever configures nothing.
     #[must_use]
     pub fn from_raw(raw: Vec<RawEntry>) -> Self {
         Self::build(raw, &RarLimits::default(), (None, None), 0)
     }
 
-    /// Como [`from_raw`](Self::from_raw), diciendo límites, generación y
-    /// cuántas entradas descartó ya el PARSER (que también cuentan).
+    /// Like [`from_raw`](Self::from_raw), given limits, generation and how
+    /// many entries the PARSER already discarded (those count too).
     #[must_use]
     pub(crate) fn build(
         raw: Vec<RawEntry>,
@@ -79,103 +80,106 @@ impl ArchiveIndex {
             tracing::warn!(
                 skipped = idx.skipped,
                 indexed = idx.nodes.len(),
-                "entradas del rar omitidas por nombre no representable"
+                "rar entries skipped for a non-representable name"
             );
         }
         idx
     }
 
-    /// Cuántas entradas del archivo NO están en el árbol.
+    /// How many entries of the archive are NOT in the tree.
     #[must_use]
     pub fn skipped(&self) -> u64 {
         self.skipped
     }
 
-    /// Cuántos nodos tiene el árbol (dirs implícitos incluidos).
+    /// How many nodes the tree has (implicit dirs included).
     #[must_use]
     pub fn len(&self) -> usize {
         self.nodes.len()
     }
 
-    /// `true` si el archivo no trajo ninguna entrada representable.
+    /// `true` if the archive brought no representable entry.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.nodes.is_empty()
     }
 
-    /// ¿Se le puede pedir este nombre al delegado sin que saque OTRA cosa?
+    /// Can this name be asked of the delegate without it pulling OUT
+    /// something else?
     ///
-    /// MEDIDO: los dos delegados tratan el nombre de la entrada como un
-    /// **patrón**, y ninguno tiene un interruptor de «esto es literal». Una
-    /// entrada llamada `star?name.txt` extrae también `starXname.txt`, y el
-    /// flujo parece perfectamente sano. Como el índice entero ya está en
-    /// memoria, la ambigüedad se decide AQUÍ, contra nuestros propios
-    /// nombres, antes de arrancar ningún proceso.
+    /// MEASURED: both delegates treat the entry's name as a **pattern**, and
+    /// neither has a "this is literal" switch. An entry named
+    /// `star?name.txt` also extracts `starXname.txt`, and the stream looks
+    /// perfectly healthy. Since the whole index is already in memory, the
+    /// ambiguity is decided HERE, against our own names, before starting any
+    /// process.
     ///
     /// # Errors
     ///
-    /// [`RarError::AmbiguousForDelegate`] si el nombre, tratado como patrón,
-    /// alcanza a alguna otra entrada del archivo.
+    /// [`RarError::AmbiguousForDelegate`] if the name, treated as a pattern,
+    /// reaches some other entry of the archive.
     pub fn addressable(&self, name: &[u8]) -> Result<(), RarError> {
         if !name.iter().any(|b| matches!(b, b'*' | b'?' | b'[' | b']')) {
-            return Ok(()); // sin metacaracteres no hay nada que confundir
+            return Ok(()); // no metacharacters, nothing to confuse
         }
-        let colisiones = self
+        let collisions = self
             .full_names
             .iter()
             .filter(|other| other.as_slice() != name && glob_matches(name, other))
             .count();
-        if colisiones == 0 {
+        if collisions == 0 {
             Ok(())
         } else {
             tracing::warn!(
                 name = ?String::from_utf8_lossy(name),
-                colisiones,
-                "nombre indireccionable: el delegado lo trataría como patrón"
+                collisions,
+                "unaddressable name: the delegate would treat it as a pattern"
             );
             Err(RarError::AmbiguousForDelegate)
         }
     }
 
-    /// Valida y trocea el nombre crudo. `None` = no representable, ya contado.
+    /// Validates and splits the raw name. `None` = not representable,
+    /// already counted.
     fn split_name(&mut self, raw: &[u8], limits: &RarLimits) -> Option<(InnerPath, bool)> {
         let mut hostile = |why: &str| {
-            tracing::debug!(name = ?String::from_utf8_lossy(raw), why, "entrada omitida");
+            tracing::debug!(name = ?String::from_utf8_lossy(raw), why, "entry skipped");
             self.skipped += 1;
             None
         };
         if raw.is_empty() {
-            return hostile("nombre vacío");
+            return hostile("empty name");
         }
         if raw.len() > limits.max_name_bytes {
-            return hostile("nombre demasiado largo");
+            return hostile("name too long");
         }
         if raw.first() == Some(&b'/') {
-            return hostile("path absoluto");
+            return hostile("absolute path");
         }
-        // RAR guarda `\` como separador cuando el archivo se hizo en Windows;
-        // aquí NO se traduce: un nombre con `\` es un nombre con `\`, y
-        // convertirlo inventaría una jerarquía que el archivo no declara.
+        // RAR stores `\` as a separator when the archive was made on
+        // Windows; it is NOT translated here: a name with `\` is a name with
+        // `\`, and converting it would invent a hierarchy the archive does
+        // not declare.
         let is_dir = raw.last() == Some(&b'/');
         let body = if is_dir { &raw[..raw.len() - 1] } else { raw };
         let mut parts: InnerPath = Vec::new();
         for comp in body.split(|&b| b == b'/') {
             if comp.is_empty() || comp == b"." || comp == b".." {
-                return hostile("componente `.`/`..`/vacío (traversal)");
+                return hostile("`.`/`..`/empty component (traversal)");
             }
             if comp == b"!" {
-                return hostile("componente `!` (marcador ADR 0018, indireccionable)");
+                return hostile("`!` component (ADR 0018 marker, unaddressable)");
             }
             if Segment::new(comp.to_vec()).is_err() {
-                return hostile("componente inválido como segmento VPath");
+                return hostile("component invalid as a VPath segment");
             }
             parts.push(comp.to_vec());
         }
         if parts.is_empty() {
-            return hostile("nombre sin componentes");
+            return hostile("name with no components");
         }
         if parts.len() > limits.max_depth {
-            return hostile("profundidad excesiva");
+            return hostile("excessive depth");
         }
         Some((parts, is_dir))
     }
@@ -184,9 +188,9 @@ impl ArchiveIndex {
         self.children.entry(parent).or_default().insert(name);
     }
 
-    /// Materializa los ancestros como dirs implícitos, con el mismo criterio
-    /// «gana el dir» que ADR 0018: sin esto, un `a` fichero seguido de
-    /// `a/hijo` dejaría el subárbol invisible.
+    /// Materializes the ancestors as implicit dirs, with the same "the dir
+    /// wins" criterion as ADR 0018: without this, an `a` file followed by
+    /// `a/child` would leave the subtree invisible.
     fn ensure_parents(&mut self, path: &[Vec<u8>]) {
         for depth in 0..path.len().saturating_sub(1) {
             let dir: InnerPath = path[..=depth].to_vec();
@@ -219,7 +223,7 @@ impl ArchiveIndex {
             encrypted: entry.encrypted,
         };
         self.ensure_parents(&path);
-        // Un dir jamás degrada a file: se perdería el subárbol.
+        // A dir never downgrades to a file: the subtree would be lost.
         if self
             .nodes
             .get(&path)
@@ -228,9 +232,9 @@ impl ArchiveIndex {
             self.skipped += 1;
             return;
         }
-        // El nombre que se le pedirá al delegado es el del ÁRBOL, no el
-        // crudo: si el crudo traía `dir/` final, pedirlo con la barra no
-        // extrae nada.
+        // The name that will be asked of the delegate is the TREE's, not
+        // the raw one: if the raw one carried a trailing `dir/`, asking with
+        // the slash extracts nothing.
         let full = path.join(&b'/');
         if !self.full_names.contains(&full) {
             self.full_names.push(full);
@@ -238,12 +242,12 @@ impl ArchiveIndex {
         self.nodes.insert(path.clone(), node);
         let (parent, name) = (
             path[..path.len() - 1].to_vec(),
-            path.last().expect("path no vacío").clone(),
+            path.last().expect("non-empty path").clone(),
         );
         self.add_child(parent, name);
     }
 
-    /// El `Entry` de un nodo, o de la raíz sintética del contenedor.
+    /// A node's `Entry`, or the container's synthetic root.
     pub(crate) fn entry_for(&self, at: &VPath, inner: &[Vec<u8>]) -> Result<Entry, Error> {
         if inner.is_empty() {
             return Ok(Entry {
@@ -269,13 +273,13 @@ impl ArchiveIndex {
     }
 }
 
-/// ¿`candidate` casa con `pattern` entendido como el glob que el delegado
-/// aplicaría?
+/// Does `candidate` match `pattern` understood as the glob the delegate
+/// would apply?
 ///
-/// Deliberadamente GENEROSO: `*` cruza barras y una clase `[...]` mal cerrada
-/// se trata como literal. Equivocarse de más aquí produce una negativa
-/// («no puedo darte esa entrada sin ambigüedad»); equivocarse de menos
-/// produce el contenido de OTRO fichero.
+/// Deliberately GENEROUS: `*` crosses slashes and a badly closed `[...]`
+/// class is treated as literal. Erring toward more here produces a refusal
+/// ("I cannot give you that entry without ambiguity"); erring toward less
+/// produces ANOTHER file's content.
 fn glob_matches(pattern: &[u8], candidate: &[u8]) -> bool {
     match pattern.first() {
         None => candidate.is_empty(),
@@ -289,7 +293,7 @@ fn glob_matches(pattern: &[u8], candidate: &[u8]) -> bool {
                     && class_matches(&pattern[1..end], candidate[0])
                     && glob_matches(&pattern[end + 1..], &candidate[1..])
             }
-            // Clase sin cerrar: literal, como hace un shell.
+            // Unclosed class: literal, as a shell does.
             None => literal_head(pattern, candidate),
         },
         Some(_) => literal_head(pattern, candidate),
@@ -304,8 +308,8 @@ fn literal_head(pattern: &[u8], candidate: &[u8]) -> bool {
 }
 
 fn class_end(pattern: &[u8]) -> Option<usize> {
-    // `[]abc]` es una clase que contiene `]`: el primer `]` pegado al
-    // corchete no cierra.
+    // `[]abc]` is a class that contains `]`: the first `]` glued to the
+    // bracket does not close it.
     let start = if pattern.get(1) == Some(&b'!') { 2 } else { 1 };
     let start = if pattern.get(start) == Some(&b']') {
         start + 1
@@ -356,28 +360,28 @@ mod tests {
         }
     }
 
-    /// MEDIDO: `star?name.txt` saca DOS entradas de los dos delegados.
+    /// MEASURED: `star?name.txt` pulls out TWO entries from both delegates.
     #[test]
-    fn un_nombre_que_es_glob_de_otro_se_rechaza() {
+    fn a_name_that_is_another_ones_glob_is_rejected() {
         let idx = ArchiveIndex::from_raw(vec![raw(b"star?name.txt", 7), raw(b"starXname.txt", 7)]);
         assert!(matches!(
             idx.addressable(b"star?name.txt"),
             Err(RarError::AmbiguousForDelegate)
         ));
-        // El gemelo literal NO es ambiguo: no contiene metacaracteres.
+        // The literal twin is NOT ambiguous: it contains no metacharacters.
         assert!(idx.addressable(b"starXname.txt").is_ok());
     }
 
-    /// Un patrón que solo se alcanza a sí mismo SÍ se puede pedir: negarlo
-    /// escondería un fichero que se puede servir bien.
+    /// A pattern that only reaches itself CAN be asked for: refusing it
+    /// would hide a file that can be served fine.
     #[test]
-    fn un_glob_que_solo_se_alcanza_a_si_mismo_se_permite() {
+    fn a_glob_that_only_reaches_itself_is_allowed() {
         let idx = ArchiveIndex::from_raw(vec![raw(b"solo*.txt", 1), raw(b"otro.bin", 1)]);
         assert!(idx.addressable(b"solo*.txt").is_ok());
     }
 
     #[test]
-    fn una_clase_de_corchetes_tambien_cuenta_como_patron() {
+    fn a_bracket_class_also_counts_as_a_pattern() {
         let idx = ArchiveIndex::from_raw(vec![raw(b"a[bc]d.txt", 1), raw(b"abd.txt", 1)]);
         assert!(matches!(
             idx.addressable(b"a[bc]d.txt"),
@@ -386,10 +390,10 @@ mod tests {
     }
 
     #[test]
-    fn un_nombre_inseguro_se_salta_y_se_cuenta() {
+    fn an_unsafe_name_is_skipped_and_counted() {
         let idx = ArchiveIndex::from_raw(vec![
             raw(b"ok.txt", 1),
-            raw(b"../fuera.txt", 1),
+            raw(b"../outside.txt", 1),
             raw(b"/abs.txt", 1),
             raw(b"con\0nul", 1),
         ]);
@@ -397,26 +401,26 @@ mod tests {
         assert_eq!(
             idx.skipped(),
             3,
-            "ADR 0018: saltadas y contadas, jamás fatales"
+            "ADR 0018: skipped and counted, never fatal"
         );
     }
 
     #[test]
-    fn los_directorios_intermedios_se_materializan() {
-        let idx = ArchiveIndex::from_raw(vec![raw(b"docs/sub/hoja.txt", 3)]);
-        assert_eq!(idx.len(), 3, "docs, docs/sub y la hoja");
+    fn intermediate_directories_are_materialized() {
+        let idx = ArchiveIndex::from_raw(vec![raw(b"docs/sub/leaf.txt", 3)]);
+        assert_eq!(idx.len(), 3, "docs, docs/sub and the leaf");
         assert_eq!(idx.children[&vec![]].len(), 1);
     }
 
     #[test]
-    fn el_marcador_de_archivo_no_es_direccionable_y_se_omite() {
+    fn the_archive_marker_is_not_addressable_and_is_skipped() {
         let idx = ArchiveIndex::from_raw(vec![raw(b"a/!/b.txt", 1)]);
         assert!(idx.is_empty());
         assert_eq!(idx.skipped(), 1);
     }
 
     #[test]
-    fn el_tope_de_entradas_no_revienta_el_indice_entero() {
+    fn the_entry_cap_does_not_blow_up_the_whole_index() {
         let limits = RarLimits {
             max_entries: 2,
             ..RarLimits::default()
@@ -430,11 +434,11 @@ mod tests {
             0,
         );
         assert_eq!(idx.len(), 2);
-        assert_eq!(idx.skipped(), 3, "las que no caben se cuentan");
+        assert_eq!(idx.skipped(), 3, "the ones that don't fit are counted");
     }
 
     #[test]
-    fn el_glob_de_asterisco_cruza_barras() {
+    fn the_star_glob_crosses_slashes() {
         assert!(glob_matches(b"a*z", b"a/b/z"));
         assert!(!glob_matches(b"a?z", b"a/bz"));
         assert!(glob_matches(b"a[!x]z", b"abz"));

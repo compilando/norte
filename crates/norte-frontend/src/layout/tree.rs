@@ -610,11 +610,12 @@ impl Node {
         }
     }
 
-    /// Parte el hueco `id` en dos a lo largo de `dir`, con `nuevo` al lado.
+    /// Splits slot `id` in two along `dir`, with `nuevo` next to it.
     ///
-    /// Los dos quedan con el mismo peso. Si `id` está dentro de una `Tabs`, el
-    /// corte va DENTRO de esa pestaña y no alrededor del grupo: partir una
-    /// pestaña es partir lo que estás mirando, no reorganizar sus hermanas.
+    /// Both end up with the same weight. If `id` is inside a `Tabs`, the
+    /// split goes INSIDE that tab and not around the group: splitting a
+    /// tab is splitting what you are looking at, not reorganizing its
+    /// siblings.
     ///
     /// # Splitting again on the same axis FLATTENS
     ///
@@ -931,10 +932,10 @@ impl Node {
         let Some(nodo) = self.find_slot(id).cloned() else {
             return self.clone();
         };
-        // El CENTRO solo junta lo que ya es de la misma familia: un listado
-        // con listados, un panel con paneles (ADR 0134). Un listado metido
-        // en las pestañas de los sitios viviría en dieciséis columnas, y un
-        // grupo mezclado dejaría de ser un grupo de paneles para siempre.
+        // The CENTER only joins what is already of the same family: a
+        // listing with listings, a panel with panels (ADR 0134). A listing
+        // put into the places tabs would live in sixteen columns, and a
+        // mixed group would stop being a panel group forever.
         if zona == DropZone::Center
             && self
                 .find_slot(target)
@@ -995,10 +996,10 @@ impl Node {
             Self::Slot { .. } => return None,
         };
         let pos = hijos.iter().position(|c| c.contains(target))?;
-        // Hermano en el MISMO reparto, si corre en el eje y la unidad pesa:
-        // así se parte a partes iguales, como `split_slot`. Nunca en el
-        // reparto del cromo: ese no se gira, y lo que se soltara ahí ya no
-        // se podría girar de vuelta con `layout.flip`.
+        // Sibling in the SAME layout, if it runs on the axis and the unit is
+        // weighted: this way it splits evenly, like `split_slot`. Never in
+        // chrome's layout: that one is not flipped, and what got dropped
+        // there could no longer be flipped back with `layout.flip`.
         if let Self::Split {
             dir,
             children,
@@ -1008,9 +1009,9 @@ impl Node {
             && !children.iter().any(es_cromo)
             && children[pos].es_unidad_de(target)
         {
-            // Junto a un panel de ancho FIJO tambien entra como hermano, con
-            // peso: partirlo por dentro le daría la mitad de sus dieciséis
-            // columnas a un listado.
+            // Next to a FIXED-width panel it also enters as a weighted
+            // sibling: splitting it from inside would give half of its
+            // sixteen columns to a listing.
             let tam = match sizes.get(pos).copied().unwrap_or(Size::Weight(1)) {
                 Size::Weight(peso) => Size::Weight(peso),
                 Size::Fixed(_) | Size::Auto => peso_entre_hermanos(Size::Weight(1), sizes),
@@ -1147,7 +1148,7 @@ impl Node {
     /// frame and the key would look broken.
     #[must_use]
     pub fn resize(&self, id: SlotId, delta: i16) -> Self {
-        /// Celdas por pulsación en un hijo fijo.
+        /// Cells per keystroke on a fixed child.
         const PASO: i32 = 2;
         self.map_split_of(id, &|sizes, pos| {
             let mut ns = sizes.to_vec();
@@ -1540,11 +1541,11 @@ impl Node {
         None
     }
 
-    /// Las pestañas del grupo que contiene `id`: el hueco que encabeza cada
-    /// una y cuál está activa. `None` si `id` no está en un grupo.
+    /// The tabs of the group that contains `id`: the slot that heads each
+    /// one and which is active. `None` if `id` is not in a group.
     ///
-    /// Lo usa el render de la barra de pestañas, y por eso devuelve el PRIMER
-    /// hueco de cada pestaña: es de quien se saca el título.
+    /// Used by the tab bar's render, and that is why it returns the FIRST
+    /// slot of each tab: that is who the title is taken from.
     #[must_use]
     pub fn tabs_of(&self, id: SlotId) -> Option<(Vec<SlotId>, usize)> {
         let hijos = match self {
@@ -1567,25 +1568,27 @@ impl Node {
         None
     }
 
-    /// El mismo árbol con el hueco `id` VISIBLE: activa su pestaña en cada
-    /// grupo del camino (#329).
+    /// The same tree with slot `id` made VISIBLE: activates its tab in
+    /// every group along the path (#329).
     ///
-    /// Existe porque [`Self::slot_ids`] y [`Self::visible_slot_ids`] contestan
-    /// dos preguntas distintas —«¿existe?» y «¿se ve?»— y hay una tercera que
-    /// no tenía respuesta: «que se vea». Sin ella, quien encontraba un hueco
-    /// escondido solo podía mandarle el teclado, que es enfocar algo que el
-    /// lector no tiene delante.
+    /// Exists because [`Self::slot_ids`] and [`Self::visible_slot_ids`]
+    /// answer two different questions — "does it exist?" and "is it
+    /// shown?" — and there was a third one with no answer: "make it
+    /// shown". Without it, whoever found a hidden slot could only send it
+    /// the keyboard, which is focusing something the reader does not have
+    /// in front of them.
     ///
-    /// Recorre TODO el camino y no solo el grupo de dentro: activar la pestaña
-    /// interior dejando la exterior en otra deja el hueco igual de invisible, y
-    /// el llamante creería haberlo enseñado. Un hueco que no está devuelve el
-    /// árbol igual — esto asegura un invariante, no ejecuta un gesto.
+    /// Walks the WHOLE path and not just the inner group: activating the
+    /// inner tab while leaving the outer one on another leaves the slot
+    /// just as invisible, and the caller would believe it had been shown.
+    /// A slot that is not there returns the tree unchanged — this enforces
+    /// an invariant, it does not run a gesture.
     ///
-    /// Uno que ya se ve lo devuelve igual salvo en un caso, y conviene decirlo:
-    /// el tipo permite un `active` fuera de rango, que [`Self::visible_slot_ids`]
-    /// y el reparto clampan los dos al primero. Sobre uno así, revelar el hueco
-    /// que YA se veía escribe el índice de verdad. Normaliza, no mueve nada de
-    /// sitio.
+    /// One that is already shown is returned unchanged except in one case,
+    /// worth stating: the type allows an out-of-range `active`, which
+    /// [`Self::visible_slot_ids`] and layout both clamp to the first one.
+    /// On one like that, revealing the slot that WAS ALREADY shown writes
+    /// the real index. It normalizes, it does not move anything.
     ///
     /// ```
     /// use norte_frontend::layout::{KindId, Node, SlotId};
@@ -1621,9 +1624,9 @@ impl Node {
                     .collect(),
                 sizes: sizes.clone(),
             },
-            // El `active` de entrada no se lee a propósito: revelar no lo
-            // conserva ni lo mueve un paso, lo FIJA en la pestaña que contiene
-            // al hueco. Ese es todo el gesto.
+            // The incoming `active` is deliberately not read: revealing
+            // does not keep it or move it one step, it SETS it to the tab
+            // that contains the slot. That is the whole gesture.
             Self::Tabs { children, .. } => {
                 let Some(pos) = children.iter().position(|c| c.contains(id)) else {
                     return self.clone();
@@ -1640,7 +1643,7 @@ impl Node {
         }
     }
 
-    /// Deja activa la pestaña `i` del grupo que contiene `id`.
+    /// Leaves tab `i` of the group that contains `id` active.
     #[must_use]
     pub fn set_active_for(&self, id: SlotId, i: usize) -> Self {
         self.map_tabs_of(id, &|children, _| {
@@ -1648,7 +1651,8 @@ impl Node {
         })
     }
 
-    /// Mueve la pestaña que contiene `id` `delta` posiciones, sin salirse.
+    /// Moves the tab that contains `id` `delta` positions, without going
+    /// out of range.
     #[must_use]
     pub fn move_tab(&self, id: SlotId, delta: isize) -> Self {
         self.map_tabs_of(id, &|children, pos| {
@@ -1662,8 +1666,9 @@ impl Node {
         })
     }
 
-    /// Aplica `f` a la `Tabs` que contiene `id`, dándole sus hijos y la
-    /// posición del que lo contiene, y esperando los hijos nuevos y el activo.
+    /// Applies `f` to the `Tabs` that contains `id`, giving it its children
+    /// and the position of the one that contains it, and expecting the new
+    /// children and the active one.
     fn map_tabs_of(&self, id: SlotId, f: &ReTab<'_>) -> Self {
         let hijos = match self {
             Self::Split { children, .. } | Self::Tabs { children, .. } => children,
@@ -1689,7 +1694,7 @@ impl Node {
         self.clone()
     }
 
-    /// El mismo nodo con el hijo `i` sustituido.
+    /// The same node with child `i` replaced.
     fn with_child(&self, i: usize, hijo: Self) -> Self {
         match self {
             Self::Split {
@@ -1721,35 +1726,36 @@ impl Node {
         }
     }
 
-    /// Una copia cuyos huecos se numeran desde `base`, más el mapa
-    /// viejo → nuevo.
+    /// A copy whose slots are numbered from `base`, plus the old -> new
+    /// map.
     ///
-    /// Es lo que hace que dos perfiles no se pisen (spec 2026-08-26, D5): las
-    /// disposiciones de fábrica usan 1..=8 TODAS, así que adoptar la misma en
-    /// dos perfiles sin reasignar deja los dos compartiendo el hueco 1 —
-    /// mismo directorio, mismo historial, mismas marcas.
+    /// It is what keeps two profiles from stepping on each other (spec
+    /// 2026-08-26, D5): the factory layouts ALL use 1..=8, so adopting the
+    /// same one in two profiles without reassigning leaves the two sharing
+    /// slot 1 — same directory, same history, same marks.
     ///
-    /// El mapa NO es una comodidad. `[profile.start]` viene indexado por los
-    /// ids que el fichero de disposición del perfil escribe, así que aplicarlo
-    /// después de rebasar exige la traducción; devolver solo el árbol dejaría
-    /// esas claves inservibles.
+    /// The map is NOT a convenience. `[profile.start]` comes indexed by the
+    /// ids the profile's layout file writes, so applying it after
+    /// rebasing requires the translation; returning only the tree would
+    /// leave those keys useless.
     ///
-    /// El orden de asignación es el de [`Self::slot_ids`], que es el de
-    /// lectura: determinista, y por tanto el mismo árbol rebasado dos veces
-    /// desde la misma base da el mismo resultado.
+    /// The assignment order is [`Self::slot_ids`]'s, which is reading
+    /// order: deterministic, and so the same tree rebased twice from the
+    /// same base gives the same result.
     ///
-    /// # De dónde sale `base`
+    /// # Where `base` comes from
     ///
-    /// De [`crate::session::SessionBody::next_slot_base`], y de ningún otro
-    /// sitio. La propiedad de «no colisiona» vive ENTERA ahí: mirar solo el
-    /// árbol del perfil activo daría una base que aterriza encima de los
-    /// huecos huérfanos, que son justo los que nadie está mirando cuando pasa.
-    /// Y el árbol rebasado se mete en `layouts` ANTES de volver a pedir una
-    /// base, o dos perfiles rebasan desde el mismo número.
+    /// From [`crate::session::SessionBody::next_slot_base`], and nowhere
+    /// else. The "does not collide" property lives ENTIRELY there: looking
+    /// only at the active profile's tree would give a base that lands on
+    /// top of the orphaned slots, which are exactly the ones nobody is
+    /// looking at when it happens. And the rebased tree goes into
+    /// `layouts` BEFORE asking for a base again, or two profiles would
+    /// rebase from the same number.
     ///
-    /// Sin espacio libre por arriba devuelve el árbol SIN TOCAR y un mapa
-    /// vacío: el llamante se queda como estaba en vez de recibir un árbol con
-    /// ids repetidos.
+    /// With no free room above, returns the tree UNTOUCHED and an empty
+    /// map: the caller stays as it was instead of receiving a tree with
+    /// repeated ids.
     ///
     /// ```
     /// use norte_frontend::layout::{Dir, KindId, Node, SlotId};
@@ -1768,34 +1774,34 @@ impl Node {
     #[must_use]
     pub fn rebase_slot_ids(&self, base: u32) -> (Self, std::collections::BTreeMap<SlotId, SlotId>) {
         let mut mapa = std::collections::BTreeMap::new();
-        let mut siguiente = base;
+        let mut next = base;
         for id in self.slot_ids() {
-            // Un árbol con ids repetidos es incoherente de entrada
-            // (`duplicate_slot_ids` lo dice y `validate` lo rechaza); si llega
-            // uno, los dos huecos siguen compartiendo id en vez de que uno se
-            // lleve un número que nadie le dio.
+            // A tree with repeated ids is inconsistent from the start
+            // (`duplicate_slot_ids` says so and `validate` rejects it); if
+            // one arrives, the two slots keep sharing the id instead of one
+            // taking a number nobody gave it.
             if mapa.contains_key(&id) {
                 continue;
             }
-            // Sin espacio arriba se DEVUELVE EL ÁRBOL TAL CUAL, y esto no es
-            // celo: saturar era peor que envolver. `saturating_add` deja a
-            // todos los huecos siguientes con `u32::MAX`, así que un árbol de
-            // entrada sano salía con ids REPETIDOS; ese árbol se guarda en
-            // `layouts`, y el siguiente `from_value` lo valida y devuelve
-            // `BadLayout` para el cuerpo ENTERO — el estado de todos los
-            // perfiles, no el del roto. Ésa es la pérdida que ADR 0059 promete
-            // que no pasa.
-            let Some(tope) = siguiente.checked_add(1) else {
+            // With no room above the TREE IS RETURNED AS IS, and this is
+            // not excessive caution: saturating was worse than bailing
+            // out. `saturating_add` would leave every following slot at
+            // `u32::MAX`, so a healthy input tree came out with REPEATED
+            // ids; that tree gets saved in `layouts`, and the next
+            // `from_value` validates it and returns `BadLayout` for the
+            // WHOLE body — every profile's state, not just the broken
+            // one's. That is the loss ADR 0059 promises does not happen.
+            let Some(tope) = next.checked_add(1) else {
                 return (self.clone(), std::collections::BTreeMap::new());
             };
-            mapa.insert(id, SlotId(siguiente));
-            siguiente = tope;
+            mapa.insert(id, SlotId(next));
+            next = tope;
         }
         (self.remap_slot_ids(&mapa), mapa)
     }
 
-    /// Aplica un mapa de ids a una copia del árbol. Lo que no esté en el mapa
-    /// se queda como está.
+    /// Applies an id map to a copy of the tree. What is not in the map
+    /// stays as it is.
     fn remap_slot_ids(&self, mapa: &std::collections::BTreeMap<SlotId, SlotId>) -> Self {
         match self {
             Self::Split {
@@ -1825,8 +1831,8 @@ impl Node {
         }
     }
 
-    /// Los ids repetidos, si los hay. Un layout con dos huecos del mismo id es
-    /// incoherente y NO se adivina cuál gana.
+    /// The repeated ids, if there are any. A layout with two slots of the
+    /// same id is inconsistent and it is NOT guessed which one wins.
     #[must_use]
     pub fn duplicate_slot_ids(&self) -> Vec<SlotId> {
         let mut cuenta: BTreeMap<SlotId, usize> = BTreeMap::new();
@@ -1844,76 +1850,79 @@ impl Node {
 mod tests {
     use super::*;
 
-    /// **Sacar a la luz un hueco escondido activa SU pestaña** (#329).
+    /// **Bringing a hidden slot to light activates ITS tab** (#329).
     ///
-    /// La barra de paneles y los toggles preguntan «¿existe?» y actúan como si
-    /// hubieran preguntado «¿se ve?». Esto es la mitad que faltaba: poder
-    /// contestar «que se vea».
+    /// The panel bar and the toggles ask "does it exist?" and act as if
+    /// they had asked "is it visible?". This is the missing half: being
+    /// able to answer "make it visible".
     #[test]
     fn revelar_activa_la_pestana_del_hueco() {
-        let arbol = Node::Tabs {
+        let tree = Node::Tabs {
             children: vec![
                 Node::slot(SlotId(1), KindId::browser()),
                 Node::slot(SlotId(2), KindId::new("log")),
             ],
             active: 0,
         };
-        assert!(!arbol.visible_slot_ids().contains(&SlotId(2)));
-        let visto = arbol.reveal(SlotId(2));
-        assert!(visto.visible_slot_ids().contains(&SlotId(2)));
+        assert!(!tree.visible_slot_ids().contains(&SlotId(2)));
+        let revealed = tree.reveal(SlotId(2));
+        assert!(revealed.visible_slot_ids().contains(&SlotId(2)));
         assert!(
-            !visto.visible_slot_ids().contains(&SlotId(1)),
-            "activar una pestaña esconde a su hermana: es lo que significa"
+            !revealed.visible_slot_ids().contains(&SlotId(1)),
+            "activating a tab hides its sibling: that is what it means"
         );
     }
 
-    /// Y lo hace en CADA grupo del camino, no solo en el de dentro.
+    /// And it does so through EVERY group along the path, not just the
+    /// innermost one.
     ///
-    /// Con grupos anidados, activar el interior y dejar el exterior en otra
-    /// pestaña deja el hueco tan invisible como estaba, y el llamante creería
-    /// haberlo enseñado.
+    /// With nested groups, activating the inner one and leaving the outer
+    /// one on another tab leaves the slot as invisible as it was, and the
+    /// caller would believe it had shown it.
     #[test]
     fn revelar_atraviesa_los_grupos_anidados() {
-        let dentro = Node::Tabs {
+        let inner = Node::Tabs {
             children: vec![
                 Node::slot(SlotId(3), KindId::browser()),
                 Node::slot(SlotId(4), KindId::new("log")),
             ],
             active: 0,
         };
-        let arbol = Node::Tabs {
-            children: vec![Node::slot(SlotId(5), KindId::browser()), dentro],
+        let tree = Node::Tabs {
+            children: vec![Node::slot(SlotId(5), KindId::browser()), inner],
             active: 0,
         };
-        assert!(!arbol.visible_slot_ids().contains(&SlotId(4)));
-        let visto = arbol.reveal(SlotId(4));
+        assert!(!tree.visible_slot_ids().contains(&SlotId(4)));
+        let revealed = tree.reveal(SlotId(4));
         assert!(
-            visto.visible_slot_ids().contains(&SlotId(4)),
-            "el grupo de fuera seguía enseñando la otra pestaña"
+            revealed.visible_slot_ids().contains(&SlotId(4)),
+            "the outer group was still showing the other tab"
         );
     }
 
-    /// Con un `Split` por el camino, revelar respeta TODO lo demás: los
-    /// tamaños, y la pestaña activa de un grupo que no contiene al hueco.
+    /// With a `Split` along the path, revealing respects EVERYTHING else:
+    /// the sizes, and the active tab of a group that does not contain the
+    /// slot.
     ///
-    /// El riesgo de una función que reconstruye el árbol es perder por el
-    /// camino algo que nadie mira en el test, y aquí lo que se perdería son
-    /// medidas: un `Split` que vuelve con pesos por defecto reparte la pantalla
-    /// de otra manera sin que nada se ponga rojo.
+    /// The risk of a function that rebuilds the tree is losing something
+    /// along the way that nobody watches in the test, and here what would
+    /// get lost is measurements: a `Split` that comes back with default
+    /// weights spreads the screen out differently without anything turning
+    /// red.
     #[test]
     fn revelar_conserva_medidas_y_los_grupos_ajenos() {
-        let ajeno = Node::Tabs {
+        let other = Node::Tabs {
             children: vec![
                 Node::slot(SlotId(10), KindId::browser()),
                 Node::slot(SlotId(11), KindId::browser()),
             ],
             active: 1,
         };
-        let arbol = Node::Split {
+        let tree = Node::Split {
             dir: Dir::Horizontal,
             sizes: vec![Size::Fixed(24), Size::Weight(1)],
             children: vec![
-                ajeno,
+                other,
                 Node::Tabs {
                     children: vec![
                         Node::slot(SlotId(1), KindId::browser()),
@@ -1923,66 +1932,71 @@ mod tests {
                 },
             ],
         };
-        let visto = arbol.reveal(SlotId(2));
-        assert!(visto.visible_slot_ids().contains(&SlotId(2)));
+        let revealed = tree.reveal(SlotId(2));
+        assert!(revealed.visible_slot_ids().contains(&SlotId(2)));
         assert!(
-            visto.visible_slot_ids().contains(&SlotId(11)),
-            "el grupo de al lado no se toca: no contiene al hueco"
+            revealed.visible_slot_ids().contains(&SlotId(11)),
+            "the group next door is untouched: it does not contain the slot"
         );
-        let (sizes, _) = visto.sizes_of(SlotId(2)).expect("sigue en el split");
+        let (sizes, _) = revealed.sizes_of(SlotId(2)).expect("still in the split");
         assert_eq!(
             (sizes[0], sizes[1]),
             (Size::Fixed(24), Size::Weight(1)),
-            "reconstruir el split se llevó por delante las medidas"
+            "rebuilding the split carried off the measurements"
         );
     }
 
-    /// Un hueco que ya se ve —o que no está— no mueve nada: revelar no es un
-    /// gesto, es un invariante que se asegura.
+    /// A slot that is already visible — or that is not there — moves
+    /// nothing: revealing is not a gesture, it is an invariant being
+    /// ensured.
     #[test]
     fn revelar_lo_que_ya_se_ve_no_cambia_el_arbol() {
-        let arbol = Node::Tabs {
+        let tree = Node::Tabs {
             children: vec![
                 Node::slot(SlotId(1), KindId::browser()),
                 Node::slot(SlotId(2), KindId::new("log")),
             ],
             active: 1,
         };
-        assert_eq!(arbol.reveal(SlotId(2)), arbol);
-        assert_eq!(arbol.reveal(SlotId(99)), arbol, "y uno que no está tampoco");
+        assert_eq!(tree.reveal(SlotId(2)), tree);
+        assert_eq!(
+            tree.reveal(SlotId(99)),
+            tree,
+            "and one that is not there either"
+        );
     }
 
-    /// Arrastrar el borde pone el hueco donde dice el puntero, y lo que uno
-    /// gana lo pierde su vecino.
+    /// Dragging the border puts the slot where the pointer says, and what
+    /// one gains its neighbor loses.
     ///
-    /// Con pesos se renormaliza la pareja: dos huecos por defecto son
-    /// `Weight(1)` y `Weight(1)`, y sobre esa pareja el único borde posible
-    /// sería la mitad exacta — un arrastre que solo puede aterrizar en el
-    /// centro no es un arrastre.
+    /// With weights the pair renormalizes: two default slots are
+    /// `Weight(1)` and `Weight(1)`, and on that pair the only possible
+    /// border would be the exact middle — a drag that can only land in the
+    /// center is not a drag.
     #[test]
     fn arrastrar_el_borde_reparte_la_pareja() {
-        let arbol = Node::split(
+        let tree = Node::split(
             Dir::Horizontal,
             vec![
                 Node::slot(SlotId(1), KindId::browser()),
                 Node::slot(SlotId(2), KindId::browser()),
             ],
         );
-        let movido = arbol.drag_border(SlotId(1), 0.25, 80);
-        let (sizes, pos) = movido.sizes_of(SlotId(1)).expect("está en un split");
+        let moved = tree.drag_border(SlotId(1), 0.25, 80);
+        let (sizes, pos) = moved.sizes_of(SlotId(1)).expect("is in a split");
         assert_eq!(pos, 0);
         assert_eq!(
             (sizes[0], sizes[1]),
             (Size::Weight(25), Size::Weight(75)),
-            "un cuarto para el de la izquierda, y el resto para el otro"
+            "a quarter for the one on the left, and the rest for the other"
         );
     }
 
-    /// Ni el uno ni el otro pueden desaparecer: un hueco a cero se lleva con
-    /// él la forma de devolverlo.
+    /// Neither one nor the other can disappear: a slot at zero takes with
+    /// it the way to give it back.
     #[test]
     fn arrastrar_hasta_el_extremo_deja_hueco_a_los_dos() {
-        let arbol = Node::split(
+        let tree = Node::split(
             Dir::Horizontal,
             vec![
                 Node::slot(SlotId(1), KindId::browser()),
@@ -1990,23 +2004,23 @@ mod tests {
             ],
         );
         for frac in [-3.0, 0.0, 1.0, 4.0] {
-            let movido = arbol.drag_border(SlotId(1), frac, 80);
-            let (sizes, _) = movido.sizes_of(SlotId(1)).expect("split");
+            let moved = tree.drag_border(SlotId(1), frac, 80);
+            let (sizes, _) = moved.sizes_of(SlotId(1)).expect("split");
             for s in &sizes[..2] {
                 assert!(
                     matches!(s, Size::Weight(w) if *w >= 1),
-                    "con frac={frac} alguien se quedó sin sitio: {sizes:?}"
+                    "with frac={frac} someone was left with no room: {sizes:?}"
                 );
             }
         }
     }
 
-    /// Un FIJO se escribe en celdas —es lo que significa— y su vecino
-    /// ponderado no se convierte en fijo: si lo hiciera, dejaría de estirarse
-    /// al cambiar el tamaño de la ventana.
+    /// A FIXED one is written in cells — that is what it means — and its
+    /// weighted neighbor does not turn fixed: if it did, it would stop
+    /// stretching when the window is resized.
     #[test]
     fn arrastrar_el_borde_de_un_fijo_lo_escribe_en_celdas() {
-        let arbol = Node::Split {
+        let tree = Node::Split {
             dir: Dir::Horizontal,
             children: vec![
                 Node::slot(SlotId(1), KindId::new("places")),
@@ -2014,35 +2028,35 @@ mod tests {
             ],
             sizes: vec![Size::Fixed(16), Size::Weight(1)],
         };
-        let movido = arbol.drag_border(SlotId(1), 0.5, 100);
-        let (sizes, _) = movido.sizes_of(SlotId(1)).expect("split");
-        assert_eq!(sizes[0], Size::Fixed(50), "la mitad de cien celdas");
-        assert_eq!(sizes[1], Size::Weight(1), "el ponderado sigue ponderado");
+        let moved = tree.drag_border(SlotId(1), 0.5, 100);
+        let (sizes, _) = moved.sizes_of(SlotId(1)).expect("split");
+        assert_eq!(sizes[0], Size::Fixed(50), "half of a hundred cells");
+        assert_eq!(sizes[1], Size::Weight(1), "the weighted one stays weighted");
     }
 
-    /// Las disposiciones de fábrica usan 1..=8, TODAS. Sin rebase, dos perfiles
-    /// comparten el hueco 1 y se pisan el directorio y el historial — que es
-    /// exactamente el bug que los perfiles existen para arreglar.
+    /// The factory layouts use 1..=8, ALL of them. Without rebasing, two
+    /// profiles share slot 1 and step on each other's directory and
+    /// history — which is exactly the bug profiles exist to fix.
     #[test]
     fn rebase_reasigna_desde_la_base_y_devuelve_el_mapa() {
-        let arbol = Node::split(
+        let tree = Node::split(
             Dir::Horizontal,
             vec![
                 Node::slot(SlotId(1), KindId::browser()),
                 Node::slot(SlotId(2), KindId::browser()),
             ],
         );
-        let (nuevo, mapa) = arbol.rebase_slot_ids(100);
-        assert_eq!(nuevo.slot_ids(), vec![SlotId(100), SlotId(101)]);
-        assert_eq!(mapa.get(&SlotId(1)), Some(&SlotId(100)));
-        assert_eq!(mapa.get(&SlotId(2)), Some(&SlotId(101)));
+        let (new_tree, map) = tree.rebase_slot_ids(100);
+        assert_eq!(new_tree.slot_ids(), vec![SlotId(100), SlotId(101)]);
+        assert_eq!(map.get(&SlotId(1)), Some(&SlotId(100)));
+        assert_eq!(map.get(&SlotId(2)), Some(&SlotId(101)));
     }
 
-    /// Rebasar no puede cambiar la FORMA: mismo árbol, mismos kinds, mismos
-    /// tamaños. Solo los números.
+    /// Rebasing cannot change the SHAPE: same tree, same kinds, same
+    /// sizes. Only the numbers.
     #[test]
     fn rebase_conserva_la_forma() {
-        let arbol = Node::split(
+        let tree = Node::split(
             Dir::Vertical,
             vec![
                 Node::slot(SlotId(3), KindId::new("places")),
@@ -2055,33 +2069,33 @@ mod tests {
                 ),
             ],
         );
-        let (nuevo, _) = arbol.rebase_slot_ids(50);
-        assert_eq!(nuevo.slot_ids().len(), arbol.slot_ids().len());
-        assert!(crate::layout::validate(&nuevo).is_ok());
+        let (new_tree, _) = tree.rebase_slot_ids(50);
+        assert_eq!(new_tree.slot_ids().len(), tree.slot_ids().len());
+        assert!(crate::layout::validate(&new_tree).is_ok());
     }
 
-    /// Un árbol sano rebasado no puede FABRICAR un duplicado, sea cual sea el
-    /// orden de los ids originales.
+    /// A healthy tree, rebased, cannot MANUFACTURE a duplicate, whatever
+    /// the order of the original ids.
     #[test]
     fn rebase_no_fabrica_duplicados() {
-        let arbol = Node::split(
+        let tree = Node::split(
             Dir::Horizontal,
             vec![
                 Node::slot(SlotId(7), KindId::browser()),
                 Node::slot(SlotId(1), KindId::browser()),
             ],
         );
-        let (nuevo, _) = arbol.rebase_slot_ids(10);
-        assert!(nuevo.duplicate_slot_ids().is_empty());
+        let (new_tree, _) = tree.rebase_slot_ids(10);
+        assert!(new_tree.duplicate_slot_ids().is_empty());
     }
 
-    /// El árbol hace round-trip: es el MISMO formato que el fichero de config,
-    /// el blob de sesión de L2 y lo que escupirá el editor de layouts. Un
-    /// formato que no round-trippea obliga a migrar entre dos, que es justo lo
-    /// que la ADR 0058 evita.
+    /// The tree round-trips: it is the SAME format as the config file, the
+    /// L2 session blob and what the layout editor will spit out. A format
+    /// that does not round-trip forces migrating between two, which is
+    /// exactly what ADR 0058 avoids.
     #[test]
     fn el_arbol_hace_round_trip() {
-        let arbol = Node::Split {
+        let tree = Node::Split {
             dir: Dir::Horizontal,
             sizes: vec![Size::Weight(1), Size::Weight(1)],
             children: vec![
@@ -2095,43 +2109,47 @@ mod tests {
                 },
             ],
         };
-        let json = serde_json::to_string(&arbol).expect("serializa");
-        assert_eq!(serde_json::from_str::<Node>(&json).expect("vuelve"), arbol);
-    }
-
-    /// Un kind DESCONOCIDO sobrevive al round-trip con sus `params` intactos.
-    /// Es la regla 3 del modelo: un cliente que no sabe pintar un kind no puede
-    /// borrárselo del layout al otro.
-    #[test]
-    fn un_kind_desconocido_conserva_sus_params() {
-        let json = r#"{"slot":{"id":7,"kind":"terminal","params":{"shell":"fish"},"bindings":{}}}"#;
-        let n: Node = serde_json::from_str(json).expect("un kind que no conocemos parsea");
-        let vuelta = serde_json::to_string(&n).expect("serializa");
-        assert!(
-            vuelta.contains("\"shell\":\"fish\""),
-            "los params se pierden: {vuelta}"
+        let json = serde_json::to_string(&tree).expect("serializes");
+        assert_eq!(
+            serde_json::from_str::<Node>(&json).expect("comes back"),
+            tree
         );
     }
 
-    /// Los ids visibles de un árbol, en orden de lectura. Lo usan roles, store
-    /// y resolve, así que se prueba aquí una vez.
+    /// An UNKNOWN kind survives the round-trip with its `params` intact.
+    /// It is the model's rule 3: a client that does not know how to paint a
+    /// kind must not erase it from the OTHER's layout.
+    #[test]
+    fn un_kind_desconocido_conserva_sus_params() {
+        let json = r#"{"slot":{"id":7,"kind":"terminal","params":{"shell":"fish"},"bindings":{}}}"#;
+        let n: Node = serde_json::from_str(json).expect("a kind we do not know parses");
+        let round_trip = serde_json::to_string(&n).expect("serializes");
+        assert!(
+            round_trip.contains("\"shell\":\"fish\""),
+            "the params get lost: {round_trip}"
+        );
+    }
+
+    /// A tree's visible ids, in reading order. Used by roles, store and
+    /// resolve, so it is tested here once.
     #[test]
     fn slot_ids_recorre_tambien_las_pestanas_ocultas() {
-        let arbol = Node::Tabs {
+        let tree = Node::Tabs {
             active: 0,
             children: vec![
                 Node::slot(SlotId(1), KindId::browser()),
                 Node::slot(SlotId(2), KindId::browser()),
             ],
         };
-        assert_eq!(arbol.slot_ids(), vec![SlotId(1), SlotId(2)]);
+        assert_eq!(tree.slot_ids(), vec![SlotId(1), SlotId(2)]);
     }
 
-    /// `substitute_auto` cambia los `Auto` por `Fixed` y NO toca nada más: el
-    /// árbol guardado conserva sus `Auto`, el del frame no los tiene.
+    /// `substitute_auto` changes the `Auto`s to `Fixed` and touches NOTHING
+    /// else: the saved tree keeps its `Auto`s, the frame's copy does not
+    /// have them.
     #[test]
     fn substitute_auto_solo_cambia_los_auto() {
-        let arbol = Node::Split {
+        let tree = Node::Split {
             dir: Dir::Vertical,
             sizes: vec![Size::Weight(1), Size::Auto, Size::Fixed(1)],
             children: vec![
@@ -2140,25 +2158,26 @@ mod tests {
                 Node::slot(SlotId(3), KindId::new("status")),
             ],
         };
-        let del_frame = arbol.substitute_auto(&|id| if id == SlotId(2) { (0, 4) } else { (0, 0) });
-        let Node::Split { sizes, .. } = &del_frame else {
-            panic!("sigue siendo un split")
+        let from_frame = tree.substitute_auto(&|id| if id == SlotId(2) { (0, 4) } else { (0, 0) });
+        let Node::Split { sizes, .. } = &from_frame else {
+            panic!("still a split")
         };
         assert_eq!(
             *sizes,
             vec![Size::Weight(1), Size::Fixed(4), Size::Fixed(1)]
         );
-        let Node::Split { sizes: orig, .. } = &arbol else {
+        let Node::Split { sizes: orig, .. } = &tree else {
             panic!("split")
         };
-        assert_eq!(orig[1], Size::Auto, "el árbol guardado no se toca");
+        assert_eq!(orig[1], Size::Auto, "the saved tree is untouched");
     }
 
-    /// En un corte HORIZONTAL, `Auto` toma el ANCHO natural, no el alto. Una
-    /// sidebar mide lo que mide de ancha; su alto lo pone el reparto.
+    /// On a HORIZONTAL cut, `Auto` takes the natural WIDTH, not the height.
+    /// A sidebar measures however wide it is; its height is set by the
+    /// distribution.
     #[test]
     fn substitute_auto_toma_el_eje_del_corte() {
-        let arbol = Node::Split {
+        let tree = Node::Split {
             dir: Dir::Horizontal,
             sizes: vec![Size::Auto, Size::Weight(1)],
             children: vec![
@@ -2166,48 +2185,49 @@ mod tests {
                 Node::slot(SlotId(2), KindId::browser()),
             ],
         };
-        let del_frame = arbol.substitute_auto(&|_| (18, 3));
-        let Node::Split { sizes, .. } = &del_frame else {
+        let from_frame = tree.substitute_auto(&|_| (18, 3));
+        let Node::Split { sizes, .. } = &from_frame else {
             panic!("split")
         };
-        assert_eq!(sizes[0], Size::Fixed(18), "el ancho, no el alto");
+        assert_eq!(sizes[0], Size::Fixed(18), "the width, not the height");
     }
 
-    /// El `Auto` de un subárbol se apoya en su PRIMER hueco: es el único que
-    /// no depende de cómo se reparta después.
+    /// A subtree's `Auto` is based on its FIRST slot: it is the only one
+    /// that does not depend on how things get distributed afterward.
     #[test]
     fn el_primer_hueco_es_a_quien_se_le_pregunta() {
-        let arbol = Node::split(
+        let tree = Node::split(
             Dir::Horizontal,
             vec![
                 Node::slot(SlotId(7), KindId::browser()),
                 Node::slot(SlotId(8), KindId::browser()),
             ],
         );
-        assert_eq!(arbol.first_slot_id(), Some(SlotId(7)));
+        assert_eq!(tree.first_slot_id(), Some(SlotId(7)));
     }
 
     fn b(id: u32) -> Node {
         Node::slot(SlotId(id), KindId::browser())
     }
 
-    /// Abrir una pestaña desde un panel suelto lo envuelve y deja activa la
-    /// nueva. Pedir dos pasos para eso no tendría sentido.
+    /// Opening a tab from a loose panel wraps it and leaves the new one
+    /// active. Requiring two steps for that would make no sense.
     #[test]
     fn abrir_una_pestana_desde_un_panel_suelto_lo_envuelve() {
-        let arbol = Node::split(Dir::Horizontal, vec![b(1), b(2)]);
-        let nuevo = arbol.add_tab(SlotId(2), &b(9));
-        assert_eq!(nuevo.slot_ids(), vec![SlotId(1), SlotId(2), SlotId(9)]);
+        let tree = Node::split(Dir::Horizontal, vec![b(1), b(2)]);
+        let new_tree = tree.add_tab(SlotId(2), &b(9));
+        assert_eq!(new_tree.slot_ids(), vec![SlotId(1), SlotId(2), SlotId(9)]);
         assert_eq!(
-            nuevo.tabs_of(SlotId(2)),
+            new_tree.tabs_of(SlotId(2)),
             Some((vec![SlotId(2), SlotId(9)], 1))
         );
     }
 
-    /// La `Tabs` que manda es la INTERIOR, no la que envuelve media pantalla.
+    /// The `Tabs` that wins is the INNER one, not the one wrapping half the
+    /// screen.
     #[test]
     fn una_pestana_nueva_entra_en_el_grupo_mas_interior() {
-        let arbol = Node::Tabs {
+        let tree = Node::Tabs {
             children: vec![Node::split(
                 Dir::Horizontal,
                 vec![
@@ -2220,183 +2240,186 @@ mod tests {
             )],
             active: 0,
         };
-        let nuevo = arbol.add_tab(SlotId(2), &b(9));
+        let new_tree = tree.add_tab(SlotId(2), &b(9));
         assert_eq!(
-            nuevo.tabs_of(SlotId(2)),
+            new_tree.tabs_of(SlotId(2)),
             Some((vec![SlotId(2), SlotId(9)], 1))
         );
-        // El grupo de fuera sigue con una sola pestaña.
-        assert_eq!(nuevo.tabs_of(SlotId(1)), Some((vec![SlotId(1)], 0)));
+        // The outer group is still down to a single tab.
+        assert_eq!(new_tree.tabs_of(SlotId(1)), Some((vec![SlotId(1)], 0)));
     }
 
-    /// Una `Tabs` que se queda con UN hijo se DISUELVE: un grupo de una
-    /// pestaña no es un grupo, y dejarlo pintaría una barra con una sola
-    /// entrada para siempre.
+    /// A `Tabs` left with ONE child DISSOLVES: a one-tab group is not a
+    /// group, and leaving it would paint a bar with a single entry
+    /// forever.
     #[test]
     fn cerrar_la_penultima_pestana_disuelve_el_grupo() {
-        let arbol = Node::Tabs {
+        let tree = Node::Tabs {
             children: vec![b(1), b(2)],
             active: 1,
         };
-        let nuevo = arbol.close_tab(SlotId(2)).expect("estaba en un grupo");
-        assert_eq!(nuevo, b(1), "el grupo desaparece y queda el hueco");
+        let new_tree = tree.close_tab(SlotId(2)).expect("was in a group");
+        assert_eq!(new_tree, b(1), "the group disappears and the slot remains");
     }
 
-    /// Cerrar un panel SUELTO no es `pane.tab-close`: devuelve `None` y el llamante
-    /// decide (será `layout.close-slot`).
+    /// Closing a LOOSE panel is not `pane.tab-close`: it returns `None` and
+    /// the caller decides (it will be `layout.close-slot`).
     #[test]
     fn cerrar_un_panel_suelto_no_es_cerrar_una_pestana() {
-        let arbol = Node::split(Dir::Horizontal, vec![b(1), b(2)]);
-        assert_eq!(arbol.close_tab(SlotId(2)), None);
+        let tree = Node::split(Dir::Horizontal, vec![b(1), b(2)]);
+        assert_eq!(tree.close_tab(SlotId(2)), None);
     }
 
-    /// Cerrar una pestaña anterior a la activa arrastra el índice activo: si
-    /// no, el activo pasaría a nombrar a la pestaña de al lado.
+    /// Closing a tab before the active one drags the active index along:
+    /// otherwise, the active one would end up naming the tab next to it.
     #[test]
     fn cerrar_una_pestana_anterior_arrastra_el_activo() {
-        let arbol = Node::Tabs {
+        let tree = Node::Tabs {
             children: vec![b(1), b(2), b(3)],
             active: 2,
         };
-        let nuevo = arbol.close_tab(SlotId(1)).expect("está en el grupo");
+        let new_tree = tree.close_tab(SlotId(1)).expect("is in the group");
         assert_eq!(
-            nuevo.tabs_of(SlotId(3)),
+            new_tree.tabs_of(SlotId(3)),
             Some((vec![SlotId(2), SlotId(3)], 1))
         );
     }
 
-    /// Mover una pestaña se la lleva el activo con ella.
+    /// Moving a tab takes the active one along with it.
     #[test]
     fn mover_una_pestana_se_lleva_el_activo() {
-        let arbol = Node::Tabs {
+        let tree = Node::Tabs {
             children: vec![b(1), b(2), b(3)],
             active: 0,
         };
-        let nuevo = arbol.move_tab(SlotId(1), 2);
+        let new_tree = tree.move_tab(SlotId(1), 2);
         assert_eq!(
-            nuevo.tabs_of(SlotId(1)),
+            new_tree.tabs_of(SlotId(1)),
             Some((vec![SlotId(2), SlotId(3), SlotId(1)], 2))
         );
     }
 
-    /// Mover más allá del borde se queda en el borde, no da la vuelta: una
-    /// pestaña que salta de la última a la primera al pulsar una vez de más es
-    /// exactamente lo que nadie quería.
+    /// Moving past the border stays at the border, it does not wrap
+    /// around: a tab that jumps from last to first on one keystroke too
+    /// many is exactly what nobody wanted.
     #[test]
     fn mover_una_pestana_no_da_la_vuelta() {
-        let arbol = Node::Tabs {
+        let tree = Node::Tabs {
             children: vec![b(1), b(2)],
             active: 1,
         };
-        let nuevo = arbol.move_tab(SlotId(2), 5);
+        let new_tree = tree.move_tab(SlotId(2), 5);
         assert_eq!(
-            nuevo.tabs_of(SlotId(2)),
+            new_tree.tabs_of(SlotId(2)),
             Some((vec![SlotId(1), SlotId(2)], 1))
         );
     }
 
-    /// Partir un hueco lo deja con el nuevo al lado, los dos al mismo peso.
+    /// Splitting a slot leaves it with the new one alongside, both at the
+    /// same weight.
     #[test]
     fn partir_un_hueco_deja_a_los_dos_al_mismo_peso() {
-        let arbol = b(1);
-        let nuevo = arbol.split_slot(SlotId(1), Dir::Vertical, &b(9));
-        assert_eq!(nuevo.slot_ids(), vec![SlotId(1), SlotId(9)]);
-        let Node::Split { dir, sizes, .. } = &nuevo else {
+        let tree = b(1);
+        let new_tree = tree.split_slot(SlotId(1), Dir::Vertical, &b(9));
+        assert_eq!(new_tree.slot_ids(), vec![SlotId(1), SlotId(9)]);
+        let Node::Split { dir, sizes, .. } = &new_tree else {
             panic!("split")
         };
         assert_eq!(*dir, Dir::Vertical);
         assert_eq!(*sizes, vec![Size::Weight(1), Size::Weight(1)]);
     }
 
-    /// Partir OTRA VEZ en el mismo eje da TERCIOS, no un cuarto.
+    /// Splitting AGAIN on the same axis gives THIRDS, not a quarter.
     ///
-    /// El corte se une al `Split` que ya corre en ese eje en vez de envolver
-    /// el hueco en uno nuevo. Anidando, cada partición se llevaba la mitad de
-    /// la mitad: tres paneles quedaban en 1/2, 1/4 y 1/4, y a la cuarta el
-    /// hijo más profundo bajaba del mínimo del kind y el reparto lo degradaba
-    /// a pestañas — el panel recién pedido desaparecía sin decir nada.
+    /// The cut joins the `Split` already running on that axis instead of
+    /// wrapping the slot in a new one. Nesting, each split used to take
+    /// half of the half: three panels ended up at 1/2, 1/4 and 1/4, and on
+    /// the fourth the deepest child dropped below the kind's minimum and
+    /// the distribution demoted it to tabs — the panel just requested
+    /// vanished without a word.
     #[test]
     fn partir_en_el_mismo_eje_reparte_a_partes_iguales() {
-        let arbol = b(1).split_slot(SlotId(1), Dir::Vertical, &b(2));
-        let tres = arbol.split_slot(SlotId(2), Dir::Vertical, &b(3));
+        let tree = b(1).split_slot(SlotId(1), Dir::Vertical, &b(2));
+        let triple = tree.split_slot(SlotId(2), Dir::Vertical, &b(3));
         let Node::Split {
             children, sizes, ..
-        } = &tres
+        } = &triple
         else {
             panic!("split")
         };
-        assert_eq!(children.len(), 3, "un solo Split con tres hijos");
+        assert_eq!(children.len(), 3, "a single Split with three children");
         assert_eq!(
             *sizes,
             vec![Size::Weight(1), Size::Weight(1), Size::Weight(1)]
         );
         assert_eq!(
-            tres.slot_ids(),
+            triple.slot_ids(),
             vec![SlotId(1), SlotId(2), SlotId(3)],
-            "y el nuevo entra JUNTO al que se partió, no al final"
+            "and the new one enters RIGHT NEXT to the one that split, not at the end"
         );
     }
 
-    /// En el OTRO eje sigue envolviendo: un corte perpendicular no puede
-    /// entrar en la fila de sus hermanos.
+    /// On the OTHER axis it still wraps: a perpendicular cut cannot enter
+    /// its siblings' row.
     #[test]
     fn partir_en_el_otro_eje_sigue_anidando() {
-        let arbol = b(1).split_slot(SlotId(1), Dir::Vertical, &b(2));
-        let cruz = arbol.split_slot(SlotId(2), Dir::Horizontal, &b(3));
-        let Node::Split { children, dir, .. } = &cruz else {
+        let tree = b(1).split_slot(SlotId(1), Dir::Vertical, &b(2));
+        let cross = tree.split_slot(SlotId(2), Dir::Horizontal, &b(3));
+        let Node::Split { children, dir, .. } = &cross else {
             panic!("split")
         };
         assert_eq!(*dir, Dir::Vertical);
-        assert_eq!(children.len(), 2, "el de fuera sigue teniendo dos hijos");
+        assert_eq!(children.len(), 2, "the outer one still has two children");
         assert!(
             matches!(&children[1], Node::Split { dir, .. } if *dir == Dir::Horizontal),
-            "y el corte nuevo va DENTRO del que se partió"
+            "and the new cut goes INSIDE the one that split"
         );
     }
 
-    /// Un hueco de tamaño FIJO se parte por dentro, no se une a sus hermanos:
-    /// su tamaño es cromo acoplado, y meter otro hijo en esa fila le robaría
-    /// el sitio a lo que hay al lado.
+    /// A FIXED-size slot splits by wrapping, it does not join its siblings:
+    /// its size is coupled chrome, and putting another child into that row
+    /// would steal the room from what is alongside it.
     #[test]
     fn partir_un_hueco_fijo_no_se_une_a_sus_hermanos() {
-        let arbol = Node::Split {
+        let tree = Node::Split {
             dir: Dir::Vertical,
             sizes: vec![Size::Weight(1), Size::Fixed(8)],
             children: vec![b(1), b(2)],
         };
-        let partido = arbol.split_slot(SlotId(2), Dir::Vertical, &b(3));
+        let split_tree = tree.split_slot(SlotId(2), Dir::Vertical, &b(3));
         let Node::Split {
             children, sizes, ..
-        } = &partido
+        } = &split_tree
         else {
             panic!("split")
         };
-        assert_eq!(children.len(), 2, "sigue habiendo dos hijos arriba");
-        assert_eq!(sizes[1], Size::Fixed(8), "y el fijo conserva su tamaño");
+        assert_eq!(children.len(), 2, "there are still two children up top");
+        assert_eq!(sizes[1], Size::Fixed(8), "and the fixed one keeps its size");
         assert_eq!(children[1].slot_ids(), vec![SlotId(2), SlotId(3)]);
     }
 
-    /// Partir una PESTAÑA parte lo que estás mirando, no reorganiza sus
-    /// hermanas: el corte va dentro de la pestaña, no alrededor del grupo.
+    /// Splitting a TAB splits what you are looking at, it does not
+    /// reorganize its siblings: the cut goes inside the tab, not around
+    /// the group.
     #[test]
     fn partir_una_pestana_corta_dentro_de_ella() {
-        let arbol = Node::Tabs {
+        let tree = Node::Tabs {
             children: vec![b(1), b(2)],
             active: 1,
         };
-        let nuevo = arbol.split_slot(SlotId(2), Dir::Horizontal, &b(9));
-        let Node::Tabs { children, active } = &nuevo else {
-            panic!("sigue siendo un grupo de pestañas")
+        let new_tree = tree.split_slot(SlotId(2), Dir::Horizontal, &b(9));
+        let Node::Tabs { children, active } = &new_tree else {
+            panic!("still a tab group")
         };
-        assert_eq!(*active, 1, "la pestaña activa no se mueve");
-        assert_eq!(children.len(), 2, "sigue habiendo DOS pestañas");
+        assert_eq!(*active, 1, "the active tab does not move");
+        assert_eq!(children.len(), 2, "there are still TWO tabs");
         assert_eq!(children[1].slot_ids(), vec![SlotId(2), SlotId(9)]);
     }
 
     #[test]
     fn el_arbol_round_trippea_en_toml() {
         use crate::layout::{Dir, KindId, Node, Size, SlotId};
-        let arbol = Node::Split {
+        let tree = Node::Split {
             dir: Dir::Vertical,
             sizes: vec![Size::Weight(1), Size::Auto, Size::Fixed(1)],
             children: vec![
@@ -2411,87 +2434,90 @@ mod tests {
                 Node::slot(SlotId(4), KindId::new("status")),
             ],
         };
-        let t = toml::to_string_pretty(&arbol).expect("serializa a TOML");
+        let t = toml::to_string_pretty(&tree).expect("serializes to TOML");
         println!("---\n{t}\n---");
-        let vuelta: Node = toml::from_str(&t).expect("vuelve de TOML");
-        assert_eq!(vuelta, arbol);
+        let round_trip: Node = toml::from_str(&t).expect("comes back from TOML");
+        assert_eq!(round_trip, tree);
     }
 
-    /// Cerrar un hueco deja al hermano ocupando el sitio de los dos.
+    /// Closing a slot leaves its sibling occupying both slots' spot.
     #[test]
     fn cerrar_un_hueco_disuelve_el_split_de_dos() {
-        let arbol = Node::split(Dir::Horizontal, vec![b(1), b(2)]);
-        assert_eq!(arbol.close_slot(SlotId(2)), Some(b(1)));
+        let tree = Node::split(Dir::Horizontal, vec![b(1), b(2)]);
+        assert_eq!(tree.close_slot(SlotId(2)), Some(b(1)));
     }
 
-    /// Cerrar el ÚNICO hueco devuelve `None`: una pantalla sin nada no la
-    /// decide el árbol.
+    /// Closing the ONLY slot returns `None`: a screen with nothing in it is
+    /// not the tree's call to make.
     #[test]
     fn cerrar_el_unico_hueco_no_se_hace_solo() {
         assert_eq!(b(1).close_slot(SlotId(1)), None);
     }
 
-    /// Al cerrar, el tamaño del hueco se va CON él: dejarlo desplazaría todos
-    /// los pesos una posición y el reparto pasaría a ser otro sin avisar.
+    /// On closing, the slot's size goes WITH it: leaving it would shift
+    /// every weight one position over and the distribution would end up
+    /// different without warning.
     #[test]
     fn cerrar_un_hueco_se_lleva_su_tamano() {
-        let arbol = Node::Split {
+        let tree = Node::Split {
             dir: Dir::Horizontal,
             sizes: vec![Size::Weight(3), Size::Weight(1), Size::Weight(1)],
             children: vec![b(1), b(2), b(3)],
         };
-        let nuevo = arbol.close_slot(SlotId(1)).expect("quedan dos");
-        let Node::Split { sizes, .. } = &nuevo else {
-            panic!("sigue siendo un split")
+        let new_tree = tree.close_slot(SlotId(1)).expect("two are left");
+        let Node::Split { sizes, .. } = &new_tree else {
+            panic!("still a split")
         };
         assert_eq!(*sizes, vec![Size::Weight(1), Size::Weight(1)]);
     }
 
-    /// Agrandar toca el peso del hueco enfocado, con tope.
+    /// Growing touches the focused slot's weight, up to a cap.
     #[test]
     fn agrandar_sube_el_peso_hasta_el_tope() {
-        let arbol = Node::split(Dir::Horizontal, vec![b(1), b(2)]);
-        let mut a = arbol;
+        let tree = Node::split(Dir::Horizontal, vec![b(1), b(2)]);
+        let mut a = tree;
         for _ in 0..20 {
             a = a.resize(SlotId(1), 1);
         }
         let Node::Split { sizes, .. } = &a else {
             panic!("split")
         };
-        assert_eq!(sizes[0], Size::Weight(10), "no crece sin fin");
+        assert_eq!(sizes[0], Size::Weight(10), "does not grow without limit");
     }
 
-    /// Un hijo FIJO SÍ se agranda desde #227, en celdas: era lo que dejaba el
-    /// sidebar atascado en el ancho con el que se abría.
+    /// A FIXED child DOES grow since #227, in cells: that was what left the
+    /// sidebar stuck at the width it opened with.
     ///
-    /// Lo que protege a la barra de estado —el otro hijo fijo que hay en la
-    /// pantalla— no es esta función: es que `layout.grow` solo nombra al hueco
-    /// CON EL FOCO, y el kind `status` no es enfocable. Un tope aquí por el
-    /// tamaño del hijo sería adivinar cuál de los dos fijos es un sidebar.
+    /// What protects the status bar — the other fixed child on screen — is
+    /// not this function: it is that `layout.grow` only names the slot
+    /// WITH FOCUS, and the `status` kind is not focusable. A cap here based
+    /// on the child's size would be guessing which of the two fixed ones is
+    /// a sidebar.
     #[test]
     fn agrandar_mueve_un_hijo_fijo_en_celdas() {
-        let arbol = Node::Split {
+        let tree = Node::Split {
             dir: Dir::Vertical,
             sizes: vec![Size::Weight(1), Size::Fixed(1)],
             children: vec![b(1), Node::slot(SlotId(2), KindId::new("status"))],
         };
-        let nuevo = arbol.resize(SlotId(2), 3);
-        let Node::Split { sizes, .. } = &nuevo else {
+        let new_tree = tree.resize(SlotId(2), 3);
+        let Node::Split { sizes, .. } = &new_tree else {
             panic!("split")
         };
         assert_eq!(sizes[1], Size::Fixed(7));
     }
 
-    /// Igualar devuelve los pesos a uno y deja los fijos en paz.
+    /// Equalizing returns the weights to one and leaves the fixed ones
+    /// alone.
     #[test]
     fn igualar_solo_toca_los_ponderados() {
-        let arbol = Node::Split {
+        let tree = Node::Split {
             dir: Dir::Vertical,
             sizes: vec![Size::Weight(7), Size::Fixed(2), Size::Weight(3)],
             children: vec![b(1), b(2), b(3)],
         };
-        let nuevo = arbol.equalize(SlotId(1));
-        let Node::Split { sizes, .. } = &nuevo else {
+        let new_tree = tree.equalize(SlotId(1));
+        let Node::Split { sizes, .. } = &new_tree else {
             panic!("split")
         };
         assert_eq!(
@@ -2500,10 +2526,11 @@ mod tests {
         );
     }
 
-    /// Dos huecos con el mismo id es incoherente, y el árbol sabe decirlo.
+    /// Two slots with the same id is incoherent, and the tree knows how to
+    /// say so.
     #[test]
     fn los_ids_repetidos_se_detectan() {
-        let arbol = Node::Split {
+        let tree = Node::Split {
             dir: Dir::Vertical,
             sizes: vec![Size::Weight(1), Size::Weight(1)],
             children: vec![
@@ -2511,84 +2538,84 @@ mod tests {
                 Node::slot(SlotId(1), KindId::browser()),
             ],
         };
-        assert_eq!(arbol.duplicate_slot_ids(), vec![SlotId(1)]);
+        assert_eq!(tree.duplicate_slot_ids(), vec![SlotId(1)]);
     }
 
-    /// Un dock a la izquierda entra en el `Split` HORIZONTAL que ya existe, no
-    /// alrededor del árbol entero: si envolviera la raíz, la barra de estado y
-    /// la franja de tareas se quedarían a la DERECHA del sidebar en vez de
-    /// debajo de los listados.
+    /// A dock to the left enters the HORIZONTAL `Split` that already
+    /// exists, not around the whole tree: if it wrapped the root, the
+    /// status bar and the task strip would end up to the RIGHT of the
+    /// sidebar instead of below the listings.
     #[test]
     fn dock_izquierda_entra_en_el_split_del_cuerpo() {
-        let cuerpo = Node::split(
+        let body = Node::split(
             Dir::Horizontal,
             vec![
                 Node::slot(SlotId(1), KindId::browser()),
                 Node::slot(SlotId(2), KindId::browser()),
             ],
         );
-        let raiz = Node::Split {
+        let root = Node::Split {
             dir: Dir::Vertical,
             sizes: vec![Size::Weight(1), Size::Fixed(1)],
-            children: vec![cuerpo, Node::slot(SlotId(4), KindId::new("status"))],
+            children: vec![body, Node::slot(SlotId(4), KindId::new("status"))],
         };
-        let con = raiz.dock(
+        let docked = root.dock(
             SlotId(1),
             Edge::Left,
             Size::Fixed(16),
             &Node::slot(SlotId(9), KindId::new("places")),
         );
-        let Node::Split { children, .. } = &con else {
-            panic!("la raíz sigue siendo un Split");
+        let Node::Split { children, .. } = &docked else {
+            panic!("the root is still a Split");
         };
         let Node::Split {
-            children: cuerpo,
+            children: body,
             sizes,
             dir,
         } = &children[0]
         else {
-            panic!("el cuerpo sigue siendo un Split");
+            panic!("the body is still a Split");
         };
         assert_eq!(*dir, Dir::Horizontal);
-        assert_eq!(cuerpo.len(), 3);
-        assert_eq!(cuerpo[0].first_slot_id(), Some(SlotId(9)));
+        assert_eq!(body.len(), 3);
+        assert_eq!(body[0].first_slot_id(), Some(SlotId(9)));
         assert_eq!(sizes[0], Size::Fixed(16));
-        // Y la barra de estado NO se movió: sigue siendo hija de la raíz.
+        // And the status bar did NOT move: it is still a child of the root.
         assert_eq!(children[1].first_slot_id(), Some(SlotId(4)));
     }
 
-    /// A la derecha, al final del mismo split.
+    /// To the right, at the end of the same split.
     #[test]
     fn dock_derecha_va_al_final() {
-        let arbol = Node::split(
+        let tree = Node::split(
             Dir::Horizontal,
             vec![
                 Node::slot(SlotId(1), KindId::browser()),
                 Node::slot(SlotId(2), KindId::browser()),
             ],
         );
-        let con = arbol.dock(
+        let docked = tree.dock(
             SlotId(1),
             Edge::Right,
             Size::Weight(1),
             &Node::slot(SlotId(9), KindId::new("viewer")),
         );
-        let Node::Split { children, .. } = &con else {
+        let Node::Split { children, .. } = &docked else {
             panic!("split")
         };
         assert_eq!(children.len(), 3);
         assert_eq!(children[2].first_slot_id(), Some(SlotId(9)));
     }
 
-    /// REGRESIÓN (captura del 2026-09-21): un PESO se mide contra los pesos
-    /// hermanos, no en absoluto. Arrastrar el borde entre dos listados los
-    /// deja en 49/51; un visor que entra con `Weight(1)` se quedaba con
-    /// 1/101 del sitio libre — una barrita de un píxel que no se ve. Entra
-    /// con la MEDIA de los pesos de sus hermanos, que es lo que `Weight(1)`
-    /// significa en un reparto de unos.
+    /// REGRESSION (2026-09-21 capture): a WEIGHT is measured against its
+    /// sibling weights, never in absolute terms. Dragging the border
+    /// between two listings leaves them at 49/51; a viewer entering with
+    /// `Weight(1)` used to get 1/101 of the free space — a one-pixel
+    /// sliver you cannot see. It enters with the AVERAGE of its siblings'
+    /// weights, which is what `Weight(1)` means in a distribution of ones.
     #[test]
     fn un_peso_que_entra_se_mide_contra_sus_hermanos() {
-        let arbol = Node::Split {
+        let tree = Node::Split {
             dir: Dir::Horizontal,
             children: vec![
                 Node::slot(SlotId(5), KindId::new("places")),
@@ -2597,37 +2624,37 @@ mod tests {
             ],
             sizes: vec![Size::Fixed(16), Size::Weight(49), Size::Weight(51)],
         };
-        let con = arbol.dock(
+        let docked = tree.dock(
             SlotId(1),
             Edge::Right,
             Size::Weight(1),
             &Node::slot(SlotId(9), KindId::new("viewer")),
         );
-        let Node::Split { sizes, .. } = &con else {
+        let Node::Split { sizes, .. } = &docked else {
             panic!("split")
         };
         assert_eq!(sizes.last(), Some(&Size::Weight(50)), "{sizes:?}");
-        // Un fijo no se toca: su número es de celdas, no de proporción.
-        let con = arbol.dock(
+        // A fixed one is untouched: its number is cells, not proportion.
+        let docked = tree.dock(
             SlotId(1),
             Edge::Right,
             Size::Fixed(30),
             &Node::slot(SlotId(9), KindId::new("metadata")),
         );
-        let Node::Split { sizes, .. } = &con else {
+        let Node::Split { sizes, .. } = &docked else {
             panic!("split")
         };
         assert_eq!(sizes.last(), Some(&Size::Fixed(30)));
     }
 
-    /// Un panel acoplado ABAJO entra por ENCIMA de la franja de tareas y de
-    /// la barra de estado, no debajo (captura del 2026-09-21): el registro y
-    /// procesos salían por debajo de la barra de estado. En VS Code el panel
-    /// de abajo está siempre encima de la barra; y en el terminal, la barra
-    /// de estado tiene que ser la última fila.
+    /// A panel docked at the BOTTOM enters ABOVE the task strip and the
+    /// status bar, not below (2026-09-21 capture): the log and processes
+    /// used to come out below the status bar. In VS Code the bottom panel
+    /// is always above the bar; and in the terminal, the status bar has to
+    /// be the last row.
     #[test]
     fn abajo_entra_por_encima_de_la_barra_de_estado() {
-        let arbol = Node::Split {
+        let tree = Node::Split {
             dir: Dir::Vertical,
             children: vec![
                 Node::slot(SlotId(1), KindId::browser()),
@@ -2636,7 +2663,7 @@ mod tests {
             ],
             sizes: vec![Size::Weight(1), Size::Auto, Size::Fixed(1)],
         };
-        let con = arbol.dock(
+        let docked = tree.dock(
             SlotId(1),
             Edge::Bottom,
             Size::Fixed(12),
@@ -2644,22 +2671,23 @@ mod tests {
         );
         let Node::Split {
             children, sizes, ..
-        } = &con
+        } = &docked
         else {
             panic!("split")
         };
         let ids: Vec<_> = children.iter().filter_map(Node::first_slot_id).collect();
         assert_eq!(ids, [SlotId(1), SlotId(9), SlotId(3), SlotId(4)]);
-        assert_eq!(sizes[1], Size::Fixed(12), "el tamaño va con su hijo");
+        assert_eq!(sizes[1], Size::Fixed(12), "the size travels with its child");
     }
 
-    /// Los paneles de un mismo borde se AGRUPAN en pestañas (spec 2026-09-21,
-    /// fase F): el segundo panel a la derecha no abre otra columna, se une a
-    /// la del primero y queda delante; el tamaño es el del grupo. Un listado
-    /// no se agrupa nunca, y cerrar una pestaña deshace el grupo.
+    /// Panels on the same edge get GROUPED into tabs (spec 2026-09-21,
+    /// phase F): a second panel docked to the right does not open another
+    /// column, it joins the first one's and lands in front; the size is
+    /// the group's. A listing never groups, and closing a tab dissolves
+    /// the group.
     #[test]
     fn los_paneles_de_un_mismo_borde_se_agrupan_en_pestanas() {
-        let cuerpo = Node::Split {
+        let body = Node::Split {
             dir: Dir::Horizontal,
             children: vec![
                 Node::slot(SlotId(1), KindId::browser()),
@@ -2667,89 +2695,92 @@ mod tests {
             ],
             sizes: vec![Size::Weight(1), Size::Weight(1)],
         };
-        let hoja = |id: u32, k: &str| Node::slot(SlotId(id), KindId::new(k));
-        // El primero: una columna, como siempre (su vecino es un listado).
-        let uno = cuerpo.dock_grouped(
+        let leaf = |id: u32, k: &str| Node::slot(SlotId(id), KindId::new(k));
+        // The first one: a column, as always (its neighbor is a listing).
+        let one = body.dock_grouped(
             SlotId(1),
             Edge::Right,
             Size::Fixed(30),
-            &hoja(7, "timeline"),
+            &leaf(7, "timeline"),
         );
-        let Node::Split { children, .. } = &uno else {
+        let Node::Split { children, .. } = &one else {
             panic!("split")
         };
         assert_eq!(children.len(), 3);
-        // El segundo: pestaña del primero, delante, y el grupo toma el
-        // sitio del que más pide — el visor es proporcional, y en las
-        // treinta columnas del primero no se leería.
-        let dos = uno.dock_grouped(SlotId(1), Edge::Right, Size::Weight(1), &hoja(9, "viewer"));
+        // The second one: a tab of the first, in front, and the group
+        // takes the room of whichever asks for more — the viewer is
+        // proportional, and it would not read in the first one's thirty
+        // columns.
+        let two = one.dock_grouped(SlotId(1), Edge::Right, Size::Weight(1), &leaf(9, "viewer"));
         let Node::Split {
             children, sizes, ..
-        } = &dos
+        } = &two
         else {
             panic!("split")
         };
-        assert_eq!(children.len(), 3, "no abre otra columna");
+        assert_eq!(children.len(), 3, "does not open another column");
         assert_eq!(
-            dos.tabs_of(SlotId(9)),
+            two.tabs_of(SlotId(9)),
             Some((vec![SlotId(7), SlotId(9)], 1))
         );
         assert_eq!(sizes[2], Size::Weight(1));
-        // El tercero se une al mismo grupo, y un fijo no le quita el peso.
-        let tres = dos.dock_grouped(
+        // The third one joins the same group, and a fixed one does not
+        // steal its weight.
+        let three = two.dock_grouped(
             SlotId(1),
             Edge::Right,
             Size::Fixed(30),
-            &hoja(8, "metadata"),
+            &leaf(8, "metadata"),
         );
         assert_eq!(
-            tres.tabs_of(SlotId(8)),
+            three.tabs_of(SlotId(8)),
             Some((vec![SlotId(7), SlotId(9), SlotId(8)], 2))
         );
-        // Abajo, por encima de la barra de estado, igual.
-        let raiz = Node::Split {
+        // At the bottom, above the status bar, the same.
+        let root = Node::Split {
             dir: Dir::Vertical,
-            children: vec![tres, hoja(4, "status")],
+            children: vec![three, leaf(4, "status")],
             sizes: vec![Size::Weight(1), Size::Fixed(1)],
         };
-        let r = raiz
-            .dock_grouped(SlotId(1), Edge::Bottom, Size::Fixed(12), &hoja(10, "log"))
+        let r = root
+            .dock_grouped(SlotId(1), Edge::Bottom, Size::Fixed(12), &leaf(10, "log"))
             .dock_grouped(
                 SlotId(1),
                 Edge::Bottom,
                 Size::Fixed(8),
-                &hoja(11, "processes"),
+                &leaf(11, "processes"),
             );
         assert_eq!(
             r.tabs_of(SlotId(11)),
             Some((vec![SlotId(10), SlotId(11)], 1))
         );
-        // Dos fijos: el mayor, que el registro no encoja a las ocho filas
-        // de los procesos.
+        // Two fixed ones: the larger, so the log does not shrink to the
+        // processes' eight rows.
         let Node::Split { sizes, .. } = &r else {
             panic!("split")
         };
         assert_eq!(sizes[1], Size::Fixed(12));
-        // Cerrar una pestaña de un grupo de dos lo deshace: vuelve la hoja.
-        let cerrado = r.close_slot(SlotId(11)).expect("cerrable");
-        assert_eq!(cerrado.tabs_of(SlotId(10)), None);
-        // Y `dock` a secas sigue sin agrupar: es el de las disposiciones
-        // escritas a mano y los presets.
-        let suelto = dos.dock(
+        // Closing a tab from a group of two dissolves it: the leaf comes
+        // back.
+        let closed = r.close_slot(SlotId(11)).expect("closable");
+        assert_eq!(closed.tabs_of(SlotId(10)), None);
+        // And plain `dock` still does not group: it is the one for
+        // hand-written layouts and the presets.
+        let loose = two.dock(
             SlotId(1),
             Edge::Right,
             Size::Fixed(30),
-            &hoja(8, "metadata"),
+            &leaf(8, "metadata"),
         );
-        assert_eq!(suelto.tabs_of(SlotId(8)), None);
+        assert_eq!(loose.tabs_of(SlotId(8)), None);
     }
 
-    /// Sin ancestro en el eje pedido, se ENVUELVE. Un solo pane es el caso
-    /// real: tras cerrar uno, el cuerpo puede ser una hoja suelta.
+    /// With no ancestor on the requested axis, it WRAPS. A single pane is
+    /// the real case: after closing one, the body can be a loose leaf.
     #[test]
     fn sin_ancestro_en_el_eje_se_envuelve() {
-        let arbol = Node::slot(SlotId(1), KindId::browser());
-        let con = arbol.dock(
+        let tree = Node::slot(SlotId(1), KindId::browser());
+        let docked = tree.dock(
             SlotId(1),
             Edge::Left,
             Size::Fixed(16),
@@ -2759,9 +2790,9 @@ mod tests {
             dir,
             children,
             sizes,
-        } = &con
+        } = &docked
         else {
-            panic!("envuelto en Split")
+            panic!("wrapped in a Split")
         };
         assert_eq!(*dir, Dir::Horizontal);
         assert_eq!(children[0].first_slot_id(), Some(SlotId(9)));
@@ -2769,11 +2800,11 @@ mod tests {
         assert_eq!(sizes, &vec![Size::Fixed(16), Size::Weight(1)]);
     }
 
-    /// Un ancla dentro de una `Tabs` acopla FUERA del grupo: un sidebar que
-    /// desaparece al cambiar de pestaña no es un sidebar.
+    /// An anchor INSIDE a `Tabs` docks OUTSIDE the group: a sidebar that
+    /// disappears when the tab changes is not a sidebar.
     #[test]
     fn con_el_ancla_en_una_pestana_el_acople_va_fuera_del_grupo() {
-        let arbol = Node::split(
+        let tree = Node::split(
             Dir::Horizontal,
             vec![
                 Node::Tabs {
@@ -2786,13 +2817,13 @@ mod tests {
                 Node::slot(SlotId(2), KindId::browser()),
             ],
         );
-        let con = arbol.dock(
+        let docked = tree.dock(
             SlotId(1),
             Edge::Left,
             Size::Fixed(16),
             &Node::slot(SlotId(9), KindId::new("places")),
         );
-        let Node::Split { children, .. } = &con else {
+        let Node::Split { children, .. } = &docked else {
             panic!("split")
         };
         assert_eq!(children.len(), 3);
@@ -2800,98 +2831,103 @@ mod tests {
         assert!(matches!(children[1], Node::Tabs { .. }));
     }
 
-    /// Un ancla que no está en el árbol no inventa nada.
+    /// An anchor that is not in the tree invents nothing.
     #[test]
     fn un_ancla_que_no_existe_deja_el_arbol_intacto() {
-        let arbol = Node::slot(SlotId(1), KindId::browser());
-        let con = arbol.dock(
+        let tree = Node::slot(SlotId(1), KindId::browser());
+        let docked = tree.dock(
             SlotId(77),
             Edge::Left,
             Size::Fixed(16),
             &Node::slot(SlotId(9), KindId::new("places")),
         );
-        assert_eq!(con, arbol);
+        assert_eq!(docked, tree);
     }
 
-    /// Y deshacerlo es `close_slot`, que ya existe: el `Split` de un solo hijo
-    /// se disuelve y el árbol vuelve a ser el de antes. Es lo que hace que el
-    /// toggle sea reversible de verdad y no deje un Split degenerado por cada
-    /// vez que alguien abrió y cerró el sidebar.
+    /// And undoing it is `close_slot`, which already exists: the
+    /// single-child `Split` dissolves and the tree goes back to what it
+    /// was before. It is what makes the toggle genuinely reversible and
+    /// keeps it from leaving a degenerate Split every time someone opened
+    /// and closed the sidebar.
     #[test]
     fn undock_es_close_slot_y_devuelve_el_arbol_de_antes() {
-        let arbol = Node::split(
+        let tree = Node::split(
             Dir::Horizontal,
             vec![
                 Node::slot(SlotId(1), KindId::browser()),
                 Node::slot(SlotId(2), KindId::browser()),
             ],
         );
-        let con = arbol.dock(
+        let docked = tree.dock(
             SlotId(1),
             Edge::Left,
             Size::Fixed(16),
             &Node::slot(SlotId(9), KindId::new("places")),
         );
-        assert_eq!(con.close_slot(SlotId(9)), Some(arbol));
+        assert_eq!(docked.close_slot(SlotId(9)), Some(tree));
     }
 
-    /// El ancho del primer hijo de un `Split`, para los tests de `resize`.
-    fn ancho(n: &Node) -> Size {
+    /// A `Split`'s first child's width, for the `resize` tests.
+    fn width(n: &Node) -> Size {
         match n {
             Node::Split { sizes, .. } => sizes[0],
             _ => panic!("split"),
         }
     }
 
-    fn con_sidebar(ancho: u16) -> Node {
+    fn with_sidebar(width: u16) -> Node {
         Node::Split {
             dir: Dir::Horizontal,
             children: vec![
                 Node::slot(SlotId(5), KindId::new("places")),
                 Node::slot(SlotId(1), KindId::browser()),
             ],
-            sizes: vec![Size::Fixed(ancho), Size::Weight(1)],
+            sizes: vec![Size::Fixed(width), Size::Weight(1)],
         }
     }
 
-    /// #227: un hijo FIJO —el ancho del sidebar— se mueve en CELDAS. Antes
-    /// `resize` solo tocaba pesos, así que el panel de sitios no se podía
-    /// ensanchar con el teclado y los presets con sidebar nacían atascados.
+    /// #227: a FIXED child — the sidebar's width — moves in CELLS. `resize`
+    /// used to only touch weights, so the places panel could not be
+    /// widened with the keyboard and presets with a sidebar were born
+    /// stuck.
     #[test]
     fn un_hijo_fijo_se_mueve_en_celdas() {
-        let arbol = con_sidebar(16);
-        assert_eq!(ancho(&arbol.resize(SlotId(5), 1)), Size::Fixed(18));
-        assert_eq!(ancho(&arbol.resize(SlotId(5), -1)), Size::Fixed(14));
+        let tree = with_sidebar(16);
+        assert_eq!(width(&tree.resize(SlotId(5), 1)), Size::Fixed(18));
+        assert_eq!(width(&tree.resize(SlotId(5), -1)), Size::Fixed(14));
     }
 
-    /// El tope de abajo existe para que no se pueda dejar en cero: un panel de
-    /// ancho cero no se ve y no hay forma de volver a agrandarlo.
+    /// The lower cap exists so it cannot be dropped to zero: a panel of
+    /// zero width is invisible and there is no way to grow it back.
     #[test]
     fn un_hijo_fijo_no_baja_de_dos_ni_pasa_de_cien() {
-        assert_eq!(ancho(&con_sidebar(2).resize(SlotId(5), -1)), Size::Fixed(2));
         assert_eq!(
-            ancho(&con_sidebar(100).resize(SlotId(5), 1)),
+            width(&with_sidebar(2).resize(SlotId(5), -1)),
+            Size::Fixed(2)
+        );
+        assert_eq!(
+            width(&with_sidebar(100).resize(SlotId(5), 1)),
             Size::Fixed(100)
         );
     }
 
-    /// Y un hijo PONDERADO sigue haciendo exactamente lo de antes.
+    /// And a WEIGHTED child keeps doing exactly what it did before.
     #[test]
     fn un_hijo_ponderado_no_cambia_de_comportamiento() {
-        let arbol = Node::split(
+        let tree = Node::split(
             Dir::Horizontal,
             vec![
                 Node::slot(SlotId(1), KindId::browser()),
                 Node::slot(SlotId(2), KindId::browser()),
             ],
         );
-        assert_eq!(ancho(&arbol.resize(SlotId(1), 1)), Size::Weight(2));
-        assert_eq!(ancho(&arbol.resize(SlotId(1), -1)), Size::Weight(1));
+        assert_eq!(width(&tree.resize(SlotId(1), 1)), Size::Weight(2));
+        assert_eq!(width(&tree.resize(SlotId(1), -1)), Size::Weight(1));
     }
 
-    /// El `orthodox` de siempre: dos listados lado a lado sobre las filas de
-    /// cromo.
-    fn ortodoxo() -> Node {
+    /// The usual `orthodox`: two listings side by side over the chrome
+    /// rows.
+    fn orthodox() -> Node {
         Node::Split {
             dir: Dir::Vertical,
             children: vec![
@@ -2903,17 +2939,18 @@ mod tests {
         }
     }
 
-    /// ADR 0138: soltar a un lado reparte con el destino a partes iguales, y
-    /// en el centro se une como pestaña. Nada se pierde.
+    /// ADR 0138: dropping to a side splits with the destination evenly, and
+    /// in the center it joins as a tab. Nothing is lost.
     #[test]
     fn mover_un_hueco_lo_suelta_al_lado_o_como_pestana() {
-        let t = ortodoxo();
-        // El 1 debajo del 2: el reparto horizontal se disuelve, y el 2 se
-        // parte en vertical DENTRO de su sitio — no como hermano en la raíz,
-        // que es la del cromo y no se gira: así `flip` lo deshace.
-        let abajo = t.move_slot(SlotId(1), SlotId(2), DropZone::Bottom);
-        let Node::Split { children, .. } = &abajo else {
-            panic!("raíz")
+        let t = orthodox();
+        // 1 below 2: the horizontal split dissolves, and 2 splits
+        // vertically INSIDE its own spot — not as a sibling at the root,
+        // which is the chrome's and does not rotate: that is how `flip`
+        // undoes it.
+        let below = t.move_slot(SlotId(1), SlotId(2), DropZone::Bottom);
+        let Node::Split { children, .. } = &below else {
+            panic!("root")
         };
         assert_eq!(
             children[0],
@@ -2923,31 +2960,31 @@ mod tests {
                 sizes: vec![Size::Weight(1); 2],
             }
         );
-        assert_eq!(children.len(), 3, "el cromo sigue igual");
+        assert_eq!(children.len(), 3, "the chrome is unchanged");
         assert_eq!(
-            abajo.flip(SlotId(1)),
+            below.flip(SlotId(1)),
             t.move_slot(SlotId(1), SlotId(2), DropZone::Right),
-            "girar lo que se soltó abajo es soltarlo a la derecha"
+            "flipping what was dropped below is dropping it to the right"
         );
-        // Un tercero a la derecha del 1 entra como HERMANO: tercios.
-        let tres = Node::split(Dir::Horizontal, vec![b(1), b(2), b(5)]);
-        let movido = tres.move_slot(SlotId(5), SlotId(1), DropZone::Right);
+        // A third one to the right of 1 enters as a SIBLING: thirds.
+        let three = Node::split(Dir::Horizontal, vec![b(1), b(2), b(5)]);
+        let moved = three.move_slot(SlotId(5), SlotId(1), DropZone::Right);
         let Node::Split {
             children, sizes, ..
-        } = &movido
+        } = &moved
         else {
             panic!("split")
         };
         assert_eq!(children, &vec![b(1), b(5), b(2)]);
         assert_eq!(sizes, &vec![Size::Weight(1); 3]);
-        // En el centro: pestaña del destino, delante.
-        let centro = t.move_slot(SlotId(1), SlotId(2), DropZone::Center);
+        // In the center: a tab of the destination, in front.
+        let center = t.move_slot(SlotId(1), SlotId(2), DropZone::Center);
         assert_eq!(
-            centro.tabs_of(SlotId(1)),
+            center.tabs_of(SlotId(1)),
             Some((vec![SlotId(2), SlotId(1)], 1))
         );
-        // Los mismos huecos, siempre.
-        for m in [&abajo, &movido, &centro] {
+        // The same slots, always.
+        for m in [&below, &moved, &center] {
             let mut ids = m.slot_ids();
             ids.sort_unstable();
             assert!(m.duplicate_slot_ids().is_empty());
@@ -2955,30 +2992,30 @@ mod tests {
         }
     }
 
-    /// Soltar al lado de una pestaña parte el GRUPO, no lo invade.
+    /// Dropping next to a tab splits the GROUP, it does not invade it.
     #[test]
     fn soltar_junto_a_una_pestana_parte_su_grupo() {
-        let grupo = Node::Tabs {
+        let group = Node::Tabs {
             children: vec![b(1), b(2)],
             active: 0,
         };
-        let t = Node::split(Dir::Horizontal, vec![grupo.clone(), b(3)]);
+        let t = Node::split(Dir::Horizontal, vec![group.clone(), b(3)]);
         let m = t.move_slot(SlotId(3), SlotId(2), DropZone::Top);
         assert_eq!(
             m,
             Node::Split {
                 dir: Dir::Vertical,
-                children: vec![b(3), grupo],
+                children: vec![b(3), group],
                 sizes: vec![Size::Weight(1); 2],
             }
         );
     }
 
-    /// Lo que no se mueve: a sí mismo, el cromo, el único hueco, un id que
-    /// no está.
+    /// What does not move: onto itself, the chrome, the only slot, an id
+    /// that is not there.
     #[test]
     fn mover_lo_que_no_se_mueve_no_cambia_nada() {
-        let t = ortodoxo();
+        let t = orthodox();
         assert_eq!(t.move_slot(SlotId(1), SlotId(1), DropZone::Left), t);
         assert_eq!(t.move_slot(SlotId(4), SlotId(1), DropZone::Top), t);
         assert_eq!(t.move_slot(SlotId(1), SlotId(4), DropZone::Top), t);
@@ -2986,9 +3023,10 @@ mod tests {
         assert_eq!(b(1).move_slot(SlotId(1), SlotId(2), DropZone::Left), b(1));
     }
 
-    /// El borde entre el segundo listado y los detalles separa el CUERPO de
-    /// los detalles: la pareja se mide entera, y arrastrarlo mueve los
-    /// detalles aunque el listado sea el último de su propio reparto.
+    /// The border between the second listing and the details separates the
+    /// BODY from the details: the pair is measured whole, and dragging it
+    /// moves the details even if the listing is the last one of its own
+    /// distribution.
     #[test]
     fn el_borde_entre_primos_mueve_su_pareja() {
         let t = Node::Split {
@@ -3007,12 +3045,8 @@ mod tests {
             t.border_pair(SlotId(1), SlotId(2)),
             Some((vec![SlotId(1)], vec![SlotId(2)]))
         );
-        assert_eq!(
-            t.border_pair(SlotId(2), SlotId(1)),
-            None,
-            "el orden importa"
-        );
-        // Cuerpo de 100 celdas y detalles de 50: el borde a 120 deja 30.
+        assert_eq!(t.border_pair(SlotId(2), SlotId(1)), None, "order matters");
+        // A 100-cell body and 50-cell details: the border at 120 leaves 30.
         let m = t.drag_border_between(SlotId(2), SlotId(7), 120.0 / 150.0, 150);
         let Node::Split { sizes, .. } = &m else {
             panic!("split")
@@ -3020,8 +3054,8 @@ mod tests {
         assert_eq!(sizes[1], Size::Fixed(30));
     }
 
-    /// Arrastrar el borde entre dos ponderados no aplasta a un tercero: la
-    /// pareja conserva su suma.
+    /// Dragging the border between two weighted ones does not crush a
+    /// third: the pair keeps its sum.
     #[test]
     fn arrastrar_una_pareja_no_aplasta_al_tercero() {
         let t = Node::split(Dir::Horizontal, vec![b(1), b(2), b(3)]);
@@ -3037,13 +3071,17 @@ mod tests {
             })
             .collect();
         let total: u16 = w.iter().sum();
-        assert_eq!(w[0] + w[1], w[2] * 2, "la pareja sigue sumando dos tercios");
+        assert_eq!(
+            w[0] + w[1],
+            w[2] * 2,
+            "the pair still adds up to two thirds"
+        );
         assert_eq!(w[2] * 3, total);
         assert!(w[0] < w[1]);
     }
 
-    /// La zona bajo el puntero, en celdas: la regla del cuarto, como la
-    /// ventana; y la parte que se resalta.
+    /// The zone under the pointer, in cells: the quarter rule, same as the
+    /// window; and the part that gets highlighted.
     #[test]
     fn la_zona_de_soltar_sale_del_cuarto_mas_cercano() {
         let r = Rect {
@@ -3069,8 +3107,9 @@ mod tests {
         assert_eq!(DropZone::Center.part_of(r), r);
     }
 
-    /// Junto a un panel de ancho fijo, lo soltado entra como HERMANO con
-    /// peso: partir el fijo por dentro le daría ocho columnas a un listado.
+    /// Next to a fixed-width panel, what gets dropped enters as a SIBLING
+    /// with weight: splitting the fixed one by wrapping would give a
+    /// listing eight columns.
     #[test]
     fn soltar_junto_a_un_fijo_entra_como_hermano() {
         let t = Node::Split {
@@ -3085,14 +3124,17 @@ mod tests {
         else {
             panic!("split")
         };
-        assert_eq!(sizes[0], Size::Fixed(16), "los sitios conservan su ancho");
+        assert_eq!(
+            sizes[0],
+            Size::Fixed(16),
+            "the places panel keeps its width"
+        );
         assert_eq!(children[1], b(2));
         assert!(matches!(sizes[1], Size::Weight(_)));
     }
 
-    /// El centro solo junta familias iguales (ADR 0134): un listado no
-    /// entra en las pestañas de los sitios, ni un panel en las de un
-    /// listado.
+    /// The center only joins equal families (ADR 0134): a listing does not
+    /// enter the places' tabs, nor a panel a listing's.
     #[test]
     fn el_centro_no_mezcla_listados_y_paneles() {
         let t = Node::Split {
@@ -3105,14 +3147,15 @@ mod tests {
         assert_ne!(t.move_slot(SlotId(1), SlotId(2), DropZone::Center), t);
     }
 
-    /// ADR 0138: girar pasa lado a lado a uno encima del otro y vuelve; no
-    /// gira el reparto del cromo, y un fijo pasa a peso.
+    /// ADR 0138: flipping turns side-by-side into one over the other and
+    /// back; it does not rotate the chrome's distribution, and a fixed one
+    /// turns into a weight.
     #[test]
     fn girar_cambia_el_eje_del_reparto_interior() {
-        let t = ortodoxo();
+        let t = orthodox();
         let g = t.flip(SlotId(1));
         let Node::Split { children, .. } = &g else {
-            panic!("raíz")
+            panic!("root")
         };
         assert!(matches!(
             &children[0],
@@ -3121,22 +3164,22 @@ mod tests {
                 ..
             }
         ));
-        assert_eq!(g.flip(SlotId(2)), t, "girar dos veces es no girar");
-        // Un solo listado sobre el cromo: nada que girar.
-        let solo = Node::Split {
+        assert_eq!(g.flip(SlotId(2)), t, "flipping twice is not flipping");
+        // A single listing over the chrome: nothing to flip.
+        let single = Node::Split {
             dir: Dir::Vertical,
             children: vec![b(1), Node::slot(SlotId(4), KindId::new("status"))],
             sizes: vec![Size::Weight(1), Size::Fixed(1)],
         };
-        assert_eq!(solo.flip(SlotId(1)), solo);
-        // Solo la RACHA ponderada: los sitios siguen siendo una columna de
-        // dieciséis, y los dos listados se apilan a su lado.
-        let con_sitios = Node::Split {
+        assert_eq!(single.flip(SlotId(1)), single);
+        // Only the WEIGHTED run: the places panel stays a sixteen-wide
+        // column, and the two listings stack alongside it.
+        let with_slots = Node::Split {
             dir: Dir::Horizontal,
             children: vec![Node::slot(SlotId(7), KindId::new("places")), b(1), b(2)],
             sizes: vec![Size::Fixed(16), Size::Weight(1), Size::Weight(1)],
         };
-        let g = con_sitios.flip(SlotId(1));
+        let g = with_slots.flip(SlotId(1));
         assert_eq!(
             g,
             Node::Split {
@@ -3148,20 +3191,20 @@ mod tests {
                 sizes: vec![Size::Fixed(16), Size::Weight(2)],
             }
         );
-        // Y de vuelta: los sitios no pierden su ancho.
+        // And round-tripping: the places panel does not lose its width.
         let Node::Split { sizes, .. } = g.flip(SlotId(2)) else {
             panic!("split")
         };
         assert_eq!(sizes[0], Size::Fixed(16));
-        // Una racha de uno no se gira, y la negativa NO sube a girar el
-        // reparto de fuera.
-        let solo_uno = Node::Split {
+        // A run of one does not flip, and the negative case does NOT climb
+        // up to flip the outer distribution.
+        let lone_one = Node::Split {
             dir: Dir::Horizontal,
             children: vec![Node::slot(SlotId(7), KindId::new("places")), b(1)],
             sizes: vec![Size::Fixed(30), Size::Weight(1)],
         };
-        assert_eq!(solo_uno.flip(SlotId(1)), solo_uno);
-        let anidado = Node::split(Dir::Vertical, vec![solo_uno.clone(), b(9)]);
-        assert_eq!(anidado.flip(SlotId(1)), anidado);
+        assert_eq!(lone_one.flip(SlotId(1)), lone_one);
+        let nested = Node::split(Dir::Vertical, vec![lone_one.clone(), b(9)]);
+        assert_eq!(nested.flip(SlotId(1)), nested);
     }
 }

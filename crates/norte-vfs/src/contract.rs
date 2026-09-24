@@ -1,26 +1,27 @@
-//! [`provider_contract!`]: la suite contractual que TODO provider debe pasar
-//! (spec §5/§12). Un provider nuevo la invoca en sus tests de integración y
-//! hereda ~24 casos: roundtrips byte-exactos, colisiones, transaccionalidad
-//! del sink, nombres hostiles y coherencia de caja. Los casos que dependen de
-//! una capability se auto-saltan si el provider no la declara.
+//! [`provider_contract!`]: the contract suite EVERY provider must pass
+//! (spec §5/§12). A new provider invokes it in its integration tests and
+//! inherits ~24 cases: byte-exact roundtrips, collisions, sink
+//! transactionality, hostile names and case coherence. Cases that depend
+//! on a capability auto-skip if the provider doesn't declare it.
 
-/// Genera la suite contractual de [`Provider`](crate::Provider) dentro de un
-/// módulo de test.
+/// Generates [`Provider`](crate::Provider)'s contract suite inside a test
+/// module.
 ///
-/// Requisitos del crate invocante (dev-dependencies): `tokio` (features
-/// `macros`, `rt`) — el resto llega vía re-exports internos de `norte-vfs`.
+/// Requirements of the invoking crate (dev-dependencies): `tokio`
+/// (features `macros`, `rt`) — the rest arrives via `norte-vfs`'s
+/// internal re-exports.
 ///
-/// - `mod`: nombre del módulo generado.
-/// - `factory`: expresión que construye un provider FRESCO (se evalúa una vez
-///   por test; los tests no comparten estado).
-/// - `root`: expresión que construye el `VPath` raíz del provider.
-/// - `hostile_names`: expresión `Vec<Vec<u8>>` con nombres hostiles a
-///   roundtripear (normalmente `norte_testkit::corpus::hostile_names()`
-///   mapeado a bytes).
+/// - `mod`: name of the generated module.
+/// - `factory`: expression that builds a FRESH provider (evaluated once
+///   per test; tests share no state).
+/// - `root`: expression that builds the provider's root `VPath`.
+/// - `hostile_names`: `Vec<Vec<u8>>` expression with hostile names to
+///   round-trip (usually `norte_testkit::corpus::hostile_names()` mapped
+///   to bytes).
 ///
 /// ```ignore
-/// // En tests de integración de un provider (ignore: evita el ciclo
-/// // dev-dep testkit→vfs en el doctest; el uso real vive en norte-testkit).
+/// // In a provider's integration tests (ignore: avoids the
+/// // testkit→vfs dev-dep cycle in the doctest; the real use lives in norte-testkit).
 /// norte_vfs::provider_contract! {
 ///     mod contract_mem,
 ///     factory: norte_testkit::MemProvider::new(),
@@ -42,11 +43,11 @@ macro_rules! provider_contract {
         mod $name {
             #![allow(
                 clippy::redundant_clone,
-                reason = "según lo que el caller pase como `factory`/`root`, el clone es redundante o no: un `expect` no puede cumplirse en todas las instanciaciones"
+                reason = "depending on what the caller passes as `factory`/`root`, the clone is redundant or not: an `expect` can't hold across every instantiation"
             )]
 
-            // Las expresiones `factory`/`root`/`hostile_names` se evalúan en
-            // este módulo: importa el scope del invocante.
+            // The `factory`/`root`/`hostile_names` expressions are
+            // evaluated in this module: imports the caller's scope.
             #[allow(unused_imports)]
             use super::*;
 
@@ -58,7 +59,7 @@ macro_rules! provider_contract {
             use $crate::{AttrRequest, ByteSink, ListOptions, Provider};
 
             fn seg(bytes: &[u8]) -> Segment {
-                Segment::new(bytes.to_vec()).expect("segmento válido de contrato")
+                Segment::new(bytes.to_vec()).expect("valid contract segment")
             }
 
             fn child(base: &VPath, name: &[u8]) -> VPath {
@@ -66,11 +67,11 @@ macro_rules! provider_contract {
             }
 
             async fn write_all<P: Provider>(p: &P, path: &VPath, content: &[u8]) {
-                let mut sink = p.write(path).await.expect("write abre");
+                let mut sink = p.write(path).await.expect("write opens");
                 sink.write(Bytes::copy_from_slice(content))
                     .await
-                    .expect("chunk entra");
-                sink.commit().await.expect("commit publica");
+                    .expect("chunk goes in");
+                sink.commit().await.expect("commit publishes");
             }
 
             async fn read_all<P: Provider>(p: &P, path: &VPath) -> Result<Vec<u8>, Error> {
@@ -90,18 +91,18 @@ macro_rules! provider_contract {
                 Ok(out)
             }
 
-            /// Auto-skip declarativo: el caso solo aplica si `flags` está
-            /// (o `!flags` no está) en las capabilities del provider.
+            /// Declarative auto-skip: the case only applies if `flags` is
+            /// (or `!flags` isn't) among the provider's capabilities.
             macro_rules! require_caps {
                 ($p:expr, has: $flag:expr) => {
                     if !$p.capabilities().flags.contains($flag) {
-                        eprintln!("skip: el provider no declara {:?}", $flag);
+                        eprintln!("skip: the provider does not declare {:?}", $flag);
                         return;
                     }
                 };
                 ($p:expr, lacks: $flag:expr) => {
                     if $p.capabilities().flags.contains($flag) {
-                        eprintln!("skip: el caso exige NO tener {:?}", $flag);
+                        eprintln!("skip: the case requires NOT having {:?}", $flag);
                         return;
                     }
                 };
@@ -109,11 +110,12 @@ macro_rules! provider_contract {
 
             // ---------- stat ----------
 
-            /// ADR 0054: `capabilities_at` puede REFINAR la declaración del
-            /// backend, no contradecirla. Lo que no depende de la ubicación
-            /// —que el backend entero sea de solo lectura— tiene que salir
-            /// igual por las dos puertas, y un `FULL_FOLD` sobre algo que
-            /// distingue caja es una respuesta imposible, no un refinamiento.
+            /// ADR 0054: `capabilities_at` may REFINE the backend's
+            /// declaration, not contradict it. What doesn't depend on the
+            /// location — the whole backend being read-only — has to come
+            /// out the same through both doors, and a `FULL_FOLD` over
+            /// something case-sensitive is an impossible answer, not a
+            /// refinement.
             #[tokio::test]
             async fn contract_capabilities_at_refines_without_contradicting() {
                 let p = $factory;
@@ -121,48 +123,48 @@ macro_rules! provider_contract {
                 let at = p
                     .capabilities_at(&root)
                     .await
-                    .expect("capabilities_at responde por la raíz");
+                    .expect("capabilities_at answers for the root");
                 assert_eq!(
                     at.flags.contains(CapabilityFlags::READ_ONLY),
                     p.capabilities().flags.contains(CapabilityFlags::READ_ONLY),
-                    "READ_ONLY es del backend, no de la ubicación"
+                    "READ_ONLY belongs to the backend, not the location"
                 );
                 assert!(
                     !(at.flags.contains(CapabilityFlags::FULL_FOLD)
                         && at.flags.contains(CapabilityFlags::CASE_SENSITIVE)),
-                    "FULL_FOLD solo tiene sentido sin CASE_SENSITIVE"
+                    "FULL_FOLD only makes sense without CASE_SENSITIVE"
                 );
-                // Lo que es de la UBICACIÓN no se declara sin path. Con
-                // `CONFINED_WRITES` no es cosmético: es una promesa de
-                // confinamiento con garantía del kernel sobre la que un caller
-                // ACTÚA (se salta el paseo con `lstat` al que si no degrada), y
-                // una promesa así no puede venir de una respuesta que no sabe
-                // de qué mount habla.
+                // What belongs to the LOCATION isn't declared without a
+                // path. With `CONFINED_WRITES` it isn't cosmetic: it's a
+                // confinement promise with a kernel guarantee a caller
+                // ACTS on (it skips the `lstat` walk it would otherwise
+                // degrade to), and a promise like that can't come from an
+                // answer that doesn't know which mount it's talking about.
                 for flag in [CapabilityFlags::FULL_FOLD, CapabilityFlags::CONFINED_WRITES] {
                     assert!(
                         !p.capabilities().flags.contains(flag),
-                        "{flag:?} es de la ubicación: solo lo contesta capabilities_at"
+                        "{flag:?} belongs to the location: only capabilities_at answers it"
                     );
                 }
             }
 
-            /// Preguntar por algo que no existe no es un error: `capabilities()`
-            /// jamás pudo fallar, y planificar hacia un destino que todavía no
-            /// está es el caso corriente de un mirror.
+            /// Asking about something that doesn't exist isn't an error:
+            /// `capabilities()` could never fail, and planning toward a
+            /// destination that isn't there yet is a mirror's common case.
             #[tokio::test]
             async fn contract_capabilities_at_missing_path_is_not_an_error() {
                 let p = $factory;
                 let root: VPath = $root;
-                p.capabilities_at(&child(&root, b"no-existe-jamas"))
+                p.capabilities_at(&child(&root, b"never-exists"))
                     .await
-                    .expect("una ruta ausente se responde igual");
+                    .expect("an absent path is answered the same way");
             }
 
             #[tokio::test]
             async fn contract_stat_root_is_dir() {
                 let p = $factory;
                 let root: VPath = $root;
-                let e = p.stat(&root).await.expect("la raíz siempre existe");
+                let e = p.stat(&root).await.expect("the root always exists");
                 assert_eq!(e.kind, EntryKind::Dir);
             }
 
@@ -171,7 +173,7 @@ macro_rules! provider_contract {
                 let p = $factory;
                 let root: VPath = $root;
                 assert_eq!(
-                    p.stat(&child(&root, b"no-existe")).await.unwrap_err(),
+                    p.stat(&child(&root, b"does-not-exist")).await.unwrap_err(),
                     Error::NotFound
                 );
             }
@@ -195,13 +197,13 @@ macro_rules! provider_contract {
             async fn contract_write_invisible_before_commit() {
                 let p = $factory;
                 let root: VPath = $root;
-                let f = child(&root, b"pendiente");
+                let f = child(&root, b"pending");
                 let mut sink = p.write(&f).await.unwrap();
                 sink.write(Bytes::from_static(b"data")).await.unwrap();
                 assert_eq!(
                     p.stat(&f).await.unwrap_err(),
                     Error::NotFound,
-                    "el path final no existe hasta commit"
+                    "the final path doesn't exist until commit"
                 );
                 sink.commit().await.unwrap();
                 assert!(p.stat(&f).await.is_ok());
@@ -211,121 +213,122 @@ macro_rules! provider_contract {
             async fn contract_abort_leaves_no_trace() {
                 let p = $factory;
                 let root: VPath = $root;
-                let f = child(&root, b"abortado");
+                let f = child(&root, b"aborted");
                 let mut sink = p.write(&f).await.unwrap();
                 sink.write(Bytes::from_static(b"data")).await.unwrap();
-                sink.abort().await.expect("abort limpia");
+                sink.abort().await.expect("abort cleans up");
                 assert_eq!(p.stat(&f).await.unwrap_err(), Error::NotFound);
                 let names: Vec<Vec<u8>> = p
                     .list(&root)
                     .await
-                    .expect("list raíz")
+                    .expect("list root")
                     .map(|e| {
-                        e.expect("entrada ok")
+                        e.expect("ok entry")
                             .path
                             .file_name()
-                            .expect("con nombre")
+                            .expect("has a name")
                             .as_bytes()
                             .to_vec()
                     })
                     .collect()
                     .await;
                 assert!(
-                    !names.contains(&b"abortado".to_vec()),
-                    "ni rastro del staging en el listado"
+                    !names.contains(&b"aborted".to_vec()),
+                    "not a trace of the staging in the listing"
                 );
             }
 
             // ---------- resume (ADR 0012) ----------
 
-            /// `open_resumable` sobre un destino SIN parcial empieza de cero
-            /// (`already == 0`) y publica normal. Contrato universal (el
-            /// default del trait lo cumple).
+            /// `open_resumable` over a destination with NO partial starts
+            /// from scratch (`already == 0`) and publishes normally.
+            /// Universal contract (the trait's default satisfies it).
             #[tokio::test]
             async fn contract_open_resumable_fresh_starts_at_zero() {
                 let p = $factory;
                 let root: VPath = $root;
-                let f = child(&root, b"resumable-nuevo");
+                let f = child(&root, b"resumable-fresh");
                 let (mut sink, already) = p.open_resumable(&f).await.expect("open_resumable");
-                assert_eq!(already, 0, "sin parcial previo, empieza de cero");
-                sink.write(Bytes::from_static(b"entero")).await.expect("write");
+                assert_eq!(already, 0, "no earlier partial, starts from scratch");
+                sink.write(Bytes::from_static(b"whole")).await.expect("write");
                 sink.commit().await.expect("commit");
-                assert_eq!(read_all(&p, &f).await.expect("leer"), b"entero");
+                assert_eq!(read_all(&p, &f).await.expect("read"), b"whole");
             }
 
-            /// Honestidad de capabilities (fase 10a): `SERVER_COPY` ⟺
-            /// `copy_native` maneja el fichero (`Some`); SIN la cap, `None` —
-            /// así el engine cae a streaming en vez de fallar en duro donde
-            /// el streaming habría copiado. "Sin sorpresas" = caps que no
-            /// mienten (criterio de salida M2).
+            /// Capability honesty (phase 10a): `SERVER_COPY` ⟺
+            /// `copy_native` handles the file (`Some`); WITHOUT the cap,
+            /// `None` — so the engine falls back to streaming instead of
+            /// hard-failing where streaming would have copied. "No
+            /// surprises" = caps that don't lie (M2's exit criterion).
             #[tokio::test]
             async fn contract_capabilities_server_copy_is_honest() {
                 let p = $factory;
                 let root: VPath = $root;
                 let flags = p.capabilities().flags;
-                // READ_ONLY va por readonly_provider_contract! (no siembra).
+                // READ_ONLY goes through readonly_provider_contract! (doesn't seed).
                 if flags.contains($crate::__private::norte_proto::CapabilityFlags::READ_ONLY) {
                     return;
                 }
                 let from = child(&root, b"cap-src.txt");
-                write_all(&p, &from, b"honesto").await;
+                write_all(&p, &from, b"honest").await;
                 let to = child(&root, b"cap-dst.txt");
                 let native = p.copy_native(&from, &to).await;
                 if flags.contains($crate::__private::norte_proto::CapabilityFlags::SERVER_COPY) {
                     assert!(
                         native.is_some(),
-                        "declara SERVER_COPY pero copy_native devolvió None"
+                        "declares SERVER_COPY but copy_native returned None"
                     );
                 } else {
                     assert!(
                         native.is_none(),
-                        "NO declara SERVER_COPY pero copy_native devolvió Some"
+                        "does NOT declare SERVER_COPY but copy_native returned Some"
                     );
                 }
             }
 
-            /// `keep` + `open_resumable` REANUDA: los bytes conservados se
-            /// reportan en `already` y el sink añade tras ellos. Un provider
-            /// sin reanudación (default `keep=abort`) se auto-salta: su
-            /// segundo `open_resumable` da `already==0` y este test lo
-            /// detecta y no exige lo imposible.
+            /// `keep` + `open_resumable` RESUMES: the kept bytes are
+            /// reported in `already` and the sink appends after them. A
+            /// provider without resume (default `keep=abort`) auto-skips:
+            /// its second `open_resumable` gives `already==0` and this
+            /// test detects that and doesn't demand the impossible.
             #[tokio::test]
             async fn contract_keep_then_resume_continues() {
                 let p = $factory;
                 let root: VPath = $root;
                 let f = child(&root, b"resumable-cont");
-                // Primer tramo: escribe "hola" y CONSERVA (no publica).
+                // First stage: writes "hi" and KEEPS (doesn't publish).
                 let (mut sink, already) = p.open_resumable(&f).await.expect("open 1");
                 assert_eq!(already, 0);
-                sink.write(Bytes::from_static(b"hola")).await.expect("write 1");
+                sink.write(Bytes::from_static(b"hi")).await.expect("write 1");
                 sink.keep().await.expect("keep");
-                // El destino final NO existe todavía (keep no publica).
+                // The final destination does NOT exist yet (keep doesn't publish).
                 assert_eq!(p.stat(&f).await.unwrap_err(), Error::NotFound);
 
-                // Segundo tramo: reanuda.
+                // Second stage: resumes.
                 let (mut sink, already) = p.open_resumable(&f).await.expect("open 2");
                 if already == 0 {
-                    // Provider sin reanudación (keep=abort): recopia entero.
-                    eprintln!("skip: el provider no reanuda (keep degrada a abort)");
-                    sink.write(Bytes::from_static(b"holamundo")).await.expect("w");
+                    // Provider without resume (keep=abort): recopies the whole thing.
+                    eprintln!("skip: the provider does not resume (keep degrades to abort)");
+                    sink.write(Bytes::from_static(b"hiworld")).await.expect("w");
                     sink.commit().await.expect("commit");
-                    assert_eq!(read_all(&p, &f).await.unwrap(), b"holamundo");
+                    assert_eq!(read_all(&p, &f).await.unwrap(), b"hiworld");
                     return;
                 }
-                assert_eq!(already, 4, "reanuda tras los 4 bytes conservados");
-                sink.write(Bytes::from_static(b"mundo")).await.expect("write 2");
+                assert_eq!(already, 2, "resumes after the 2 kept bytes");
+                sink.write(Bytes::from_static(b"world")).await.expect("write 2");
                 sink.commit().await.expect("commit");
                 assert_eq!(
-                    read_all(&p, &f).await.expect("leer"),
-                    b"holamundo",
-                    "el contenido es la concatenación de los dos tramos"
+                    read_all(&p, &f).await.expect("read"),
+                    b"hiworld",
+                    "the content is the concatenation of the two stages"
                 );
             }
 
-            /// `partial_digest` del staging conservado == SHA-256 de esos
-            /// bytes (#35). Permisivo: un provider sin digest (default `None`)
-            /// se auto-salta — degrada a Length, correcto. Verifica el
-            /// invariante staging↔digest en TODA la matriz, no solo en Mem.
+            /// `partial_digest` of the kept staging == SHA-256 of those
+            /// bytes (#35). Permissive: a provider without a digest
+            /// (default `None`) auto-skips — degrades to Length, correct.
+            /// Verifies the staging↔digest invariant across the WHOLE
+            /// matrix, not just on Mem.
             #[tokio::test]
             async fn contract_partial_digest_matches_staged_bytes() {
                 use sha2::{Digest, Sha256};
@@ -338,17 +341,17 @@ macro_rules! provider_contract {
 
                 match p.partial_digest(&f, 9).await.expect("partial_digest") {
                     None => {
-                        // Provider sin digest del staging (o sin reanudación):
-                        // degrada a Length, aceptable.
-                        eprintln!("skip: el provider no expone partial_digest");
+                        // Provider without a staging digest (or without
+                        // resume): degrades to Length, acceptable.
+                        eprintln!("skip: the provider does not expose partial_digest");
                     }
                     Some(d) => {
                         let expected: [u8; 32] = Sha256::digest(b"digest me").into();
-                        assert_eq!(d, expected, "el digest cubre los bytes del staging");
-                        // Un prefijo más corto hashea SOLO ese prefijo.
+                        assert_eq!(d, expected, "the digest covers the staging's bytes");
+                        // A shorter prefix hashes ONLY that prefix.
                         if let Some(d3) = p.partial_digest(&f, 3).await.expect("digest 3") {
                             let e3: [u8; 32] = Sha256::digest(b"dig").into();
-                            assert_eq!(d3, e3, "el digest respeta `len`");
+                            assert_eq!(d3, e3, "the digest respects `len`");
                         }
                     }
                 }
@@ -358,12 +361,12 @@ macro_rules! provider_contract {
             async fn contract_write_collision_is_conflict() {
                 let p = $factory;
                 let root: VPath = $root;
-                let f = child(&root, b"ocupado");
+                let f = child(&root, b"taken");
                 write_all(&p, &f, b"1").await;
                 match p.write(&f).await {
                     Err(Error::Conflict { .. }) => {}
-                    Err(e) => panic!("esperaba Conflict, fue {e:?}"),
-                    Ok(_) => panic!("esperaba Conflict, el write abrió"),
+                    Err(e) => panic!("expected Conflict, was {e:?}"),
+                    Ok(_) => panic!("expected Conflict, the write opened"),
                 }
             }
 
@@ -374,8 +377,8 @@ macro_rules! provider_contract {
                 let f = child(&child(&root, b"no-dir"), b"f");
                 match p.write(&f).await {
                     Err(Error::NotFound) => {}
-                    Err(e) => panic!("esperaba NotFound, fue {e:?}"),
-                    Ok(_) => panic!("esperaba NotFound, el write abrió"),
+                    Err(e) => panic!("expected NotFound, was {e:?}"),
+                    Ok(_) => panic!("expected NotFound, the write opened"),
                 }
             }
 
@@ -384,7 +387,7 @@ macro_rules! provider_contract {
                 let p = $factory;
                 let root: VPath = $root;
                 assert_eq!(
-                    read_all(&p, &child(&root, b"nada")).await.unwrap_err(),
+                    read_all(&p, &child(&root, b"nothing")).await.unwrap_err(),
                     Error::NotFound
                 );
             }
@@ -394,28 +397,28 @@ macro_rules! provider_contract {
                 use $crate::__private::norte_proto::ByteRange;
                 let p = $factory;
                 let root: VPath = $root;
-                let f = child(&root, b"rango.bin");
+                let f = child(&root, b"range.bin");
                 write_all(&p, &f, b"0123456789").await;
 
                 let mid = ByteRange { offset: 2, len: Some(3) };
                 assert_eq!(
-                    read_all_range(&p, &f, Some(mid)).await.expect("rango medio"),
+                    read_all_range(&p, &f, Some(mid)).await.expect("mid range"),
                     b"234"
                 );
-                let cola = ByteRange { offset: 8, len: None };
+                let tail = ByteRange { offset: 8, len: None };
                 assert_eq!(
-                    read_all_range(&p, &f, Some(cola)).await.expect("hasta EOF"),
+                    read_all_range(&p, &f, Some(tail)).await.expect("until EOF"),
                     b"89"
                 );
-                let pasado = ByteRange { offset: 100, len: Some(4) };
+                let past = ByteRange { offset: 100, len: Some(4) };
                 assert_eq!(
-                    read_all_range(&p, &f, Some(pasado)).await.expect("pread past-EOF"),
+                    read_all_range(&p, &f, Some(past)).await.expect("pread past-EOF"),
                     b"",
-                    "offset más allá de EOF = stream vacío, no error"
+                    "offset past EOF = empty stream, not an error"
                 );
-                let sobra = ByteRange { offset: 7, len: Some(100) };
+                let excess = ByteRange { offset: 7, len: Some(100) };
                 assert_eq!(
-                    read_all_range(&p, &f, Some(sobra)).await.expect("len recortado a EOF"),
+                    read_all_range(&p, &f, Some(excess)).await.expect("len trimmed to EOF"),
                     b"789"
                 );
             }
@@ -426,56 +429,56 @@ macro_rules! provider_contract {
                 let p = $factory;
                 require_caps!(p, has: CapabilityFlags::SYMLINKS);
                 let root: VPath = $root;
-                let link = child(&root, b"enlace");
-                // Target relativo con bytes arbitrarios: JAMAS se interpreta.
-                let target: &[u8] = b"destino-que-no-existe";
+                let link = child(&root, b"link");
+                // Relative target with arbitrary bytes: NEVER interpreted.
+                let target: &[u8] = b"destination-that-does-not-exist";
                 p.symlink(&link, target, SymlinkKind::File)
                     .await
-                    .expect("symlink crea");
+                    .expect("symlink creates");
                 assert_eq!(
                     p.read_link(&link).await.expect("read_link"),
                     target,
-                    "bytes del target intactos"
+                    "target bytes intact"
                 );
-                let e = p.stat(&link).await.expect("stat del link");
-                assert_eq!(e.kind, EntryKind::Symlink, "describe el LINK");
+                let e = p.stat(&link).await.expect("stat of the link");
+                assert_eq!(e.kind, EntryKind::Symlink, "describes the LINK");
             }
 
-            /// Targets hostiles: la garantía central es que los BYTES del
-            /// target viajan intactos, jamás interpretados ni decodificados.
-            /// Viven inline (no en names.json): un target NO es un Segment —
-            /// admite `/`, `\`, `..`, absolutos y no-UTF8.
+            /// Hostile targets: the core guarantee is that the target's
+            /// BYTES travel intact, never interpreted nor decoded. Live
+            /// inline (not in names.json): a target is NOT a Segment — it
+            /// allows `/`, `\`, `..`, absolute paths and non-UTF8.
             #[tokio::test]
             async fn contract_symlink_hostile_targets_roundtrip() {
                 use $crate::SymlinkKind;
                 let p = $factory;
                 require_caps!(p, has: CapabilityFlags::SYMLINKS);
                 let root: VPath = $root;
-                let hostiles: &[(&str, &[u8])] = &[
+                let hostile_targets: &[(&str, &[u8])] = &[
                     ("latin1", b"caf\xE9"),
                     ("relative_deep", b"sub/dir/f"),
                     ("absolute", b"/etc/hostname"),
-                    ("dotdot", b"../fuera"),
+                    ("dotdot", b"../outside"),
                     ("windows_style", b"C:\\Users\\x"),
                     ("lone_surrogate", &[0xED, 0xA0, 0x80]),
                     ("not_wtf8", &[0xFF, 0xFE]),
                 ];
-                for (i, (id, target)) in hostiles.iter().enumerate() {
+                for (i, (id, target)) in hostile_targets.iter().enumerate() {
                     let link = child(&root, format!("ln{i}").as_bytes());
                     match p.symlink(&link, target, SymlinkKind::File).await {
                         Ok(()) => {
                             assert_eq!(
                                 p.read_link(&link).await.expect("read_link"),
                                 *target,
-                                "bytes del target intactos: {id}"
+                                "target bytes intact: {id}"
                             );
                         }
-                        // El OS puede rechazar el target (Windows exige
-                        // WTF-8): rechazo LIMPIO, jamás lossy ni panic.
+                        // The OS may reject the target (Windows requires
+                        // WTF-8): a CLEAN rejection, never lossy nor a panic.
                         Err(Error::InvalidPath) => {
-                            eprintln!("skip target {id}: rechazo limpio del OS");
+                            eprintln!("skip target {id}: clean OS rejection");
                         }
-                        Err(e) => panic!("symlink con target {id}: {e:?}"),
+                        Err(e) => panic!("symlink with target {id}: {e:?}"),
                     }
                 }
             }
@@ -486,34 +489,35 @@ macro_rules! provider_contract {
                 let p = $factory;
                 require_caps!(p, has: CapabilityFlags::SYMLINKS);
                 let root: VPath = $root;
-                let f = child(&root, b"ocupado");
+                let f = child(&root, b"taken");
                 write_all(&p, &f, b"x").await;
                 match p.symlink(&f, b"target", SymlinkKind::File).await {
                     Err(Error::Conflict { .. }) => {}
-                    other => panic!("esperaba Conflict, fue {other:?}"),
+                    other => panic!("expected Conflict, was {other:?}"),
                 }
-                assert_eq!(read_all(&p, &f).await.expect("intacto"), b"x");
+                assert_eq!(read_all(&p, &f).await.expect("intact"), b"x");
             }
 
-            /// ADR 0009: con capability TRASH, `trash()` se lleva el
-            /// árbol ENTERO y el path deja de existir; sin capability,
-            /// Unsupported (jamás borrar en su lugar).
+            /// ADR 0009: with the TRASH capability, `trash()` takes the
+            /// WHOLE tree with it and the path stops existing; without
+            /// the capability, Unsupported (never delete in its place).
             #[tokio::test]
             async fn contract_trash_takes_the_tree_or_refuses() {
                 let p = $factory;
                 let root: VPath = $root;
-                // Nombre ÚNICO y reconocible: la papelera real del
-                // desarrollador acumula esto — la purga vive en los tests
-                // del provider local (os_limited); macOS se acepta
-                // documentado en ADR 0009.
-                let nombre = format!("norte-contract-trash-{}", std::process::id());
-                let dir = child(&root, nombre.as_bytes());
+                // A UNIQUE, recognizable name: the developer's real trash
+                // accumulates these — the purge lives in the local
+                // provider's tests (os_limited); macOS is accepted and
+                // documented in ADR 0009.
+                let name = format!("norte-contract-trash-{}", std::process::id());
+                let dir = child(&root, name.as_bytes());
                 p.mkdir(&dir).await.expect("mkdir");
-                write_all(&p, &child(&dir, b"hijo"), b"x").await;
-                // Y una víctima con nombre HOSTIL (no-UTF8): el trash de
-                // los 3 OS debe tragarlo o rechazar limpio, jamás panicar.
-                // (Si el FS rechaza el nombre — APFS — simplemente no está.)
-                let sembrado_hostil = if let Ok(mut sink) =
+                write_all(&p, &child(&dir, b"kid"), b"x").await;
+                // And a victim with a HOSTILE name (non-UTF8): the trash
+                // on all 3 OSes must swallow it or cleanly reject it,
+                // never panic. (If the FS rejects the name — APFS — it
+                // simply isn't there.)
+                let hostile_seeded = if let Ok(mut sink) =
                     p.write(&child(&dir, b"tr\xE1sh")).await
                 {
                     let _ = sink.write(Bytes::from_static(b"x")).await;
@@ -526,48 +530,50 @@ macro_rules! provider_contract {
                         .await
                         .expect("trash");
                     assert_eq!(
-                        p.stat(&dir).await.expect_err("se fue"),
+                        p.stat(&dir).await.expect_err("gone"),
                         Error::NotFound
                     );
-                    // El destino recuperable y lo que el provider PROMETE
-                    // sobre él no pueden discrepar: sin esta pareja, un
-                    // provider que contesta `None` deja al undo casando por
-                    // ruta original, que sobre una pareja `trashed`+`created`
-                    // desentierra el fichero equivocado y lo canta como éxito.
+                    // The recoverable destination and what the provider
+                    // PROMISES about it can't disagree: without this
+                    // pairing, a provider that answers `None` leaves undo
+                    // matching by original path, which over a
+                    // `trashed`+`created` pair digs up the wrong file and
+                    // calls it a success.
                     assert_eq!(
                         dest.is_some(),
                         p.trash_restorable(),
-                        "una papelera promete nombrar su destino y lo nombra, o ni lo promete"
+                        "a trash either promises to name its destination and does, or doesn't promise at all"
                     );
                     if let Some(dest) = dest {
-                        p.stat(&dest).await.expect("el destino recuperable EXISTE");
-                        // Y restaura EXACTAMENTE: de vuelta a su ruta, sin
-                        // adivinar cuál de los ítems de la papelera era.
+                        p.stat(&dest).await.expect("the recoverable destination EXISTS");
+                        // And it restores EXACTLY: back to its path,
+                        // without guessing which trash item it was.
                         p.restore_from(&dest, &dir).await.expect("restore_from");
                         assert!(
                             p.stat(&dir).await.is_ok(),
-                            "restaurado desde el destino que el propio provider dio"
+                            "restored from the destination the provider itself gave"
                         );
-                        // Y vuelve el NODO EXACTO, no un directorio con su
-                        // nombre (#168). Un restore que recrea la carpeta y
-                        // pierde lo de dentro pasa el `stat` de arriba y es
-                        // justo la forma en que un undo dice «hecho» sobre
-                        // datos que ya no están.
+                        // And the EXACT NODE comes back, not a directory
+                        // with its name (#168). A restore that recreates
+                        // the folder and loses what's inside passes the
+                        // `stat` above and is exactly how an undo says
+                        // "done" over data that's no longer there.
                         assert_eq!(
-                            read_all(&p, &child(&dir, b"hijo"))
+                            read_all(&p, &child(&dir, b"kid"))
                                 .await
-                                .expect("el hijo restaurado se lee"),
+                                .expect("the restored kid reads back"),
                             b"x".to_vec(),
-                            "el contenido del hijo vuelve byte a byte"
+                            "the kid's content comes back byte for byte"
                         );
-                        // Incluido el nombre NO-UTF8, si el FS lo aceptó al
-                        // sembrarlo: es el que se pierde cuando un provider
-                        // reconstruye rutas por texto en vez de por bytes.
-                        let hostil = child(&dir, b"tr\xE1sh");
-                        if sembrado_hostil {
-                            p.stat(&hostil)
+                        // Including the NON-UTF8 name, if the FS accepted
+                        // it when it was seeded: it's the one that gets
+                        // lost when a provider rebuilds paths from text
+                        // instead of bytes.
+                        let hostile = child(&dir, b"tr\xE1sh");
+                        if hostile_seeded {
+                            p.stat(&hostile)
                                 .await
-                                .expect("el nombre no-UTF8 vuelve con sus bytes");
+                                .expect("the non-UTF8 name comes back with its bytes");
                         }
                     }
                 } else {
@@ -575,7 +581,7 @@ macro_rules! provider_contract {
                         p.trash(&dir, &$crate::trash::TrashId::new(0, 0)).await,
                         Err(Error::Unsupported)
                     ));
-                    assert!(p.stat(&dir).await.is_ok(), "sin papelera NO se toca");
+                    assert!(p.stat(&dir).await.is_ok(), "without a trash NOTHING is touched");
                 }
             }
 
@@ -583,13 +589,13 @@ macro_rules! provider_contract {
             async fn contract_read_link_errors() {
                 let p = $factory;
                 let root: VPath = $root;
-                // Inexistente: NotFound (o Unsupported si el provider no
-                // sabe de symlinks en absoluto).
-                match p.read_link(&child(&root, b"no-existe")).await {
+                // Nonexistent: NotFound (or Unsupported if the provider
+                // doesn't know about symlinks at all).
+                match p.read_link(&child(&root, b"does-not-exist")).await {
                     Err(Error::NotFound | Error::Unsupported) => {}
-                    other => panic!("esperaba NotFound/Unsupported, fue {other:?}"),
+                    other => panic!("expected NotFound/Unsupported, was {other:?}"),
                 }
-                // Archivo normal: TypeMismatch (o Unsupported).
+                // Normal file: TypeMismatch (or Unsupported).
                 let f = child(&root, b"normal");
                 write_all(&p, &f, b"x").await;
                 match p.read_link(&f).await {
@@ -599,7 +605,7 @@ macro_rules! provider_contract {
                         }
                         | Error::Unsupported,
                     ) => {}
-                    other => panic!("esperaba TypeMismatch/Unsupported, fue {other:?}"),
+                    other => panic!("expected TypeMismatch/Unsupported, was {other:?}"),
                 }
             }
 
@@ -609,73 +615,74 @@ macro_rules! provider_contract {
                 let root: VPath = $root;
                 let d = child(&root, b"dir");
                 p.mkdir(&d).await.unwrap();
-                assert!(read_all(&p, &d).await.is_err(), "leer un dir es error");
+                assert!(read_all(&p, &d).await.is_err(), "reading a dir is an error");
             }
 
-            // ---------- node_id (identidad real, issue #16) ----------
+            // ---------- node_id (real identity, issue #16) ----------
 
-            /// Un provider CON identidad: estable entre llamadas y distinta
-            /// entre nodos distintos. Un provider sin identidad (Ok(None))
-            /// se auto-salta — el default del trait es legal.
+            /// A provider WITH identity: stable between calls and
+            /// distinct between distinct nodes. A provider without
+            /// identity (Ok(None)) auto-skips — the trait's default is legal.
             #[tokio::test]
             async fn contract_node_id_stable_and_distinct() {
                 use $crate::FollowLinks;
                 let p = $factory;
                 let root: VPath = $root;
-                let a = child(&root, b"ida");
-                let b = child(&root, b"idb");
-                write_all(&p, &a, b"x").await;
-                write_all(&p, &b, b"y").await;
-                let Some(id_a) = p.node_id(&a, FollowLinks::No).await.expect("node_id a") else {
-                    eprintln!("skip: el provider no expone identidad de nodo");
+                let a_path = child(&root, b"ida");
+                let b_path = child(&root, b"idb");
+                write_all(&p, &a_path, b"x").await;
+                write_all(&p, &b_path, b"y").await;
+                let Some(id_a) = p.node_id(&a_path, FollowLinks::No).await.expect("node_id a") else {
+                    eprintln!("skip: the provider does not expose node identity");
                     return;
                 };
                 let id_a2 = p
-                    .node_id(&a, FollowLinks::No)
+                    .node_id(&a_path, FollowLinks::No)
                     .await
-                    .expect("node_id a, 2ª")
-                    .expect("con identidad: siempre o nunca");
-                assert_eq!(id_a, id_a2, "estable entre llamadas");
+                    .expect("node_id a, 2nd")
+                    .expect("with identity: always or never");
+                assert_eq!(id_a, id_a2, "stable between calls");
                 let id_b = p
-                    .node_id(&b, FollowLinks::No)
+                    .node_id(&b_path, FollowLinks::No)
                     .await
                     .expect("node_id b")
-                    .expect("con identidad: siempre o nunca");
-                assert_ne!(id_a, id_b, "nodos distintos, identidades distintas");
-                // En un nodo que no es symlink, follow no cambia nada.
+                    .expect("with identity: always or never");
+                assert_ne!(id_a, id_b, "distinct nodes, distinct identities");
+                // On a node that isn't a symlink, follow changes nothing.
                 let id_a3 = p
-                    .node_id(&a, FollowLinks::Yes)
+                    .node_id(&a_path, FollowLinks::Yes)
                     .await
                     .expect("node_id a, follow")
-                    .expect("con identidad: siempre o nunca");
-                assert_eq!(id_a, id_a3, "follow sobre no-symlink es lo mismo");
+                    .expect("with identity: always or never");
+                assert_eq!(id_a, id_a3, "follow over a non-symlink is the same");
             }
 
-            /// La identidad sobrevive al rename: es del NODO, no del path.
-            /// (Es la base del rename_retrying del engine, issue #17.)
+            /// Identity survives the rename: it belongs to the NODE, not
+            /// the path. (It's the basis of the engine's rename_retrying,
+            /// issue #17.)
             #[tokio::test]
             async fn contract_node_id_survives_rename() {
                 use $crate::FollowLinks;
                 let p = $factory;
                 let root: VPath = $root;
-                let antes = child(&root, b"id-antes");
-                write_all(&p, &antes, b"x").await;
-                let Some(id) = p.node_id(&antes, FollowLinks::No).await.expect("node_id") else {
-                    eprintln!("skip: el provider no expone identidad de nodo");
+                let before = child(&root, b"id-before");
+                write_all(&p, &before, b"x").await;
+                let Some(id) = p.node_id(&before, FollowLinks::No).await.expect("node_id") else {
+                    eprintln!("skip: the provider does not expose node identity");
                     return;
                 };
-                let despues = child(&root, b"id-despues");
-                p.rename(&antes, &despues).await.expect("rename");
+                let after = child(&root, b"id-after");
+                p.rename(&before, &after).await.expect("rename");
                 let id2 = p
-                    .node_id(&despues, FollowLinks::No)
+                    .node_id(&after, FollowLinks::No)
                     .await
-                    .expect("node_id tras rename")
-                    .expect("con identidad: siempre o nunca");
-                assert_eq!(id, id2, "el rename mueve el nodo, no lo recrea");
+                    .expect("node_id after rename")
+                    .expect("with identity: always or never");
+                assert_eq!(id, id2, "the rename moves the node, doesn't recreate it");
             }
 
-            /// `FollowLinks::Yes` resuelve el symlink (identidad del DESTINO);
-            /// `No` da la identidad del propio link (semántica lstat).
+            /// `FollowLinks::Yes` resolves the symlink (the TARGET's
+            /// identity); `No` gives the link's own identity (lstat semantics).
             #[tokio::test]
             async fn contract_node_id_follow_resolves_link() {
                 use $crate::{FollowLinks, SymlinkKind};
@@ -685,63 +692,63 @@ macro_rules! provider_contract {
                 let f = child(&root, b"idf");
                 write_all(&p, &f, b"x").await;
                 let link = child(&root, b"idlink");
-                // Target relativo al padre del link: resoluble en cualquier
-                // provider (mismo convenio que el resolve mínimo de Mem).
+                // Target relative to the link's parent: resolvable on any
+                // provider (same convention as Mem's minimal resolve).
                 p.symlink(&link, b"idf", SymlinkKind::File)
                     .await
-                    .expect("symlink crea");
-                let Some(target_id) = p.node_id(&f, FollowLinks::No).await.expect("id del target")
+                    .expect("symlink creates");
+                let Some(target_id) = p.node_id(&f, FollowLinks::No).await.expect("target's id")
                 else {
-                    eprintln!("skip: el provider no expone identidad de nodo");
+                    eprintln!("skip: the provider does not expose node identity");
                     return;
                 };
                 let followed = p
                     .node_id(&link, FollowLinks::Yes)
                     .await
                     .expect("node_id follow")
-                    .expect("con identidad: siempre o nunca");
-                assert_eq!(followed, target_id, "Yes = identidad del destino");
+                    .expect("with identity: always or never");
+                assert_eq!(followed, target_id, "Yes = the target's identity");
                 let own = p
                     .node_id(&link, FollowLinks::No)
                     .await
-                    .expect("node_id del link")
-                    .expect("con identidad: siempre o nunca");
-                assert_ne!(own, target_id, "No = identidad del propio link");
+                    .expect("node_id of the link")
+                    .expect("with identity: always or never");
+                assert_ne!(own, target_id, "No = the link's own identity");
             }
 
-            /// Symlink roto: `Yes` es NotFound (no hay destino); `No` sigue
-            /// funcionando (el link existe). Path inexistente: NotFound en
-            /// ambos modos (u Ok(None) si el provider no sabe de identidad).
+            /// Broken symlink: `Yes` is NotFound (no target); `No` still
+            /// works (the link exists). Nonexistent path: NotFound in
+            /// both modes (or Ok(None) if the provider knows nothing of identity).
             #[tokio::test]
             async fn contract_node_id_broken_and_missing() {
                 use $crate::{FollowLinks, SymlinkKind};
                 let p = $factory;
                 let root: VPath = $root;
-                match p.node_id(&child(&root, b"no-existe"), FollowLinks::No).await {
+                match p.node_id(&child(&root, b"does-not-exist"), FollowLinks::No).await {
                     Ok(None) | Err(Error::NotFound) => {}
-                    other => panic!("esperaba NotFound/Ok(None), fue {other:?}"),
+                    other => panic!("expected NotFound/Ok(None), was {other:?}"),
                 }
                 require_caps!(p, has: CapabilityFlags::SYMLINKS);
-                let roto = child(&root, b"id-roto");
-                p.symlink(&roto, b"nada-aqui", SymlinkKind::File)
+                let broken = child(&root, b"id-broken");
+                p.symlink(&broken, b"nothing-here", SymlinkKind::File)
                     .await
-                    .expect("symlink crea");
-                match p.node_id(&roto, FollowLinks::No).await {
+                    .expect("symlink creates");
+                match p.node_id(&broken, FollowLinks::No).await {
                     Ok(_) => {}
-                    other => panic!("el link EXISTE aunque esté roto, fue {other:?}"),
+                    other => panic!("the link EXISTS even though it's broken, was {other:?}"),
                 }
-                match p.node_id(&roto, FollowLinks::Yes).await {
+                match p.node_id(&broken, FollowLinks::Yes).await {
                     Err(Error::NotFound) => {}
-                    // Sin identidad, None es legal también para un link roto.
+                    // Without identity, None is also legal for a broken link.
                     Ok(None) => {}
-                    other => panic!("esperaba NotFound al seguir link roto, fue {other:?}"),
+                    other => panic!("expected NotFound when following a broken link, was {other:?}"),
                 }
             }
 
-            /// GARANTÍA del trait: `remove` sobre un symlink borra EL
-            /// LINK, jamás su target (semántica unlink). El move del copy
-            /// engine depende de esto para no destruir targets al borrar
-            /// links expandidos (issue #19).
+            /// GUARANTEE of the trait: `remove` over a symlink deletes
+            /// THE LINK, never its target (unlink semantics). The copy
+            /// engine's move relies on this so it doesn't destroy targets
+            /// when deleting expanded links (issue #19).
             #[tokio::test]
             async fn contract_remove_symlink_leaves_target_intact() {
                 use $crate::SymlinkKind;
@@ -750,27 +757,27 @@ macro_rules! provider_contract {
                 let root: VPath = $root;
                 let dir = child(&root, b"rmtarget");
                 p.mkdir(&dir).await.expect("mkdir");
-                write_all(&p, &child(&dir, b"hijo"), b"vivo").await;
+                write_all(&p, &child(&dir, b"kid"), b"alive").await;
                 let link = child(&root, b"rmlink");
                 p.symlink(&link, b"rmtarget", SymlinkKind::Dir)
                     .await
-                    .expect("symlink crea");
-                p.remove(&link).await.expect("remove del LINK");
+                    .expect("symlink creates");
+                p.remove(&link).await.expect("remove of the LINK");
                 assert_eq!(
-                    p.stat(&link).await.expect_err("el link se fue"),
+                    p.stat(&link).await.expect_err("the link is gone"),
                     Error::NotFound
                 );
-                let e = p.stat(&dir).await.expect("el target VIVE");
+                let e = p.stat(&dir).await.expect("the target LIVES");
                 assert_eq!(e.kind, EntryKind::Dir);
                 assert_eq!(
-                    read_all(&p, &child(&dir, b"hijo")).await.expect("contenido intacto"),
-                    b"vivo"
+                    read_all(&p, &child(&dir, b"kid")).await.expect("content intact"),
+                    b"alive"
                 );
             }
 
-            /// La identidad funciona igual con nombres HOSTILES (bytes
-            /// no-UTF8). Si el FS rechaza el nombre (APFS exige UTF-8),
-            /// rechazo limpio y skip — como el resto del corpus hostil.
+            /// Identity works the same with HOSTILE names (non-UTF8
+            /// bytes). If the FS rejects the name (APFS requires UTF-8),
+            /// a clean rejection and skip — like the rest of the hostile corpus.
             #[tokio::test]
             async fn contract_node_id_with_hostile_name() {
                 use $crate::FollowLinks;
@@ -778,32 +785,32 @@ macro_rules! provider_contract {
                 let root: VPath = $root;
                 let name: &[u8] = b"id-\xE9-latin1";
                 let Ok(seg) = $crate::__private::norte_proto::Segment::new(name.to_vec()) else {
-                    panic!("segmento hostil válido");
+                    panic!("valid hostile segment");
                 };
                 let path = root.join(seg);
                 let mut sink = match p.write(&path).await {
                     Ok(s) => s,
                     Err(Error::InvalidPath) => {
-                        eprintln!("skip: el FS rechaza el nombre (limpio)");
+                        eprintln!("skip: the FS rejects the name (cleanly)");
                         return;
                     }
-                    Err(e) => panic!("write hostil: {e:?}"),
+                    Err(e) => panic!("hostile write: {e:?}"),
                 };
                 sink.write(Bytes::from_static(b"x")).await.expect("chunk");
                 if let Err(Error::InvalidPath) = sink.commit().await {
-                    eprintln!("skip: el FS rechaza el nombre en commit (limpio)");
+                    eprintln!("skip: the FS rejects the name at commit (cleanly)");
                     return;
                 }
                 let Some(id) = p.node_id(&path, FollowLinks::No).await.expect("node_id") else {
-                    eprintln!("skip: el provider no expone identidad de nodo");
+                    eprintln!("skip: the provider does not expose node identity");
                     return;
                 };
                 let id2 = p
                     .node_id(&path, FollowLinks::No)
                     .await
-                    .expect("node_id, 2ª")
-                    .expect("con identidad: siempre o nunca");
-                assert_eq!(id, id2, "identidad estable con bytes no-UTF8");
+                    .expect("node_id, 2nd")
+                    .expect("with identity: always or never");
+                assert_eq!(id, id2, "stable identity with non-UTF8 bytes");
             }
 
             // ---------- mkdir / list ----------
@@ -812,7 +819,7 @@ macro_rules! provider_contract {
             async fn contract_mkdir_and_stat() {
                 let p = $factory;
                 let root: VPath = $root;
-                let d = child(&root, b"nuevo");
+                let d = child(&root, b"new");
                 p.mkdir(&d).await.unwrap();
                 assert_eq!(p.stat(&d).await.unwrap().kind, EntryKind::Dir);
             }
@@ -825,7 +832,7 @@ macro_rules! provider_contract {
                 p.mkdir(&d).await.unwrap();
                 match p.mkdir(&d).await {
                     Err(Error::Conflict { .. }) => {}
-                    other => panic!("esperaba Conflict, fue {other:?}"),
+                    other => panic!("expected Conflict, was {other:?}"),
                 }
             }
 
@@ -841,31 +848,31 @@ macro_rules! provider_contract {
             async fn contract_list_sees_children_byte_exact() {
                 let p = $factory;
                 let root: VPath = $root;
-                write_all(&p, &child(&root, b"uno"), b"1").await;
-                p.mkdir(&child(&root, b"dos")).await.unwrap();
+                write_all(&p, &child(&root, b"one"), b"1").await;
+                p.mkdir(&child(&root, b"two")).await.unwrap();
                 let mut names: Vec<Vec<u8>> = p
                     .list(&root)
                     .await
                     .unwrap()
                     .map(|e| {
-                        e.expect("entrada ok")
+                        e.expect("ok entry")
                             .path
                             .file_name()
-                            .expect("con nombre")
+                            .expect("has a name")
                             .as_bytes()
                             .to_vec()
                     })
                     .collect()
                     .await;
                 names.sort();
-                assert_eq!(names, vec![b"dos".to_vec(), b"uno".to_vec()]);
+                assert_eq!(names, vec![b"one".to_vec(), b"two".to_vec()]);
             }
 
             #[tokio::test]
             async fn contract_list_missing_is_not_found() {
                 let p = $factory;
                 let root: VPath = $root;
-                assert!(p.list(&child(&root, b"nada")).await.is_err());
+                assert!(p.list(&child(&root, b"nothing")).await.is_err());
             }
 
             // ---------- remove ----------
@@ -874,7 +881,7 @@ macro_rules! provider_contract {
             async fn contract_remove_file() {
                 let p = $factory;
                 let root: VPath = $root;
-                let f = child(&root, b"borrable");
+                let f = child(&root, b"removable");
                 write_all(&p, &f, b"x").await;
                 p.remove(&f).await.unwrap();
                 assert_eq!(p.stat(&f).await.unwrap_err(), Error::NotFound);
@@ -885,7 +892,7 @@ macro_rules! provider_contract {
                 let p = $factory;
                 let root: VPath = $root;
                 assert_eq!(
-                    p.remove(&child(&root, b"nada")).await.unwrap_err(),
+                    p.remove(&child(&root, b"nothing")).await.unwrap_err(),
                     Error::NotFound
                 );
             }
@@ -894,7 +901,7 @@ macro_rules! provider_contract {
             async fn contract_remove_empty_dir() {
                 let p = $factory;
                 let root: VPath = $root;
-                let d = child(&root, b"vacio");
+                let d = child(&root, b"empty");
                 p.mkdir(&d).await.unwrap();
                 p.remove(&d).await.unwrap();
                 assert_eq!(p.stat(&d).await.unwrap_err(), Error::NotFound);
@@ -904,14 +911,14 @@ macro_rules! provider_contract {
             async fn contract_remove_nonempty_dir_refused() {
                 let p = $factory;
                 let root: VPath = $root;
-                let d = child(&root, b"lleno");
+                let d = child(&root, b"full");
                 p.mkdir(&d).await.unwrap();
                 write_all(&p, &child(&d, b"f"), b"x").await;
                 assert!(
                     p.remove(&d).await.is_err(),
-                    "remove no recursivo: dir con hijos se niega"
+                    "non-recursive remove: a dir with children is refused"
                 );
-                assert!(p.stat(&d).await.is_ok(), "y el dir sigue ahí");
+                assert!(p.stat(&d).await.is_ok(), "and the dir is still there");
             }
 
             // ---------- rename ----------
@@ -922,10 +929,10 @@ macro_rules! provider_contract {
                 let root: VPath = $root;
                 let a = child(&root, b"a");
                 let b = child(&root, b"b");
-                write_all(&p, &a, b"contenido").await;
+                write_all(&p, &a, b"content").await;
                 p.rename(&a, &b).await.unwrap();
                 assert_eq!(p.stat(&a).await.unwrap_err(), Error::NotFound);
-                assert_eq!(read_all(&p, &b).await.unwrap(), b"contenido");
+                assert_eq!(read_all(&p, &b).await.unwrap(), b"content");
             }
 
             #[tokio::test]
@@ -933,7 +940,7 @@ macro_rules! provider_contract {
                 let p = $factory;
                 let root: VPath = $root;
                 assert_eq!(
-                    p.rename(&child(&root, b"no"), &child(&root, b"da"))
+                    p.rename(&child(&root, b"no"), &child(&root, b"there"))
                         .await
                         .unwrap_err(),
                     Error::NotFound
@@ -950,9 +957,9 @@ macro_rules! provider_contract {
                 write_all(&p, &b, b"2").await;
                 match p.rename(&a, &b).await {
                     Err(Error::Conflict { .. }) => {}
-                    other => panic!("esperaba Conflict, fue {other:?}"),
+                    other => panic!("expected Conflict, was {other:?}"),
                 }
-                assert_eq!(read_all(&p, &b).await.unwrap(), b"2", "el destino intacto");
+                assert_eq!(read_all(&p, &b).await.unwrap(), b"2", "the destination intact");
             }
 
             #[tokio::test]
@@ -967,20 +974,21 @@ macro_rules! provider_contract {
                 assert_eq!(read_all(&p, &child(&dst, b"f")).await.unwrap(), b"x");
             }
 
-            // ---------- nombres hostiles ----------
+            // ---------- hostile names ----------
 
             #[tokio::test]
             async fn contract_hostile_names_roundtrip() {
                 let p = $factory;
                 let root: VPath = $root;
                 let names: Vec<Vec<u8>> = $hostile;
-                assert!(!names.is_empty(), "el corpus no puede estar vacío");
+                assert!(!names.is_empty(), "the corpus can't be empty");
                 let mut created = 0usize;
                 for bytes in names {
                     let f = child(&root, &bytes);
-                    // El OS puede rechazar el nombre (APFS exige UTF-8, NTFS
-                    // prohíbe controles): rechazo limpio = skip. La garantía
-                    // contractual es: SI se crea, los bytes vuelven intactos.
+                    // The OS may reject the name (APFS requires UTF-8,
+                    // NTFS forbids controls): a clean rejection = skip.
+                    // The contractual guarantee is: IF it gets created,
+                    // the bytes come back intact.
                     let mut sink = match p.write(&f).await {
                         Ok(s) => s,
                         Err(e) => {
@@ -989,37 +997,37 @@ macro_rules! provider_contract {
                         }
                     };
                     sink.write(Bytes::from_static(b"x")).await.expect("chunk");
-                    // Algunos providers publican en commit (rename/put): el
-                    // rechazo del OS también puede llegar aquí.
+                    // Some providers publish at commit (rename/put): the
+                    // OS's rejection can also arrive here.
                     match sink.commit().await {
                         Ok(()) => {}
                         Err(Error::InvalidPath | Error::Conflict { .. }) => {
                             eprintln!("skip (commit) {}", f.display_lossy());
                             continue;
                         }
-                        Err(e) => panic!("commit de {}: {e:?}", f.display_lossy()),
+                        Err(e) => panic!("commit of {}: {e:?}", f.display_lossy()),
                     }
                     created += 1;
                     let e = p.stat(&f).await.unwrap_or_else(|err| {
-                        panic!("stat de {:?} tras commit: {err:?}", f.display_lossy())
+                        panic!("stat of {:?} after commit: {err:?}", f.display_lossy())
                     });
                     assert_eq!(
-                        e.path.file_name().expect("con nombre").as_bytes(),
+                        e.path.file_name().expect("has a name").as_bytes(),
                         bytes.as_slice(),
-                        "bytes intactos para {}",
+                        "bytes intact for {}",
                         f.display_lossy()
                     );
-                    // La prueba REAL de roundtrip: los bytes que devuelve el
-                    // BACKEND al listar (no el eco del path de entrada).
+                    // The REAL roundtrip test: the bytes the BACKEND
+                    // returns when listing (not the input path's echo).
                     let listed: Vec<Vec<u8>> = p
                         .list(&root)
                         .await
-                        .expect("list raíz")
+                        .expect("list root")
                         .map(|e| {
-                            e.expect("entrada ok")
+                            e.expect("ok entry")
                                 .path
                                 .file_name()
-                                .expect("con nombre")
+                                .expect("has a name")
                                 .as_bytes()
                                 .to_vec()
                         })
@@ -1029,49 +1037,49 @@ macro_rules! provider_contract {
                     assert_eq!(
                         exact,
                         1,
-                        "el backend debe devolver los bytes EXACTOS una vez para {}",
+                        "the backend must return the EXACT bytes exactly once for {}",
                         f.display_lossy()
                     );
                     assert_eq!(read_all(&p, &f).await.unwrap(), b"x");
                 }
-                assert!(created > 0, "ningún nombre hostil se pudo crear: sospechoso");
+                assert!(created > 0, "not a single hostile name could be created: suspicious");
             }
 
             #[tokio::test]
             async fn contract_write_never_touches_siblings() {
                 let p = $factory;
                 let root: VPath = $root;
-                // Un archivo REAL del usuario cuyo nombre coincide con un
-                // posible esquema de staging: escribir el vecino jamás lo toca.
+                // A REAL user file whose name matches a possible staging
+                // scheme: writing the neighbor never touches it.
                 let sibling = child(&root, b"x.norte-partial");
-                write_all(&p, &sibling, b"contenido real del usuario").await;
+                write_all(&p, &sibling, b"real user content").await;
                 let target = child(&root, b"x");
-                write_all(&p, &target, b"nuevo").await;
+                write_all(&p, &target, b"new").await;
                 assert_eq!(
                     read_all(&p, &sibling).await.unwrap(),
-                    b"contenido real del usuario",
-                    "el staging pisó un archivo real"
+                    b"real user content",
+                    "the staging overwrote a real file"
                 );
-                assert_eq!(read_all(&p, &target).await.unwrap(), b"nuevo");
+                assert_eq!(read_all(&p, &target).await.unwrap(), b"new");
             }
 
-            // ---------- capabilities condicionales ----------
+            // ---------- conditional capabilities ----------
 
             #[tokio::test]
             async fn contract_rename_case_variant_when_sensitive_is_conflict() {
                 let p = $factory;
                 require_caps!(p, has: CapabilityFlags::CASE_SENSITIVE);
                 let root: VPath = $root;
-                write_all(&p, &child(&root, b"caja"), b"1").await;
-                write_all(&p, &child(&root, b"CAJA"), b"2").await;
-                // En FS case-sensitive son archivos DISTINTOS: rename entre
-                // variantes de caja es Conflict, jamás un reemplazo silencioso.
-                match p.rename(&child(&root, b"caja"), &child(&root, b"CAJA")).await {
+                write_all(&p, &child(&root, b"box"), b"1").await;
+                write_all(&p, &child(&root, b"BOX"), b"2").await;
+                // On a case-sensitive FS these are DISTINCT files: rename
+                // between case variants is Conflict, never a silent replacement.
+                match p.rename(&child(&root, b"box"), &child(&root, b"BOX")).await {
                     Err(Error::Conflict { .. }) => {}
-                    other => panic!("esperaba Conflict, fue {other:?}"),
+                    other => panic!("expected Conflict, was {other:?}"),
                 }
-                assert_eq!(read_all(&p, &child(&root, b"caja")).await.unwrap(), b"1");
-                assert_eq!(read_all(&p, &child(&root, b"CAJA")).await.unwrap(), b"2");
+                assert_eq!(read_all(&p, &child(&root, b"box")).await.unwrap(), b"1");
+                assert_eq!(read_all(&p, &child(&root, b"BOX")).await.unwrap(), b"2");
             }
 
             #[tokio::test]
@@ -1079,13 +1087,13 @@ macro_rules! provider_contract {
                 let p = $factory;
                 require_caps!(p, lacks: CapabilityFlags::CASE_SENSITIVE);
                 let root: VPath = $root;
-                write_all(&p, &child(&root, b"Mismo"), b"1").await;
-                match p.write(&child(&root, b"mismo")).await {
+                write_all(&p, &child(&root, b"Same"), b"1").await;
+                match p.write(&child(&root, b"same")).await {
                     Err(Error::Conflict {
                         conflict: ConflictKind::CaseCollision,
                     }) => {}
-                    Err(e) => panic!("esperaba CaseCollision, fue {e:?}"),
-                    Ok(_) => panic!("esperaba CaseCollision, el write abrió"),
+                    Err(e) => panic!("expected CaseCollision, was {e:?}"),
+                    Ok(_) => panic!("expected CaseCollision, the write opened"),
                 }
             }
 
@@ -1094,10 +1102,10 @@ macro_rules! provider_contract {
                 let p = $factory;
                 require_caps!(p, has: CapabilityFlags::CASE_SENSITIVE);
                 let root: VPath = $root;
-                write_all(&p, &child(&root, b"Caja"), b"1").await;
-                write_all(&p, &child(&root, b"caja"), b"2").await;
-                assert_eq!(read_all(&p, &child(&root, b"Caja")).await.unwrap(), b"1");
-                assert_eq!(read_all(&p, &child(&root, b"caja")).await.unwrap(), b"2");
+                write_all(&p, &child(&root, b"Box"), b"1").await;
+                write_all(&p, &child(&root, b"box"), b"2").await;
+                assert_eq!(read_all(&p, &child(&root, b"Box")).await.unwrap(), b"1");
+                assert_eq!(read_all(&p, &child(&root, b"box")).await.unwrap(), b"2");
             }
 
             #[tokio::test]
@@ -1105,34 +1113,33 @@ macro_rules! provider_contract {
                 let p = $factory;
                 let root: VPath = $root;
                 let a = child(&root, b"orig");
-                let b = child(&root, b"copia");
+                let b = child(&root, b"copy");
                 write_all(&p, &a, b"bytes").await;
                 let declared = p
                     .capabilities()
                     .flags
                     .contains(CapabilityFlags::SERVER_COPY);
                 match p.copy_native(&a, &b).await {
-                    None => assert!(!declared, "SERVER_COPY declarado pero copy_native = None"),
+                    None => assert!(!declared, "SERVER_COPY declared but copy_native = None"),
                     Some(res) => {
-                        assert!(declared, "copy_native sin declarar SERVER_COPY");
-                        res.expect("copia nativa ok");
+                        assert!(declared, "copy_native without declaring SERVER_COPY");
+                        res.expect("native copy ok");
                         assert_eq!(read_all(&p, &b).await.unwrap(), b"bytes");
-                        // Destino existente: Conflict, jamás sobrescritura
-                        // silenciosa (misma política que write).
+                        // Existing destination: Conflict, never a silent
+                        // overwrite (same policy as write).
                         match p.copy_native(&a, &b).await {
                             Some(Err(Error::Conflict { .. })) => {}
                             other => panic!(
-                                "copy_native sobre destino existente debía dar Conflict, fue {other:?}"
+                                "copy_native over an existing destination should have given Conflict, was {other:?}"
                             ),
                         }
                     }
                 }
             }
 
-            // ---------- attrs (#108 bloque 2, ADR 0039) ----------
-            // Aserciones compartidas con la suite read-only:
-            // `__private::contract_attrs` (una divergencia debilitaría una
-            // suite en silencio).
+            // ---------- attrs (#108 block 2, ADR 0039) ----------
+            // Assertions shared with the read-only suite:
+            // `__private::contract_attrs` (a divergence would silently weaken a suite).
             use $crate::__private::contract_attrs::{assert_attrs_contract, assert_catalog_sane};
 
             #[tokio::test]
@@ -1145,33 +1152,33 @@ macro_rules! provider_contract {
             async fn contract_attrs_values_match_declared_types() {
                 let p = $factory;
                 if p.attrs().is_empty() {
-                    eprintln!("skip: catálogo de attrs vacío");
+                    eprintln!("skip: empty attrs catalogue");
                     return;
                 }
                 let root: VPath = $root;
-                write_all(&p, &child(&root, b"attrs-probe.txt"), b"contenido de prueba").await;
+                write_all(&p, &child(&root, b"attrs-probe.txt"), b"test content").await;
                 let ids: Vec<String> = p.attrs().iter().map(|a| a.id.clone()).collect();
                 let opt = ListOptions {
                     attrs: AttrRequest::sanitized(ids),
                 };
                 let catalog = p.attrs().to_vec();
 
-                // stat_with sobre el archivo sembrado.
+                // stat_with over the seeded file.
                 let e = p
                     .stat_with(&child(&root, b"attrs-probe.txt"), &opt)
                     .await
                     .expect("stat_with");
                 assert_attrs_contract(&catalog, &opt.attrs, &e);
 
-                // list_with sobre la raíz: TODA entrada cumple.
+                // list_with over the root: EVERY entry complies.
                 let mut stream = p.list_with(&root, &opt).await.expect("list_with");
                 let mut n = 0usize;
                 while let Some(e) = stream.next().await {
-                    let e = e.expect("entrada del listado");
+                    let e = e.expect("listing entry");
                     assert_attrs_contract(&catalog, &opt.attrs, &e);
                     n += 1;
                 }
-                assert!(n >= 1, "el listado debe contener el probe");
+                assert!(n >= 1, "the listing must contain the probe");
             }
 
             #[tokio::test]
@@ -1184,12 +1191,12 @@ macro_rules! provider_contract {
                     .stat_with(&child(&root, b"attrs-bare.txt"), &opt)
                     .await
                     .expect("stat_with");
-                assert!(e.attrs.is_empty(), "sin petición no hay attrs");
+                assert!(e.attrs.is_empty(), "no request means no attrs");
                 let mut stream = p.list_with(&root, &opt).await.expect("list_with");
                 while let Some(e) = stream.next().await {
                     assert!(
-                        e.expect("entrada").attrs.is_empty(),
-                        "sin petición no hay attrs"
+                        e.expect("entry").attrs.is_empty(),
+                        "no request means no attrs"
                     );
                 }
             }
@@ -1205,7 +1212,7 @@ macro_rules! provider_contract {
                 let e = p
                     .stat_with(&child(&root, b"attrs-unk.txt"), &opt)
                     .await
-                    .expect("id desconocido jamás es error");
+                    .expect("an unknown id is never an error");
                 assert!(!e.attrs.contains_key("zz.does-not-exist"));
             }
         }

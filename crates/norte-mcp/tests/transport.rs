@@ -1,5 +1,5 @@
-//! #67: el transporte del puente NO es serial — un tool suspendido (ask de
-//! policy / task larga) no retiene `ping` ni `notifications/cancelled`.
+//! #67: the bridge's transport is NOT serial — a suspended tool (a policy
+//! ask / a long task) does not hold up `ping` or `notifications/cancelled`.
 #![cfg(unix)]
 
 use std::sync::Arc;
@@ -15,18 +15,18 @@ use norte_vfs::Provider;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 fn vp(wire: &str) -> VPath {
-    VPath::parse(wire).expect("wire válido")
+    VPath::parse(wire).expect("valid wire")
 }
 
 async fn write_file(mem: &MemProvider, wire: &str, content: &[u8]) {
-    let mut sink = mem.write(&vp(wire)).await.expect("write abre");
+    let mut sink = mem.write(&vp(wire)).await.expect("write opens");
     sink.write(Bytes::copy_from_slice(content))
         .await
         .expect("chunk");
     sink.commit().await.expect("commit");
 }
 
-/// Daemon `ask` in-process (mismo arnés que `e2e_m3`).
+/// In-process `ask` daemon (same harness as `e2e_m3`).
 async fn spawn_ask_daemon() -> (tempfile::TempDir, std::path::PathBuf, Arc<MemProvider>) {
     let dir = tempfile::tempdir().expect("tempdir");
     let socket = dir.path().join("d.sock");
@@ -59,8 +59,8 @@ async fn spawn_ask_daemon() -> (tempfile::TempDir, std::path::PathBuf, Arc<MemPr
     (dir, socket, mem)
 }
 
-/// Arranca el transporte del puente sobre un par duplex y devuelve los
-/// extremos del "cliente MCP": (escritor de líneas, lector de líneas).
+/// Starts the bridge's transport over a duplex pair and returns the "MCP
+/// client" ends: (line writer, line reader).
 async fn spawn_transport(
     socket: &std::path::Path,
 ) -> (
@@ -88,13 +88,13 @@ async fn read_json(
     let mut line = String::new();
     tokio::time::timeout(Duration::from_secs(3), r.read_line(&mut line))
         .await
-        .expect("respuesta antes del timeout")
+        .expect("response before the timeout")
         .expect("io");
     serde_json::from_str(&line).expect("json")
 }
 
-/// Concede scope de copy a la sesión `claude` vía el propio transporte + un
-/// humano wire-directo.
+/// Grants copy scope to the `claude` session via the transport itself + a
+/// human going directly over the wire.
 async fn grant_scope_via_transport(
     w: &mut tokio::io::WriteHalf<tokio::io::DuplexStream>,
     r: &mut BufReader<tokio::io::ReadHalf<tokio::io::DuplexStream>>,
@@ -107,7 +107,7 @@ async fn grant_scope_via_transport(
             version: "0".into(),
         })
         .await
-        .expect("init humano");
+        .expect("human init");
     send_line(
         w,
         &serde_json::json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{
@@ -130,10 +130,11 @@ async fn grant_scope_via_transport(
     human
 }
 
-/// Espera DETERMINISTA a que el copy esté genuinamente suspendido en su Ask:
-/// sondea `policy.pending` hasta verlo no vacío y devuelve el `approval_id`.
-/// Jamás un sleep fijo: «el copy ya llegó al Ask» es un estado del daemon, y
-/// 100 ms sobre UDS local era una apuesta que bajo carga se perdía (ola W10).
+/// DETERMINISTIC wait for the copy to be genuinely suspended in its Ask:
+/// polls `policy.pending` until it sees it non-empty and returns the
+/// `approval_id`. Never a fixed sleep: "the copy has already reached the
+/// Ask" is daemon state, and 100 ms over a local UDS was a bet that lost
+/// under load (wave W10).
 async fn esperar_ask(human: &Client) -> u64 {
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
     loop {
@@ -146,7 +147,7 @@ async fn esperar_ask(human: &Client) -> u64 {
         }
         assert!(
             std::time::Instant::now() < deadline,
-            "el Ask nunca apareció en policy.pending"
+            "the Ask never showed up in policy.pending"
         );
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
@@ -158,18 +159,18 @@ fn copy_call(id: u64) -> serde_json::Value {
         "arguments":{"from":"mem:///proj/a.txt","to":"mem:///proj/b.txt"}}})
 }
 
-/// #67: con un `copy` SUSPENDIDO en el ask, un `ping` concurrente responde
-/// igualmente — el keep-alive del cliente MCP no declara muerto al puente.
+/// #67: with a `copy` SUSPENDED in the ask, a concurrent `ping` answers just
+/// the same — the MCP client's keep-alive does not declare the bridge dead.
 #[tokio::test]
 async fn ping_responde_con_un_tool_suspendido_en_vuelo() {
     let (_dir, socket, _mem) = spawn_ask_daemon().await;
     let (mut w, mut r) = spawn_transport(&socket).await;
     let human = grant_scope_via_transport(&mut w, &mut r, &socket).await;
 
-    // El copy queda suspendido en el Ask (nadie decide).
+    // The copy stays suspended in the Ask (nobody decides).
     send_line(&mut w, &copy_call(10)).await;
     esperar_ask(&human).await;
-    // El ping DEBE responder aunque el copy siga en vuelo.
+    // The ping MUST answer even while the copy is still in flight.
     send_line(
         &mut w,
         &serde_json::json!({"jsonrpc":"2.0","id":11,"method":"ping"}),
@@ -178,12 +179,12 @@ async fn ping_responde_con_un_tool_suspendido_en_vuelo() {
     let resp = read_json(&mut r).await;
     assert_eq!(
         resp["id"], 11,
-        "el ping responde ANTES de que el copy resuelva: {resp}"
+        "the ping answers BEFORE the copy resolves: {resp}"
     );
 }
 
-/// #67: `notifications/cancelled` abandona el tool en vuelo SIN respuesta
-/// (spec MCP); el transporte sigue vivo para lo siguiente.
+/// #67: `notifications/cancelled` abandons the in-flight tool WITHOUT a
+/// response (MCP spec); the transport stays alive for what comes next.
 #[tokio::test]
 async fn cancelled_abandona_el_tool_en_vuelo_sin_respuesta() {
     let (_dir, socket, _mem) = spawn_ask_daemon().await;
@@ -198,7 +199,7 @@ async fn cancelled_abandona_el_tool_en_vuelo_sin_respuesta() {
             "params":{"requestId":10}}),
     )
     .await;
-    // Tras cancelar, un ping responde y NADA llega para el id 10 antes.
+    // After cancelling, a ping answers and NOTHING arrives for id 10 first.
     send_line(
         &mut w,
         &serde_json::json!({"jsonrpc":"2.0","id":12,"method":"ping"}),
@@ -207,27 +208,28 @@ async fn cancelled_abandona_el_tool_en_vuelo_sin_respuesta() {
     let resp = read_json(&mut r).await;
     assert_eq!(
         resp["id"], 12,
-        "lo primero tras el cancel es el ping — el id 10 no responde: {resp}"
+        "the first thing after the cancel is the ping — id 10 does not answer: {resp}"
     );
 }
 
-/// #72 (e2e): el agente cancela su tools/call suspendido en un Ask → el puente
-/// reenvía rpc.cancel → el daemon RETIRA el Ask. El humano ya NO puede
-/// aprobar-para-ejecutar: policy.pending queda vacío y un policy.decide tardío
-/// no crea el destino. (≠ #67, que solo abandonaba la espera local dejando el
-/// Ask zombi hasta el TTL.)
+/// #72 (e2e): the agent cancels its tools/call suspended in an Ask → the
+/// bridge forwards rpc.cancel → the daemon WITHDRAWS the Ask. The human can
+/// NO LONGER approve-to-execute: policy.pending stays empty and a late
+/// policy.decide does not create the destination. (≠ #67, which only
+/// abandoned the local wait, leaving the Ask zombie until the TTL.)
 #[tokio::test]
 async fn cancel_del_agente_retira_el_ask_el_humano_no_ejecuta() {
     let (_dir, socket, mem) = spawn_ask_daemon().await;
     let (mut w, mut r) = spawn_transport(&socket).await;
     let human = grant_scope_via_transport(&mut w, &mut r, &socket).await;
 
-    // El agente lanza el copy: queda suspendido en el Ask (nadie decide aún).
+    // The agent launches the copy: it stays suspended in the Ask (nobody
+    // has decided yet).
     send_line(&mut w, &copy_call(10)).await;
 
     let approval_id = esperar_ask(&human).await;
 
-    // El agente CANCELA su tools/call en vuelo.
+    // The agent CANCELS its in-flight tools/call.
     send_line(
         &mut w,
         &serde_json::json!({"jsonrpc":"2.0","method":"notifications/cancelled",
@@ -235,7 +237,8 @@ async fn cancel_del_agente_retira_el_ask_el_humano_no_ejecuta() {
     )
     .await;
 
-    // El Ask debe RETIRARSE: policy.pending vuelve a vacío. Sondeo con deadline.
+    // The Ask must be WITHDRAWN: policy.pending goes back to empty. Polled
+    // with a deadline.
     {
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
         loop {
@@ -248,14 +251,15 @@ async fn cancel_del_agente_retira_el_ask_el_humano_no_ejecuta() {
             }
             assert!(
                 std::time::Instant::now() < deadline,
-                "el Ask quedó ZOMBI: el rpc.cancel no se reenvió (#72)"
+                "the Ask stayed ZOMBIE: the rpc.cancel was not forwarded (#72)"
             );
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
     }
 
-    // Un policy.decide TARDÍO no debe ejecutar nada (la pending ya no existe):
-    // Err u Ok ambos aceptables — lo que importa es el efecto en el FS.
+    // A LATE policy.decide must not execute anything (the pending one no
+    // longer exists): either Err or Ok is acceptable — what matters is the
+    // effect on the FS.
     let _ = human
         .call::<_, norte_proto::methods::PolicyDecideResult>(
             norte_proto::methods::POLICY_DECIDE,
@@ -266,17 +270,17 @@ async fn cancel_del_agente_retira_el_ask_el_humano_no_ejecuta() {
         )
         .await;
 
-    // Deja aflorar cualquier ejecución errónea antes de comprobar el FS.
+    // Lets any wrongful execution surface before checking the FS.
     tokio::time::sleep(Duration::from_millis(100)).await;
     assert!(
         matches!(
             mem.stat(&vp("mem:///proj/b.txt")).await,
             Err(norte_proto::Error::NotFound)
         ),
-        "b.txt no debe existir tras la retirada del Ask"
+        "b.txt must not exist after the Ask was withdrawn"
     );
 
-    // El transporte sigue vivo tras todo el intercambio.
+    // The transport is still alive after the whole exchange.
     send_line(
         &mut w,
         &serde_json::json!({"jsonrpc":"2.0","id":12,"method":"ping"}),
@@ -285,13 +289,13 @@ async fn cancel_del_agente_retira_el_ask_el_humano_no_ejecuta() {
     let resp = read_json(&mut r).await;
     assert_eq!(
         resp["id"], 12,
-        "el transporte sigue vivo tras el cancel: {resp}"
+        "the transport is still alive after the cancel: {resp}"
     );
 }
 
-/// #67 (regla 3): EOF del peer con un tool SUSPENDIDO termina el transporte
-/// limpio — cancela lo en vuelo, drena el writer, retorna dentro de un
-/// timeout (jamás cuelga en el join del writer).
+/// #67 (rule 3): the peer's EOF with a SUSPENDED tool ends the transport
+/// cleanly — cancels what is in flight, drains the writer, returns within a
+/// timeout (never hangs on the writer's join).
 #[tokio::test]
 async fn eof_con_tool_en_vuelo_termina_limpio() {
     let (_dir, socket, _mem) = spawn_ask_daemon().await;
@@ -304,19 +308,19 @@ async fn eof_con_tool_en_vuelo_termina_limpio() {
     let (cli_r, mut cli_w) = tokio::io::split(client_side);
     let mut r = BufReader::new(cli_r);
 
-    // Concede scope y lanza un copy que queda suspendido en el Ask.
+    // Grants scope and launches a copy that stays suspended in the Ask.
     let human = grant_scope_via_transport(&mut cli_w, &mut r, &socket).await;
     send_line(&mut cli_w, &copy_call(10)).await;
     esperar_ask(&human).await;
 
-    // El peer MUERE (dropea su extremo) con el copy en vuelo.
+    // The peer DIES (drops its end) with the copy in flight.
     drop(cli_w);
     drop(r);
 
-    // serve_transport debe RETORNAR pronto — no colgarse esperando al Ask.
+    // serve_transport must RETURN soon — not hang waiting on the Ask.
     let out = tokio::time::timeout(Duration::from_secs(3), served)
         .await
-        .expect("serve_transport no cuelga tras EOF con tool en vuelo")
+        .expect("serve_transport does not hang after EOF with a tool in flight")
         .expect("join");
-    assert!(out.is_ok(), "teardown limpio: {out:?}");
+    assert!(out.is_ok(), "clean teardown: {out:?}");
 }

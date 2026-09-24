@@ -1,31 +1,31 @@
-//! Provider VFS read-only de archivos comprimidos: zip/tar como directorios
-//! virtuales (ADR 0018).
+//! Read-only VFS provider for compressed archives: zip/tar as virtual
+//! directories (ADR 0018).
 //!
-//! No es un backend propio: COMPONE sobre otro [`Provider`](norte_vfs::Provider)
-//! (local, sftp, s3, memoria) que le da los bytes del contenedor. El
-//! direccionamiento es el de ADR 0018: scheme compuesto
-//! `<formato>+<scheme-interior>` + segmento marcador `!`
-//! (`zip+file:///a.zip/!/docs/x.txt`), con
-//! [`VPath::archive_split`](norte_proto::VPath::archive_split) como única
-//! fuente de verdad del parseo.
+//! It isn't a backend of its own: it COMPOSES over another
+//! [`Provider`](norte_vfs::Provider) (local, sftp, s3, memory) that gives
+//! it the container's bytes. Addressing follows ADR 0018: a composite
+//! scheme `<format>+<inner-scheme>` + `!` marker segment
+//! (`zip+file:///a.zip/!/docs/x.txt`), with
+//! [`VPath::archive_split`](norte_proto::VPath::archive_split) as the sole
+//! source of truth for parsing.
 //!
-//! ## Semántica (checklist de provider)
+//! ## Semantics (provider checklist)
 //!
-//! - **Encoding de nombres**: bytes crudos, jamás decodificados (regla 1; el
-//!   bit 11 de zip es solo metadato). Entradas cuyo nombre no mapea a
-//!   segmentos `VPath` (`..`, `.`, vacío, NUL, absoluto, componente `!`) se
-//!   OMITEN del árbol con `tracing::warn!` — contrato documentado en
-//!   [`Provider::list`](norte_vfs::Provider::list) de este provider.
-//! - **Symlinks**: los de tar se listan como `Symlink`; `read_link` da el
-//!   target crudo; `read` sobre ellos es `TypeMismatch` (semántica lstat).
-//! - **Case**: sensitive y preserving (comparación por bytes, como el
-//!   contenido del archivo).
-//! - **Rename atómico / trash / paths máximos**: no aplica — `READ_ONLY`;
-//!   toda mutación responde [`Error::Unsupported`](norte_proto::Error).
-//! - **Anti-bomba**: [`Limits`] acota entradas/nombre/profundidad del
-//!   índice; superarlos es `Corrupt`.
-//! - **Caché**: índice por archivo (LRU cap 8), invalidado por
-//!   `(mtime_ms, size)` del contenedor; `mtime` desconocido = siempre stale.
+//! - **Name encoding**: raw bytes, never decoded (rule 1; zip's bit 11 is
+//!   only metadata). Entries whose name doesn't map to `VPath` segments
+//!   (`..`, `.`, empty, NUL, absolute, a `!` component) are OMITTED from
+//!   the tree with `tracing::warn!` — a contract documented on this
+//!   provider's [`Provider::list`](norte_vfs::Provider::list).
+//! - **Symlinks**: tar's are listed as `Symlink`; `read_link` gives the
+//!   raw target; `read` over them is `TypeMismatch` (lstat semantics).
+//! - **Case**: sensitive and preserving (byte comparison, like the
+//!   archive's content).
+//! - **Atomic rename / trash / max paths**: doesn't apply — `READ_ONLY`;
+//!   every mutation answers [`Error::Unsupported`](norte_proto::Error).
+//! - **Anti-bomb**: [`Limits`] bounds the index's entries/name/depth;
+//!   exceeding them is `Corrupt`.
+//! - **Cache**: per-archive index (LRU cap 8), invalidated by the
+//!   container's `(mtime_ms, size)`; unknown `mtime` = always stale.
 #![forbid(unsafe_code)]
 
 mod blocking;

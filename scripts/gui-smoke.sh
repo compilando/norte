@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# Humo del paquete que `just gui-package` dejó en ESTA máquina, por el mismo
-# cuerpo que la matriz de la base (`scripts/baseline/smoke-inside.sh`).
+# Smoke test of the package `just gui-package` left on THIS machine, using
+# the same body as the baseline's matrix (`scripts/baseline/smoke-inside.sh`).
 #
-#   scripts/gui-smoke.sh [imagen]
+#   scripts/gui-smoke.sh [image]
 #
-# Una imagen de la familia Fedora prueba el `.rpm`; cualquier otra, el `.deb`.
-# Es el bucle de desarrollo: no comprueba revisión ni suelo de glibc, y un
-# paquete construido aquí no arranca en una distribución vieja. Lo que se
-# publicaría pasa por `just baseline` (ADR 0112).
+# An image from the Fedora family tests the `.rpm`; any other, the `.deb`.
+# This is the development loop: it does not check revision or glibc floor,
+# and a package built here does not start on an old distribution. What
+# would be published goes through `just baseline` (ADR 0112).
 set -euo pipefail
 IMAGEN="${1:-debian:trixie}"
 RAIZ="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -18,7 +18,7 @@ case "${IMAGEN##*/}" in
 esac
 paquete="$(find "$RAIZ/target/release/bundle/$artefacto" -name "*.$artefacto" -print -quit 2>/dev/null || true)"
 if [ -z "$paquete" ]; then
-  echo "no hay .$artefacto en target/release/bundle — corre \`just gui-package\`" >&2
+  echo "no .$artefacto in target/release/bundle — run \`just gui-package\`" >&2
   exit 1
 fi
 

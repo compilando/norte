@@ -1,13 +1,13 @@
-//! Indexado y lectura de zip sobre el parser PROPIO del central directory
-//! ([`zip_cd`](crate::zip_cd), #59). SYNC: corre en `spawn_blocking` sobre
-//! un [`ProviderReader`](crate::blocking::ProviderReader).
+//! Indexing and reading of zip over our OWN central directory parser
+//! ([`zip_cd`](crate::zip_cd), #59). SYNC: runs in `spawn_blocking` over a
+//! [`ProviderReader`](crate::blocking::ProviderReader).
 //!
-//! Nombres: bytes crudos del CD SIEMPRE (regla 1). El bit 11 (UTF-8) no se
-//! usa para decodificar nada y el extra 0x7075 se ignora por diseño; la
-//! reinterpretación manual de display es feature futura (issue de fase 8g).
-//! El locator de una entrada es AUTOCONTENIDO (`Locator::Zip`): la lectura
-//! resuelve el offset de datos desde el LOCAL header y descomprime con
-//! flate2 — sin objeto de archive retenido ni re-parse del CD.
+//! Names: ALWAYS raw bytes from the CD (rule 1). Bit 11 (UTF-8) isn't used
+//! to decode anything and the 0x7075 extra is ignored by design; manual
+//! display reinterpretation is a future feature (phase 8g issue). An
+//! entry's locator is SELF-CONTAINED (`Locator::Zip`): reading resolves
+//! the data offset from the LOCAL header and decompresses with flate2 —
+//! no retained archive object nor CD re-parse.
 
 use std::io::{Read, Seek, SeekFrom};
 use std::sync::Arc;
@@ -18,13 +18,12 @@ use norte_proto::{EntryKind, Error};
 use crate::index::{ArchiveIndex, Limits, Locator, Node};
 use crate::zip_cd;
 
-/// Construye el índice recorriendo el central directory en streaming
-/// (jamás materializado, #59). `cancel` se chequea por entrada (regla 3).
-/// La cuenta del EOCD/EOCD64 corta ANTES de pagar el CD si supera
-/// `max_entries` (#95.3: `LimitExceeded`, no `Corrupt` — puede ser un EOCD
-/// mentiroso O un zip legítimo enorme; se rehúsa a averiguarlo). Un EOCD
-/// que miente a la baja también corta: las entradas REALES cuentan durante
-/// el walk.
+/// Builds the index by streaming the central directory (never
+/// materialized, #59). `cancel` is checked per entry (rule 3). The
+/// EOCD/EOCD64 count cuts short BEFORE paying for the CD if it exceeds
+/// `max_entries` (#95.3: `LimitExceeded`, not `Corrupt` — it could be a
+/// lying EOCD OR a legitimately huge zip; it refuses to find out). An
+/// EOCD that lies LOW also cuts short: the REAL entries count during the walk.
 pub(crate) fn build_index<R: Read + Seek>(
     mut reader: R,
     container_len: u64,
@@ -37,7 +36,7 @@ pub(crate) fn build_index<R: Read + Seek>(
         tracing::warn!(
             claimed = eocd.count,
             max = limits.max_entries,
-            "EOCD supera max_entries"
+            "EOCD exceeds max_entries"
         );
         return Err(Error::LimitExceeded {
             limit: Error::LIMIT_ENTRIES.into(),
@@ -45,8 +44,8 @@ pub(crate) fn build_index<R: Read + Seek>(
     }
     let mut index = ArchiveIndex::new(generation);
     let stats = zip_cd::parse_cd(&mut reader, &eocd, cancel, |entry| {
-        // Kind desde los BYTES crudos, jamás desde metadatos decodificados:
-        // solo `/` final es dir (`\` final es un file legal — H2).
+        // Kind from the RAW bytes, never from decoded metadata: only a
+        // trailing `/` is a dir (a trailing `\` is a legal file — H2).
         let node = if entry.name_raw.last() == Some(&b'/') {
             Node::dir(entry.mtime_ms)
         } else {
@@ -55,8 +54,9 @@ pub(crate) fn build_index<R: Read + Seek>(
                 kind: EntryKind::File,
                 size: Some(entry.uncomp_size),
                 mtime_ms: entry.mtime_ms,
-                // Sin locator: se LISTA (metadatos) pero read → Unsupported
-                // (cifrado o método fuera de stored/deflate, ADR 0018).
+                // No locator: it gets LISTED (metadata) but read →
+                // Unsupported (encrypted or a method outside
+                // stored/deflate, ADR 0018).
                 locator: readable.then_some(Locator::Zip {
                     header_offset: entry.header_offset,
                     method: entry.method,
@@ -65,8 +65,8 @@ pub(crate) fn build_index<R: Read + Seek>(
                     uncomp_size: entry.uncomp_size,
                 }),
                 link_target: None,
-                // SIEMPRE, también sin locator (#108 bloque 2): method es
-                // precisamente más interesante en cifradas/no-soportadas.
+                // ALWAYS, even without a locator (#108 block 2): method is
+                // precisely more interesting on encrypted/unsupported entries.
                 zip: Some(crate::index::ZipExtra {
                     method: entry.method,
                     crc32: entry.crc32,
@@ -78,10 +78,10 @@ pub(crate) fn build_index<R: Read + Seek>(
         if index.skipped > limits.max_entries as u64 {
             tracing::warn!(
                 max = limits.max_entries,
-                "zip supera el presupuesto de omitidas"
+                "zip exceeds the omitted-entries budget"
             );
-            // #95.3: mismo criterio que tar/targz — el presupuesto de
-            // omitidas es un límite LOCAL, no corrupción.
+            // #95.3: same criterion as tar/targz — the omitted-entries
+            // budget is a LOCAL limit, not corruption.
             return Err(Error::LimitExceeded {
                 limit: Error::LIMIT_ENTRIES.into(),
             });
@@ -90,25 +90,26 @@ pub(crate) fn build_index<R: Read + Seek>(
     })?;
     index.skipped += stats.hostile_skipped;
     if eocd.count != stats.parsed {
-        // Un EOCD que miente a la ALTA es metadato rancio, no fatal: las
-        // entradas que anuncia y no existen cuentan como omitidas (señal).
-        // A la baja ya lo cubrió el presupuesto durante el walk. Nota #59:
-        // el colapso lossy del crate `zip` (H1) ya no puede ocurrir — esta
-        // divergencia solo puede venir del propio EOCD.
+        // An EOCD that lies HIGH is stale metadata, not fatal: the
+        // entries it announces that don't exist count as omitted (a
+        // signal). Lying low was already covered by the budget during the
+        // walk. Note #59: the `zip` crate's lossy collapse (H1) can no
+        // longer happen — this divergence can only come from the EOCD itself.
         tracing::warn!(
             claimed = eocd.count,
             parsed = stats.parsed,
-            "la cuenta del EOCD no coincide con el central directory"
+            "the EOCD's count doesn't match the central directory"
         );
         index.skipped += eocd.count.saturating_sub(stats.parsed);
     }
-    // rust MINOR-1 (#59 review): las hostiles del parser (zip64 malformado)
-    // y el delta del EOCD entran DESPUÉS del walk — el presupuesto de
-    // omitidas se re-aplica aquí, mismo criterio que dentro del walk.
+    // rust MINOR-1 (#59 review): the parser's hostile ones (malformed
+    // zip64) and the EOCD's delta come in AFTER the walk — the
+    // omitted-entries budget is re-applied here, same criterion as inside
+    // the walk.
     if index.skipped > limits.max_entries as u64 {
         tracing::warn!(
             max = limits.max_entries,
-            "zip supera el presupuesto de omitidas (post-walk)"
+            "zip exceeds the omitted-entries budget (post-walk)"
         );
         return Err(Error::LimitExceeded {
             limit: Error::LIMIT_ENTRIES.into(),
@@ -117,44 +118,44 @@ pub(crate) fn build_index<R: Read + Seek>(
     if index.skipped > 0 {
         tracing::warn!(
             skipped = index.skipped,
-            "entradas omitidas del índice (nombres hostiles/límites); detalle en debug"
+            "entries omitted from the index (hostile names/limits); detail in debug"
         );
     }
     Ok(index)
 }
 
-/// Parámetros de una lectura zip (#59): el locator autocontenido más el
-/// recorte del range que el caller YA aplicó sobre bytes descomprimidos.
+/// Parameters of a zip read (#59): the self-contained locator plus the
+/// range trim the caller ALREADY applied over decompressed bytes.
 pub(crate) struct ReadPlan {
-    /// Offset del LOCAL header en el contenedor.
+    /// The LOCAL header's offset in the container.
     pub header_offset: u64,
-    /// Método de compresión (0 stored / 8 deflate — el locator solo existe
-    /// para esos dos).
+    /// Compression method (0 stored / 8 deflate — the locator only exists
+    /// for those two).
     pub method: u16,
-    /// CRC-32 que el CD declara (verificado SOLO en lecturas completas).
+    /// CRC-32 the CD declares (verified ONLY on complete reads).
     pub crc32: u32,
-    /// Tamaño comprimido (acota el `Take` del decoder).
+    /// Compressed size (bounds the decoder's `Take`).
     pub comp_size: u64,
-    /// Tamaño descomprimido que el CD promete.
+    /// Decompressed size the CD promises.
     pub uncomp_size: u64,
-    /// Tamaño del contenedor (misma generación que el índice).
+    /// Container size (same generation as the index).
     pub container_len: u64,
-    /// Bytes descomprimidos a saltar (range del caller).
+    /// Decompressed bytes to skip (the caller's range).
     pub skip: u64,
-    /// Bytes descomprimidos a entregar (range del caller, ya recortado
-    /// contra el tamaño de la entrada).
+    /// Decompressed bytes to deliver (the caller's range, already trimmed
+    /// against the entry's size).
     pub take: u64,
 }
 
-/// Lee una entrada hacia `tx` resolviendo el offset de datos desde el LOCAL
-/// header — sin archive retenido ni re-parse del CD (#59). stored va con
-/// seek directo; deflate descomprime en streaming (el range se aplica sobre
-/// los bytes DESCOMPRIMIDOS vía skip/take). En lecturas COMPLETAS (el
-/// camino de copia) el CRC del CD se verifica sobre los bytes servidos: un
-/// mismatch cierra el stream con `Err(Corrupt)` como último item. Un range
-/// parcial NO se verifica (documentado: exigiría descomprimir la entrada
-/// entera). Si el receptor muere (drop del stream = cancelación, regla 3),
-/// `blocking_send` falla y el hilo termina en el siguiente chunk.
+/// Reads an entry into `tx`, resolving the data offset from the LOCAL
+/// header — no retained archive nor CD re-parse (#59). stored goes with a
+/// direct seek; deflate decompresses in streaming (the range is applied
+/// over the DECOMPRESSED bytes via skip/take). On COMPLETE reads (the copy
+/// path) the CD's CRC is verified against the bytes served: a mismatch
+/// closes the stream with `Err(Corrupt)` as the last item. A partial range
+/// is NOT verified (documented: it would require decompressing the whole
+/// entry). If the receiver dies (dropping the stream = cancellation, rule
+/// 3), `blocking_send` fails and the thread ends at the next chunk.
 pub(crate) fn read_entry<R: Read + Seek>(
     mut reader: R,
     plan: &ReadPlan,
@@ -167,26 +168,26 @@ pub(crate) fn read_entry<R: Read + Seek>(
             return;
         }
     };
-    // CRC solo en lecturas completas: skip==0 y take==tamaño de la entrada.
+    // CRC only on complete reads: skip==0 and take==the entry's size.
     let crc = (plan.skip == 0 && plan.take == plan.uncomp_size).then(flate2::Crc::new);
     match plan.method {
         0 => {
-            // stored: APPNOTE exige comp == uncomp. Un CD que miente
-            // (`uncomp > comp`) haría que un RANGED read sirviera bytes
-            // vecinos del contenedor en silencio (encoding MAJOR-1 del
-            // review #59 — el crate viejo acotaba por comp_size): rechazo
-            // fail-loud, jamás datos ajenos atribuidos a la entrada.
+            // stored: APPNOTE requires comp == uncomp. A CD that lies
+            // (`uncomp > comp`) would make a RANGED read silently serve
+            // the container's neighboring bytes (encoding review #59's
+            // MAJOR-1 — the old crate bounded by comp_size): a fail-loud
+            // rejection, never foreign data attributed to the entry.
             if plan.comp_size != plan.uncomp_size {
                 tracing::warn!(
                     comp = plan.comp_size,
                     uncomp = plan.uncomp_size,
-                    "entrada stored con tamaños inconsistentes en el CD"
+                    "stored entry with inconsistent sizes in the CD"
                 );
                 let _ = tx.blocking_send(Err(Error::Corrupt));
                 return;
             }
-            // Bytes tal cual en el contenedor — seek directo al tramo
-            // pedido, sin fase de descarte.
+            // Bytes as they are in the container — a direct seek to the
+            // requested span, no discard phase.
             let available = plan.uncomp_size.saturating_sub(plan.skip).min(plan.take);
             let Some(start) = data.checked_add(plan.skip) else {
                 let _ = tx.blocking_send(Err(Error::Corrupt));
@@ -203,26 +204,26 @@ pub(crate) fn read_entry<R: Read + Seek>(
                 let _ = tx.blocking_send(Err(zip_cd::corrupt_io(&e)));
                 return;
             }
-            // El Take acota el decoder al tramo comprimido de ESTA entrada:
-            // un deflate mentiroso no puede arrastrar bytes de la siguiente.
+            // The Take bounds the decoder to THIS entry's compressed
+            // span: a lying deflate can't drag along the next entry's bytes.
             let mut decoder = flate2::read::DeflateDecoder::new(reader.take(plan.comp_size));
             pump(&mut decoder, plan.skip, plan.take, crc, plan.crc32, tx);
         }
         other => {
-            // Inalcanzable con locators del índice (readable ⇒ 0|8):
-            // defensivo, jamás panic.
-            tracing::warn!(method = other, "método zip sin soporte en read");
+            // Unreachable with the index's locators (readable ⇒ 0|8):
+            // defensive, never a panic.
+            tracing::warn!(method = other, "unsupported zip method in read");
             let _ = tx.blocking_send(Err(Error::Unsupported));
         }
     }
 }
 
-/// Bombea `take` bytes (tras descartar `to_skip`) de `src` al canal en
-/// chunks de 64 KiB. `Ok(0)` en CUALQUIERA de las dos fases → `Corrupt`
-/// (#95.4: el caller ya recortó el range contra el tamaño de la entrada —
-/// un EOF aquí solo puede ser contenedor truncado/mutado bajo nuestros
-/// pies, jamás datos cortos en silencio). Con `crc` activo (lectura
-/// completa) el mismatch final se envía como ÚLTIMO item `Err(Corrupt)`.
+/// Pumps `take` bytes (after discarding `to_skip`) from `src` into the
+/// channel in 64 KiB chunks. `Ok(0)` in EITHER phase → `Corrupt` (#95.4:
+/// the caller already trimmed the range against the entry's size — an EOF
+/// here can only be a truncated/mutated container under our feet, never
+/// silently short data). With `crc` active (a complete read) the final
+/// mismatch is sent as the LAST `Err(Corrupt)` item.
 fn pump<R: Read>(
     src: &mut R,
     to_skip: u64,
@@ -232,18 +233,19 @@ fn pump<R: Read>(
     tx: &tokio::sync::mpsc::Sender<Result<bytes::Bytes, Error>>,
 ) {
     let send_err = |tx: &tokio::sync::mpsc::Sender<Result<bytes::Bytes, Error>>, e: Error| {
-        // Mejor esfuerzo: si el receptor murió, no hay a quién contárselo.
+        // Best effort: if the receiver died, there's nobody to tell.
         let _ = tx.blocking_send(Err(e));
     };
     let mut buf = vec![0u8; 64 * 1024];
     let mut to_skip = to_skip;
     while to_skip > 0 {
-        // La fase de DESCARTE no envía nada al canal: sin este chequeo, un
-        // caller que dropea el stream a mitad de un skip profundo (deflate
-        // ranged sobre una entrada zip64) dejaría el hilo blocking clavado
-        // descomprimiendo para nadie (rust MAJOR-1 del review #59; regla 3).
+        // The DISCARD phase sends nothing to the channel: without this
+        // check, a caller that drops the stream mid a deep skip (ranged
+        // deflate over a zip64 entry) would leave the blocking thread
+        // pinned decompressing for nobody (rust MAJOR-1 from review #59;
+        // rule 3).
         if tx.is_closed() {
-            tracing::debug!("lectura zip cancelada durante el descarte (receptor muerto)");
+            tracing::debug!("zip read cancelled during discard (receiver dead)");
             return;
         }
         let want = buf.len().min(usize::try_from(to_skip).unwrap_or(buf.len()));
@@ -259,8 +261,8 @@ fn pump<R: Read>(
             .len()
             .min(usize::try_from(remaining).unwrap_or(buf.len()));
         match src.read(&mut buf[..want]) {
-            // Premature EOF a mitad de la entrada: el índice prometió
-            // `size` bytes y no están — datos cortos JAMÁS en silencio.
+            // Premature EOF mid-entry: the index promised `size` bytes
+            // and they aren't there — short data is NEVER silent.
             Ok(0) => return send_err(tx, Error::Corrupt),
             Ok(n) => {
                 remaining -= n as u64;
@@ -271,7 +273,7 @@ fn pump<R: Read>(
                     .blocking_send(Ok(bytes::Bytes::copy_from_slice(&buf[..n])))
                     .is_err()
                 {
-                    tracing::debug!("lectura zip cancelada (receptor muerto)");
+                    tracing::debug!("zip read cancelled (receiver dead)");
                     return;
                 }
             }
@@ -281,7 +283,7 @@ fn pump<R: Read>(
     if let Some(crc) = crc
         && crc.sum() != expected_crc
     {
-        tracing::warn!("CRC del CD no coincide con los bytes servidos");
+        tracing::warn!("the CD's CRC doesn't match the bytes served");
         send_err(tx, Error::Corrupt);
     }
 }

@@ -1,9 +1,10 @@
-//! Casos hostiles/roundtrip del provider tar.gz (#55, ADR 0028): la capa gz
-//! añade dos riesgos que tar plano no tiene — no es seekable (forward-decode
-//! O(offset) por read) y es forward-only en el índice (miembros gzip
-//! concatenados, truncamiento, gzip bombs). El corpus hostil de NOMBRES
-//! (traversal, absolutos, marcador `!`…) ya lo cubre `readonly_provider_contract!`
-//! en `contract.rs` reutilizando el mismo árbol canónico gzipeado.
+//! Hostile/roundtrip cases for the tar.gz provider (#55, ADR 0028): the gz
+//! layer adds two risks plain tar doesn't have — it isn't seekable
+//! (forward-decode O(offset) per read) and it's forward-only in the index
+//! (concatenated gzip members, truncation, gzip bombs). The hostile corpus
+//! of NAMES (traversal, absolutes, the `!` marker…) is already covered by
+//! `readonly_provider_contract!` in `contract.rs`, reusing the same
+//! gzipped canonical tree.
 
 mod common;
 
@@ -30,31 +31,28 @@ async fn read_all(p: &ArchiveProvider, f: &VPath, range: Option<ByteRange>) -> V
     out
 }
 
-/// Round-trip completo + range en medio, con contenido que CRUZA el bloque
-/// de 256 KiB del `ProviderReader` (regla del descarte forward-decode: el
-/// offset se sirve descartando bytes descomprimidos, no con `Seek`).
+/// Full round trip + a range in the middle, with content that CROSSES the
+/// `ProviderReader`'s 256 KiB block (the forward-decode discard rule: the
+/// offset is served by discarding decompressed bytes, not with `Seek`).
 #[tokio::test(flavor = "multi_thread")]
-async fn roundtrip_grande_y_range_en_medio() {
+async fn a_large_roundtrip_and_a_range_in_the_middle() {
     let data: Vec<u8> = (0..300_000u32).map(|i| (i % 251) as u8).collect();
     let tar = TarSmith::new()
-        .file(b"primero.bin", b"cabecera")
-        .file(b"grande.bin", &data)
+        .file(b"first.bin", b"header")
+        .file(b"big.bin", &data)
         .build();
     let gz = common::gzip(&tar);
     let (p, root) = common::targz_provider(&gz).await;
-    let f = root.join(seg(b"grande.bin"));
+    let f = root.join(seg(b"big.bin"));
 
     assert_eq!(
         p.stat(&f).await.expect("stat").size,
         Some(data.len() as u64)
     );
-    assert_eq!(
-        read_all(&p, &f, None).await,
-        data,
-        "lectura completa byte-exacta"
-    );
+    assert_eq!(read_all(&p, &f, None).await, data, "full read byte-exact");
 
-    // Range con offset EN MEDIO del archivo (fuerza el descarte forward).
+    // Range with an offset IN THE MIDDLE of the file (forces the forward
+    // discard).
     assert_eq!(
         read_all(
             &p,
@@ -66,7 +64,7 @@ async fn roundtrip_grande_y_range_en_medio() {
         )
         .await,
         &data[262_100..262_200],
-        "range en medio, cruzando el bloque de 256 KiB del ProviderReader"
+        "range in the middle, crossing the ProviderReader's 256 KiB block"
     );
     assert_eq!(
         read_all(
@@ -79,7 +77,7 @@ async fn roundtrip_grande_y_range_en_medio() {
         )
         .await,
         &data[299_995..],
-        "range de cola sin len"
+        "tail range with no len"
     );
     assert_eq!(
         read_all(
@@ -92,23 +90,23 @@ async fn roundtrip_grande_y_range_en_medio() {
         )
         .await,
         b"",
-        "past-EOF de la ENTRADA: stream vacío"
+        "past-EOF of the ENTRY: empty stream"
     );
 }
 
-/// Miembros gzip CONCATENADOS (tgz reales los tienen — p. ej. `git archive
-/// | gzip` puede producir varios, y herramientas que anexan datos también):
-/// `MultiGzDecoder` los decodifica como un stream continuo y el tar completo
-/// se indexa igual que con un único miembro.
+/// CONCATENATED gzip members (real tgz files have them — e.g. `git archive
+/// | gzip` can produce several, and tools that append data too):
+/// `MultiGzDecoder` decodes them as one continuous stream and the whole
+/// tar gets indexed just as with a single member.
 #[tokio::test]
-async fn multi_member_gzip_se_indexa_completo() {
+async fn multi_member_gzip_indexes_whole() {
     let tar = TarSmith::new()
-        .file(b"a.txt", b"primero")
-        .file(b"b.txt", b"segundo")
+        .file(b"a.txt", b"first")
+        .file(b"b.txt", b"second")
         .build();
-    // Parte el tar PLANO a mitad de bytes (no de entrada) y gzipea cada
-    // mitad por separado: dos miembros gzip concatenados que, decodificados
-    // en serie, reproducen el tar original byte a byte.
+    // Splits the PLAIN tar in half by bytes (not by entry) and gzips each
+    // half separately: two concatenated gzip members that, decoded in
+    // series, reproduce the original tar byte for byte.
     let mid = tar.len() / 2;
     let mut multi = common::gzip(&tar[..mid]);
     multi.extend_from_slice(&common::gzip(&tar[mid..]));
@@ -122,7 +120,7 @@ async fn multi_member_gzip_se_indexa_completo() {
             e.expect("ok")
                 .path
                 .file_name()
-                .expect("nombre")
+                .expect("name")
                 .as_bytes()
                 .to_vec()
         })
@@ -132,36 +130,36 @@ async fn multi_member_gzip_se_indexa_completo() {
     assert_eq!(names, vec![b"a.txt".to_vec(), b"b.txt".to_vec()]);
     assert_eq!(
         read_all(&p, &root.join(seg(b"b.txt")), None).await,
-        b"segundo"
+        b"second"
     );
 }
 
-/// Contenedor tar.gz cortado a mitad: PINEA el comportamiento — el índice
-/// falla `Corrupt` (jamás datos cortos en silencio). Cortar a mitad de los
-/// BYTES COMPRIMIDOS deja al decoder gzip con un miembro incompleto (CRC/
-/// stream truncado) o, si el corte cae dentro del tar ya descomprimido, al
-/// iterador de `tar` con una entrada sin datos suficientes para saltar.
-/// Ambos casos son errores de IO genuinos del decoder que `corrupt()`
-/// traduce a `Corrupt`.
+/// A tar.gz container cut in half: PINS the behavior — the index fails
+/// with `Corrupt` (never silent short data). Cutting the COMPRESSED
+/// BYTES in half leaves the gzip decoder with an incomplete member (CRC/
+/// truncated stream), or, if the cut lands inside the already-decompressed
+/// tar, leaves the `tar` iterator with an entry lacking enough data to
+/// skip over. Both cases are genuine decoder IO errors that `corrupt()`
+/// translates into `Corrupt`.
 #[tokio::test]
-async fn tar_gz_truncado_es_corrupt() {
-    let tar = TarSmith::new().file(b"grande.bin", &[7u8; 4000]).build();
+async fn a_truncated_tar_gz_is_corrupt() {
+    let tar = TarSmith::new().file(b"big.bin", &[7u8; 4000]).build();
     let gz = common::gzip(&tar);
-    let cortado = &gz[..gz.len() / 2];
-    let (p, root) = common::targz_provider(cortado).await;
+    let truncated = &gz[..gz.len() / 2];
+    let (p, root) = common::targz_provider(truncated).await;
     match p.list(&root).await.map(|_| ()) {
         Err(Error::Corrupt) => {}
-        other => panic!("esperaba Corrupt con tar.gz truncado, fue {other:?}"),
+        other => panic!("expected Corrupt with a truncated tar.gz, got {other:?}"),
     }
 }
 
-/// Bomba clásica: un archivo grande de ceros comprime a casi nada. Con
-/// `max_decompressed_bytes` pequeño, el índice corta ANTES de pagar la
-/// descompresión completa — nunca cuelga.
+/// Classic bomb: a big file of zeros compresses to almost nothing. With a
+/// small `max_decompressed_bytes`, the index cuts BEFORE paying for the
+/// full decompression — it never hangs.
 #[tokio::test]
-async fn bomba_de_descompresion_corta_por_limite() {
+async fn a_decompression_bomb_is_cut_by_the_limit() {
     let tar = TarSmith::new()
-        .file(b"bomba.bin", &vec![0u8; 4_000_000])
+        .file(b"bomb.bin", &vec![0u8; 4_000_000])
         .build();
     let gz = common::gzip(&tar);
     let limits = Limits {
@@ -171,83 +169,86 @@ async fn bomba_de_descompresion_corta_por_limite() {
     let (p, root) = common::targz_provider_with_limits(&gz, limits).await;
     match p.list(&root).await.map(|_| ()) {
         Err(Error::LimitExceeded { limit }) if limit == "decompressed-bytes" => {}
-        other => panic!("esperaba LimitExceeded(decompressed-bytes), fue {other:?}"),
+        other => panic!("expected LimitExceeded(decompressed-bytes), got {other:?}"),
     }
 }
 
-/// Drop del stream de lectura a mitad de la descompresión: el hilo
-/// `spawn_blocking` termina en el siguiente chunk (canal cerrado, regla 3) —
-/// nada cuelga y una relectura posterior sigue siendo correcta.
+/// Dropping the read stream mid-decompression: the `spawn_blocking`
+/// thread ends at the next chunk (closed channel, rule 3) — nothing hangs
+/// and a later re-read is still correct.
 #[tokio::test(flavor = "multi_thread")]
-async fn drop_del_stream_cancela_el_forward_decode() {
+async fn dropping_the_stream_cancels_the_forward_decode() {
     let data: Vec<u8> = (0..4_000_000u32).map(|i| (i % 13) as u8).collect();
-    let tar = TarSmith::new().file(b"enorme.bin", &data).build();
+    let tar = TarSmith::new().file(b"huge.bin", &data).build();
     let gz = common::gzip(&tar);
     let (p, root) = common::targz_provider(&gz).await;
-    let f = root.join(seg(b"enorme.bin"));
+    let f = root.join(seg(b"huge.bin"));
 
     let mut stream = p.read(&f, None).await.expect("read");
-    let first = stream.next().await.expect("hay chunk").expect("ok");
+    let first = stream.next().await.expect("there's a chunk").expect("ok");
     assert!(!first.is_empty());
-    drop(stream); // el hilo blocking muere al siguiente send (canal cerrado)
+    drop(stream); // the blocking thread dies on the next send (closed channel)
 
     assert_eq!(
         read_all(&p, &f, None).await,
         data,
-        "releer entera sigue íntegra"
+        "re-reading it whole is still intact"
     );
 }
 
-/// Basura tras el gzip (trailing garbage, NO un miembro gzip válido): PINEA
-/// el comportamiento de `MultiGzDecoder` — se detiene limpio en el último
-/// miembro válido (la basura se ignora), no propaga error. Documentado: si
-/// un upgrade del crate cambia esto, el test se pone rojo con aviso.
+/// Garbage after the gzip (trailing garbage, NOT a valid gzip member):
+/// PINS `MultiGzDecoder`'s behavior — it stops cleanly at the last valid
+/// member (the garbage is ignored), it doesn't propagate an error.
+/// Documented: if a crate upgrade changes this, the test goes red with a
+/// warning.
 #[tokio::test]
-async fn basura_tras_el_gzip_se_ignora() {
-    let tar = TarSmith::new().file(b"x.txt", b"contenido").build();
+async fn garbage_after_the_gzip_is_ignored() {
+    let tar = TarSmith::new().file(b"x.txt", b"content").build();
     let mut gz = common::gzip(&tar);
-    gz.extend_from_slice(b"esto no es un miembro gzip valido, es basura");
+    gz.extend_from_slice(b"this is not a valid gzip member, it is garbage");
     let (p, root) = common::targz_provider(&gz).await;
     assert_eq!(
         read_all(&p, &root.join(seg(b"x.txt")), None).await,
-        b"contenido",
-        "el contenido válido se lee igual; la basura tras el último miembro se ignora"
+        b"content",
+        "the valid content still reads fine; the garbage after the last member is ignored"
     );
 }
 
-/// #58 (mismo criterio que tar/zip) + FIX-3 (rust MINOR-2, #55 review): un
-/// fallo GENUINO del provider INTERIOR (desconexión a mitad del índice) se
-/// propaga VERBATIM aunque haya atravesado flate2 + tar-rs (que pueden
-/// reenvolver el `io::Error` original) — jamás se disfraza de `Corrupt`.
+/// #58 (same criterion as tar/zip) + FIX-3 (rust MINOR-2, #55 review): a
+/// GENUINE failure of the INNER provider (disconnection mid-index)
+/// propagates VERBATIM even after crossing flate2 + tar-rs (which may
+/// rewrap the original `io::Error`) — it never gets disguised as
+/// `Corrupt`.
 #[tokio::test]
-async fn fallo_del_provider_interior_no_se_disfraza_de_corrupt() {
-    let tar = TarSmith::new().file(b"ok.txt", b"bien").build();
+async fn a_failure_of_the_inner_provider_is_not_disguised_as_corrupt() {
+    let tar = TarSmith::new().file(b"ok.txt", b"fine").build();
     let gz = common::gzip(&tar);
     let (mem, path) = common::seed_container(b"fixture.tar.gz", &gz).await;
     let faults = mem.faults();
     let root = VPath::archive_compose("tar+gz", &path, &[]).expect("compose");
     let p = ArchiveProvider::with_limits(mem, Format::TarGz, "tar+gz+mem", Limits::default());
-    // El corte llega a distintos puntos del parseo (índice + descompresión);
-    // en NINGUNO debe verse disfrazado de "tar.gz corrupto".
+    // The cut lands at different points of the parsing (index +
+    // decompression); in NONE of them should it look disguised as
+    // "corrupt tar.gz".
     for n in 0..8u64 {
         faults.clear();
         faults.disconnect_after(n);
         match p.list(&root).await.map(|_| ()) {
             Err(Error::ProviderUnavailable { retryable: true }) | Ok(()) => {}
-            other => panic!("con disconnect_after({n}) el IO del interior se disfrazó: {other:?}"),
+            other => panic!("with disconnect_after({n}) the inner IO got disguised: {other:?}"),
         }
     }
 }
 
-/// FIX-2 (security MAJOR, #55 review): el semáforo de concurrencia del
-/// forward-decode ENCOLA las lecturas excedentes, nunca las rechaza. Fuego
-/// `GZ_READ_CONCURRENCY` (4) + 2 lecturas concurrentes de la MISMA entrada con
-/// latencia inyectada en el provider interior (simula el hilo pinneado real
-/// sin necesitar un contenedor gigante) y verifica que TODAS completan con
-/// el contenido correcto.
+/// FIX-2 (security MAJOR, #55 review): the forward-decode's concurrency
+/// semaphore QUEUES the excess reads, it never rejects them. Fires
+/// `GZ_READ_CONCURRENCY` (4) + 2 concurrent reads of the SAME entry with
+/// latency injected into the inner provider (simulates the real pinned
+/// thread without needing a giant container) and checks that ALL of them
+/// complete with the correct content.
 #[tokio::test(flavor = "multi_thread")]
-async fn concurrencia_de_lecturas_gz_se_encola_no_se_rechaza() {
-    let tar = TarSmith::new().file(b"a.txt", b"contenido corto").build();
+async fn gz_read_concurrency_queues_rather_than_rejects() {
+    let tar = TarSmith::new().file(b"a.txt", b"short content").build();
     let gz = common::gzip(&tar);
     let (mem, path) = common::seed_container(b"fixture.tar.gz", &gz).await;
     mem.faults()
@@ -270,54 +271,55 @@ async fn concurrencia_de_lecturas_gz_se_encola_no_se_rechaza() {
     for h in handles {
         assert_eq!(
             h.await.expect("join"),
-            b"contenido corto",
-            "toda lectura por encima del tope de concurrencia debe ENCOLARSE y completar, no fallar"
+            b"short content",
+            "every read above the concurrency ceiling must QUEUE and complete, not fail"
         );
     }
 }
 
-/// Content-Encoding real de flate2 vía `write::GzEncoder` en varios
-/// `write_all` (no solo un buffer contiguo) — smoke test de que el helper
-/// `common::gzip` no depende de escribir todo de una vez.
+/// flate2's real Content-Encoding via `write::GzEncoder` in several
+/// `write_all` calls (not just one contiguous buffer) — smoke test that
+/// the `common::gzip` helper doesn't depend on writing it all at once.
 #[tokio::test]
-async fn gzip_por_partes_produce_el_mismo_resultado() {
-    let tar = TarSmith::new().file(b"p.txt", b"partes").build();
+async fn gzip_in_parts_produces_the_same_result() {
+    let tar = TarSmith::new().file(b"p.txt", b"parts").build();
     let mut enc = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
-    enc.write_all(&tar[..tar.len() / 2]).expect("parte 1");
-    enc.write_all(&tar[tar.len() / 2..]).expect("parte 2");
+    enc.write_all(&tar[..tar.len() / 2]).expect("part 1");
+    enc.write_all(&tar[tar.len() / 2..]).expect("part 2");
     let gz = enc.finish().expect("finish");
     let (p, root) = common::targz_provider(&gz).await;
     assert_eq!(
         read_all(&p, &root.join(seg(b"p.txt")), None).await,
-        b"partes"
+        b"parts"
     );
 }
 
-/// #60: GNU longname TAMBIÉN por el camino tar.gz (`entries()` secuencial,
-/// sin Seek) — `classify_entry` es compartido pero el iterador no: el nombre
-/// de 255 bytes del corpus se lista byte-exacto y se lee.
+/// #60: GNU longname ALSO via the tar.gz path (sequential `entries()`,
+/// no Seek) — `classify_entry` is shared but the iterator isn't: the
+/// corpus's 255-byte name lists byte-exact and reads.
 #[tokio::test]
-async fn gnu_longname_roundtrip_por_targz() {
-    // MEDIUM del audit: la variante MULTIBYTE (85×あ) — el truncado a 100
-    // parte una secuencia UTF-8 (100 = 33×3+1): si el crate usara el nombre
-    // del header en vez del longname, el listado saldría con un nombre
-    // inválido-UTF8 distinto y el read fallaría — canario incorporado.
-    let largo = norte_testkit::corpus::hostile_names()
+async fn gnu_longname_roundtrips_via_targz() {
+    // MEDIUM from the audit: the MULTIBYTE variant (85×あ) — truncating to
+    // 100 splits a UTF-8 sequence (100 = 33×3+1): if the crate used the
+    // header's name instead of the longname, the listing would come out
+    // with a different invalid-UTF8 name and the read would fail — a
+    // built-in canary.
+    let long_name = norte_testkit::corpus::hostile_names()
         .into_iter()
         .find(|n| n.id == "name_max_255_multibyte")
-        .expect("fixture del corpus")
+        .expect("corpus fixture")
         .bytes;
     let tar = TarSmith::new()
-        .file_gnu_longname(&largo, b"gz-largo")
+        .file_gnu_longname(&long_name, b"gz-long")
         .build();
     let gz = common::gzip(&tar);
     let (p, root) = common::targz_provider(&gz).await;
-    let seg = norte_proto::Segment::new(largo).expect("seg");
-    let f = root.join(seg);
+    let name_seg = norte_proto::Segment::new(long_name).expect("seg");
+    let f = root.join(name_seg);
     let mut stream = p.read(&f, None).await.expect("read");
     let mut out = Vec::new();
     while let Some(chunk) = stream.next().await {
         out.extend_from_slice(&chunk.expect("chunk ok"));
     }
-    assert_eq!(out, b"gz-largo");
+    assert_eq!(out, b"gz-long");
 }

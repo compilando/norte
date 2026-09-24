@@ -1,6 +1,6 @@
 [package]
 name = "norte-vfs-object"
-description = "Provider VFS sobre object storage (opendal: S3 primero)"
+description = "VFS provider over object storage (opendal: S3 first)"
 license = "MIT OR Apache-2.0"
 version.workspace = true
 edition.workspace = true
@@ -14,21 +14,21 @@ bytes.workspace = true
 futures.workspace = true
 norte-proto.workspace = true
 norte-vfs.workspace = true
-# El Operator llega INYECTADO ya configurado (bucket/region/credenciales en
-# norte-connect, fase 7d — ADR 0016 B); el provider jamás ve el secreto.
+# The Operator arrives INJECTED already configured (bucket/region/credentials
+# in norte-connect, phase 7d — ADR 0016 B); the provider never sees the secret.
 opendal.workspace = true
 tracing.workspace = true
-# Solo `rt`: el Drop del sink aborta el multipart huérfano best-effort vía
-# Handle::try_current().spawn() — el abort es una llamada de red, no un unlink
-# síncrono como en local.
+# `rt` only: the sink's Drop aborts the orphaned multipart best-effort via
+# Handle::try_current().spawn() — the abort is a network call, not a
+# synchronous unlink like local's.
 tokio = { workspace = true, features = ["rt"] }
 
 [dev-dependencies]
-# SHA-256 para el test contractual de partial_digest (#35).
+# SHA-256 for partial_digest's contractual test (#35).
 sha2.workspace = true
-# services-fs: harness del CONTRATO (misma lógica del provider sin HTTP; el
-# spike de 7b midió que s3s-fs pierde markers de dir vacío y nombres largos).
-# services-memory no: sin atomic_write_dir ni semántica de fs POSIX.
+# services-fs: the CONTRACT's harness (the same provider logic without
+# HTTP; the 7b spike measured that s3s-fs loses empty-dir markers and long
+# names). Not services-memory: no atomic_write_dir nor POSIX fs semantics.
 hyper-util.workspace = true
 norte-testkit.workspace = true
 opendal = { workspace = true, features = ["services-fs"] }
@@ -38,16 +38,16 @@ tempfile.workspace = true
 tokio = { workspace = true, features = ["macros", "net", "rt", "rt-multi-thread", "sync", "time"] }
 
 [features]
-# Test de integración NIGHTLY contra un servidor S3 REAL (MinIO) por
-# testcontainers (ADR 0016 J, spec §12). Fuera del gate de PR: exige Docker —
-# lo corre el workflow nightly, no `just ci`.
+# NIGHTLY integration test against a REAL S3 server (MinIO) via
+# testcontainers (ADR 0016 J, spec §12). Outside the PR gate: requires
+# Docker — run by the nightly workflow, not `just ci`.
 it-s3 = ["dep:testcontainers"]
 
 [dependencies.testcontainers]
 version = "0.27"
 optional = true
 
-# El test `reals3` solo se compila con la feature `it-s3` (nightly).
+# The `reals3` test only compiles with the `it-s3` feature (nightly).
 [[test]]
 name = "reals3"
 required-features = ["it-s3"]

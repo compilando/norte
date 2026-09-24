@@ -1,5 +1,5 @@
-//! `norte doctor`, `norte paths` y `norte shell-init`: diagnóstico de solo
-//! lectura sobre config/keymaps y utilidades del entorno.
+//! `norte doctor`, `norte paths` and `norte shell-init`: read-only
+//! diagnostics over config/keymaps and environment utilities.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -20,12 +20,12 @@ fn doctor_finding_line(f: &doctor::Finding) -> String {
     match f.code {
         "connections-parse" => norte_i18n::t("cli-doctor-detail-connections-parse"),
         "connections-none" => norte_i18n::t("cli-doctor-detail-connections-none"),
-        // #320: `detail` sigue siendo el valor MÁQUINA (`conn: VAR`); las
-        // frases que distinguen los tres estados de la variable viven aquí,
-        // como las de arriba. Las tres, y no solo la nueva: dos avisos
-        // adyacentes de la misma sección leídos en registros distintos —uno
-        // narrado y otro en crudo— se comparan peor que si ninguno lo
-        // estuviera.
+        // #320: `detail` stays the MACHINE value (`conn: VAR`); the
+        // sentences that distinguish the variable's three states live
+        // here, like the ones above. All three, not just the new one: two
+        // adjacent warnings from the same section read in different
+        // registers — one narrated and one raw — compare worse than if
+        // neither did.
         "conn-secret-env-empty" => norte_i18n::ta(
             "cli-doctor-detail-conn-secret-env-empty",
             &[("detail", &f.detail)],
@@ -111,11 +111,11 @@ pub(crate) async fn paths_cmd(json: bool, socket: Option<PathBuf>) -> anyhow::Re
     let layers = norte_config::standard_layers();
     let config_dir = norte_config::config_dir();
     let socket = socket.unwrap_or_else(|| norte_core::daemon::default_socket_path(None));
-    // Mismo `[log] dir` efectivo que resuelven los frontends y `doctor`:
-    // apuntar al default mientras el log de verdad está en otro sitio es
-    // exactamente el fallo que este comando existe para evitar.
+    // The same effective `[log] dir` the frontends and `doctor` resolve:
+    // pointing at the default while the real log is somewhere else is
+    // exactly the mistake this command exists to prevent.
     let layers_log = layers.clone();
-    // `collect` statea cada ruta (I/O síncrona, regla 2).
+    // `collect` stats each path (synchronous I/O, hard rule 2).
     let entries = tokio::task::spawn_blocking(move || {
         let dir_log = norte_config::load(&layers_log)
             .ok()
@@ -157,21 +157,21 @@ pub(crate) async fn paths_cmd(json: bool, socket: Option<PathBuf>) -> anyhow::Re
             .context(norte_i18n::t("cli-serialize-failed"))?;
         println!();
     } else {
-        let ancho = entries.iter().map(|e| e.id.len()).max().unwrap_or(0);
+        let width = entries.iter().map(|e| e.id.len()).max().unwrap_or(0);
         for e in &entries {
-            let etiqueta = match e.layer {
+            let label = match e.layer {
                 Some(l) => format!("{}:{}", e.id, paths::layer_name(l)),
                 None => e.id.to_string(),
             };
-            let marca = if e.exists {
+            let mark = if e.exists {
                 String::new()
             } else {
                 format!("  {}", norte_i18n::t("cli-paths-missing"))
             };
             println!(
-                "{etiqueta:<width$}  {}{marca}",
+                "{label:<width$}  {}{mark}",
                 e.path.display(),
-                width = ancho + 8
+                width = width + 8
             );
         }
         println!("{}", norte_i18n::t("cli-paths-footer"));
@@ -203,10 +203,11 @@ pub(crate) async fn doctor_cmd(json: bool) -> anyhow::Result<ExitCode> {
         findings.extend(doctor::check_keymaps(&layers));
         findings.extend(doctor::check_plugins(&config_dir));
         findings.extend(doctor::check_connections(&config_dir, &env));
-        // Roadmap ítem 9: dónde está el log. Sin esta fila el fichero existe y
-        // nadie sabe pedirlo cuando hace falta — y tiene que resolver el MISMO
-        // `[log] dir` que resuelven los frontends: apuntar al default mientras
-        // el log de verdad está en otro sitio es peor que no decir nada.
+        // Roadmap item 9: where the log is. Without this row the file
+        // exists and nobody knows to ask for it when needed — and it has
+        // to resolve the SAME `[log] dir` the frontends resolve: pointing
+        // at the default while the real log is somewhere else is worse
+        // than saying nothing.
         let dir_log = norte_config::load(&layers_log)
             .ok()
             .and_then(|c| c.log.dir)
@@ -257,9 +258,10 @@ pub(crate) async fn doctor_cmd(json: bool) -> anyhow::Result<ExitCode> {
                     "keymap" => "cli-doctor-section-keymap",
                     "plugins" => "cli-doctor-section-plugins",
                     "connections" => "cli-doctor-section-connections",
-                    // No debería ocurrir (`Finding::section` es un catálogo
-                    // cerrado en este módulo): se imprime crudo en vez de
-                    // panicar — un diagnóstico jamás debe tumbar el proceso.
+                    // Should not happen (`Finding::section` is a closed
+                    // catalog in this module): printed raw instead of
+                    // panicking — a diagnostic must never bring down the
+                    // process.
                     other => other,
                 };
                 println!("{}", norte_i18n::t(key));
@@ -294,7 +296,8 @@ pub(crate) async fn doctor_cmd(json: bool) -> anyhow::Result<ExitCode> {
     })
 }
 
-/// Appendea una línea (+`\n`) a `path`, creándolo `0600` si no existe.
+/// Appends a line (+`\n`) to `path`, creating it `0600` if it does not
+/// exist.
 pub(crate) async fn append_line_0600(path: &std::path::Path, line: &str) -> anyhow::Result<()> {
     use tokio::io::AsyncWriteExt;
     let mut opts = tokio::fs::OpenOptions::new();
@@ -318,7 +321,7 @@ mod tests {
     /// raw machine `detail` — both are silent in text mode, so they are pinned
     /// here instead.
     #[test]
-    fn los_hallazgos_plugin_help_se_renderizan_en_los_dos_idiomas() {
+    fn plugin_help_findings_render_in_both_languages() {
         for code in [
             "plugin-help-truncated",
             "plugin-help-lossy",

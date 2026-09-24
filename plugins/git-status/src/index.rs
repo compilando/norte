@@ -1,76 +1,74 @@
-//! El índice de git (`.git/index`), leído en bytes.
+//! Git's index (`.git/index`), read as bytes.
 //!
-//! Es el fichero que hace barata esta columna: trae, por cada ruta rastreada,
-//! el `stat` que git vio la última vez. Comparar eso con el `stat` de ahora
-//! contesta «¿cambió?» sin abrir un solo fichero — que es justo lo que un
-//! panel puede permitirse hacer por página.
+//! This is the file that makes this column cheap: for every tracked path it
+//! brings the `stat` git last saw. Comparing that against the current
+//! `stat` answers "did it change?" without opening a single file — which is
+//! exactly what a panel can afford to do per page.
 //!
-//! Formato: cabecera `DIRC`, versión, número de entradas, y luego las entradas
-//! con sus campos en big-endian. Lo que aquí se implementa son las versiones
-//! **2 y 3**; la 4 comprime los nombres contra la entrada anterior y se
-//! RECHAZA POR SU NOMBRE, porque leerla como si fuese v2 daría rutas
-//! inventadas.
+//! Format: `DIRC` header, version, entry count, and then the entries with
+//! their fields in big-endian. What is implemented here is versions **2 and
+//! 3**; 4 compresses names against the previous entry and is REJECTED BY
+//! NAME, because reading it as if it were v2 would give made-up paths.
 
 extern crate alloc;
 
 use alloc::vec::Vec;
 
-/// Una entrada del índice: la ruta y el `stat` que git guardó.
+/// An index entry: the path and the `stat` git saved.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IndexEntry {
-    /// Ruta relativa a la raíz del repositorio, en BYTES (regla dura 1).
+    /// Path relative to the repository's root, in BYTES (hard rule 1).
     pub path: Vec<u8>,
-    /// `st_mtime` en segundos, tal como git lo guardó.
+    /// `st_mtime` in seconds, as git saved it.
     pub mtime_sec: u32,
-    /// `st_mtime`, nanosegundos.
+    /// `st_mtime`, nanoseconds.
     pub mtime_nsec: u32,
-    /// `st_ctime` en segundos.
+    /// `st_ctime` in seconds.
     pub ctime_sec: u32,
-    /// `st_ctime`, nanosegundos.
+    /// `st_ctime`, nanoseconds.
     pub ctime_nsec: u32,
-    /// Tamaño que git vio (truncado a 32 bits por el formato).
+    /// Size git saw (truncated to 32 bits by the format).
     pub size: u32,
-    /// Inodo, o 0 si git no lo guardó (repositorios de Windows).
+    /// Inode, or 0 if git did not save it (Windows repositories).
     pub ino: u32,
-    /// Dispositivo, o 0.
+    /// Device, or 0.
     pub dev: u32,
-    /// Modo del fichero.
+    /// File mode.
     pub mode: u32,
-    /// Id de objeto del blob que git tiene registrado. Es lo que desempata el
-    /// caso «racy», donde el `stat` no dice nada.
+    /// Object id of the blob git has on record. This is what breaks the
+    /// "racy" tie, where `stat` says nothing.
     pub oid: [u8; 20],
-    /// `true` si la entrada está en un estado de conflicto de merge (stage
-    /// distinto de 0). Un fichero en conflicto no es «modificado».
+    /// `true` if the entry is in a merge-conflict state (stage other than
+    /// 0). A file in conflict is not "modified".
     pub conflicted: bool,
 }
 
-/// Por qué un índice no se pudo leer.
+/// Why an index could not be read.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IndexError {
-    /// No empieza por `DIRC`.
+    /// Does not start with `DIRC`.
     NotAnIndex,
-    /// Versión que este parser no lee. La 4 comprime prefijos de ruta.
+    /// A version this parser does not read. 4 compresses path prefixes.
     UnsupportedVersion(u32),
-    /// Se acabó el fichero a mitad de una entrada.
+    /// The file ended mid-entry.
     Truncated,
 }
 
-/// El índice ya parseado. Las entradas quedan en el orden del fichero, que
-/// git mantiene ORDENADO por ruta — y eso es lo que hace barato preguntar por
-/// un prefijo.
+/// The already-parsed index. Entries stay in the file's order, which git
+/// keeps SORTED by path — and that is what makes asking for a prefix cheap.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct GitIndex {
     entries: Vec<IndexEntry>,
 }
 
 impl GitIndex {
-    /// Parsea `.git/index`.
+    /// Parses `.git/index`.
     ///
     /// # Errors
     ///
-    /// [`IndexError`] según lo que falle. Las extensiones que van detrás de
-    /// las entradas se ignoran: se lee el número de entradas de la cabecera y
-    /// se para ahí.
+    /// [`IndexError`] depending on what fails. The extensions that follow
+    /// the entries are ignored: the entry count is read from the header and
+    /// it stops there.
     pub fn parse(raw: &[u8]) -> Result<Self, IndexError> {
         if raw.len() < 12 || &raw[..4] != b"DIRC" {
             return Err(IndexError::NotAnIndex);
@@ -90,29 +88,29 @@ impl GitIndex {
         Ok(Self { entries })
     }
 
-    /// Cuántas entradas trae.
+    /// How many entries it brings.
     #[must_use]
     pub fn len(&self) -> usize {
         self.entries.len()
     }
 
-    /// `true` si no trae ninguna (un repositorio recién creado).
+    /// `true` if it brings none (a freshly created repository).
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
 
-    /// La entrada `n`, en el orden del fichero.
+    /// Entry `n`, in the file's order.
     #[must_use]
     pub fn entry(&self, n: usize) -> Option<&IndexEntry> {
         self.entries.get(n)
     }
 
-    /// Las entradas cuya ruta empieza por `prefix`.
+    /// The entries whose path starts with `prefix`.
     ///
-    /// Barato porque el índice está ORDENADO: se busca el primer candidato por
-    /// bisección y se sigue mientras el prefijo aguante, en vez de recorrer un
-    /// índice de cien mil entradas por cada página de veinte.
+    /// Cheap because the index is SORTED: the first candidate is found by
+    /// bisection and it continues while the prefix holds, instead of
+    /// walking a hundred-thousand-entry index for every twenty-item page.
     pub fn under_prefix<'a>(&'a self, prefix: &'a [u8]) -> impl Iterator<Item = &'a IndexEntry> {
         let start = self.entries.partition_point(|e| e.path < prefix.to_vec());
         self.entries[start..]
@@ -120,7 +118,7 @@ impl GitIndex {
             .take_while(move |e| e.path.starts_with(prefix))
     }
 
-    /// La entrada de una ruta exacta, por bisección.
+    /// The entry for an exact path, by bisection.
     #[must_use]
     pub fn get(&self, path: &[u8]) -> Option<&IndexEntry> {
         let at = self.entries.partition_point(|e| e.path.as_slice() < path);
@@ -132,12 +130,12 @@ fn be32(b: &[u8]) -> u32 {
     u32::from_be_bytes([b[0], b[1], b[2], b[3]])
 }
 
-/// Una entrada v2/v3 y el offset de la siguiente.
+/// A v2/v3 entry and the next one's offset.
 ///
-/// Las entradas van alineadas a 8 bytes con relleno de NULs (v2/v3), así que
-/// el avance no es «lo que ocupó el nombre» sino eso redondeado.
+/// Entries are aligned to 8 bytes with NUL padding (v2/v3), so the advance
+/// is not "what the name took up" but that rounded up.
 fn parse_entry(raw: &[u8], at: usize, version: u32) -> Result<(IndexEntry, usize), IndexError> {
-    // 62 bytes fijos + nombre + relleno; v3 mete 2 bytes más de flags.
+    // 62 fixed bytes + name + padding; v3 adds 2 more bytes of flags.
     const FIXED: usize = 62;
     let extra = usize::from(version >= 3);
     if raw.len() < at + FIXED {
@@ -145,12 +143,12 @@ fn parse_entry(raw: &[u8], at: usize, version: u32) -> Result<(IndexEntry, usize
     }
     let f = &raw[at..];
     let flags = u16::from_be_bytes([f[60], f[61]]);
-    // Bit 14 = extended (v3): hay 2 bytes más de flags antes del nombre.
+    // Bit 14 = extended (v3): there are 2 more bytes of flags before the name.
     let extended = usize::from(extra == 1 && flags & 0x4000 != 0) * 2;
-    // Los 12 bits bajos son el largo del nombre, con 0xFFF = "más largo que
-    // eso, busca el NUL".
+    // The low 12 bits are the name's length, with 0xFFF = "longer than
+    // that, look for the NUL".
     let name_len = usize::from(flags & 0x0FFF);
-    // Bits 12-13 = stage: distinto de 0 es un conflicto de merge.
+    // Bits 12-13 = stage: other than 0 is a merge conflict.
     let conflicted = (flags >> 12) & 0x3 != 0;
     let name_at = at + FIXED + extended;
     if raw.len() < name_at {
@@ -186,37 +184,38 @@ fn parse_entry(raw: &[u8], at: usize, version: u32) -> Result<(IndexEntry, usize
         },
         conflicted,
     };
-    // Relleno hasta múltiplo de 8, contando desde el principio de la entrada.
+    // Padding up to a multiple of 8, counting from the entry's start.
     let used = name_end - at;
     let padded = used + (8 - used % 8);
     Ok((entry, at + padded))
 }
 
-/// La forja de índices que usan los tests de ESTE módulo y los de `status`.
-/// Vive fuera de `mod tests` para que otro módulo pueda usarla sin duplicar
-/// el formato — que es justo lo que haría que las dos copias divergieran.
+/// The index forge used by THIS module's tests and `status`'s.
+/// Lives outside `mod tests` so another module can use it without
+/// duplicating the format — which is exactly what would make the two copies
+/// diverge.
 #[cfg(test)]
 pub mod tests_support {
     use super::*;
 
-    /// Un índice v2 con `(ruta, tamaño, mtime, oid)` por entrada.
+    /// A v2 index with `(path, size, mtime, oid)` per entry.
     #[must_use]
-    pub fn forja(entradas: &[(&[u8], u32, u32, [u8; 20])]) -> Vec<u8> {
-        let con_modo: Vec<_> = entradas
+    pub fn forja(entries: &[(&[u8], u32, u32, [u8; 20])]) -> Vec<u8> {
+        let with_mode: Vec<_> = entries
             .iter()
             .map(|(n, s, m, o)| (*n, *s, *m, *o, 0o100_644u32))
             .collect();
-        forja_con_modo(&con_modo)
+        forja_con_modo(&with_mode)
     }
 
-    /// [`forja`] con el MODO de cada entrada, que es lo único que distingue un
-    /// submódulo (`0o160000`, el «gitlink») de un fichero normal.
+    /// [`forja`] with each entry's MODE, which is the only thing that tells
+    /// a submodule (`0o160000`, the "gitlink") apart from a normal file.
     #[must_use]
-    pub fn forja_con_modo(entradas: &[(&[u8], u32, u32, [u8; 20], u32)]) -> Vec<u8> {
+    pub fn forja_con_modo(entries: &[(&[u8], u32, u32, [u8; 20], u32)]) -> Vec<u8> {
         let mut out = b"DIRC".to_vec();
         out.extend_from_slice(&2u32.to_be_bytes());
-        out.extend_from_slice(&(entradas.len() as u32).to_be_bytes());
-        for (name, size, mtime, oid, mode) in entradas {
+        out.extend_from_slice(&(entries.len() as u32).to_be_bytes());
+        for (name, size, mtime, oid, mode) in entries {
             let start = out.len();
             out.extend_from_slice(&7u32.to_be_bytes());
             out.extend_from_slice(&0u32.to_be_bytes());
@@ -243,17 +242,18 @@ pub mod tests_support {
 mod tests {
     use super::*;
 
-    /// Forja un índice v2 con las entradas dadas: cabecera `DIRC`, versión y
-    /// cuenta, y cada entrada con sus 62 bytes fijos, el nombre y el relleno.
-    fn index_v2_con(entradas: &[(&[u8], u32)]) -> Vec<u8> {
-        forja(2, entradas, 0)
+    /// Forges a v2 index with the given entries: `DIRC` header, version and
+    /// count, and each entry with its 62 fixed bytes, the name and the
+    /// padding.
+    fn v2_index_with(entries: &[(&[u8], u32)]) -> Vec<u8> {
+        forge(2, entries, 0)
     }
 
-    fn forja(version: u32, entradas: &[(&[u8], u32)], stage: u16) -> Vec<u8> {
+    fn forge(version: u32, entries: &[(&[u8], u32)], stage: u16) -> Vec<u8> {
         let mut out = b"DIRC".to_vec();
         out.extend_from_slice(&version.to_be_bytes());
-        out.extend_from_slice(&(entradas.len() as u32).to_be_bytes());
-        for (name, size) in entradas {
+        out.extend_from_slice(&(entries.len() as u32).to_be_bytes());
+        for (name, size) in entries {
             let start = out.len();
             out.extend_from_slice(&7u32.to_be_bytes()); // ctime sec
             out.extend_from_slice(&0u32.to_be_bytes()); // ctime nsec
@@ -276,8 +276,8 @@ mod tests {
     }
 
     #[test]
-    fn parsea_v2_y_conserva_los_bytes_del_nombre() {
-        let raw = index_v2_con(&[(b"cp437-\xa4\xa5.txt", 3), (b"src/lib.rs", 10)]);
+    fn parses_v2_and_keeps_the_names_bytes() {
+        let raw = v2_index_with(&[(b"cp437-\xa4\xa5.txt", 3), (b"src/lib.rs", 10)]);
         let idx = GitIndex::parse(&raw).unwrap();
         assert_eq!(idx.len(), 2);
         assert_eq!(idx.entry(0).unwrap().path, b"cp437-\xa4\xa5.txt");
@@ -287,25 +287,25 @@ mod tests {
     }
 
     #[test]
-    fn la_version_4_se_rechaza_por_su_nombre() {
-        let mut raw = index_v2_con(&[(b"a", 1)]);
+    fn version_4_is_rejected_by_name() {
+        let mut raw = v2_index_with(&[(b"a", 1)]);
         raw[7] = 4;
         assert_eq!(
             GitIndex::parse(&raw),
             Err(IndexError::UnsupportedVersion(4)),
-            "v4 comprime prefijos de ruta; decirlo es mejor que leer basura"
+            "v4 compresses path prefixes; saying so beats reading garbage"
         );
     }
 
     #[test]
-    fn algo_que_no_es_un_indice_se_dice() {
+    fn something_that_is_not_an_index_says_so() {
         assert_eq!(GitIndex::parse(b"nope"), Err(IndexError::NotAnIndex));
         assert_eq!(GitIndex::parse(&[]), Err(IndexError::NotAnIndex));
     }
 
     #[test]
-    fn un_indice_truncado_no_inventa_entradas() {
-        let raw = index_v2_con(&[(b"a.txt", 1), (b"b.txt", 1)]);
+    fn a_truncated_index_does_not_invent_entries() {
+        let raw = v2_index_with(&[(b"a.txt", 1), (b"b.txt", 1)]);
         assert_eq!(
             GitIndex::parse(&raw[..raw.len() - 10]),
             Err(IndexError::Truncated)
@@ -313,8 +313,8 @@ mod tests {
     }
 
     #[test]
-    fn el_indice_esta_ordenado_y_eso_es_lo_que_hace_barato_el_prefijo() {
-        let raw = index_v2_con(&[(b"a/b.txt", 1), (b"a/c.txt", 1), (b"z.txt", 1)]);
+    fn the_index_is_sorted_and_that_is_what_makes_the_prefix_cheap() {
+        let raw = v2_index_with(&[(b"a/b.txt", 1), (b"a/c.txt", 1), (b"z.txt", 1)]);
         let idx = GitIndex::parse(&raw).unwrap();
         assert_eq!(idx.under_prefix(b"a/").count(), 2);
         assert_eq!(idx.under_prefix(b"").count(), 3);
@@ -322,18 +322,19 @@ mod tests {
     }
 
     #[test]
-    fn get_encuentra_una_ruta_exacta_y_no_su_prefijo() {
-        let raw = index_v2_con(&[(b"a/b.txt", 1), (b"ab.txt", 2)]);
+    fn get_finds_an_exact_path_and_not_its_prefix() {
+        let raw = v2_index_with(&[(b"a/b.txt", 1), (b"ab.txt", 2)]);
         let idx = GitIndex::parse(&raw).unwrap();
         assert_eq!(idx.get(b"ab.txt").unwrap().size, 2);
-        assert!(idx.get(b"a/").is_none(), "un prefijo no es una entrada");
+        assert!(idx.get(b"a/").is_none(), "a prefix is not an entry");
     }
 
-    /// Stage distinto de 0 = conflicto de merge. Un fichero en conflicto no es
-    /// «modificado», y llamarlo así escondería lo que de verdad pasa.
+    /// A stage other than 0 = merge conflict. A file in conflict is not
+    /// "modified", and calling it that would hide what is actually
+    /// happening.
     #[test]
-    fn una_entrada_en_conflicto_se_marca() {
-        let raw = forja(2, &[(b"peleado.txt", 1)], 2);
+    fn a_conflicted_entry_is_marked() {
+        let raw = forge(2, &[(b"contested.txt", 1)], 2);
         let idx = GitIndex::parse(&raw).unwrap();
         assert!(idx.entry(0).unwrap().conflicted);
     }

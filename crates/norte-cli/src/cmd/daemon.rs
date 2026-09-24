@@ -1,4 +1,4 @@
-//! `norte daemon run|stop`, `norte mcp serve`, `norte policy grant` y
+//! `norte daemon run|stop`, `norte mcp serve`, `norte policy grant` and
 //! `norte undo` (ADR 0011, M3-4).
 
 use std::path::PathBuf;
@@ -11,8 +11,9 @@ use norte_core::backend::Backend;
 
 use crate::{DaemonCmd, McpCmd, PolicyCmd};
 
-/// Resuelve el socket del daemon y un `spawn_cmd` de autoarranque (este mismo
-/// binario sabe ser daemon). Sondas de FS fuera del runtime (regla 2).
+/// Resolves the daemon's socket and an auto-start `spawn_cmd` (this same
+/// binary knows how to be a daemon). FS probes off the runtime (hard rule
+/// 2).
 #[cfg(unix)]
 async fn socket_and_spawn(
     socket: Option<PathBuf>,
@@ -28,15 +29,16 @@ async fn socket_and_spawn(
     Ok((socket, spawn_cmd))
 }
 
-/// `norte mcp serve`: sirve MCP por stdio, arrancando el daemon si hace falta.
-/// El puente conecta como sesión de agente; el tracing va a stderr (el
-/// `logging::init` global ya lo fija), stdout es EXCLUSIVO del transporte MCP.
+/// `norte mcp serve`: serves MCP over stdio, starting the daemon if
+/// needed. The bridge connects as an agent session; tracing goes to
+/// stderr (the global `logging::init` already sets it), stdout is
+/// EXCLUSIVE to the MCP transport.
 #[cfg(unix)]
 pub(crate) async fn mcp_cmd(cmd: McpCmd, socket: Option<PathBuf>) -> anyhow::Result<ExitCode> {
     let McpCmd::Serve { session } = cmd;
     let (socket, spawn_cmd) = socket_and_spawn(socket).await?;
-    // Autoarranque idempotente: connect_or_spawn arranca el daemon si el
-    // socket no responde, luego el puente reconecta.
+    // Idempotent auto-start: connect_or_spawn starts the daemon if the
+    // socket does not answer, then the bridge reconnects.
     if let Err(e) = norte_core::daemon::Client::connect_or_spawn(&socket, move || {
         let mut cmd = std::process::Command::new(&spawn_cmd[0]);
         cmd.args(&spawn_cmd[1..]);
@@ -57,8 +59,8 @@ pub(crate) async fn mcp_cmd(cmd: McpCmd, socket: Option<PathBuf>) -> anyhow::Res
     Ok(ExitCode::SUCCESS)
 }
 
-/// `norte policy grant <request_id>`: un humano concede un scope pedido por un
-/// agente. Conexión User (sin `agent_session`).
+/// `norte policy grant <request_id>`: a human grants a scope an agent
+/// requested. User connection (no `agent_session`).
 #[cfg(unix)]
 pub(crate) async fn policy_cmd(
     cmd: PolicyCmd,
@@ -90,8 +92,9 @@ pub(crate) async fn policy_cmd(
     Ok(ExitCode::SUCCESS)
 }
 
-/// `norte undo <session>`: un humano deshace la sesión completa de un agente.
-/// Corre como Task; se espera su terminal con Ctrl-C = cancelar (patrón `cp`).
+/// `norte undo <session>`: a human undoes an agent's whole session. Runs
+/// as a Task; its terminal state is awaited with Ctrl-C = cancel (the
+/// `cp` pattern).
 #[cfg(unix)]
 pub(crate) async fn undo_cmd(session: &str, socket: Option<PathBuf>) -> anyhow::Result<ExitCode> {
     use norte_core::backend::remote::RemoteBackend;
@@ -119,11 +122,12 @@ pub(crate) async fn undo_cmd(session: &str, socket: Option<PathBuf>) -> anyhow::
     if outcome != ExitCode::SUCCESS {
         return Ok(outcome);
     }
-    // «Done» CUALIFICADO (#71): el estado terminal de la Task es Completed
-    // incluso si el LIFO se bloqueó o todo se saltó — el informe es la ÚNICA
-    // señal de integridad. Solo un daemon N-1 (sin el método → Unsupported)
-    // degrada al mensaje simple; cualquier otro fallo del fetch NO se traga:
-    // aviso + exit≠0 (el undo pudo funcionar, pero queda sin verificar).
+    // QUALIFIED "Done" (#71): the Task's terminal state is Completed even
+    // if the LIFO got blocked or everything was skipped — the report is
+    // the ONLY integrity signal. Only an N-1 daemon (without the method →
+    // Unsupported) degrades to the simple message; any other fetch
+    // failure is NOT swallowed: warning + exit≠0 (the undo may have
+    // worked, but it is left unverified).
     let report = match backend.undo_report(task_id).await {
         Ok(r) => r,
         Err(norte_proto::Error::Unsupported) => {
@@ -183,10 +187,11 @@ pub(crate) async fn undo_cmd(session: &str, socket: Option<PathBuf>) -> anyhow::
     Ok(outcome)
 }
 
-/// Un [`Aviso`](norte_core::equipo::Aviso) de arranque o de equipamiento, en
-/// el idioma del operador. Lo usan `norte daemon run` y el engine embebido de
-/// la CLI: los dos equipan con `norte_core::equipo` y los dos avisan igual.
-pub(crate) fn texto_del_aviso(aviso: &norte_core::equipo::Aviso) -> String {
+/// A startup or provisioning [`Aviso`](norte_core::equipo::Aviso), in the
+/// operator's language. Used by `norte daemon run` and the CLI's embedded
+/// engine: both provision with `norte_core::equipo` and both warn the
+/// same way.
+pub(crate) fn warning_text(aviso: &norte_core::equipo::Aviso) -> String {
     use norte_core::equipo::Aviso;
     use norte_i18n::ta;
     match aviso {
@@ -209,7 +214,7 @@ pub(crate) fn texto_del_aviso(aviso: &norte_core::equipo::Aviso) -> String {
         ),
         Aviso::SinIndice(error) => ta("cli-warn-no-index", &[("error", error)]),
         Aviso::IaNoDisponible(error) => ta("cli-warn-ai-unavailable", &[("error", error)]),
-        // Ya viene redactado por `install_embed_provider`.
+        // Already written out by `install_embed_provider`.
         Aviso::IaEmbeddings(w) => w.clone(),
         Aviso::IaInvalida(error) => ta("cli-warn-ai-invalid", &[("error", error)]),
         Aviso::IaNoCargo(error) => ta("cli-warn-ai-load-failed", &[("error", error)]),
@@ -217,17 +222,18 @@ pub(crate) fn texto_del_aviso(aviso: &norte_core::equipo::Aviso) -> String {
     }
 }
 
-/// Elige el transporte (regla 7: la lógica es la misma). `--daemon`
-/// conecta al socket, arrancando `norte daemon run` si hace falta.
+/// Chooses the transport (rule 7: the logic is the same). `--daemon`
+/// connects to the socket, starting `norte daemon run` if needed.
 pub(crate) async fn make_backend(
     engine: Engine,
     daemon: bool,
     socket: Option<PathBuf>,
 ) -> anyhow::Result<Backend> {
     if !daemon {
-        // #44: los avisos de degradación se drenan en el dispatch (top-level)
-        // vía `Backend::take_degraded`, que en embebido instala el observer del
-        // canal — misma vía que en modo daemon (rust M1 + security m1).
+        // #44: degradation warnings are drained at dispatch (top-level)
+        // via `Backend::take_degraded`, which in embedded mode installs
+        // the channel observer — same path as in daemon mode (rust M1 +
+        // security m1).
         return Ok(Backend::Embedded(Arc::new(engine)));
     }
     #[cfg(not(unix))]
@@ -238,8 +244,8 @@ pub(crate) async fn make_backend(
     #[cfg(unix)]
     {
         use norte_core::backend::remote::RemoteBackend;
-        // Ambas sondas de FS (socket por defecto + current_exe) fuera del
-        // runtime (regla 2, m3 del rust-reviewer).
+        // Both FS probes (default socket + current_exe) off the runtime
+        // (hard rule 2, rust-reviewer m3).
         let (socket, exe) = tokio::task::spawn_blocking(move || {
             let socket = socket.unwrap_or_else(|| norte_core::daemon::default_socket_path(None));
             (socket, std::env::current_exe())
@@ -247,8 +253,8 @@ pub(crate) async fn make_backend(
         .await
         .context("resolución del socket/exe")?;
         let exe = exe.context("current_exe")?;
-        // Autoarranque: este MISMO binario sabe ser daemon, con el argv
-        // compartido — lo que arranca una orden suelta se apaga solo.
+        // Auto-start: this SAME binary knows how to be a daemon, with the
+        // shared argv — what starts a loose command shuts itself down.
         let spawn_cmd = norte_core::daemon::daemon_run_argv(exe, &socket);
         let remote = RemoteBackend::connect(
             socket,
@@ -265,19 +271,20 @@ pub(crate) async fn make_backend(
     }
 }
 
-/// `norte daemon run|stop` (ADR 0011). El engine que sirve el daemon es el
-/// MISMO embebido de esta CLI: solo cambia el transporte (regla 7).
+/// `norte daemon run|stop` (ADR 0011). The engine that serves the daemon
+/// is the SAME one embedded in this CLI: only the transport changes (rule
+/// 7).
 ///
-/// `anillo` es el registro en memoria que montó `run` (#328): el MISMO en el
-/// que escribe la capa de `tracing`, y el que `log.tail` sirve. `None` —el
-/// montaje falló porque ya había subscriber— deja al daemon contestando
-/// `Unsupported` a los dos métodos de registro, que es lo que el frontend
-/// necesita para degradar diciendo por qué.
+/// `ring` is the in-memory registry `run` set up (#328): the SAME one the
+/// `tracing` layer writes to, and the one `log.tail` serves. `None` — the
+/// setup failed because there was already a subscriber — leaves the
+/// daemon answering `Unsupported` to both registry methods, which is what
+/// the frontend needs to degrade while saying why.
 #[cfg(unix)]
-#[expect(clippy::too_many_lines, reason = "un brazo por subcomando del daemon")]
+#[expect(clippy::too_many_lines, reason = "one arm per daemon subcommand")]
 pub(crate) async fn daemon_cmd(
     cmd: DaemonCmd,
-    anillo: Option<norte_config::logring::LogRing>,
+    ring: Option<norte_config::logring::LogRing>,
 ) -> anyhow::Result<ExitCode> {
     use norte_core::daemon::{Client, default_socket_path};
     match cmd {
@@ -285,10 +292,10 @@ pub(crate) async fn daemon_cmd(
             socket,
             idle_timeout,
         } => {
-            // QUÉ lleva el daemon lo decide el core (regla 7,
-            // `norte_core::daemon::componer`); aquí queda lo del binario: pintar
-            // los avisos en el idioma del operador, el anillo de registro y las
-            // señales.
+            // WHAT the daemon carries is decided by the core (rule 7,
+            // `norte_core::daemon::componer`); what stays here is the
+            // binary's job: painting the warnings in the operator's
+            // language, the log ring and the signals.
             use norte_core::daemon::componer::{ErrorDeArranque, Opciones};
             let mut avisos = Vec::new();
             let compuesto = norte_core::daemon::componer(
@@ -296,26 +303,28 @@ pub(crate) async fn daemon_cmd(
                     socket,
                     idle_timeout: (idle_timeout > 0)
                         .then(|| std::time::Duration::from_secs(idle_timeout)),
-                    // La sesión de UI (L2) vive en el directorio de estado. Sin
-                    // él —un entorno sin HOME— el daemon sirve la pantalla y no
-                    // la guarda.
+                    // The UI session (L2) lives in the state directory.
+                    // Without one — an environment with no HOME — the
+                    // daemon serves the screen and does not save it.
                     state_dir: norte_config::dirs::state_dir(),
                     config_dir: None,
                 },
                 &mut avisos,
             )
             .await;
-            // Los avisos se dicen ANTES de mirar si arrancó: lo que se averiguó
-            // por el camino sigue siendo verdad aunque el arranque falle luego.
+            // The warnings are said BEFORE checking whether it started:
+            // what was found out along the way stays true even if
+            // startup later fails.
             for aviso in &avisos {
-                eprintln!("{}", texto_del_aviso(aviso));
+                eprintln!("{}", warning_text(aviso));
             }
             let daemon = match compuesto {
                 Ok(d) => d,
-                // El aviso NOMBRA la causa probable: desde #167 un frontend
-                // embebido (un `ntc` sin `--daemon`) se queda el lock exclusivo,
-                // y sin esta frase el operador recibe un texto de sqlx y ninguna
-                // pista de qué cerrar.
+                // The warning NAMES the likely cause: since #167 an
+                // embedded frontend (an `ntc` without `--daemon`) keeps
+                // the exclusive lock, and without this sentence the
+                // operator gets sqlx's text and no clue about what to
+                // close.
                 Err(ErrorDeArranque::Journal(causa)) => {
                     return Err(anyhow::Error::new(causa).context(
                         "no se pudo abrir el journal (si dice «database is locked», otro \
@@ -324,11 +333,11 @@ pub(crate) async fn daemon_cmd(
                 }
                 Err(e) => return Err(e.into()),
             };
-            // El anillo se monta entre el bind y el `run`, que es donde puede
-            // montarse: lo tiene el proceso (lo creó el subscriber), no la
-            // config del daemon.
-            let daemon = match anillo {
-                Some(anillo) => daemon.with_log_ring(anillo),
+            // The ring is set up between the bind and the `run`, which is
+            // where it can be set up: the process has it (the subscriber
+            // created it), not the daemon's config.
+            let daemon = match ring {
+                Some(ring) => daemon.with_log_ring(ring),
                 None => daemon,
             };
             eprintln!(
@@ -338,11 +347,12 @@ pub(crate) async fn daemon_cmd(
                     &[("socket", &daemon.socket_path().display().to_string())]
                 )
             );
-            // Ctrl-C/SIGTERM = shutdown graceful (las tasks terminan);
-            // la SEGUNDA señal escala a hard (cancela tasks) — sin ella,
-            // una task colgada solo moriría con SIGKILL (M4 rust-reviewer).
-            // El registro va ANTES del spawn: si falla, error visible, no
-            // un panic tragado dentro de un task (M5).
+            // Ctrl-C/SIGTERM = graceful shutdown (tasks finish); the
+            // SECOND signal escalates to hard (cancels tasks) — without
+            // it, a hung task would only die with SIGKILL (M4
+            // rust-reviewer). The registration goes BEFORE the spawn: if
+            // it fails, a visible error, not a panic swallowed inside a
+            // task (M5).
             let mut sigterm =
                 tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
                     .context("no se pudo registrar SIGTERM")?;
@@ -369,8 +379,8 @@ pub(crate) async fn daemon_cmd(
             hard,
             handover,
         } => {
-            // La resolución del path por defecto puede sondear el FS
-            // (regla 2): fuera del hilo del runtime.
+            // Resolving the default path can probe the FS (hard rule 2):
+            // off the runtime thread.
             let socket = match socket {
                 Some(s) => s,
                 None => tokio::task::spawn_blocking(|| default_socket_path(None))
@@ -387,14 +397,15 @@ pub(crate) async fn daemon_cmd(
                 })
                 .await
                 .context("initialize")?;
-            // Un daemon anterior a 0.46 IGNORA `mode` y hace una parada
-            // corriente: a los frontends no se les avisa y no vuelven solos.
-            // Sin esta comprobación la CLI diría «hecho» de algo que no pasó —
-            // y es el caso NORMAL, porque la primera actualización a 0.46 la
-            // recibe por definición un daemon 0.45.
-            let sabe_relevar =
+            // A daemon older than 0.46 IGNORES `mode` and does an
+            // ordinary stop: frontends are not warned and do not come
+            // back on their own. Without this check the CLI would say
+            // "done" about something that did not happen — and it is the
+            // NORMAL case, because the first upgrade to 0.46 is, by
+            // definition, received by a 0.45 daemon.
+            let supports_handover =
                 norte_proto::methods::version_at_least(&init.protocol_version, 0, 46);
-            if handover && !sabe_relevar {
+            if handover && !supports_handover {
                 eprintln!(
                     "{}",
                     norte_i18n::ta(
@@ -419,7 +430,7 @@ pub(crate) async fn daemon_cmd(
                 .context("daemon.shutdown")?;
             eprintln!(
                 "{}",
-                if handover && sabe_relevar {
+                if handover && supports_handover {
                     norte_i18n::t("cli-daemon-handover-requested")
                 } else {
                     norte_i18n::t("cli-daemon-stopped")
