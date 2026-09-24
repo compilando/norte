@@ -30,20 +30,31 @@ use crate::Pantalla;
 
 /// Lo que se le dice al hijo que hay al otro lado.
 ///
-/// `vt100` y no `xterm-256color`, que es lo que heredaría: esta rejilla hace
-/// SGR, CUP, los cuatro movimientos, ED, EL y esconder el cursor, y nada más.
-/// Ni pantalla alterna, ni regiones de scroll, ni insertar o borrar líneas.
+/// `xterm-256color` desde #366, y antes `vt100`. La regla no ha cambiado —no
+/// se anuncia lo que no se cumple, que es peor que quedarse corto— lo que ha
+/// cambiado es lo que se cumple:
 ///
-/// Anunciar lo que no se cumple es peor que quedarse corto, y aquí tiene
-/// consecuencias que se ven: con la pantalla alterna prometida y no
-/// implementada, un `less` deja su último fotograma puesto al salir, y un
-/// programa que se posicione dentro de una región de scroll pinta algo
-/// coherente que no se corresponde con su estado. Es una superficie donde
-/// alguien LEE y después teclea una orden contra lo que leyó.
+/// - SGR entero, con los 256 colores y el color verdadero;
+/// - CUP, los cuatro movimientos, CHA y VPA;
+/// - ED, EL, ECH, ICH, DCH, IL, DL, SU, SD, REP;
+/// - la pantalla ALTERNA (`?1049`, y la vieja `?47`), que es lo que hace que
+///   un `less` no deje su último fotograma pegado al salir;
+/// - las regiones de scroll (`DECSTBM`), que es lo que un programa con una
+///   línea de estado fijada da por hecho;
+/// - guardar y restaurar el cursor con su estilo, `RIS`, y el juego de dibujo
+///   de líneas.
 ///
-/// Cuesta el color de un `ls` —vt100 no declara ninguno— y lo recupera #366,
-/// que implementa lo que falta y sube esto de una vez.
-pub const TERM: &str = "vt100";
+/// Lo que sigue sin estar: el ratón, el portapapeles OSC 52, las consultas que
+/// esperan respuesta (`DA`, `DSR`), el modo de pegado entre corchetes y los
+/// dobles anchos del DEC. Ninguna de ellas hace que un programa pinte algo
+/// coherente que no se corresponde con su estado —que era el criterio—: quien
+/// pregunta y no recibe respuesta degrada, y quien manda una secuencia que
+/// esta rejilla ignora no ve nada raro en pantalla.
+///
+/// Es una superficie donde alguien LEE y después teclea una orden contra lo
+/// que leyó, así que si algo de lo anunciado dejara de cumplirse, lo que hay
+/// que bajar es esto y no el listón.
+pub const TERM: &str = "xterm-256color";
 
 /// Cuánto se guarda de lo que el shell escribió y aún no se ha volcado.
 ///

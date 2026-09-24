@@ -27,9 +27,14 @@ independently through `PROTOCOL_VERSION`.
   the pty are one shared crate rather than two that could drift. Over a
   remote pane it refuses to open and says why — a shell sits in a directory
   of the filesystem. The shell dies with the panel: closing the slot
-  ends it, and so does leaving norte. It is spawned with `TERM=vt100`,
-  which is what the grid honestly implements — so a `ls` inside is
-  monochrome for now; #366 implements the missing sequences and raises it.
+  ends it, and so does leaving norte. It is spawned with
+  `TERM=xterm-256color`, which is what the grid implements (#366): full
+  colour, the alternate screen — so `less` and `vim` leave the screen as
+  they found it — scroll regions, insert and delete, save and restore
+  cursor, and the line-drawing charset. What is still missing is the mouse,
+  OSC 52, the queries that expect an answer, and bracketed paste; none of
+  them makes a program paint something coherent that does not match its
+  state, which is the line that decides what may be announced.
 - **RSA client keys as a per-connection opt-in** (ADR 0150). An SFTP
   connection with `auth = "key"` accepts an RSA key file when its entry says
   `allow_rsa = true`. Signatures are rsa-sha2 only: a server that accepts

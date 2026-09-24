@@ -132,6 +132,42 @@ struct Rejilla {
     cursor_visible: bool,
     /// El estilo con el que se escribe ahora.
     estilo: Estilo,
+    /// La REGIÓN de scroll, `[arriba, abajo]` inclusive (`DECSTBM`).
+    ///
+    /// Sin ella la pantalla entera sube cuando el cursor cae por abajo. Con
+    /// ella sube SOLO ese trozo, que es lo que usa cualquier programa que
+    /// fija una línea de estado: `tmux`, un `top`, un instalador con barra.
+    /// Sin implementarla, la línea fijada se iba desplazando hacia arriba y
+    /// acababa saliendo de la pantalla.
+    region: (u16, u16),
+    /// El cursor guardado por `ESC 7` / `CSI s`, y el estilo con él.
+    ///
+    /// El estilo va DENTRO porque `DECSC` lo guarda: restaurar la posición y
+    /// dejar el color de otro sitio es lo que hace que un prompt salga a
+    /// medias de un color.
+    guardado: Option<(u16, u16, Estilo)>,
+    /// El último carácter IMPRESO, para `REP` (`CSI b`).
+    ultimo: Option<char>,
+    /// ¿Está puesto el juego de dibujo de líneas (`ESC ( 0`)?
+    dibujo: bool,
+    /// La pantalla que `CSI ?1049h` apartó, si se apartó alguna.
+    ///
+    /// Es lo que hace que un `less` o un `vim` no dejen su último fotograma
+    /// pegado al salir: entran, pintan sobre una pantalla limpia, y al salir
+    /// se devuelve la de antes TAL CUAL —celdas, cursor y estilo—. De los dos
+    /// modos, el moderno (`1049`) guarda además el cursor; el viejo (`47`) no,
+    /// y esa diferencia se respeta.
+    alterna: Option<Box<Guardada>>,
+}
+
+/// Una pantalla apartada por la pantalla alterna.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Guardada {
+    celdas: Vec<Celda>,
+    fila: u16,
+    col: u16,
+    estilo: Estilo,
+    region: (u16, u16),
 }
 
 impl Rejilla {
@@ -145,6 +181,126 @@ impl Rejilla {
             col: 0,
             cursor_visible: true,
             estilo: Estilo::default(),
+            region: (0, alto - 1),
+            guardado: None,
+            ultimo: None,
+            dibujo: false,
+            alterna: None,
+        }
+    }
+
+    /// `DECSC`: la posición del cursor Y el estilo con el que se escribía.
+    fn guardar_cursor(&mut self) {
+        self.guardado = Some((self.fila, self.col, self.estilo));
+    }
+
+    /// `DECRC`. Sin nada guardado no hace nada, que es lo que dice la norma:
+    /// inventarse la esquina superior izquierda movería el cursor de un
+    /// programa que solo quería asegurarse.
+    fn restaurar_cursor(&mut self) {
+        if let Some((fila, col, estilo)) = self.guardado {
+            self.fila = fila.min(self.alto - 1);
+            self.col = col.min(self.ancho);
+            self.estilo = estilo;
+        }
+    }
+
+    /// Entra o sale de la pantalla alterna.
+    ///
+    /// `con_cursor` distingue el modo moderno (`1049`, guarda también dónde
+    /// estaba el cursor) del viejo (`47`, solo la pantalla). Entrar dos veces
+    /// no apila: la segunda no hace nada, o se perdería la pantalla de verdad.
+    fn pantalla_alterna(&mut self, entrar: bool, con_cursor: bool) {
+        if entrar {
+            if self.alterna.is_some() {
+                return;
+            }
+            self.alterna = Some(Box::new(Guardada {
+                celdas: self.celdas.clone(),
+                fila: self.fila,
+                col: self.col,
+                estilo: self.estilo,
+                region: self.region,
+            }));
+            // La alterna empieza LIMPIA y sin región: es una pantalla nueva.
+            self.celdas = vec![Celda::default(); self.celdas.len()];
+            self.region = (0, self.alto - 1);
+            if con_cursor {
+                self.fila = 0;
+                self.col = 0;
+            }
+            return;
+        }
+        let Some(g) = self.alterna.take() else {
+            return;
+        };
+        self.celdas = g.celdas;
+        self.region = g.region;
+        if con_cursor {
+            self.fila = g.fila.min(self.alto - 1);
+            self.col = g.col.min(self.ancho);
+            self.estilo = g.estilo;
+        }
+    }
+
+    /// `ED`: borra la pantalla. `0` de aquí abajo, `1` de aquí arriba, y
+    /// cualquier otra cosa, entera.
+    fn borrar_pantalla(&mut self, modo: u16) {
+        let (fila, col, alto, ancho) = (self.fila, self.col, self.alto, self.ancho);
+        match modo {
+            0 => {
+                self.borrar_fila(fila, col, ancho);
+                for f in fila + 1..alto {
+                    self.borrar_fila(f, 0, ancho);
+                }
+            }
+            1 => {
+                for f in 0..fila {
+                    self.borrar_fila(f, 0, ancho);
+                }
+                self.borrar_fila(fila, 0, col.saturating_add(1));
+            }
+            _ => {
+                for f in 0..alto {
+                    self.borrar_fila(f, 0, ancho);
+                }
+            }
+        }
+    }
+
+    /// `EL`: lo mismo dentro de la fila del cursor.
+    fn borrar_linea(&mut self, modo: u16) {
+        let (fila, col, ancho) = (self.fila, self.col, self.ancho);
+        match modo {
+            0 => self.borrar_fila(fila, col, ancho),
+            1 => self.borrar_fila(fila, 0, col.saturating_add(1)),
+            _ => self.borrar_fila(fila, 0, ancho),
+        }
+    }
+
+    /// `ICH`: abre `n` huecos en la fila del cursor, empujando a la derecha.
+    fn insertar_celdas(&mut self, n: u16) {
+        let (fila, col, ancho) = (self.fila, self.col, self.ancho);
+        let n = n.min(ancho.saturating_sub(col));
+        for c in (col..ancho).rev() {
+            let origen = c.checked_sub(n).filter(|o| *o >= col);
+            let celda = origen.and_then(|o| self.indice(fila, o).map(|i| self.celdas[i].clone()));
+            if let Some(i) = self.indice(fila, c) {
+                self.celdas[i] = celda.unwrap_or_default();
+            }
+        }
+    }
+
+    /// `DCH`: se lleva `n` celdas de la fila del cursor, tirando del resto.
+    fn borrar_celdas(&mut self, n: u16) {
+        let (fila, col, ancho) = (self.fila, self.col, self.ancho);
+        let n = n.min(ancho.saturating_sub(col));
+        for c in col..ancho {
+            let origen = c.checked_add(n).filter(|o| *o < ancho);
+            let celda = origen.and_then(|o| self.indice(fila, o).map(|i| self.celdas[i].clone()));
+            if let Some(i) = self.indice(fila, c) {
+                self.celdas[i] = celda.unwrap_or_default();
+            }
         }
     }
 
@@ -153,23 +309,86 @@ impl Rejilla {
             .then(|| usize::from(fila) * usize::from(self.ancho) + usize::from(col))
     }
 
-    /// Baja una fila, y si ya estaba abajo del todo SUBE la pantalla.
+    /// Baja una fila, y si ya estaba en el BORDE DE ABAJO DE LA REGIÓN sube su
+    /// contenido.
     ///
-    /// Sin esto, lo último que escribe un shell es justo lo que no se ve.
+    /// Sin esto, lo último que escribe un shell es justo lo que no se ve. Y sin
+    /// mirar la región, un programa con una línea de estado fijada veía cómo
+    /// esa línea se iba hacia arriba hasta desaparecer.
+    ///
+    /// Fuera de la región el cursor baja y ya: ahí no hay scroll, que es
+    /// exactamente lo que la región promete.
     fn bajar(&mut self) {
-        if self.fila + 1 < self.alto {
-            self.fila += 1;
+        let (arriba, abajo) = self.region;
+        if self.fila == abajo {
+            self.subir_region(arriba, abajo, 1);
             return;
         }
-        self.celdas.drain(..usize::from(self.ancho));
-        self.celdas.resize(
-            usize::from(self.ancho) * usize::from(self.alto),
-            Celda::default(),
-        );
+        if self.fila + 1 < self.alto {
+            self.fila += 1;
+        }
+    }
+
+    /// Sube `n` filas el trozo `[arriba, abajo]`, rellenando por abajo.
+    fn subir_region(&mut self, arriba: u16, abajo: u16, n: u16) {
+        if arriba > abajo {
+            return;
+        }
+        let alto_region = abajo - arriba + 1;
+        let n = n.min(alto_region);
+        for f in arriba..=abajo {
+            let origen = f + n;
+            for c in 0..self.ancho {
+                let celda = if origen <= abajo {
+                    self.indice(origen, c).map(|i| self.celdas[i].clone())
+                } else {
+                    None
+                };
+                if let Some(i) = self.indice(f, c) {
+                    self.celdas[i] = celda.unwrap_or_default();
+                }
+            }
+        }
+    }
+
+    /// Baja `n` filas el trozo `[arriba, abajo]`, rellenando por arriba. Es la
+    /// inversa de [`Self::subir_region`], y la usa `IL`.
+    fn bajar_region(&mut self, arriba: u16, abajo: u16, n: u16) {
+        if arriba > abajo {
+            return;
+        }
+        let alto_region = abajo - arriba + 1;
+        let n = n.min(alto_region);
+        for f in (arriba..=abajo).rev() {
+            let origen = f.checked_sub(n).filter(|o| *o >= arriba);
+            for c in 0..self.ancho {
+                let celda = origen.and_then(|o| self.indice(o, c).map(|i| self.celdas[i].clone()));
+                if let Some(i) = self.indice(f, c) {
+                    self.celdas[i] = celda.unwrap_or_default();
+                }
+            }
+        }
+    }
+
+    /// El carácter que `ESC ( 0` pinta en lugar de `c` (DEC Special Graphics).
+    ///
+    /// Solo el tramo `0x60..=0x7e`, que es el que el juego redefine; el resto
+    /// se queda como está. Sin esto, un programa que dibuja una caja imprimía
+    /// `lqqqk` donde quería una esquina y tres rayas.
+    fn dibujar(c: char) -> char {
+        const TABLA: &str = "◆▒␉␌␍␊°±␤␋┘┐┌└┼⎺⎻─⎼⎽├┤┴┬│≤≥π≠£·";
+        let i = (c as u32)
+            .checked_sub(0x60)
+            .and_then(|i| usize::try_from(i).ok());
+        i.and_then(|i| TABLA.chars().nth(i)).unwrap_or(c)
     }
 
     /// Escribe un carácter donde esté el cursor y lo adelanta.
     fn poner(&mut self, c: char) {
+        let c = if self.dibujo { Self::dibujar(c) } else { c };
+        // Para `REP`, que repite el último IMPRESO — incluido el traducido:
+        // lo que se repite es lo que se ve.
+        self.ultimo = Some(c);
         // Un carácter de anchura cero —una combinante— no tiene celda propia.
         // Se DESCARTA, y eso es una limitación conocida: lo correcto es
         // pegarlo al carácter anterior, y eso pide que una celda guarde un
@@ -366,38 +585,124 @@ impl vte::Perform for Rejilla {
             'B' => self.fila = self.fila.saturating_add(uno(0)).min(self.alto - 1),
             'C' => self.col = self.col.saturating_add(uno(0)).min(self.ancho - 1),
             'D' => self.col = self.col.saturating_sub(uno(0)),
-            'J' if !privado => {
-                let (fila, col, alto, ancho) = (self.fila, self.col, self.alto, self.ancho);
-                match cero(0) {
-                    0 => {
-                        self.borrar_fila(fila, col, ancho);
-                        for f in fila + 1..alto {
-                            self.borrar_fila(f, 0, ancho);
-                        }
-                    }
-                    1 => {
-                        for f in 0..fila {
-                            self.borrar_fila(f, 0, ancho);
-                        }
-                        self.borrar_fila(fila, 0, col.saturating_add(1));
-                    }
-                    _ => {
-                        for f in 0..alto {
-                            self.borrar_fila(f, 0, ancho);
-                        }
+            'J' if !privado => self.borrar_pantalla(cero(0)),
+            'K' if !privado => self.borrar_linea(cero(0)),
+            // Posición absoluta en UN eje: `CHA` la columna, `VPA` la fila.
+            // Baratas y constantes — un prompt que se repinta las usa en cada
+            // pulsación—, y sin ellas se quedaba escribiendo donde estuviera.
+            'G' | '`' if !privado => self.col = (uno(0) - 1).min(self.ancho - 1),
+            'd' if !privado => self.fila = (uno(0) - 1).min(self.alto - 1),
+            // Insertar y borrar LÍNEAS, dentro de la región y desde el cursor:
+            // es lo que usa un editor para abrir hueco sin repintar el resto.
+            'L' if !privado => {
+                let (arriba, abajo) = self.region;
+                if self.fila >= arriba && self.fila <= abajo {
+                    self.bajar_region(self.fila, abajo, uno(0));
+                }
+            }
+            'M' if !privado => {
+                let (arriba, abajo) = self.region;
+                if self.fila >= arriba && self.fila <= abajo {
+                    self.subir_region(self.fila, abajo, uno(0));
+                }
+            }
+            // Insertar y borrar CARACTERES en la fila del cursor, y borrar sin
+            // mover: lo que un editor de línea usa para no repintar la línea
+            // entera en cada tecla.
+            '@' if !privado => self.insertar_celdas(uno(0)),
+            'P' if !privado => self.borrar_celdas(uno(0)),
+            'X' if !privado => {
+                let (fila, col) = (self.fila, self.col);
+                self.borrar_fila(fila, col, col.saturating_add(uno(0)));
+            }
+            // Subir y bajar la región sin mover el cursor (`SU`/`SD`).
+            'S' if !privado => {
+                let (arriba, abajo) = self.region;
+                self.subir_region(arriba, abajo, uno(0));
+            }
+            'T' if !privado => {
+                let (arriba, abajo) = self.region;
+                self.bajar_region(arriba, abajo, uno(0));
+            }
+            // `REP`: repetir el último carácter impreso. Un `tput rep` lo usa
+            // para pintar una línea de guiones con cuatro bytes.
+            'b' if !privado => {
+                if let Some(c) = self.ultimo {
+                    for _ in 0..uno(0) {
+                        self.poner(c);
                     }
                 }
             }
-            'K' if !privado => {
-                let (fila, col, ancho) = (self.fila, self.col, self.ancho);
-                match cero(0) {
-                    0 => self.borrar_fila(fila, col, ancho),
-                    1 => self.borrar_fila(fila, 0, col.saturating_add(1)),
-                    _ => self.borrar_fila(fila, 0, ancho),
+            // `DECSTBM`: la región de scroll. Sin parámetros vuelve a ser la
+            // pantalla entera, y el cursor va a su esquina — eso lo dice la
+            // norma y lo dan por hecho los programas que la fijan.
+            'r' if !privado => {
+                let arriba = codigos.first().copied().filter(|v| *v != 0).unwrap_or(1) - 1;
+                let abajo = codigos
+                    .get(1)
+                    .copied()
+                    .filter(|v| *v != 0)
+                    .unwrap_or(self.alto)
+                    - 1;
+                let (arriba, abajo) = (arriba.min(self.alto - 1), abajo.min(self.alto - 1));
+                // Una región al revés o de una sola fila no se acepta: no hay
+                // nada que desplazar y dejarla puesta rompe el scroll normal.
+                if arriba < abajo {
+                    self.region = (arriba, abajo);
+                    self.fila = arriba;
+                    self.col = 0;
                 }
             }
-            'h' | 'l' if privado && codigos.first() == Some(&25) => {
-                self.cursor_visible = accion == 'h';
+            // `SCP`/`RCP`, los gemelos de `ESC 7`/`ESC 8` en forma de CSI.
+            's' if !privado => self.guardar_cursor(),
+            'u' if !privado => self.restaurar_cursor(),
+            'h' | 'l' if privado => {
+                let encender = accion == 'h';
+                match codigos.first() {
+                    Some(&25) => self.cursor_visible = encender,
+                    // La pantalla ALTERNA. `1049` es la moderna —aparta
+                    // pantalla Y cursor— y `47`/`1047` la vieja, que solo
+                    // aparta la pantalla. Es la que hace que un `less` no deje
+                    // su último fotograma pegado al salir.
+                    Some(&1049) => self.pantalla_alterna(encender, true),
+                    Some(&47 | &1047) => self.pantalla_alterna(encender, false),
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn esc_dispatch(&mut self, intermedios: &[u8], _ignora: bool, byte: u8) {
+        match (intermedios.first(), byte) {
+            // `DECSC`/`DECRC`: guardar y restaurar el cursor.
+            (None, b'7') => self.guardar_cursor(),
+            (None, b'8') => self.restaurar_cursor(),
+            // `RIS`: reinicio completo. Lo manda un `reset`, y también un
+            // programa que se encontró la pantalla en un estado que no
+            // entiende — que es justo cuando hay que obedecer.
+            (None, b'c') => {
+                let (ancho, alto) = (self.ancho, self.alto);
+                *self = Self::nueva(ancho, alto);
+            }
+            // `ESC ( 0` y `ESC ( B`: el juego de caracteres de dibujo de
+            // líneas y la vuelta a ASCII. Ignorarlo hacía que un programa que
+            // dibuja cajas imprimiera `lqqqk` donde quería esquinas.
+            (Some(b'('), b'0') => self.dibujo = true,
+            (Some(b'('), b'B') => self.dibujo = false,
+            // `IND` y `NEL` bajan una línea (con scroll de región); `RI` sube.
+            (None, b'D') => self.bajar(),
+            (None, b'E') => {
+                self.bajar();
+                self.col = 0;
+            }
+            (None, b'M') => {
+                let (arriba, abajo) = self.region;
+                if self.fila == arriba {
+                    self.bajar_region(arriba, abajo, 1);
+                } else {
+                    self.fila = self.fila.saturating_sub(1);
+                }
             }
             _ => {}
         }
@@ -541,12 +846,248 @@ impl Pantalla {
         self.rejilla.cursor_visible = vieja.cursor_visible;
         self.rejilla.fila = vieja.fila.min(alto - 1);
         self.rejilla.col = vieja.col.min(ancho);
+        self.rejilla.dibujo = vieja.dibujo;
+        self.rejilla.ultimo = vieja.ultimo;
+        // El cursor guardado y la región se ACOTAN al tamaño nuevo en vez de
+        // tirarse: un `vim` que redimensiona mientras tiene su región puesta
+        // no la vuelve a mandar, y perderla le desharía la línea de estado.
+        // Una región que ya no cabe vuelve a ser la pantalla entera, que es lo
+        // que un terminal de verdad hace.
+        self.rejilla.guardado = vieja
+            .guardado
+            .map(|(f, c, e)| (f.min(alto - 1), c.min(ancho), e));
+        let (arriba, abajo) = vieja.region;
+        self.rejilla.region = if arriba < abajo.min(alto - 1) {
+            (arriba.min(alto - 1), abajo.min(alto - 1))
+        } else {
+            (0, alto - 1)
+        };
+        // Y la pantalla apartada se conserva RECORTADA: perderla dejaría a un
+        // `less` sin nada que devolver al salir, que es el fallo que la
+        // pantalla alterna existe para no tener.
+        self.rejilla.alterna = vieja.alterna.map(|g| {
+            let mut celdas = vec![Celda::default(); usize::from(ancho) * usize::from(alto)];
+            for fila in 0..alto.min(vieja.alto) {
+                for col in 0..ancho.min(vieja.ancho) {
+                    let destino = usize::from(fila) * usize::from(ancho) + usize::from(col);
+                    let origen = usize::from(fila) * usize::from(vieja.ancho) + usize::from(col);
+                    if let Some(c) = g.celdas.get(origen) {
+                        celdas[destino] = c.clone();
+                    }
+                }
+            }
+            Box::new(Guardada {
+                celdas,
+                fila: g.fila.min(alto - 1),
+                col: g.col.min(ancho),
+                estilo: g.estilo,
+                region: (0, alto - 1),
+            })
+        });
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Las filas con texto, sin los rellenos de la derecha: es lo que un test
+    /// quiere comparar y escribirlo a mano en cada uno era la mitad del ruido.
+    fn pantalla(p: &Pantalla, alto: u16) -> Vec<String> {
+        (0..alto)
+            .map(|f| p.fila_texto(f).trim_end().to_owned())
+            .collect()
+    }
+
+    /// **La pantalla ALTERNA devuelve exactamente lo que había** (#366).
+    ///
+    /// Es el punto entero de `CSI ?1049h`: un `less` o un `vim` entran, pintan
+    /// sobre una pantalla limpia y al salir la de antes vuelve TAL CUAL. Sin
+    /// esto, lo que quedaba pegado en el panel era el último fotograma del
+    /// programa que acababa de salir — el fallo que se ve como roto y no como
+    /// pobre.
+    #[test]
+    fn la_pantalla_alterna_devuelve_lo_que_habia() {
+        let mut p = Pantalla::nueva(10, 3);
+        p.alimentar(b"uno\r\ndos\r\ntres");
+        let antes = pantalla(&p, 3);
+        let cursor_antes = p.cursor();
+
+        // Entra un programa de pantalla completa y pinta lo suyo.
+        p.alimentar(b"\x1b[?1049h");
+        assert_eq!(
+            pantalla(&p, 3),
+            vec![String::new(), String::new(), String::new()],
+            "la alterna empieza limpia"
+        );
+        assert_eq!(p.cursor(), (0, 0), "y con el cursor en la esquina");
+        p.alimentar(b"visor");
+        assert_eq!(p.fila_texto(0).trim_end(), "visor");
+
+        // Y sale.
+        p.alimentar(b"\x1b[?1049l");
+        assert_eq!(pantalla(&p, 3), antes, "no volvió lo que había");
+        assert_eq!(p.cursor(), cursor_antes, "ni el cursor");
+    }
+
+    /// **Redimensionar con la alterna puesta no pierde la pantalla de abajo.**
+    ///
+    /// Es fácil de olvidar porque el cambio de tamaño construye una rejilla
+    /// nueva: si lo apartado no viaja con ella, un `less` al que el lector
+    /// cambia el tamaño de la ventana se queda sin nada que devolver al salir
+    /// — justo el fallo que la pantalla alterna existe para no tener.
+    #[test]
+    fn redimensionar_con_la_alterna_puesta_no_pierde_lo_de_abajo() {
+        let mut p = Pantalla::nueva(10, 3);
+        p.alimentar(b"real");
+        p.alimentar(b"\x1b[?1049h");
+        p.alimentar(b"visor");
+        p.redimensionar(12, 4);
+        p.alimentar(b"\x1b[?1049l");
+        assert_eq!(p.fila_texto(0).trim_end(), "real");
+    }
+
+    /// Entrar dos veces en la alterna no apila: la segunda no hace nada. Si
+    /// apilara, la pantalla de VERDAD se perdería al salir una sola vez.
+    #[test]
+    fn entrar_dos_veces_en_la_alterna_no_pierde_la_de_verdad() {
+        let mut p = Pantalla::nueva(10, 2);
+        p.alimentar(b"real");
+        p.alimentar(b"\x1b[?1049h");
+        p.alimentar(b"primera");
+        p.alimentar(b"\x1b[?1049h");
+        p.alimentar(b"\x1b[?1049l");
+        assert_eq!(p.fila_texto(0).trim_end(), "real");
+    }
+
+    /// **La región de scroll deja quieto lo que hay fuera** (#366).
+    ///
+    /// Lo usa todo lo que fija una línea de estado. Sin ella, esa línea se iba
+    /// desplazando hacia arriba con cada salto hasta salirse de la pantalla.
+    #[test]
+    fn la_region_de_scroll_no_mueve_lo_de_fuera() {
+        let mut p = Pantalla::nueva(10, 4);
+        // Una cabecera fija arriba y la región en las tres de abajo.
+        p.alimentar(b"cabecera\x1b[2;4r");
+        // `DECSTBM` deja el cursor en la esquina de la región.
+        assert_eq!(p.cursor(), (1, 0));
+        p.alimentar(b"a\r\nb\r\nc\r\nd");
+        assert_eq!(
+            pantalla(&p, 4),
+            vec![
+                "cabecera".to_owned(),
+                "b".to_owned(),
+                "c".to_owned(),
+                "d".to_owned()
+            ],
+            "la cabecera se movió, o la región no desplazó"
+        );
+    }
+
+    /// `CHA` y `VPA`: posición absoluta en un solo eje. Las usa cualquier
+    /// prompt que se repinta, y sin ellas escribía donde estuviera.
+    #[test]
+    fn la_posicion_absoluta_de_un_solo_eje() {
+        let mut p = Pantalla::nueva(10, 3);
+        p.alimentar(b"abcdef\x1b[3Gx");
+        assert_eq!(p.fila_texto(0).trim_end(), "abxdef");
+        // `VPA` mueve la FILA y deja la columna donde estaba: ésa es la mitad
+        // que la distingue de un `CUP`, y la que un prompt aprovecha.
+        assert_eq!(p.cursor(), (0, 3));
+        p.alimentar(b"\x1b[3dy");
+        assert_eq!(p.cursor().0, 2, "VPA no llevó a la fila 3");
+        assert_eq!(p.celda(2, 3).map(|c| c.c), Some('y'));
+    }
+
+    /// Insertar y borrar caracteres en la fila: lo que un editor de línea usa
+    /// para no repintar la línea entera en cada tecla.
+    #[test]
+    fn insertar_y_borrar_caracteres_en_la_fila() {
+        let mut p = Pantalla::nueva(10, 1);
+        p.alimentar(b"abcdef\x1b[1G\x1b[2@");
+        assert_eq!(p.fila_texto(0).trim_end(), "  abcdef");
+        p.alimentar(b"\x1b[1G\x1b[3P");
+        assert_eq!(p.fila_texto(0).trim_end(), "bcdef");
+        // `ECH` borra SIN mover ni tirar del resto.
+        p.alimentar(b"\x1b[1G\x1b[2X");
+        assert_eq!(p.fila_texto(0).trim_end(), "  def");
+    }
+
+    /// Insertar y borrar LÍNEAS, dentro de la región.
+    #[test]
+    fn insertar_y_borrar_lineas() {
+        let mut p = Pantalla::nueva(10, 4);
+        p.alimentar(b"a\r\nb\r\nc\r\nd\x1b[2;1H\x1b[L");
+        assert_eq!(
+            pantalla(&p, 4),
+            vec![
+                "a".to_owned(),
+                String::new(),
+                "b".to_owned(),
+                "c".to_owned()
+            ],
+        );
+        p.alimentar(b"\x1b[2;1H\x1b[M");
+        assert_eq!(
+            pantalla(&p, 4),
+            vec![
+                "a".to_owned(),
+                "b".to_owned(),
+                "c".to_owned(),
+                String::new()
+            ],
+        );
+    }
+
+    /// Guardar y restaurar el cursor, con su ESTILO: restaurar la posición y
+    /// dejar el color de otro sitio es lo que saca un prompt a medio pintar.
+    #[test]
+    fn guardar_y_restaurar_el_cursor_lleva_el_estilo() {
+        let mut p = Pantalla::nueva(10, 2);
+        p.alimentar(b"\x1b[31m\x1b[1;3H\x1b7");
+        p.alimentar(b"\x1b[0m\x1b[2;1Hxx\x1b8y");
+        assert_eq!(p.cursor(), (0, 3), "el cursor no volvió a donde se guardó");
+        let c = p.celda(0, 2).expect("dentro");
+        assert_eq!(c.c, 'y');
+        assert_eq!(
+            c.estilo.fg,
+            ColorTerm::Indexado(1),
+            "restauró la posición y no el estilo"
+        );
+    }
+
+    /// `RIS` deja la pantalla como recién abierta: es lo que manda un `reset`,
+    /// y lo manda quien se encontró la pantalla en un estado que no entiende.
+    #[test]
+    fn ris_reinicia_del_todo() {
+        let mut p = Pantalla::nueva(10, 3);
+        p.alimentar(b"\x1b[31mhola\x1b[2;3r\x1b[?25l");
+        p.alimentar(b"\x1bc");
+        assert_eq!(
+            pantalla(&p, 3),
+            vec![String::new(), String::new(), String::new()]
+        );
+        assert_eq!(p.cursor(), (0, 0));
+        assert!(p.cursor_visible(), "el cursor siguió escondido");
+    }
+
+    /// `REP` repite el último carácter impreso: un `tput rep` pinta una línea
+    /// de guiones con cuatro bytes en vez de con ochenta.
+    #[test]
+    fn rep_repite_el_ultimo() {
+        let mut p = Pantalla::nueva(10, 1);
+        p.alimentar(b"-\x1b[4b");
+        assert_eq!(p.fila_texto(0).trim_end(), "-----");
+    }
+
+    /// El juego de DIBUJO: sin él, un programa que dibuja cajas imprimía
+    /// `lqqqk` donde quería una esquina y tres rayas.
+    #[test]
+    fn el_juego_de_dibujo_pinta_lineas_y_no_letras() {
+        let mut p = Pantalla::nueva(10, 1);
+        p.alimentar(b"\x1b(0lqqk\x1b(Bx");
+        assert_eq!(p.fila_texto(0).trim_end(), "┌──┐x");
+    }
 
     #[test]
     fn el_texto_llena_la_fila_y_el_salto_baja() {
