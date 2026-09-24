@@ -174,15 +174,28 @@ impl Default for Nonce {
 /// use norte_frontend::subshell::{Nonce, install};
 ///
 /// let n = Nonce::new();
-/// let texto = install(Shell::Bash, &n);
+/// let texto = install(Shell::Bash, &n, std::path::Path::new("/run/user/1000/norte/b.cd"));
 /// assert!(texto.contains("PROMPT_COMMAND"));
 /// // Ni un solo byte de control salvo los saltos de línea que envían cada
 /// // orden: lo demás lo interpretaría el editor de línea, no el shell.
 /// assert!(texto.bytes().all(|b| b == b'\n' || (0x20..0x7f).contains(&b)));
 /// ```
 #[must_use]
-pub fn install(shell: Shell, nonce: &Nonce) -> String {
+pub fn install(shell: Shell, nonce: &Nonce, buzon: &std::path::Path) -> String {
+    use std::os::unix::ffi::OsStrExt as _;
     let (pre, n) = (marker_format_prefix(), nonce.as_str());
+    // La ruta del buzón entra ESCAPADA en octal, como el destino de un `cd`
+    // entraba antes: es una ruta del sistema y puede llevar cualquier byte,
+    // incluidas comillas. Lo que se manda por el pty no puede llevar ni un
+    // byte de control (lo interpretaría el editor de línea), así que va como
+    // formato de `printf` y el shell la reconstruye.
+    let mut buzon_esc = String::new();
+    for b in buzon.as_os_str().as_bytes() {
+        use std::fmt::Write as _;
+        // El `write!` a un `String` no puede fallar; el `let _` lo dice sin
+        // gastar un `expect` (regla 6).
+        let _ = write!(buzon_esc, "\\{b:03o}");
+    }
     // El cuerpo del gancho: escapa el DLE, luego el BEL, e imprime.
     // `%s` y no `$PWD` interpolado en el formato: un directorio que se llame
     // `%d` no es un especificador de formato, es un directorio.
@@ -192,15 +205,22 @@ pub fn install(shell: Shell, nonce: &Nonce) -> String {
                 "local p=${PWD//$'\\020'/$'\\020\\020'}; ",
                 "p=${p//$'\\a'/$'\\020'G}; "
             );
-            let hook = format!(" __norte_cwd() {{ {cuerpo}printf '{pre}{n};%s\\a' \"$p\"; }}\n");
-            // `printf \"$1\"`: el argumento es el FORMATO, y lo que norte manda
-            // ahí son escapes octales y nada más. El `_` final es un centinela:
-            // `$(...)` se come los saltos de línea del final, y un directorio
-            // PUEDE acabar en uno.
-            let cd = " __norte_cd() { local d; d=$(printf \"$1\"); cd -- \"${d%_}\"; }\n";
+            // El `cd` va DENTRO del gancho y antes de anunciar el directorio:
+            // así el marcador dice dónde se ha quedado el shell, no dónde
+            // estaba. Una función y un registro en vez de dos, que además
+            // borra la invariante de orden que hacía falta cuando eran dos.
+            //
+            // `${d%_}` quita el centinela: `$(<f)` se come los saltos de línea
+            // del final y un directorio PUEDE acabar en uno.
+            let mover = format!(
+                "local f d; f=$(printf '{buzon_esc}'); \
+                 if [ -s \"$f\" ]; then d=$(<\"$f\"); : > \"$f\"; cd -- \"${{d%_}}\" || true; fi; "
+            );
+            let hook =
+                format!(" __norte_cwd() {{ {mover}{cuerpo}printf '{pre}{n};%s\\a' \"$p\"; }}\n");
             match shell {
                 Shell::Zsh => format!(
-                    " setopt hist_ignore_space 2>/dev/null\n{hook}{cd} \
+                    " setopt hist_ignore_space 2>/dev/null\n{hook} \
                      precmd_functions+=(__norte_cwd)\n"
                 ),
                 // `PROMPT_COMMAND` se ACUMULA con lo que hubiera: el prompt del
@@ -210,7 +230,7 @@ pub fn install(shell: Shell, nonce: &Nonce) -> String {
                 // Terminal—, donde la concatenación de cadenas pisa el elemento
                 // 0 y se lleva por delante el resto en silencio.
                 _ => format!(
-                    " HISTCONTROL=ignorespace:${{HISTCONTROL}}\n{hook}{cd} \
+                    " HISTCONTROL=ignorespace:${{HISTCONTROL}}\n{hook} \
                      if [[ ${{PROMPT_COMMAND@a}} == *a* ]]; \
                      then PROMPT_COMMAND+=(__norte_cwd); \
                      else PROMPT_COMMAND=\"__norte_cwd${{PROMPT_COMMAND:+;$PROMPT_COMMAND}}\"; fi\n"
@@ -222,16 +242,18 @@ pub fn install(shell: Shell, nonce: &Nonce) -> String {
         // del lector. `string collect` conserva los saltos de línea de dentro
         // de un nombre, que la sustitución de comandos partiría en argumentos.
         //
-        // `__norte_cd` se define ANTES del gancho, y el orden es la invariante
-        // de `el_gancho_se_registra_cuando_el_cd_ya_existe`: en fish el gancho
-        // se registra al definirlo, así que con el orden contrario el primer
-        // marcador podía salir —y dar permiso para teclear el `cd`— con la
-        // línea que define `__norte_cd` todavía sin consumir.
+        // Una sola función, igual que en los otros dos: el `cd` va dentro y
+        // antes del anuncio. Cuando eran dos, el orden en que se definían era
+        // una invariante que había que recordar —en fish el gancho se registra
+        // al definirlo, así que al revés el primer marcador salía con la línea
+        // del `cd` todavía sin consumir—. Ya no hay orden que recordar.
         Shell::Fish => format!(
-            " function __norte_cd; \
-             set -l d (printf \"$argv[1]\" | string collect); \
-             cd -- (string sub -s 1 -e -1 -- \"$d\"); end\n \
-             function __norte_cwd --on-event fish_prompt; \
+            " function __norte_cwd --on-event fish_prompt; \
+             set -l f (printf '{buzon_esc}' | string collect); \
+             if test -s \"$f\"; \
+             set -l d (cat -- \"$f\" | string collect); \
+             printf '' > \"$f\"; \
+             cd -- (string sub -s 1 -e -1 -- \"$d\") 2>/dev/null; end; \
              set -l p (string replace -a -- \\x10 \\x10\\x10 $PWD | \
              string replace -a -- \\a \\x10G | string collect); \
              printf '{pre}{n};%s\\a' \"$p\"; end\n"
@@ -409,55 +431,6 @@ fn payload_cwd(payload: &[u8], nonce: &Nonce) -> Option<Vec<u8>> {
     (dir.first() == Some(&b'/')).then_some(dir)
 }
 
-/// La orden que lleva al subshell a `dir`, en BYTES listos para el pty.
-///
-/// `None` si el shell no es uno de los que norte sabe preparar (no se le
-/// instaló `__norte_cd`, así que teclear el `cd` sería un error de sintaxis
-/// impreso en la cara del lector en cada pulsación) o si `dir` lleva un NUL,
-/// que ningún nombre de fichero puede tener y que el editor de línea se
-/// tragaría en silencio, dejando al shell en una ruta un byte más corta que la
-/// que norte cree.
-///
-/// Todo lo que sale de aquí es ASCII IMPRIMIBLE: la ruta viaja como escapes
-/// octales dentro del formato de un `printf`. Ese es el punto entero — ver la
-/// regla del módulo. Entrecomillar no valía: los bytes de control no llegan al
-/// parser del shell, los ejecuta el editor de línea antes.
-///
-/// El `\137` final (`_`) es un centinela que la función instalada quita: la
-/// sustitución de comandos se come los saltos de línea finales, y un directorio
-/// puede acabar en uno.
-///
-/// ```
-/// use norte_frontend::shell::Shell;
-/// use norte_frontend::subshell::cd_command;
-///
-/// let cmd = cd_command(Shell::Bash, b"/tmp").unwrap();
-/// assert_eq!(cmd, b" __norte_cd '\\057\\164\\155\\160\\137'\n");
-/// // Un nombre que empieza por un byte que readline ejecutaría sale como
-/// // dígitos octales, igual que cualquier otro.
-/// let malo = cd_command(Shell::Bash, b"/\x15id #").unwrap();
-/// assert!(malo.iter().all(|b| *b == b'\n' || (0x20..0x7f).contains(b)));
-/// assert!(cd_command(Shell::Bash, b"/tmp/a\0b").is_none());
-/// ```
-#[must_use]
-pub fn cd_command(shell: Shell, dir: &[u8]) -> Option<Vec<u8>> {
-    // El shell entra por TIPO y no por nombre, y eso es la mitad de la
-    // garantía: `Shell::parse` devuelve `None` para un `nu` o un `elvish`, así
-    // que a un shell que norte no sabe preparar no se le teclea nada. Antes se
-    // le mandaba el `cd` igual, y cada pulsación le imprimía un error de
-    // sintaxis en la cara al lector.
-    let (Shell::Bash | Shell::Zsh | Shell::Fish) = shell;
-    if dir.contains(&0) {
-        return None;
-    }
-    let mut out = b" __norte_cd '".to_vec();
-    for b in dir.iter().chain(std::iter::once(&b'_')) {
-        out.extend_from_slice(format!("\\{b:03o}").as_bytes());
-    }
-    out.extend_from_slice(b"'\n");
-    Some(out)
-}
-
 /// Los bytes que un acorde le manda a un shell, o `None` si ahí no significa
 /// nada.
 ///
@@ -633,48 +606,71 @@ mod tests {
     fn norte_jamas_teclea_un_byte_de_control() {
         let n = nonce();
         for shell in [Shell::Bash, Shell::Zsh, Shell::Fish] {
-            let texto = install(shell, &n);
+            // Una ruta de buzón con bytes hostiles: va por el mismo camino
+            // de escapes octales que iba el destino de un `cd`.
+            let texto = install(shell, &n, std::path::Path::new("/tmp/\x15\x01'b"));
             assert!(
                 texto
                     .bytes()
                     .all(|b| b == b'\n' || (0x20..0x7f).contains(&b)),
                 "{shell:?}: el gancho lleva un byte que el editor de línea ejecutaría"
             );
-            let cd = cd_command(shell, b"/tmp/\x15\x01\x7f\x1b").expect("shell conocido");
+        }
+    }
+
+    /// **El gancho hace el `cd` ANTES de anunciar el directorio.**
+    ///
+    /// Es una sola función y ese orden es su invariante: si anunciara primero,
+    /// el marcador diría dónde estaba el shell y no dónde se ha quedado, y el
+    /// panel se quedaría un prompt por detrás de sí mismo.
+    ///
+    /// Antes eran dos —una para el `cd`, otra para anunciar— y el orden en que
+    /// se DEFINÍAN era la invariante: en fish el gancho se registra al
+    /// definirlo, así que al revés el primer marcador salía con la línea del
+    /// `cd` todavía sin consumir. Con una función esa invariante desaparece.
+    #[test]
+    fn el_gancho_mueve_antes_de_anunciar() {
+        let n = nonce();
+        for shell in [Shell::Bash, Shell::Zsh, Shell::Fish] {
+            let texto = install(shell, &n, std::path::Path::new("/tmp/buzon"));
+            let mueve = texto.find("cd --").expect("el gancho mueve");
+            let anuncia = texto.find("777;norte-cwd;").expect("el gancho anuncia");
             assert!(
-                cd.iter().all(|b| *b == b'\n' || (0x20..0x7f).contains(b)),
-                "{shell:?}: el cd lleva un byte que el editor de línea ejecutaría"
+                mueve < anuncia,
+                "{shell:?}: anuncia el directorio antes de haberse movido"
+            );
+            assert_eq!(
+                texto.matches("--on-event fish_prompt").count()
+                    + texto.matches("precmd_functions").count()
+                    + texto.matches("PROMPT_COMMAND+=").count(),
+                usize::from(shell != Shell::Bash) + usize::from(shell == Shell::Bash),
+                "{shell:?}: un solo registro, no dos"
             );
         }
     }
 
-    /// **El gancho se registra cuando `__norte_cd` ya existe**, en los tres.
+    /// **El gancho no teclea ningún `cd`: lo recoge de un fichero** (#363).
     ///
-    /// El marcador es lo que autoriza a teclear el `cd`, y la fontanería entera
-    /// se manda de un tirón: en cuanto el gancho está puesto, el primer prompt
-    /// lo imprime, y eso puede pasar con las líneas de detrás todavía sin
-    /// consumir. Si `__norte_cd` fuera una de ellas, el permiso llegaría antes
-    /// que la función. Hoy no se cae —la cola del tty es FIFO, así que el `cd`
-    /// se lee después de la definición—, y lo que se perdería si algo vaciara
-    /// la cola es un `Unknown command` en la cara del lector, no una orden mal
-    /// dirigida. Aun así el orden correcto es gratis, y bash y zsh ya lo tenían
-    /// por accidente: registran en la ÚLTIMA línea.
+    /// Teclearlo exigía saber que el editor de línea estaba en un prompt
+    /// vacío, y eso no se puede saber desde fuera: la pila de buffers de zsh
+    /// (`push-line`, `print -z`) y el type-ahead de los tres llegaban a
+    /// «marcador recibido y nadie escribió» con una línea a medias del lector
+    /// esperando. El `cd` se concatenaba y el shell EJECUTABA una orden que
+    /// nadie dio.
     #[test]
-    fn el_gancho_se_registra_cuando_el_cd_ya_existe() {
+    fn el_gancho_recoge_el_destino_de_un_fichero_y_no_lo_teclea() {
         let n = nonce();
-        for (shell, registro) in [
-            (Shell::Bash, "PROMPT_COMMAND"),
-            (Shell::Zsh, "precmd_functions"),
-            // En fish el gancho SE REGISTRA al definirlo: `--on-event` es el
-            // registro, no hay una línea aparte que lo ate.
-            (Shell::Fish, "--on-event fish_prompt"),
-        ] {
-            let texto = install(shell, &n);
-            let cd = texto.find("__norte_cd").expect("define el cd");
-            let puesto = texto.find(registro).expect("registra el gancho");
+        for shell in [Shell::Bash, Shell::Zsh, Shell::Fish] {
+            let texto = install(shell, &n, std::path::Path::new("/run/u/norte/b.cd"));
             assert!(
-                cd < puesto,
-                "{shell:?}: el gancho queda puesto antes de que `__norte_cd` exista"
+                !texto.contains("__norte_cd"),
+                "{shell:?}: sigue existiendo la función que se tecleaba"
+            );
+            // La ruta del buzón va escapada en octal, como iba el destino:
+            // `/` es `\057`, y su presencia dice que el gancho la lleva.
+            assert!(
+                texto.contains("\\057\\162\\165\\156"),
+                "{shell:?}: el gancho no lleva la ruta del buzón: {texto}"
             );
         }
     }
@@ -685,13 +681,12 @@ mod tests {
     fn el_gancho_imprime_el_marcador_entero() {
         let n = nonce();
         for shell in [Shell::Bash, Shell::Zsh, Shell::Fish] {
-            let texto = install(shell, &n);
+            let texto = install(shell, &n, std::path::Path::new("/tmp/buzon"));
             assert!(
                 texto.contains("\\033]777;norte-cwd;"),
                 "{shell:?}: sin el prefijo OSC no hay marcador"
             );
             assert!(texto.contains(n.as_str()), "{shell:?}: sin nonce");
-            assert!(texto.contains("__norte_cd"), "{shell:?}: sin la función cd");
         }
     }
 
@@ -701,7 +696,7 @@ mod tests {
     /// el elemento 0 llevándose el resto por delante sin decir nada.
     #[test]
     fn el_gancho_de_bash_no_pisa_el_prompt_del_lector() {
-        let texto = install(Shell::Bash, &nonce());
+        let texto = install(Shell::Bash, &nonce(), std::path::Path::new("/tmp/buzon"));
         assert!(texto.contains("${PROMPT_COMMAND:+;$PROMPT_COMMAND}"));
         assert!(texto.contains("PROMPT_COMMAND+=(__norte_cwd)"));
         assert!(texto.contains("@a"), "sin la prueba de array");
@@ -833,15 +828,21 @@ mod tests {
         assert_eq!(s.cwd.as_deref(), Some(&b"/dos"[..]));
     }
 
-    /// **El `cd` no deja escapar una orden, y la defensa NO son las comillas.**
+    /// **La ruta del BUZÓN no deja escapar una orden, y la defensa NO son las
+    /// comillas.**
     ///
-    /// Los cinco primeros nombres los paraba ya el entrecomillado. Los tres
-    /// últimos no: son bytes que readline EJECUTA (`0x15` borra la línea,
+    /// Antes esto probaba el `cd` que norte tecleaba. Desde #363 no se teclea
+    /// ninguno, pero la ruta del buzón viaja por el mismo camino y dentro del
+    /// gancho, así que la propiedad es la misma y hace falta igual: es una
+    /// ruta del sistema y puede llevar cualquier byte.
+    ///
+    /// Los nombres hostiles corrientes los pararía el entrecomillado. Los tres
+    /// del final no: son bytes que readline EJECUTA (`0x15` borra la línea,
     /// `0x01` salta al principio, `0x7f` borra hacia atrás), así que nunca
-    /// llegaban al parser que la comilla protege. `/tmp/\x15id #` ejecutaba
-    /// `id`. La defensa es que la ruta viaja en octal.
+    /// llegan al parser que la comilla protege. La defensa es que la ruta
+    /// viaja en octal.
     #[test]
-    fn el_cd_no_deja_escapar_una_orden() {
+    fn la_ruta_del_buzon_no_deja_escapar_una_orden() {
         // El CORPUS canónico, no una lista inventada aquí (convención del
         // repo): las tres fixtures `readline_*` entraron por esto, y una lista
         // local habría dejado el fallo fuera del sitio donde el resto de norte
@@ -863,33 +864,27 @@ mod tests {
             .into_iter()
             .map(<[u8]>::to_vec),
         );
+        let n = nonce();
         for nombre in &nombres {
-            let nombre = nombre.as_slice();
-            let cmd = cd_command(Shell::Bash, nombre).expect("shell conocido");
-            assert!(
-                cmd.iter().all(|b| *b == b'\n' || (0x20..0x7f).contains(b)),
-                "{nombre:?} viajó con un byte que el editor de línea ejecuta"
-            );
-            // Y los bytes de la ruta están TODOS ahí, en octal y en orden.
-            let mut esperado = String::new();
-            for b in nombre.iter().chain(std::iter::once(&b'_')) {
-                use std::fmt::Write as _;
-                write!(esperado, "\\{b:03o}").expect("String no falla");
+            use std::os::unix::ffi::OsStrExt as _;
+            let buzon = std::path::Path::new(std::ffi::OsStr::from_bytes(nombre));
+            for shell in [Shell::Bash, Shell::Zsh, Shell::Fish] {
+                let texto = install(shell, &n, buzon);
+                assert!(
+                    texto
+                        .bytes()
+                        .all(|b| b == b'\n' || (0x20..0x7f).contains(&b)),
+                    "{nombre:?} viajó con un byte que el editor de línea ejecuta"
+                );
+                // Y los bytes de la ruta están TODOS ahí, en octal y en orden.
+                let mut esperado = String::new();
+                for b in nombre {
+                    use std::fmt::Write as _;
+                    write!(esperado, "\\{b:03o}").expect("String no falla");
+                }
+                assert!(texto.contains(&esperado), "{nombre:?} en {shell:?}");
             }
-            assert_eq!(
-                cmd,
-                format!(" __norte_cd '{esperado}'\n").into_bytes(),
-                "{nombre:?}"
-            );
         }
-    }
-
-    /// Un NUL no puede estar en un nombre de fichero, pero `cd_command` es
-    /// pública y toma bytes: si llegara, readline se lo tragaría en silencio y
-    /// el shell acabaría en una ruta un byte más corta que la que norte cree.
-    #[test]
-    fn un_nul_no_se_manda() {
-        assert_eq!(cd_command(Shell::Bash, b"/tmp/a\0b"), None);
     }
 
     fn browse(src: &str) -> Effective {

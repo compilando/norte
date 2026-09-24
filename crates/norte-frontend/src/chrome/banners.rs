@@ -253,6 +253,7 @@ fn clave_de_fallo(reason: &str) -> Option<&'static str> {
         "auth-rejected" => Some("failed-reason-auth-rejected"),
         "no-user" => Some("failed-reason-no-user"),
         "agent" => Some("failed-reason-agent"),
+        "rsa-too-small" => Some("failed-reason-rsa-too-small"),
         _ => None,
     }
 }

@@ -213,6 +213,32 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **The subshell is moved through a file now, not by typing at it** (#363,
+  ADR 0153). `Ctrl+O`'s shell follows the panel, and norte did that by writing
+  `__norte_cd '...'` into the pty. Typing at a line editor is only safe when
+  its buffer is empty, and there is no way to ask a shell whether it is: norte
+  approximated it, and a security review found two ways to be wrong.
+  zsh's `push-line` (Ctrl+Q) parks your line, prints a fresh prompt and then
+  puts the line back — so norte saw a prompt and your line was still there.
+  And in all three shells, what you type while the shell is busy waits in the
+  pty queue, so the prompt arrives with your keystrokes unconsumed. Either way
+  the `cd` glued itself onto what you had written and the shell ran an order
+  you never gave: `rm -rf tmpdir __norte_cd '...'`.
+  Now the destination goes into a per-session file (mode 0600, in your runtime
+  directory) and the prompt hook picks it up, which is a moment when the shell
+  is provably between commands. **The visible change**: a panel move lands at
+  the shell's next prompt instead of instantly. That is the honest semantics,
+  and it is what norte already did every time it decided typing was unsafe.
+  Your half-written line is never touched.
+- **An RSA client key shorter than 2048 bits is refused, even with
+  `allow_rsa`** (#370). That opt-in (ADR 0150) buys one named risk — a timing
+  side channel in the RSA implementation — which is identical at 1024 bits and
+  at 4096. A short modulus is a different risk the opt-in never mentioned, so
+  anyone who enabled it was getting something they had not agreed to. The
+  refusal says how many bits the key has and how many it needs, and it is the
+  one key failure that reaches you as a reason rather than a generic
+  "permission denied": the remedy follows from the sentence.
+
 - **Undoing a creation no longer deletes a file the creation did not make**
   (#369, ADR 0152). A `created` entry now records the identity of the node it
   created, and its undo refuses when what is at that path is a different node.

@@ -32,7 +32,7 @@
 use std::io::{Read as _, Write as _};
 use std::sync::{Arc, Mutex};
 
-use norte_frontend::subshell::{Nonce, cd_command, install, scan_cwd};
+use norte_frontend::subshell::{Nonce, install, scan_cwd};
 
 /// El subshell vivo de esta sesión.
 pub struct Subshell {
@@ -51,6 +51,20 @@ pub struct Subshell {
     /// Cuál de los tres es, si es uno de los tres. `None` = norte no le
     /// instaló nada y no le teclea nada.
     cual: Option<norte_frontend::shell::Shell>,
+    /// El BUZÓN de esta sesión: por dónde se le dice al shell que cambie de
+    /// directorio, en vez de teclearle un `cd` (#363).
+    ///
+    /// Un fichero 0600 con un nonce en el nombre, bajo el directorio de
+    /// ejecución del usuario (`$XDG_RUNTIME_DIR`, que ya es 0700 suyo) o bajo
+    /// `/tmp/norte-<uid>` si no lo hay — el mismo sitio y el mismo criterio
+    /// que el socket del daemon. `None` = no se pudo crear, y entonces el
+    /// panel simplemente no arrastra al shell: degradar así es correcto, y
+    /// caerse o volver a teclear el `cd` no lo serían.
+    ///
+    /// Se borra al soltar el subshell. Si norte muere de golpe queda un
+    /// fichero de unas decenas de bytes en un directorio que el sistema
+    /// limpia al cerrar sesión.
+    buzon_fichero: Option<std::path::PathBuf>,
 }
 
 /// La entrada del pty, compartida entre quien adjunta y el hilo lector.
@@ -72,26 +86,6 @@ struct Buzon {
     cwd: Option<Vec<u8>>,
     /// Un marcador partido entre dos lecturas, esperando su final.
     cola: Vec<u8>,
-    /// Llegó un marcador de prompt y NADIE le ha escrito al shell desde
-    /// entonces: está parado, con la línea vacía, esperando una orden.
-    ///
-    /// Es la condición que autoriza a teclearle un `cd` ([`Subshell::ir_a`]).
-    /// Sin ella, el `cd` se concatenaba a lo que el lector hubiera dejado a
-    /// medio escribir —que es justo lo que este subshell promete conservar— y
-    /// el shell EJECUTABA una orden que nadie tecleó: un `rm -rf tmpdir` a
-    /// medias se convertía en `rm -rf tmpdircd -- '/otro/sitio'`. Y si lo que
-    /// había delante era un `vim`, los bytes entraban en su buffer.
-    ///
-    /// La condición es «desde el marcador nadie ESCRIBIÓ», y no «detrás del
-    /// marcador no vino nada». Lo segundo parece más directo y es falso: el
-    /// gancho corre ANTES de que el shell pinte su prompt (`PROMPT_COMMAND`
-    /// primero, `PS1` después), así que detrás del marcador viene SIEMPRE el
-    /// prompt y la condición no se cumplía jamás. Lo que sí distingue los dos
-    /// casos es quién escribe: las teclas del lector pasan por
-    /// [`Subshell::escribir`] igual que las de norte, así que una línea a
-    /// medias baja este flag y solo lo vuelve a subir el marcador del prompt
-    /// SIGUIENTE — el que aparece cuando esa línea se ejecutó o se abandonó.
-    en_prompt: bool,
     /// El pty se cerró: el shell se fue.
     cerrado: bool,
 }
@@ -176,24 +170,29 @@ impl Subshell {
         );
 
         let cual = shell_conocido(&shell);
+        // El buzón se crea ANTES del gancho: el gancho lleva su ruta dentro.
+        let buzon_fichero = cual.and_then(|_| crear_buzon(&nonce));
         let mut yo = Self {
             escritura,
             maestro: par.master,
             hijo,
             buzon,
             cual,
+            buzon_fichero,
         };
-        // El gancho del prompt y la función del `cd` se mandan como si el
-        // lector los tecleara: NO se toca ningún fichero suyo. Un `.bashrc`
-        // que norte editara sería una modificación permanente por una función
-        // que se apaga al salir — y sobreviviría a un norte que ya no está.
-        if let Some(cual) = cual {
-            let _ = yo.escribir(install(cual, &nonce).as_bytes());
+        // El gancho del prompt se manda como si el lector lo tecleara: NO se
+        // toca ningún fichero suyo. Un `.bashrc` que norte editara sería una
+        // modificación permanente por una función que se apaga al salir — y
+        // sobreviviría a un norte que ya no está.
+        //
+        // Sin buzón no se instala nada: el gancho lleva su ruta dentro, y uno
+        // apuntando a un fichero que no existe sería fontanería tecleada en la
+        // cara del lector a cambio de nada.
+        if let (Some(cual), Some(buzon)) = (cual, yo.buzon_fichero.clone()) {
+            let _ = yo.escribir(install(cual, &nonce, &buzon).as_bytes());
             // Ctrl+L: la orden de `readline`/ZLE/fish que limpia la pantalla y
             // repinta el prompt. Sin esto, lo primero que el lector ve en su
             // primer Ctrl+O es la pared de fontanería que acabamos de teclear.
-            // No baja `en_prompt` —ver `escribir_tecla`—, y eso es lo que
-            // impide que se lleve por delante el primer marcador (#360).
             let _ = yo.escribir_tecla(b"\x0c");
         }
         Ok(yo)
@@ -201,93 +200,84 @@ impl Subshell {
 
     /// Le escribe al shell.
     ///
-    /// Toda escritura —las teclas del lector y las órdenes de norte— baja
-    /// `Buzon::en_prompt`: a partir de aquí hay algo en la línea, y no se le
-    /// puede teclear nada más hasta que el prompt siguiente diga que se fue.
-    /// Sin excepciones: lo que sea una TECLA del lector va por
-    /// [`Self::escribir_tecla`], que es donde vive la única que hay.
+    /// **norte ya no le teclea ÓRDENES** (#363): por aquí salen las teclas del
+    /// lector y la fontanería del arranque, nada más. Mover el shell de
+    /// directorio se hace por el buzón y no por el editor de línea — ver
+    /// [`Self::ir_a`].
     ///
     /// # Errors
     /// Lo que falle el pty.
-    ///
-    /// # Panics
-    /// Igual que [`Self::drenar`]: buzón envenenado.
     pub fn escribir(&mut self, bytes: &[u8]) -> std::io::Result<()> {
-        buzon_de(&self.buzon).en_prompt = false;
         escribir_crudo(&self.escritura, bytes)
     }
 
     /// Le escribe al shell UNA TECLA del lector.
     ///
-    /// Es [`Self::escribir`] salvo para las teclas que el editor de línea
-    /// ejecuta sin poner nada en la línea, que no bajan `Buzon::en_prompt`.
-    /// Hoy es una: el Ctrl+L (`0x0c`), que limpia la pantalla y REPINTA el
-    /// prompt dejando el buffer como estaba.
-    ///
-    /// Bajarlo ahí lo dejaba abajo para siempre, y el motivo es que nada lo
-    /// volvería a subir: el marcador del cwd lo imprime `PROMPT_COMMAND` —o
-    /// `precmd`, o el evento de fish—, que el shell corre antes de leer una
-    /// orden NUEVA y no en un repintado. Hasta el Intro siguiente,
-    /// [`Self::ir_a`] decía no y el panel no seguía al shell: la promesa de
-    /// #142, apagada por la tecla de limpiar la pantalla. Y como el arranque
-    /// manda esa misma tecla detrás de la fontanería, bajo carga el primer
-    /// marcador caía entre los dos escritos y se perdía (#360).
-    ///
-    /// **La excepción depende de quién llama, no de los bytes**, y esa es la
-    /// diferencia que importa: un PEGADO llega con contenido cualquiera, y un
-    /// pegado que sea exactamente un `^L` —un separador de página, que en texto
-    /// plano es corriente— se llevaría la excepción sin ser una tecla. Hoy
-    /// además saldría bien por accidente, porque norte no envuelve el pegado en
-    /// `ESC[200~`/`ESC[201~` y el editor de línea lo EJECUTA; el día que lo
-    /// envuelva —que es lo que un `vim` delante pide— ese byte pasaría a ser un
-    /// carácter en la línea con el permiso todavía puesto, o sea el fallo de
-    /// #142 otra vez y sin test que lo pille. El pegado va por
-    /// [`Self::escribir`] y baja el flag siempre.
+    /// Hoy es [`Self::escribir`] y nada más. Se queda como puerta aparte
+    /// porque lo que entra por aquí lo TECLEÓ alguien y lo que entra por la
+    /// otra lo manda norte, y eso conviene que se vea en la llamada. Lo que
+    /// hubo aquí —una exención para el Ctrl+L, que repinta el prompt sin
+    /// tocar la línea— existía para no bajar un permiso que ya no existe:
+    /// desde #363 norte no teclea órdenes, así que no hay permiso que cuidar.
     ///
     /// # Errors
     /// Lo que falle el pty.
-    ///
-    /// # Panics
-    /// Igual que [`Self::drenar`]: buzón envenenado.
     pub fn escribir_tecla(&mut self, bytes: &[u8]) -> std::io::Result<()> {
-        if no_toca_la_linea(bytes) {
-            return escribir_crudo(&self.escritura, bytes);
-        }
         self.escribir(bytes)
     }
 
     /// Manda al shell al directorio `dir` (bytes nativos), SI se le puede.
     ///
-    /// Devuelve si se mandó. Se niega en tres casos, y los tres son la misma
-    /// idea —no teclear en un sitio que no es un prompt vacío—:
+    /// **No le teclea nada** (#363). Deja la ruta en el BUZÓN de esta sesión
+    /// —un fichero 0600 bajo el directorio de ejecución— y el gancho del
+    /// prompt la recoge y hace el `cd` la próxima vez que el shell esté entre
+    /// dos órdenes. Devuelve si se dejó anotada.
     ///
-    /// - el shell no es uno de los tres que norte prepara (no tiene
-    ///   `__norte_cd`, así que el `cd` sería un error de sintaxis impreso en
-    ///   la cara del lector, y en CADA pulsación);
-    /// - el shell no está parado en su prompt (`Buzon::en_prompt`): puede
-    ///   haber una línea a medio escribir —que este subshell promete
-    ///   conservar— o un `vim` delante, y los bytes irían a parar ahí;
-    /// - la ruta lleva un NUL, que ningún nombre puede tener.
+    /// # Por qué no se teclea
+    ///
+    /// Teclear un `cd` exige saber que el editor de línea está en un prompt
+    /// VACÍO, y eso no se puede saber desde fuera. norte lo aproximaba con
+    /// «llegó un marcador de prompt y nadie ha escrito desde entonces», que es
+    /// otra frase, y había al menos dos maneras de cumplir la segunda sin la
+    /// primera:
+    ///
+    /// - la **pila de buffers de zsh**. `push-line` (Ctrl+Q por defecto)
+    ///   aparta la línea, el shell pinta un prompt nuevo —marcador, permiso— y
+    ///   acto seguido la devuelve al buffer. Un `print -z` de una función del
+    ///   lector llega al mismo sitio sin tocar una tecla;
+    /// - el **type-ahead**, en los tres. Lo que el lector teclea mientras el
+    ///   shell está ocupado espera en la cola del pty. El marcador llega con
+    ///   esos bytes todavía sin consumir, y el `cd` se concatenaba a ellos.
+    ///
+    /// En los dos casos el shell EJECUTABA una orden que nadie dio:
+    /// `rm -rf tmpdir __norte_cd '...'`. Con el buzón no hay nada a lo que
+    /// concatenarse —el canal de inyección al editor de línea desaparece— y el
+    /// movimiento ocurre exactamente cuando el shell está demostrablemente
+    /// entre órdenes, que es lo que había que demostrar.
+    ///
+    /// Lo que cambia para el lector: el `cd` se aplica en el prompt siguiente
+    /// y no al instante. Es la semántica honesta, y es lo que ya pasaba cada
+    /// vez que esto se negaba.
+    ///
+    /// Se niega si el shell no es uno de los tres que norte prepara: sin
+    /// gancho no hay quien lea el buzón.
     ///
     /// # Errors
-    /// Lo que falle el pty.
-    ///
-    /// # Panics
-    /// Igual que [`Self::drenar`]: buzón envenenado.
+    /// Lo que falle al escribir el buzón.
     pub fn ir_a(&mut self, dir: &std::path::Path) -> std::io::Result<bool> {
         use std::os::unix::ffi::OsStrExt as _;
-        let Some(cual) = self.cual else {
-            return Ok(false);
-        };
-        if !buzon_de(&self.buzon).en_prompt {
+        if self.cual.is_none() {
             return Ok(false);
         }
-        let Some(cmd) = cd_command(cual, dir.as_os_str().as_bytes()) else {
+        let Some(buzon) = self.buzon_fichero.as_deref() else {
             return Ok(false);
         };
-        // `escribir` baja `en_prompt` solo: hasta que llegue el marcador del
-        // prompt siguiente no se le teclea nada más.
-        self.escribir(&cmd)?;
+        // El `_` final es un centinela y no un adorno: el shell lee el fichero
+        // con `$(<f)`, que se come los saltos de línea del final, y un
+        // directorio PUEDE acabar en uno.
+        let mut bytes = dir.as_os_str().as_bytes().to_vec();
+        bytes.push(b'_');
+        escribir_buzon(buzon, &bytes)?;
         Ok(true)
     }
 
@@ -354,6 +344,14 @@ impl Subshell {
 impl Drop for Subshell {
     fn drop(&mut self) {
         self.matar();
+        // Y se lleva su buzón: es de esta sesión y no le sirve a nadie más.
+        // Un error aquí no se cuenta — el shell ya se fue y no hay a quién
+        // decírselo—, y lo que queda si norte muere de golpe son unas decenas
+        // de bytes en un directorio que el sistema limpia al cerrar sesión.
+        if let Some(p) = &self.buzon_fichero {
+            let _ = std::fs::remove_file(p);
+            let _ = std::fs::remove_file(p.with_extension("cd.tmp"));
+        }
     }
 }
 
@@ -391,26 +389,79 @@ fn buzon_de(buzon: &Mutex<Buzon>) -> std::sync::MutexGuard<'_, Buzon> {
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
-/// ¿Es una tecla que el editor de línea ejecuta SIN poner nada en la línea?
+/// Crea el buzón de esta sesión: un fichero VACÍO y 0600 con el nonce en el
+/// nombre (#363).
 ///
-/// Hoy es una sola: el Ctrl+L (`0x0c`). El por qué —y por qué lo pregunta solo
-/// `Subshell::escribir_tecla`— está ahí.
+/// Vive donde vive el socket del daemon y por el mismo criterio:
+/// `$XDG_RUNTIME_DIR` si lo hay —ya es 0700 del usuario— y si no
+/// `/tmp/norte-<uid>`. El modo se pone al CREARLO y no después: un fichero que
+/// nace 0644 y se arregla luego tiene una ventana en la que otro usuario puede
+/// abrirlo, y lo que se escribe aquí manda a un shell a un directorio.
 ///
-/// Se compara la tecla ENTERA y no se busca el byte dentro: una escritura que
-/// lleve un `0x0c` entre otros bytes sí pone algo en la línea, y las teclas
-/// llegan de una en una ([`tecla_a_bytes`]) — un Alt+Ctrl+L, que viaja como
-/// `ESC 0x0c`, no es ésta.
-///
-/// Vale para la atadura DE FÁBRICA, y no se puede comprobar: `Subshell::arrancar`
-/// usa el `$SHELL` del lector con su configuración entera detrás, y un
-/// `bind '"\C-l": self-insert'` —o una macro de `readline`, que dejaría su texto
-/// en la línea— convierte esto en mentira. norte no puede verlo desde aquí; lo
-/// que sí puede es decirlo en vez de suponerlo.
-fn no_toca_la_linea(bytes: &[u8]) -> bool {
-    bytes == [0x0c]
+/// `None` si no se puede. El llamante degrada: el panel no arrastra al shell y
+/// no se instala el gancho. Es preferible a las dos alternativas —caerse, o
+/// volver a teclear el `cd`—.
+fn crear_buzon(nonce: &Nonce) -> Option<std::path::PathBuf> {
+    use std::os::unix::fs::OpenOptionsExt as _;
+    let dir = match std::env::var_os("XDG_RUNTIME_DIR").filter(|v| !v.is_empty()) {
+        Some(r) => std::path::PathBuf::from(r).join("norte"),
+        // Sin `XDG_RUNTIME_DIR`, el mismo sitio que el socket del daemon:
+        // `/tmp/norte-<uid>`. El uid sale del dueño de un fichero que acabamos
+        // de crear, que es nuestro euid sin `unsafe` (regla 5) — la misma
+        // vuelta que da `norte-client` para nombrar ese directorio.
+        None => std::path::PathBuf::from(format!("/tmp/norte-{}", uid_propio()?)),
+    };
+    std::fs::create_dir_all(&dir).ok()?;
+    let path = dir.join(format!("subshell-{}.cd", nonce.as_str()));
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(&path)
+        .ok()?;
+    Some(path)
 }
 
-/// Escribe al pty SIN tocar `en_prompt`.
+/// El uid de este proceso SIN `unsafe` (regla 5): el dueño de un fichero que
+/// acabamos de crear es nuestro euid.
+///
+/// Solo se usa para NOMBRAR el directorio de `/tmp`, como en `norte-client`.
+/// Lo que protege de verdad es el modo 0700 de ese directorio y el 0600 del
+/// buzón, no el número del nombre.
+fn uid_propio() -> Option<u32> {
+    use std::os::unix::fs::MetadataExt as _;
+    let sonda = std::env::temp_dir().join(format!(".norte-uid-{}", std::process::id()));
+    std::fs::File::create(&sonda).ok()?;
+    let uid = std::fs::metadata(&sonda).ok().map(|m| m.uid());
+    let _ = std::fs::remove_file(&sonda);
+    uid
+}
+
+/// Deja `bytes` en el buzón, de una pieza.
+///
+/// Por temporal y `rename` y no escribiendo encima: el gancho puede leerlo en
+/// cualquier momento —corre en CADA prompt— y media ruta es un `cd` a un sitio
+/// que no es. El `rename` dentro del mismo directorio es atómico, así que el
+/// shell ve la ruta entera o la de antes, nunca un trozo.
+fn escribir_buzon(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write as _;
+    use std::os::unix::fs::OpenOptionsExt as _;
+    let tmp = path.with_extension("cd.tmp");
+    {
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(&tmp)?;
+        f.write_all(bytes)?;
+        f.flush()?;
+    }
+    std::fs::rename(&tmp, path)
+}
+
+/// Escribe al pty.
 ///
 /// Lo usan los dos escritores. La distinción importa: teclear una orden pone
 /// algo en la línea, y contestar una consulta de terminal no — el programa que
@@ -453,12 +504,12 @@ fn lanzar_lector(
                     let s = scan_cwd(&trozo, &nonce);
                     b.cola = s.tail;
                     if let Some(c) = s.cwd {
-                        b.cwd = Some(c);
                         // El gancho del prompt habló: el shell acaba de
-                        // terminar lo que tuviera y va a pintar su `PS1`. Es
-                        // lo ÚNICO que autoriza a teclearle un `cd` (ver
-                        // `Buzon::en_prompt`), y lo baja cualquier escritura.
-                        b.en_prompt = true;
+                        // terminar lo que tuviera y va a pintar su `PS1`. Y ya
+                        // recogió el buzón si había algo, porque el `cd` va
+                        // DENTRO del gancho y antes del anuncio: esto es dónde
+                        // se ha quedado, no dónde estaba.
+                        b.cwd = Some(c);
                     }
                     b.pendiente.extend_from_slice(&s.visible);
                     // Se conserva la COLA de lo escrito: un proceso que
@@ -694,20 +745,28 @@ mod tests {
     ///
     /// Ctrl+L no es una orden: `readline`/ZLE lo ejecutan como una función que
     /// limpia la pantalla y REPINTA el prompt, dejando la línea exactamente
-    /// como estaba. No pone nada en ella, así que no puede quitarle a `ir_a` el
-    /// permiso para teclear.
+    /// como estaba. No pone nada en ella.
     ///
-    /// Lo quitaba. `escribir` baja `en_prompt` para TODO lo que se manda, y el
-    /// repintado de `readline` no corre `PROMPT_COMMAND` —lo corre bash antes
-    /// de leer una orden NUEVA—, así que detrás del Ctrl+L no viene ningún
-    /// marcador y el flag se quedaba abajo hasta que el lector pulsara Intro.
-    /// Entre medias el panel no seguía al shell: la promesa entera de #142,
-    /// apagada por la tecla de limpiar la pantalla.
+    /// Lo apagaba igual. Cuando norte tecleaba el `cd`, hacía falta un permiso
+    /// —«llegó un marcador y nadie ha escrito desde entonces»— y `escribir` lo
+    /// bajaba para TODO lo que se mandara. El repintado no corre
+    /// `PROMPT_COMMAND` —lo corre bash antes de leer una orden NUEVA—, así que
+    /// detrás del Ctrl+L no venía ningún marcador y el permiso se quedaba
+    /// abajo hasta el Intro siguiente. Entre medias el panel no seguía al
+    /// shell: la promesa entera de #142, apagada por la tecla de limpiar la
+    /// pantalla.
     ///
-    /// Y es la carrera que la suite vio una vez bajo carga: el arranque manda
-    /// la fontanería y después un Ctrl+L, y entre los dos escritos cabe el
-    /// primer marcador. Si cabe, el Ctrl+L lo tira y `ir_a` dice no para
-    /// siempre — diez segundos de espera y rojo.
+    /// Desde #363 no hay permiso que bajar: el destino se anota en el buzón
+    /// pase lo que pase, y el gancho lo recoge en el prompt siguiente. El test
+    /// se queda porque la propiedad sigue siendo la misma —un Ctrl+L no puede
+    /// dejar al panel sin poder arrastrar al shell— y porque es la carrera que
+    /// la suite vio una vez bajo carga.
+    ///
+    /// El Intro de en medio es del LECTOR y no de norte: el gancho corre entre
+    /// dos órdenes, así que hace falta que el shell llegue a una. Ése es el
+    /// precio del cambio, y es el que #363 aceptó a cambio de cerrar la
+    /// inyección: el movimiento se aplica en el prompt siguiente y no al
+    /// instante.
     #[test]
     fn un_ctrl_l_no_apaga_el_seguimiento() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -715,7 +774,6 @@ mod tests {
         let otro = dir.join("otro");
         std::fs::create_dir(&otro).expect("mkdir");
         let mut sh = bash(&dir);
-        // Con el shell quieto hay marcador, y por tanto permiso para teclear.
         espera_quieto(&sh);
         sh.escribir_tecla(b"\x0c").expect("ctrl+l");
         let _ = sh.drenar();
@@ -724,6 +782,10 @@ mod tests {
             sh.ir_a(&otro).expect("cd"),
             "un Ctrl+L dejó al panel sin poder seguir al shell"
         );
+        // La línea está vacía, así que el Intro del lector no ejecuta nada:
+        // solo lleva al shell a su prompt siguiente, que es donde el gancho
+        // recoge el buzón.
+        sh.escribir_tecla(b"\n").expect("intro");
         let hasta = std::time::Instant::now() + std::time::Duration::from_secs(10);
         let mut llego = false;
         while std::time::Instant::now() < hasta {
@@ -740,11 +802,16 @@ mod tests {
 
     /// **Una línea a medio escribir no se convierte en una orden.**
     ///
-    /// Es el peor de los fallos que tuvo esto: el `cd` se tecleaba SIEMPRE al
-    /// entrar, así que un `rm -rf tmpdir` que el lector había escrito y no
-    /// ejecutado se convertía en `rm -rf tmpdircd -- '/otro'` en cuanto
-    /// volvía. Y lo que hace que el caso sea normal y no raro es que este
-    /// subshell PROMETE conservar la línea a medias.
+    /// Es el peor de los fallos que tuvo esto: el `cd` se tecleaba al entrar,
+    /// así que un `rm -rf tmpdir` que el lector había escrito y no ejecutado
+    /// se convertía en `rm -rf tmpdircd -- \'/otro\'` en cuanto volvía. Y lo
+    /// que hace el caso normal y no raro es que este subshell PROMETE
+    /// conservar la línea a medias.
+    ///
+    /// Desde #363 no se teclea nada: el destino se deja en el buzón y el
+    /// gancho lo recoge en el prompt siguiente. Así que `ir_a` SÍ acepta —hay
+    /// dónde anotarlo— y lo que se comprueba es que la línea del lector siga
+    /// intacta y que no se ejecute.
     #[test]
     fn una_linea_a_medias_no_se_ejecuta() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -756,29 +823,75 @@ mod tests {
         // medias: las órdenes de instalación producen un prompt cada una, y
         // teclear encima de una que aún no llegó sería una carrera del test.
         espera_quieto(&sh);
-        sh.escribir(b"echo pwned").expect("media línea");
-        std::thread::sleep(std::time::Duration::from_millis(300));
-        let _ = sh.drenar();
-        // Y un Ctrl+L por medio no lo arregla: la excepción de
-        // `escribir_tecla` solo puede DEJAR el permiso como esté, nunca
-        // ponerlo. Sin esta línea, un refactor que leyera «un Ctrl+L significa
-        // que volvemos a un prompt limpio» y subiera el flag pasaría la suite
-        // entera y reabriría el `rm -rf tmpdir` de #142. Va aquí y no en un
-        // test hermano porque la línea a medias es exactamente el estado que
-        // tiene que sobrevivir al repintado.
-        sh.escribir_tecla(b"\x0c").expect("ctrl+l");
+        // `pwn''ed` y no `pwned`: lo que el pty ECOA es la línea tal cual, así
+        // que buscar «pwned» encontraría el eco y no la ejecución. Con las
+        // comillas en medio, la cadena entera solo aparece si bash la ejecutó.
+        sh.escribir(b"echo pwn''ed").expect("media línea");
         std::thread::sleep(std::time::Duration::from_millis(300));
         let _ = sh.drenar();
 
         assert!(
-            !sh.ir_a(&otro).expect("cd"),
-            "con una línea a medias no se teclea nada, ni después de un Ctrl+L"
+            sh.ir_a(&otro).expect("cd"),
+            "hay buzón donde anotarlo, así que se anota"
         );
         std::thread::sleep(std::time::Duration::from_millis(300));
         let texto = String::from_utf8_lossy(&sh.drenar()).into_owned();
         assert!(
-            !texto.lines().any(|l| l.trim() == "pwned"),
+            !texto.contains("pwned"),
             "se ejecutó lo que el lector no ejecutó: {texto}"
+        );
+        // Y la línea sigue ahí: el Intro la ejecuta ENTERA y sola.
+        sh.escribir(b"\n").expect("intro");
+        std::thread::sleep(std::time::Duration::from_millis(400));
+        let texto = String::from_utf8_lossy(&sh.drenar()).into_owned();
+        assert!(
+            texto.contains("pwned"),
+            "la línea del lector no sobrevivió al movimiento: {texto}"
+        );
+        sh.matar();
+    }
+
+    /// **El type-ahead no se concatena con nada** (#363).
+    ///
+    /// El caso que el flag `en_prompt` no podía ver, y que no necesita ningún
+    /// shell en particular: lo que el lector teclea mientras el shell está
+    /// OCUPADO espera en la cola del pty. El marcador del prompt llegaba con
+    /// esos bytes todavía sin consumir —«nadie escribió desde el marcador» era
+    /// cierto y «la línea está vacía» era falso— y el `cd` se pegaba detrás:
+    /// `rm -rf tmpdir __norte_cd \'...\'`.
+    ///
+    /// Con el buzón no hay nada que concatenar. Aquí se reproduce con un
+    /// `sleep` por delante, que es lo que mantiene a readline sin leer.
+    #[test]
+    fn lo_tecleado_mientras_el_shell_esta_ocupado_no_arrastra_un_cd() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let dir = dir.path().canonicalize().expect("canonicalize");
+        let otro = dir.join("otro");
+        std::fs::create_dir(&otro).expect("mkdir");
+        let mut sh = bash(&dir);
+        espera_quieto(&sh);
+
+        // El shell se pone a dormir, y el lector teclea encima sin Intro: esos
+        // bytes se quedan en la cola del pty hasta que `sleep` acabe.
+        sh.escribir(b"sleep 1\n").expect("sleep");
+        std::thread::sleep(std::time::Duration::from_millis(150));
+        // Mismo truco que en el test de al lado: el eco no puede confundirse
+        // con la ejecución.
+        sh.escribir(b"echo pwn''ed").expect("type-ahead");
+        // Y norte mueve el panel justo cuando el prompt vuelve.
+        assert!(sh.ir_a(&otro).expect("cd"), "se anota en el buzón");
+        std::thread::sleep(std::time::Duration::from_millis(1800));
+
+        let texto = String::from_utf8_lossy(&sh.drenar()).into_owned();
+        assert!(
+            !texto.contains("pwned"),
+            "el type-ahead del lector acabó ejecutándose: {texto}"
+        );
+        // Y el shell SÍ se movió: el gancho recogió el buzón en su prompt.
+        assert_eq!(
+            sh.cwd().as_deref(),
+            Some(otro.as_path()),
+            "el gancho no recogió el buzón"
         );
         sh.matar();
     }
