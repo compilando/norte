@@ -143,7 +143,7 @@ impl State {
                 Vec::new(),
             );
         }
-        let texto = siembra.unwrap_or_else(|| "[N].[E]".to_owned());
+        let text = siembra.unwrap_or_else(|| "[N].[E]".to_owned());
         let id = ModalId(self.next_modal);
         self.next_modal += 1;
         let vista = DialogView {
@@ -175,7 +175,7 @@ impl State {
                     destructive: false,
                 },
             ],
-            input: Some(texto.clone()),
+            input: Some(text.clone()),
             input_hostile: false,
             input_secret: false,
             fields: Vec::new(),
@@ -184,7 +184,7 @@ impl State {
         self.dialogs.push(Dialog {
             id,
             vista: vista.clone(),
-            typed: Typed::Text(texto),
+            typed: Typed::Text(text),
             recognized: true,
             on_confirm: Some(Pending::TemplateBatch { dir, names }),
         });
@@ -210,12 +210,12 @@ impl State {
         backend: &Arc<dyn HostBackend>,
         buzon: &mpsc::Sender<Message>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
-        let texto = template.trim().to_owned();
-        if let Err(e) = norte_frontend::rename_pattern::check(&texto, names) {
+        let text = template.trim().to_owned();
+        if let Err(e) = norte_frontend::rename_pattern::check(&text, names) {
             let key = norte_frontend::rename_pattern::error_key(e);
             self.status.message = Some(clamp_display(norte_i18n::t_in(self.lang, key)));
             let mut outputs = vec![self.parche(vec![ViewChange::Status(self.status.clone())])];
-            let (_, reabierto) = self.request_batch_template(Some(texto));
+            let (_, reabierto) = self.request_batch_template(Some(text));
             outputs.extend(reabierto);
             return outputs;
         }
@@ -223,7 +223,7 @@ impl State {
         // identity plan renames nothing, and confirming without touching
         // the template is harmless.
         let entries: Vec<norte_proto::methods::AiRenameEntry> =
-            norte_frontend::rename_pattern::plan(&texto, names, 1)
+            norte_frontend::rename_pattern::plan(&text, names, 1)
                 .into_iter()
                 .filter(|(from, to)| from != to)
                 .map(|(from, to)| norte_proto::methods::AiRenameEntry { from, to })
@@ -246,10 +246,10 @@ impl State {
             .collect();
         self.epoch_ia += 1;
         let epoch = self.epoch_ia;
-        let Some(parejas) = norte_frontend::rename_pairs_in(&entries, Some(&del_dir)) else {
+        let Some(pairs) = norte_frontend::rename_pairs_in(&entries, Some(&del_dir)) else {
             return self.ai_say(epoch, "msg-ai-rename-invalid-plan");
         };
-        self.open_revision(epoch, dir, entries, parejas, backend, buzon)
+        self.open_revision(epoch, dir, entries, pairs, backend, buzon)
     }
 
     /// A RENAMER row from the palette (C3, ADR 0095): asks the plugin for
@@ -465,10 +465,10 @@ impl State {
         // what the pane shows now: a tampered plan cannot rename something
         // that was not there, and the reader may have gone somewhere else
         // while the model was thinking.
-        let Some(parejas) = norte_frontend::rename_pairs_in(&plan.entries, Some(&names)) else {
+        let Some(pairs) = norte_frontend::rename_pairs_in(&plan.entries, Some(&names)) else {
             return self.ai_say(epoch, "msg-ai-rename-invalid-plan");
         };
-        self.open_revision(epoch, dir, plan.entries, parejas, backend, buzon)
+        self.open_revision(epoch, dir, plan.entries, pairs, backend, buzon)
     }
 
     /// Opens the review of a plan — the model's or a template's (#310) — and
@@ -482,14 +482,14 @@ impl State {
         epoch: u64,
         dir: VPath,
         entries: Vec<norte_proto::methods::AiRenameEntry>,
-        parejas: Vec<norte_proto::methods::RenamePair>,
+        pairs: Vec<norte_proto::methods::RenamePair>,
         backend: &Arc<dyn HostBackend>,
         buzon: &mpsc::Sender<Message>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
         let b = Arc::clone(backend);
         let buz = buzon.clone();
         let d = dir.clone();
-        let p = parejas.clone();
+        let p = pairs.clone();
         tokio::spawn(async move {
             let res = b.rename_batch_plan(d, p).await;
             let _ = buz
@@ -502,7 +502,7 @@ impl State {
         self.revision_ia = Some(RevisionIa {
             dir,
             entries,
-            pairs: parejas,
+            pairs,
             plan: norte_frontend::BatchPlan::Pending,
             first: 0,
             seen_until: norte_frontend::AI_RENAME_PAIR_LIMIT,
@@ -552,11 +552,11 @@ impl State {
     /// as a transfer's destination.
     pub(super) fn vista_ia(&self) -> Option<crate::dto::AiRenameView> {
         let r = self.revision_ia.as_ref()?;
-        let line = |texto: &str| {
-            let (pintable, hostil) = norte_frontend::display_name(texto.as_bytes());
+        let line = |text: &str| {
+            let (pintable, hostile) = norte_frontend::display_name(text.as_bytes());
             crate::dto::DialogLine {
                 text: clamp_display(pintable),
-                hostile: hostil,
+                hostile,
             }
         };
         let pairs = r
@@ -817,12 +817,12 @@ impl State {
                 Vec::new(),
             );
         };
-        let (dir, parejas, hash) = (r.dir.clone(), r.pairs.clone(), plan.plan_hash.clone());
+        let (dir, pairs, hash) = (r.dir.clone(), r.pairs.clone(), plan.plan_hash.clone());
         let afectados = vec![dir.clone()];
         let backend2 = Arc::clone(backend);
         let buzon2 = buzon.clone();
         tokio::spawn(async move {
-            let message = match backend2.rename_batch(dir, parejas, hash).await {
+            let message = match backend2.rename_batch(dir, pairs, hash).await {
                 Ok(task) => Message::TaskNew(Box::new((task, afectados, None))),
                 Err(e) => Message::TaskFailed(Box::new(e)),
             };
@@ -890,7 +890,7 @@ impl State {
         // `CAFÉ.TXT`. For a name still not representable that carries a
         // U+FFFD, and that residue is exactly what the confirmation's guard
         // does not let through.
-        let (pintable, hostil) =
+        let (pintable, hostile) =
             norte_frontend::display_name_with(name.as_bytes(), slot.pane.name_encoding());
         let siembra = clamp_display(pintable.clone());
         if siembra != pintable {
@@ -935,7 +935,7 @@ impl State {
                 },
             ],
             input: Some(siembra.clone()),
-            input_hostile: hostil,
+            input_hostile: hostile,
             input_secret: false,
             fields: Vec::new(),
             dest_check: crate::dto::DestCheckView::NotAsked,

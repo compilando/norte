@@ -1,6 +1,6 @@
 //! Every Fluent key the HOST chooses EXISTS in both catalogues.
 //!
-//! The Rust twin of `norte-gui-tauri/tests/catalogo_completo.rs`, and it was
+//! The Rust twin of `norte-gui-tauri/tests/full_catalogue.rs`, and it was
 //! needed because that one only sees what the TypeScript requests. These
 //! keys are chosen by the host — `ActionAck::Unavailable { reason_key }`, a
 //! dialog's title, each response's label — and they travel across the

@@ -462,7 +462,7 @@ pub(crate) fn draw_disk_map(
     // The title carries the STATUS, which is half the information:
     // "measuring" over a half-finished map is what keeps it from being read
     // as a total.
-    let estado = match map.state() {
+    let the_state = match map.state() {
         // Idle and Done add nothing, and it is the SAME result on purpose:
         // one is "nobody has asked for anything" and the other "it is
         // already done", and in both the title is enough on its own. What
@@ -474,7 +474,7 @@ pub(crate) fn draw_disk_map(
     };
     let block = Block::default()
         .borders(Borders::ALL)
-        .title(format!(" {}{estado} ", t("disk-map-title")))
+        .title(format!(" {}{the_state} ", t("disk-map-title")))
         .title_style(app.theme.role(Role::Title))
         .border_style(app.theme.role(border));
     let inside = block.inner(area);
@@ -537,20 +537,21 @@ pub(crate) fn draw_places(
                 // The SHORT name, same as the window's (2026-09-21
                 // screenshot): the whole clipped mount used to be five
                 // "/home/oscar/…" rows that could not be told apart.
-                let (nombre, hostile) = norte_frontend::places::drive_name(label, mount);
+                let (entry_name, hostile) = norte_frontend::places::drive_name(label, mount);
                 // Short and with no decimals: fourteen cells have to carry
                 // the mount's name AND its space. A `?` when the filesystem
                 // did not answer — never a zero, which would read as
                 // "full" (the whole word is still said by the popup, which
                 // does have room).
-                let libre = free.map_or_else(|| "?".to_owned(), norte_frontend::human_bytes_short);
+                let is_free =
+                    free.map_or_else(|| "?".to_owned(), norte_frontend::human_bytes_short);
                 // A mount's name is clipped in the MIDDLE: what identifies
                 // `/home/oscar/.cache` is the tail, and with six mounts
                 // under `/home` a list clipped from the front is six rows
                 // saying the same thing.
                 ListItem::new(Line::raw(two_fields(
-                    &with_badge(&nombre, hostile),
-                    &libre,
+                    &with_badge(&entry_name, hostile),
+                    &is_free,
                     width,
                     middle,
                 )))
@@ -582,13 +583,13 @@ pub(crate) fn draw_places(
     // scroll so the cursor is visible, starting from zero every frame — so
     // the screen does not change; what changes is that there is now ONE
     // source and the mouse can read it.
-    let mut estado = ListState::default().with_offset(if with_keyboard {
+    let mut the_state = ListState::default().with_offset(if with_keyboard {
         places_offset(state.cursor(), inner.height as usize)
     } else {
         0
     });
-    estado.select(with_keyboard.then(|| state.cursor()));
-    frame.render_stateful_widget(list, inner, &mut estado);
+    the_state.select(with_keyboard.then(|| state.cursor()));
+    frame.render_stateful_widget(list, inner, &mut the_state);
 }
 
 /// First model row that is visible, for a cursor and a height.
@@ -698,9 +699,9 @@ pub fn tree_zones(app: &App, area: Rect) -> Vec<TreeZone> {
     (0..inner.height as usize)
         .filter_map(|row| {
             let index = offset.checked_add(row)?;
-            let fila = rows.get(index)?;
+            let the_row = rows.get(index)?;
             // `  ` per level, then the mark: the same mold as `draw_tree`.
-            let sangria = u16::try_from(fila.depth.saturating_mul(2)).unwrap_or(u16::MAX);
+            let sangria = u16::try_from(the_row.depth.saturating_mul(2)).unwrap_or(u16::MAX);
             Some(TreeZone {
                 row: inner
                     .y
@@ -1201,7 +1202,7 @@ pub(crate) fn draw_log(frame: &mut Frame<'_>, area: Rect, app: &App, with_keyboa
         Role::BorderUnfocused
     };
     let panel = &app.log_panel;
-    let fuente = crate::logview::source_efectiva(app);
+    let source = crate::logview::source_efectiva(app);
     // The title says the level, the SOURCE and the filter: without that, a
     // panel that looks empty cannot tell "nothing has happened" apart from
     // "you are filtering it out" or from "you are looking at the other
@@ -1220,7 +1221,7 @@ pub(crate) fn draw_log(frame: &mut Frame<'_>, area: Rect, app: &App, with_keyboa
     // `ntc` has one process and one ring, and a sentence about the origin
     // would answer a question nobody asked — exactly the panel #326 left
     // behind.
-    if let Some(source_txt) = crate::logview::source_label(app, fuente) {
+    if let Some(source_txt) = crate::logview::source_label(app, source) {
         let _ = write!(title, "· {source_txt} ");
     }
     // If some ring is capturing MORE than what is shown, it is said, and
@@ -1229,7 +1230,7 @@ pub(crate) fn draw_log(frame: &mut Frame<'_>, area: Rect, app: &App, with_keyboa
     // the rest of the session — on purpose, so that going and coming back
     // does not erase what happened in between — and without this line that
     // shows up nowhere.
-    let capture = crate::logview::capture_note(app, fuente);
+    let capture = crate::logview::capture_note(app, source);
     if !capture.is_empty() {
         let _ = write!(title, "· {capture} ");
     }
@@ -1245,7 +1246,7 @@ pub(crate) fn draw_log(frame: &mut Frame<'_>, area: Rect, app: &App, with_keyboa
     // opening lost. They are different numbers and do not add up. A ring
     // that silently drops the old stuff makes the reader look for a line
     // that was there and no longer is, and conclude the log is lying.
-    let descartes = crate::logview::discard_note(app, fuente);
+    let descartes = crate::logview::discard_note(app, source);
     if !descartes.is_empty() {
         let _ = write!(title, "· {descartes} ");
     }
@@ -1282,7 +1283,7 @@ pub(crate) fn draw_log(frame: &mut Frame<'_>, area: Rect, app: &App, with_keyboa
         return;
     }
 
-    if app.log_ring.is_none() && fuente == norte_frontend::logpanel::LogSource::Window {
+    if app.log_ring.is_none() && source == norte_frontend::logpanel::LogSource::Window {
         // With no ring installed (tests, or an embedder that did not mount
         // the subscriber) and no daemon serving its own, it is said,
         // instead of painting an empty panel that looks like nothing is
@@ -1313,7 +1314,7 @@ pub(crate) fn draw_log(frame: &mut Frame<'_>, area: Rect, app: &App, with_keyboa
         .iter()
         .skip(from)
         .take(alto)
-        .map(|(l, origen)| {
+        .map(|(l, origin)| {
             let rol = match l.level {
                 norte_config::logline::LogLevel::Error => Role::Error,
                 norte_config::logline::LogLevel::Warn => Role::Warning,
@@ -1331,7 +1332,7 @@ pub(crate) fn draw_log(frame: &mut Frame<'_>, area: Rect, app: &App, with_keyboa
             // nothing. A rule and not a color, same as in the window: the
             // color is already taken by the level, which is what is
             // searched for at a glance.
-            let margin = match (fuente, origen) {
+            let margin = match (source, origin) {
                 (
                     norte_frontend::logpanel::LogSource::Both,
                     norte_frontend::logpanel::LogSource::Daemon,
@@ -1374,7 +1375,7 @@ pub(crate) fn rol_de_actor(actor_kind: &str) -> Role {
 /// class reads at a glance through the column, which is what a timeline is
 /// for.
 fn timeline_line<'a>(
-    fila: &norte_frontend::timeline::TimelineRow,
+    the_row: &norte_frontend::timeline::TimelineRow,
     theme: &TuiTheme,
     width: usize,
 ) -> Line<'a> {
@@ -1382,39 +1383,39 @@ fn timeline_line<'a>(
 
     let mut spans = vec![
         Span::styled(
-            format!("{} ", norte_frontend::format::time_utc(fila.ts_ms)),
+            format!("{} ", norte_frontend::format::time_utc(the_row.ts_ms)),
             theme.role(Role::BorderUnfocused),
         ),
-        Span::styled("● ", theme.role(rol_de_actor(&fila.actor_kind))),
+        Span::styled("● ", theme.role(rol_de_actor(&the_row.actor_kind))),
     ];
     // The badge, UP FRONT and in its own span, as on every surface where
     // something is decided: the server has already masked the text, and
     // this is what keeps it from being read as faithful.
-    if fila.hostile {
+    if the_row.hostile {
         spans.push(Span::styled(
             format!("{HOSTILE_BADGE} "),
             theme.role(Role::HostileBadge),
         ));
     }
     let mut cola = String::new();
-    if fila.members > 1 {
+    if the_row.members > 1 {
         let _ = write!(
             cola,
             " · {}",
-            ta("timeline-batch", &[("n", &fila.members.to_string())])
+            ta("timeline-batch", &[("n", &the_row.members.to_string())])
         );
     }
-    if !fila.reversible {
+    if !the_row.reversible {
         let _ = write!(cola, " · {}", t("timeline-irreversible"));
     }
     let used = spans.iter().map(Span::width).sum::<usize>() + super::text::cells(&cola);
-    let verb = format!("{} ", fila.op);
+    let verb = format!("{} ", the_row.op);
     let place = width
         .saturating_sub(used + super::text::cells(&verb))
         .max(1);
     spans.push(Span::raw(verb));
     spans.push(Span::raw(norte_frontend::display::middle_ellipsis(
-        &norte_frontend::timeline::path_label(&fila.path),
+        &norte_frontend::timeline::path_label(&the_row.path),
         place,
     )));
     if !cola.is_empty() {
@@ -1527,8 +1528,9 @@ mod draw_log_tests {
     /// `Display` adds, and the block's LEFT border, which is another `│`
     /// and which this test's first version confused with the daemon's
     /// rule — declaring a line from this terminal flagged as remote.
-    fn margin(fila: &str) -> String {
-        fila.chars()
+    fn margin(the_row: &str) -> String {
+        the_row
+            .chars()
             .skip_while(|c| *c == '"')
             .skip(1)
             .take(2)

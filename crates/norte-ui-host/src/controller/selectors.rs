@@ -208,9 +208,9 @@ impl State {
         let dest = self.where_to_return_after_disconnecting(&dir);
         let backend_c = Arc::clone(backend);
         let buzon_c = buzon.clone();
-        let clave = dir.clone();
+        let key = dir.clone();
         tokio::spawn(async move {
-            let res = backend_c.close_connection(clave).await;
+            let res = backend_c.close_connection(key).await;
             let _ = buzon_c
                 .send(Message::Background(Box::new(Background::Desconectada(
                     slot, res, dest,
@@ -242,7 +242,7 @@ impl State {
         backend: &Arc<dyn HostBackend>,
         buzon: &mpsc::Sender<Message>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
-        let clave = match res {
+        let key = match res {
             Ok(true) => "msg-disconnect-done",
             // `false` is not a failure: there was no open session. And the
             // pane leaves anyway, because staying there would require
@@ -255,7 +255,7 @@ impl State {
                 return self.say(norte_frontend::error::error_key(&e));
             }
         };
-        self.status.message = Some(clamp_display(norte_i18n::t_in(self.lang, clave)));
+        self.status.message = Some(clamp_display(norte_i18n::t_in(self.lang, key)));
         self.navigate_slot(slot, dest, Trail::Record, backend, buzon)
     }
 
@@ -314,8 +314,8 @@ impl State {
             "Enter" | "enter" => {
                 let chosen = p.chosen().map(std::ffi::OsStr::to_os_string);
                 return match chosen {
-                    Some(nombre) => {
-                        let envios = self.choose_profile(&nombre, backend, buzon);
+                    Some(name) => {
+                        let envios = self.choose_profile(&name, backend, buzon);
                         (self.applied(), envios)
                     }
                     // A row that cannot be loaded changes nothing, and the
@@ -341,19 +341,19 @@ impl State {
     /// nothing happens, and if not, the switch begins.
     pub(super) fn choose_profile(
         &mut self,
-        nombre: &std::ffi::OsStr,
+        name: &std::ffi::OsStr,
         backend: &Arc<dyn HostBackend>,
         buzon: &mpsc::Sender<Message>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
         let _ = backend;
-        if self.profile_active.as_deref() == Some(nombre) {
+        if self.profile_active.as_deref() == Some(name) {
             // Already on it: it closes and stays quiet. Dropping and
             // reloading the screen only to leave it the same would be work
             // for nothing.
             self.selector_profile = None;
             return vec![self.parche(vec![ViewChange::Profiles { profiles: None }])];
         }
-        self.switch_profile(nombre, buzon)
+        self.switch_profile(name, buzon)
     }
 
     pub(super) fn key_in_theme(
@@ -376,9 +376,9 @@ impl State {
                 // again: the one there was may not be a preset. The
                 // notification goes out the same way, so whoever is hosting
                 // undoes their side too.
-                let nombre = previo.name.clone();
+                let name = previo.name.clone();
                 self.theme = previo;
-                self.nativo(crate::dto::NativeEffect::ThemeChanged { name: nombre });
+                self.nativo(crate::dto::NativeEffect::ThemeChanged { name });
                 let change = ViewChange::Theme { theme: None };
                 // And the rows: the live preview left the names with the
                 // colors of whichever theme the cursor brushed, and going
@@ -412,8 +412,8 @@ impl State {
         // LIVE preview: moving through the list shows the theme, not its
         // name.
         let under_the_cursor = sel.names.get(sel.cursor).cloned();
-        if let Some(nombre) = under_the_cursor {
-            self.apply_theme(&nombre, buzon);
+        if let Some(name) = under_the_cursor {
+            self.apply_theme(&name, buzon);
         }
         let change = ViewChange::Theme {
             theme: self.vista_theme(),
@@ -450,12 +450,12 @@ impl State {
     /// PROFILE SWITCH door it did, because a profile can carry `theme =
     /// "…/mine.toml"` (ADR 0020) and that used to go silently unapplied,
     /// with the terminal applying it.
-    pub(super) fn apply_theme(&mut self, nombre: &str, buzon: &mpsc::Sender<Message>) {
-        if let Ok(Some(tema)) = norte_theme::Theme::preset(nombre) {
-            self.theme_placed(nombre, &tema);
+    pub(super) fn apply_theme(&mut self, name: &str, buzon: &mpsc::Sender<Message>) {
+        if let Ok(Some(theme)) = norte_theme::Theme::preset(name) {
+            self.theme_placed(name, &theme);
             return;
         }
-        let spec = nombre.to_owned();
+        let spec = name.to_owned();
         let buzon = buzon.clone();
         tokio::task::spawn_blocking(move || {
             let resolved = norte_frontend::theme::resolve_theme(Some(&spec));
@@ -473,10 +473,10 @@ impl State {
 
     /// The already-resolved theme becomes the active one, and whoever hosts
     /// it is told.
-    pub(super) fn theme_placed(&mut self, nombre: &str, tema: &norte_theme::Theme) {
-        self.theme = crate::pickers::HostTheme::de(nombre, tema);
+    pub(super) fn theme_placed(&mut self, name: &str, theme: &norte_theme::Theme) {
+        self.theme = crate::pickers::HostTheme::de(name, theme);
         self.nativo(crate::dto::NativeEffect::ThemeChanged {
-            name: nombre.to_owned(),
+            name: name.to_owned(),
         });
     }
 
@@ -511,7 +511,7 @@ impl State {
     /// inter-process lock behind it (`persist_ui_theme_to` blocks while
     /// another norte is writing): doing it here would freeze the whole
     /// window. It comes back through the mailbox like everything else.
-    pub(super) fn persistir_theme(&mut self, nombre: &str, buzon: &mpsc::Sender<Message>) {
+    pub(super) fn persistir_theme(&mut self, name: &str, buzon: &mpsc::Sender<Message>) {
         let Some(dir) = self.write_dir() else {
             self.status.message = Some(clamp_display(norte_i18n::t_in(
                 self.lang,
@@ -519,17 +519,17 @@ impl State {
             )));
             return;
         };
-        let nombre = nombre.to_owned();
+        let name = name.to_owned();
         let buzon = buzon.clone();
         tokio::task::spawn_blocking(move || {
-            let clave = match norte_config::persist_ui_theme_to(&dir, &nombre) {
+            let key = match norte_config::persist_ui_theme_to(&dir, &name) {
                 Ok(_) => None,
                 // The error does NOT travel: it can carry the file's path,
                 // and what the status bar says comes from the catalog (#73).
                 // The category is enough to know what happened.
                 Err(e) => Some(io_key(&e)),
             };
-            let _ = buzon.blocking_send(Message::ThemePersistido(clave));
+            let _ = buzon.blocking_send(Message::ThemePersistido(key));
         });
     }
 
@@ -661,11 +661,11 @@ impl State {
     pub(super) fn save_favorite(
         &mut self,
         dest: &VPath,
-        nombre: &str,
+        name: &str,
         buzon: &mpsc::Sender<Message>,
     ) -> (Option<&'static str>, Vec<BridgeEnvelope<UiUpdate>>) {
-        let nombre = nombre.trim().to_owned();
-        if nombre.is_empty() {
+        let name = name.trim().to_owned();
+        if name.is_empty() {
             // No name, no favorite: it is what the terminal does with an
             // empty field, and it is more honest than saving one with no
             // name.
@@ -677,14 +677,13 @@ impl State {
         let wire = dest.to_wire();
         let where_to = dest.clone();
         let buzon = buzon.clone();
-        let n = nombre.clone();
+        let n = name.clone();
         tokio::task::spawn_blocking(move || {
-            let clave = match norte_config::persist_hotlist_add(&dir, &n, &wire) {
+            let key = match norte_config::persist_hotlist_add(&dir, &n, &wire) {
                 Ok(_) => None,
                 Err(e) => Some(io_key(&e)),
             };
-            let _ =
-                buzon.blocking_send(Message::FavoritePersistido(Box::new((n, where_to, clave))));
+            let _ = buzon.blocking_send(Message::FavoritePersistido(Box::new((n, where_to, key))));
         });
         (None, Vec::new())
     }
@@ -766,11 +765,11 @@ impl State {
     /// happens outside the actor.
     pub(super) fn save_profile(
         &mut self,
-        nombre: &str,
+        name: &str,
         buzon: &mpsc::Sender<Message>,
     ) -> (Option<&'static str>, Vec<BridgeEnvelope<UiUpdate>>) {
-        let nombre = std::ffi::OsString::from(nombre.trim());
-        if !norte_config::valid_profile_name(&nombre) {
+        let name = std::ffi::OsString::from(name.trim());
+        if !norte_config::valid_profile_name(&name) {
             return (
                 Some("msg-profile-name-invalid"),
                 self.say("msg-profile-name-invalid"),
@@ -781,13 +780,13 @@ impl State {
         };
         let snap = self.profile_snapshot();
         let buzon = buzon.clone();
-        let visible = nombre.to_string_lossy().into_owned();
+        let visible = name.to_string_lossy().into_owned();
         tokio::task::spawn_blocking(move || {
-            let clave = match norte_config::save_profile(&dir, &nombre, &snap) {
+            let key = match norte_config::save_profile(&dir, &name, &snap) {
                 Ok(_) => None,
                 Err(e) => Some(io_key(&e)),
             };
-            let _ = buzon.blocking_send(Message::ProfileSaved(Box::new((visible, clave))));
+            let _ = buzon.blocking_send(Message::ProfileSaved(Box::new((visible, key))));
         });
         (None, Vec::new())
     }
@@ -818,7 +817,7 @@ impl State {
         &mut self,
         buzon: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let Some(nombre) = self
+        let Some(name) = self
             .selector
             .as_ref()
             .and_then(|s| s.name_raw())
@@ -841,13 +840,13 @@ impl State {
             );
         };
         let buzon = buzon.clone();
-        let n = nombre;
+        let n = name;
         tokio::task::spawn_blocking(move || {
-            let clave = match norte_config::persist_hotlist_remove(&dir, &n) {
+            let key = match norte_config::persist_hotlist_remove(&dir, &n) {
                 Ok(_) => None,
                 Err(e) => Some(io_key(&e)),
             };
-            let _ = buzon.blocking_send(Message::FavoriteRemoved(Box::new((n, clave))));
+            let _ = buzon.blocking_send(Message::FavoriteRemoved(Box::new((n, key))));
         });
         (self.applied(), Vec::new())
     }
@@ -860,16 +859,16 @@ impl State {
     /// same, and the parity test requires it.
     pub(super) fn profile_saved(
         &mut self,
-        nombre: &str,
+        name: &str,
         failure: Option<&'static str>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
-        if let Some(clave) = failure {
-            return self.say(clave);
+        if let Some(key) = failure {
+            return self.say(key);
         }
         self.status.message = Some(clamp_display(norte_i18n::ta_in(
             self.lang,
             "msg-profile-saved",
-            &[("name", &clamp_display(nombre.to_owned()))],
+            &[("name", &clamp_display(name.to_owned()))],
         )));
         let change = ViewChange::Status(self.status.clone());
         vec![self.parche(vec![change])]
@@ -877,25 +876,25 @@ impl State {
 
     pub(super) fn favorite_persistido(
         &mut self,
-        nombre: &str,
+        name: &str,
         dest: Option<VPath>,
         failure: Option<&'static str>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
-        if let Some(clave) = failure {
-            return self.say(clave);
+        if let Some(key) = failure {
+            return self.say(key);
         }
         match dest {
             Some(dest) => {
                 // REPLACES the one with the same name, which is what the
                 // file does: if the in-memory copy added one more, the list
                 // would show two where the disk has one.
-                self.config.common.hotlist.retain(|h| h.name != nombre);
+                self.config.common.hotlist.retain(|h| h.name != name);
                 self.config.common.hotlist.push(norte_config::HotlistItem {
-                    name: nombre.to_owned(),
+                    name: name.to_owned(),
                     target: Ok(dest),
                 });
             }
-            None => self.config.common.hotlist.retain(|h| h.name != nombre),
+            None => self.config.common.hotlist.retain(|h| h.name != name),
         }
         // The side panel paints the favorites: it is re-seeded from the copy
         // that just changed, and that bumps its generation. Without this the
@@ -1094,7 +1093,7 @@ impl State {
         backend: &Arc<dyn HostBackend>,
         buzon: &mpsc::Sender<Message>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
-        let (vista, clave) = match ev {
+        let (vista, key) = match ev {
             norte_client::ConnEvent::Restored => (ConnectionView::Connected, "msg-daemon-restored"),
             // The daemon warns BEFORE closing, and this is the only thing
             // that tells a handoff apart from a stop: as soon as the
@@ -1108,11 +1107,11 @@ impl State {
                 } else {
                     "msg-daemon-stopping"
                 });
-                let clave = self.daemon_notice.unwrap_or("msg-daemon-stopping");
+                let key = self.daemon_notice.unwrap_or("msg-daemon-stopping");
                 let banners = self.banner_change();
                 let parche = self.parche(vec![banners]);
                 let notice = self.over(UiUpdate::Notice(UiNotice::Message {
-                    key: clave.to_owned(),
+                    key: key.to_owned(),
                     detail: None,
                 }));
                 return vec![parche, notice];
@@ -1157,7 +1156,7 @@ impl State {
         let banners = self.banner_change();
         let parche = self.parche(vec![ViewChange::Connection(vista), banners]);
         let notice = self.over(UiUpdate::Notice(UiNotice::Message {
-            key: clave.to_owned(),
+            key: key.to_owned(),
             detail: None,
         }));
         envios.extend([parche, notice]);
@@ -1219,10 +1218,10 @@ impl State {
         // from a URL, and neither origin is trustworthy for what is
         // painted.
         let line = |s: &str| {
-            let (pintable, hostil) = norte_frontend::display_name(s.as_bytes());
+            let (pintable, hostile) = norte_frontend::display_name(s.as_bytes());
             crate::dto::DialogLine {
                 text: clamp_display(pintable),
-                hostile: hostil,
+                hostile,
             }
         };
         let vista = DialogView {
@@ -1410,16 +1409,16 @@ impl State {
     /// hide the others forever, which is exactly what the TUI already
     /// decided not to do.
     pub(super) fn banner_change(&mut self) -> ViewChange {
-        let phrase = |clave: &str| crate::dto::BannerView {
-            text: clamp_display(norte_i18n::t_in(self.lang, clave)),
+        let phrase = |key: &str| crate::dto::BannerView {
+            text: clamp_display(norte_i18n::t_in(self.lang, key)),
             subject: None,
         };
         let mut banners = Vec::new();
         if self.journal_rehusado {
             banners.push(phrase("status-journal-refused"));
         }
-        if let Some(clave) = self.daemon_notice {
-            banners.push(phrase(clave));
+        if let Some(key) = self.daemon_notice {
+            banners.push(phrase(key));
         }
         // A LOOSE window — another one holds the session, or the saved one
         // belongs to a newer binary — does not write the screen, and until

@@ -138,8 +138,8 @@ pub(crate) type ModalBody = Vec<ModalLine>;
 /// This is what lets the 55 variants that still compose a `String` stay
 /// untouched: declaring roles is a change PER MODAL, not a requirement to
 /// compile.
-pub(crate) fn plain_body(cuerpo: &str) -> ModalBody {
-    cuerpo.lines().map(ModalLine::plain).collect()
+pub(crate) fn plain_body(dialog_body: &str) -> ModalBody {
+    dialog_body.lines().map(ModalLine::plain).collect()
 }
 
 /// The style each role is painted with.
@@ -175,8 +175,8 @@ fn line_style(kind: LineKind, theme: &TuiTheme) -> ratatui::style::Style {
 /// [`draw_nav_popup`]/[`middle_ellipsis`]), not `chars` — a body with CJK
 /// (two cells per char, e.g. a path with `日本語`) overflowed the box with
 /// the old char count.
-pub(crate) fn modal_width(title: &str, cuerpo: &ModalBody, frame_width: u16) -> u16 {
-    let content_max = cuerpo
+pub(crate) fn modal_width(title: &str, dialog_body: &ModalBody, frame_width: u16) -> u16 {
+    let content_max = dialog_body
         .iter()
         .map(ModalLine::width)
         .chain(std::iter::once(title.width() + 2))
@@ -480,8 +480,8 @@ fn modal_title_body_raw(
     {
         return organize_plan_modal(dir, lines, *offset, hints);
     }
-    let (title, cuerpo) = modal_title_text(modal, reinterpret, hints);
-    (title, plain_body(&cuerpo))
+    let (title, dialog_body) = modal_title_text(modal, reinterpret, hints);
+    (title, plain_body(&dialog_body))
 }
 
 #[expect(clippy::too_many_lines, reason = "modal→text table, not logic")]
@@ -551,21 +551,21 @@ fn modal_title_text(
             ajenas,
             ..
         } => {
-            let mut lineas = vec![
+            let mut text_lines = vec![
                 t("timeline-undo-body"),
                 ta("timeline-undo-count", &[("n", &to_undo.to_string())]),
             ];
             if *irreversible > 0 {
-                lineas.push(ta(
+                text_lines.push(ta(
                     "timeline-undo-skipped",
                     &[("n", &irreversible.to_string())],
                 ));
             }
             if *ajenas > 0 {
-                lineas.push(ta("timeline-undo-foreign", &[("n", &ajenas.to_string())]));
+                text_lines.push(ta("timeline-undo-foreign", &[("n", &ajenas.to_string())]));
             }
-            lineas.push(hints.uninstall.clone());
-            (t("timeline-undo-title"), lineas.join("\n"))
+            text_lines.push(hints.uninstall.clone());
+            (t("timeline-undo-title"), text_lines.join("\n"))
         }
         Modal::ConfirmDelete { items, permanent } => (
             if *permanent {
@@ -714,7 +714,7 @@ fn modal_title_text(
             targets,
             error,
         } => {
-            let (_, cuerpo) =
+            let (_, dialog_body) =
                 free_text_modal_text("modal-chmod", "modal-chmod-hint", mode, error.as_deref());
             // The singular has its own id: i18n args are strings, and a
             // plural selector over a string never picks anything.
@@ -723,7 +723,7 @@ fn modal_title_text(
             } else {
                 norte_i18n::ta("modal-chmod", &[("n", &targets.len().to_string())])
             };
-            (title, cuerpo)
+            (title, dialog_body)
         }
         // Same masking: the typed address and its diagnostic are user text,
         // and an address arrives by paste as easily as a name.
@@ -832,8 +832,8 @@ fn modal_title_text(
 /// UNSTABLE ratatui feature, and turning it on for one modal is not worth
 /// it. That case declares its height by hand, and a test checks that its
 /// message fits (`el_mensaje_que_se_envuelve_cabe_en_su_caja`).
-fn body_height(cuerpo: &ModalBody) -> u16 {
-    u16::try_from(cuerpo.len())
+fn body_height(dialog_body: &ModalBody) -> u16 {
+    u16::try_from(dialog_body.len())
         .unwrap_or(u16::MAX)
         .saturating_add(3)
 }
@@ -875,7 +875,7 @@ pub(crate) fn draw_modal(
         interior,
     } = modal_frame(modal, reinterpret, hints, frame.area());
     clear_themed(frame, area, theme);
-    let lineas: Vec<ratatui::text::Line<'_>> = body
+    let text_lines: Vec<ratatui::text::Line<'_>> = body
         .iter()
         .map(|l| {
             // The buttons (spec 2026-09-10): one span per button with the
@@ -928,7 +928,7 @@ pub(crate) fn draw_modal(
             }
         })
         .collect();
-    let mut body = Paragraph::new(lineas).block(
+    let mut body = Paragraph::new(text_lines).block(
         Block::default()
             .borders(Borders::ALL)
             .title(title)
@@ -1532,7 +1532,7 @@ const ORGANIZE_FILE: &str = "→ ";
 /// them, but an N+1 or compromised daemon can send anything.
 pub(crate) fn organize_plan_modal(
     dir: &norte_proto::VPath,
-    lineas: &[norte_frontend::organize::TreeLine],
+    text_lines: &[norte_frontend::organize::TreeLine],
     offset: usize,
     dialog_hints: &crate::hints::DialogHints,
 ) -> (String, ModalBody) {
@@ -1540,10 +1540,10 @@ pub(crate) fn organize_plan_modal(
     // Render belt-and-braces: the clamp lives in
     // `App::organize_plan_scroll`, but an out-of-range offset must never
     // paint an empty window.
-    let offset = offset.min(lineas.len().saturating_sub(ORGANIZE_LINE_LIMIT));
-    let last = (offset + ORGANIZE_LINE_LIMIT).min(lineas.len());
+    let offset = offset.min(text_lines.len().saturating_sub(ORGANIZE_LINE_LIMIT));
+    let last = (offset + ORGANIZE_LINE_LIMIT).min(text_lines.len());
     let (dir_txt, dir_hostile) = norte_frontend::path_display(dir);
-    let (dirs, files) = norte_frontend::organize::summary(lineas);
+    let (dirs, files) = norte_frontend::organize::summary(text_lines);
     let mut body: ModalBody = vec![
         ModalLine::new(
             ta(
@@ -1561,7 +1561,7 @@ pub(crate) fn organize_plan_modal(
             LineKind::Strong,
         ),
     ];
-    for l in lineas.iter().take(last).skip(offset) {
+    for l in text_lines.iter().take(last).skip(offset) {
         let (text, hostile) = display_name(l.text.as_bytes());
         // The indent is bounded: the depth is validated by the proto
         // (`ORGANIZE_MAX_DEPTH`), but a painted body does not depend on the
@@ -1581,11 +1581,11 @@ pub(crate) fn organize_plan_modal(
             .hostile(hostile),
         );
     }
-    if lineas.len() > ORGANIZE_LINE_LIMIT {
+    if text_lines.len() > ORGANIZE_LINE_LIMIT {
         // What is hidden does not slip through clean: if any line OUTSIDE
         // the window is painted different from its bytes, the indicator
         // says so.
-        let oculto_hostile = lineas
+        let oculto_hostile = text_lines
             .iter()
             .enumerate()
             .any(|(i, l)| (i < offset || i >= last) && display_name(l.text.as_bytes()).1);
@@ -1595,7 +1595,7 @@ pub(crate) fn organize_plan_modal(
                     "modal-ai-rename-more",
                     &[
                         ("shown", &last.to_string()),
-                        ("total", &lineas.len().to_string()),
+                        ("total", &text_lines.len().to_string()),
                     ],
                 ),
                 LineKind::Dim,
@@ -3192,8 +3192,8 @@ mod approval_modal_tests {
         // height is derived from it, so it is enough for the list to be
         // BOUNDED. 17 paths and 400 paint the same.
         let alto_de = |n: usize| {
-            let (_, cuerpo) = approval_modal_text(&req(sample_paths(n)), "PIE-DEL-MODAL");
-            body_height(&plain_body(&cuerpo))
+            let (_, dialog_body) = approval_modal_text(&req(sample_paths(n)), "PIE-DEL-MODAL");
+            body_height(&plain_body(&dialog_body))
         };
         assert_eq!(
             alto_de(total),

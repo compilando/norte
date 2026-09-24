@@ -436,21 +436,21 @@ fn pressing_a_sidebar_row_selects_it_and_pressing_again_activates_it() {
     let mut app = app_con_sidebar();
     let area = ratatui::layout::Rect::new(0, 0, 100, 30);
     let _ = buffer_de(&app, 100, 30);
-    let (geo, tabs, menus, sitios) = (
+    let (geo, tabs, menus, places) = (
         norte_tui::ui::pane_geometry(&app, area),
         norte_tui::ui::tab_zones(&app, area),
         norte_tui::ui::menu_zones(&app, area),
         norte_tui::ui::places_zones(&app, area),
     );
-    let huecos = norte_tui::ui::panel_slots(&app, area);
+    let slots = norte_tui::ui::panel_slots(&app, area);
     norte_tui::mouse::after_frame(
         &mut app,
         geo,
         norte_tui::mouse::FrameZones {
             tabs,
             menus,
-            places: sitios,
-            slots: huecos,
+            places,
+            slots,
             ..Default::default()
         },
     );
@@ -491,21 +491,21 @@ fn pressing_a_header_folds_its_section() {
     let mut app = app_con_sidebar();
     let area = ratatui::layout::Rect::new(0, 0, 100, 30);
     let _ = buffer_de(&app, 100, 30);
-    let (geo, tabs, menus, sitios) = (
+    let (geo, tabs, menus, places) = (
         norte_tui::ui::pane_geometry(&app, area),
         norte_tui::ui::tab_zones(&app, area),
         norte_tui::ui::menu_zones(&app, area),
         norte_tui::ui::places_zones(&app, area),
     );
-    let huecos = norte_tui::ui::panel_slots(&app, area);
+    let slots = norte_tui::ui::panel_slots(&app, area);
     norte_tui::mouse::after_frame(
         &mut app,
         geo,
         norte_tui::mouse::FrameZones {
             tabs,
             menus,
-            places: sitios,
-            slots: huecos,
+            places,
+            slots,
             ..Default::default()
         },
     );

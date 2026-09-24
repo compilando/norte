@@ -234,9 +234,9 @@ fn the_transfer_modal_paints_the_confinement_warning() {
 #[test]
 fn copying_a_single_file_requests_the_destination_check() {
     let dir = vp("file:///casa");
-    let entrada = entry(&dir, b"a.bin", EntryKind::File, Some(4_200_000_000));
+    let the_entry = entry(&dir, b"a.bin", EntryKind::File, Some(4_200_000_000));
     let mut app = App::new(
-        Pane::new(dir.clone(), vec![entrada]),
+        Pane::new(dir.clone(), vec![the_entry]),
         Pane::new(vp("file:///medios"), Vec::new()),
     );
     app.panes[0].set_cursor(0);
@@ -763,7 +763,7 @@ fn snapshot_extensions_description_hostile_80x24() {
         .into_iter()
         .find(|n| n.id == "rtl_override")
         .expect("corpus fixture");
-    let descripcion = String::from_utf8_lossy(&hostile.bytes).into_owned();
+    let description = String::from_utf8_lossy(&hostile.bytes).into_owned();
     let mut app = app_base();
     app.extensions = Some(norte_tui::app::ExtensionManager {
         plugins: vec![norte_proto::methods::PluginInfo {
@@ -775,7 +775,7 @@ fn snapshot_extensions_description_hostile_80x24() {
             capabilities: vec!["fs-read".into()],
             approved: true,
             enabled: true,
-            description: Some(descripcion),
+            description: Some(description),
             commands: Vec::new(),
             columns: Vec::new(),
             panels: Vec::new(),
@@ -1036,12 +1036,12 @@ fn a_modals_buttons_paint_and_a_click_is_their_key() {
     let mut terminal = Terminal::new(TestBackend::new(80, 16)).expect("terminal");
     terminal.draw(|f| ui::draw(f, &app)).expect("draw");
     let buf = terminal.backend().buffer();
-    let fila: String = (enter.x0..=enter.x1)
+    let row: String = (enter.x0..=enter.x1)
         .map(|x| buf[(x, enter.row)].symbol().to_string())
         .collect();
     assert!(
-        fila.contains("Enter"),
-        "the button paints its chord: {fila:?}"
+        row.contains("Enter"),
+        "the button paints its chord: {row:?}"
     );
     let button = app.theme.role(norte_theme::Role::Button);
     let cell = buf[(enter.x0, enter.row)].style();
@@ -1095,8 +1095,8 @@ fn snapshot_modal_trash_and_permanent() {
         items: vec![vp("file:///casa/notas.txt")],
         permanent: true,
     });
-    let permanente = render(&app);
-    insta::assert_snapshot!(format!("{trash}\n===\n{permanente}"));
+    let permanent = render(&app);
+    insta::assert_snapshot!(format!("{trash}\n===\n{permanent}"));
 }
 
 /// H3c: while a help page OPENED FROM the modal covers it, help keeps the
@@ -1622,23 +1622,23 @@ fn the_help_footer_adapts_to_the_width() {
         "…and no loss marker, because nothing was lost: {width:?}"
     );
 
-    let estrecho = pie_a(80, 16);
+    let narrow = pie_a(80, 16);
     // The ones that survive are the TOP of the ranking: how you switch to
     // the text and how you scroll down it, which is what nobody guesses on a
     // screen unlike any other in the program.
     for verb in ["índice ↔ texto", "bajar"] {
         assert!(
-            estrecho.contains(verb),
+            narrow.contains(verb),
             "at 80 columns the verbs the reader cannot guess survive, and \
-             `{verb}` is missing: {estrecho:?}"
+             `{verb}` is missing: {narrow:?}"
         );
     }
     assert!(
-        estrecho.contains('…'),
-        "and the clip is MARKED — a silently clipped footer lies: {estrecho:?}"
+        narrow.contains('…'),
+        "and the clip is MARKED — a silently clipped footer lies: {narrow:?}"
     );
     // Whole group or nothing: no bracket is left orphaned.
-    for pie in [&width, &estrecho] {
+    for pie in [&width, &narrow] {
         assert_eq!(
             pie.matches('[').count(),
             pie.matches(']').count(),
@@ -1724,12 +1724,12 @@ fn snapshot_help_hostile_plugin_page() {
         .into_iter()
         .find(|n| n.id == "rtl_override")
         .expect("corpus fixture");
-    let nombre = String::from_utf8_lossy(&hostile.bytes).into_owned();
+    let entry_name = String::from_utf8_lossy(&hostile.bytes).into_owned();
     let mut app = app_base();
     open_help(&mut app);
     let plugin = norte_proto::methods::PluginInfo {
         id: "org.evil.demo".into(),
-        name: nombre,
+        name: entry_name,
         publisher: String::new(),
         version: "1.0.0".into(),
         category: "command".into(),
@@ -2320,7 +2320,7 @@ fn snapshot_help_body_with_focus() {
     // the key column measures whatever the theme's widest one measures, and
     // since `alt+A` paints as `Alt+Shift+A` the label has fewer columns left
     // on an 80-wide terminal. What identifies the row is how it starts.
-    let startup = |texto: &str| texto.chars().take(16).collect::<String>();
+    let startup = |content: &str| content.chars().take(16).collect::<String>();
     let label = startup(&resolver.label(&command));
     let row = &row_texts(&with_focus)[different[0]];
     assert!(
@@ -2379,7 +2379,7 @@ fn snapshot_palette_hostile_plugin_row() {
         .into_iter()
         .find(|n| n.id == "rtl_override")
         .expect("corpus fixture");
-    let titulo = String::from_utf8_lossy(&hostile.bytes).into_owned();
+    let title = String::from_utf8_lossy(&hostile.bytes).into_owned();
     let mut app = app_base();
     let plugin = norte_proto::methods::PluginInfo {
         id: "org.evil.demo".into(),
@@ -2393,7 +2393,7 @@ fn snapshot_palette_hostile_plugin_row() {
         description: None,
         commands: vec![norte_proto::methods::PluginCommandInfo {
             id: "run".into(),
-            title: titulo,
+            title,
             kind: norte_proto::methods::PluginCommandKind::Command,
         }],
         columns: Vec::new(),
@@ -2463,13 +2463,15 @@ fn the_settings_list_follows_the_cursor() {
         norte_tui::app::Settings::new(norte_tui::settings::build_rows(&empty_cfg(), &[]));
     let ultima = settings.visible().len() - 1;
     settings.set_cursor(ultima);
-    let nombre = settings.rows()[settings.visible()[ultima]].name.clone();
+    let entry_name = settings.rows()[settings.visible()[ultima]].name.clone();
     app.settings = Some(settings);
     ui::before_frame(&mut app, ratatui::layout::Rect::new(0, 0, 80, 24));
     let screen = render_80x24(&app);
     assert!(
-        screen.lines().any(|l| l.contains(&format!("> {nombre}"))),
-        "the cursor's row (\"{nombre}\") has to be visible, with its mark:\n{screen}"
+        screen
+            .lines()
+            .any(|l| l.contains(&format!("> {entry_name}"))),
+        "the cursor's row (\"{entry_name}\") has to be visible, with its mark:\n{screen}"
     );
     // And the window has moved: the first row no longer fits.
     assert!(
@@ -2566,8 +2568,8 @@ fn the_section_index_disappears_on_a_narrow_terminal() {
         "the index lists the sections the cursor has not visited:\n{screen}"
     );
 
-    let estrecha = ratatui::layout::Rect::new(0, 0, 50, 24);
-    ui::before_frame(&mut app, estrecha);
+    let is_narrow = ratatui::layout::Rect::new(0, 0, 50, 24);
+    ui::before_frame(&mut app, is_narrow);
     let screen = render_at(&app, 50, 24);
     assert!(
         !screen.contains(&open_with),
@@ -2652,19 +2654,19 @@ fn long_names_read_whole() {
     let screen = terminal.backend().to_string();
     // Only the LEFT pane: the right one is empty, has no names to read, and
     // so keeps all of its columns.
-    let izquierdo: String = screen
+    let left: String = screen
         .lines()
         .map(|l| l.chars().take(51).collect::<String>() + "\n")
         .collect();
     assert!(
-        izquierdo.contains("Captura de pantalla 2024.png"),
+        left.contains("Captura de pantalla 2024.png"),
         "the whole name, no ellipsis:\n{screen}"
     );
     assert!(
-        !izquierdo.contains("Tipo"),
+        !left.contains("Tipo"),
         "the class is the first thing to yield:\n{screen}"
     );
-    assert!(izquierdo.contains("Tamaño"), "the size stays:\n{screen}");
+    assert!(left.contains("Tamaño"), "the size stays:\n{screen}");
 }
 
 /// Menus go in sections (ADR 0125): Operate paints its labels, and the
@@ -2688,7 +2690,7 @@ fn the_menu_paints_sections_and_the_click_follows_the_command() {
         screen.contains("├─ Archivos comprimidos"),
         "the section's label:\n{screen}"
     );
-    let fila = screen
+    let row = screen
         .lines()
         .position(|l| l.contains("Borrar ") && !l.contains("permanente"))
         .expect("the Delete row");
@@ -2698,7 +2700,7 @@ fn the_menu_paints_sections_and_the_click_follows_the_command() {
         .expect("Delete in Operate");
     let zone = ui::menu_zones(&app, area)
         .into_iter()
-        .find(|z| usize::from(z.row) == fila)
+        .find(|z| usize::from(z.row) == row)
         .expect("the Delete row is clickable");
     assert_eq!(zone.hit, ui::MenuHit::Item(delete));
 }
@@ -2785,20 +2787,20 @@ fn snapshot_settings_filtered_and_editing_text() {
 /// (`CompareRow::reason_is_consistent`).
 fn row_compare(
     id: u64,
-    nombre: &[u8],
+    entry_name: &[u8],
     verdict: norte_proto::methods::CompareVerdict,
     criterion: norte_proto::methods::CompareCriterion,
     confidence: norte_proto::methods::CompareConfidence,
-    izquierda: bool,
-    derecha: bool,
+    left_side: bool,
+    right_side: bool,
 ) -> norte_proto::methods::CompareRow {
     use norte_proto::methods::{CompareReason, CompareRow, CompareVerdict};
     let left = vp("file:///casa");
     let right = vp("file:///otro");
     CompareRow {
         id,
-        left: izquierda.then(|| entry(&left, nombre, EntryKind::File, Some(1024))),
-        right: derecha.then(|| entry(&right, nombre, EntryKind::File, Some(2048))),
+        left: left_side.then(|| entry(&left, entry_name, EntryKind::File, Some(1024))),
+        right: right_side.then(|| entry(&right, entry_name, EntryKind::File, Some(2048))),
         verdict,
         criterion,
         confidence,

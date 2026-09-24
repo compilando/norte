@@ -450,11 +450,11 @@ async fn an_apply_of_an_unknown_result_is_not_reoffered() {
         // before asking what the screen shows.
         asentar().await;
         h.dispatch(UiAction::Resync).await.expect("host alive");
-        let tras = next_snapshot(&mut sub).await.sync.expect("still open");
+        let then = next_snapshot(&mut sub).await.sync.expect("still open");
         assert_eq!(
-            tras.can_approve, se_reofrece,
+            then.can_approve, se_reofrece,
             "{error:?} left the screen offering approve = {}",
-            tras.can_approve
+            then.can_approve
         );
     }
 }
@@ -984,16 +984,16 @@ async fn the_palette_runs_an_extension_command_and_shows_its_output() {
         .expect("host alive");
     // Plugin rows are MERGED IN when the daemon answers: the palette is
     // painted first, with the host's own commands.
-    let mut llegaron = false;
+    let mut got = false;
     for _ in 0..2_000 {
         h.dispatch(UiAction::Resync).await.expect("host alive");
         let p = next_snapshot(&mut sub).await.palette.expect("open");
         if p.rows.iter().any(|r| r.text.contains("Saludar")) {
-            llegaron = true;
+            got = true;
             break;
         }
     }
-    assert!(llegaron, "the extension command's row never arrived");
+    assert!(got, "the extension command's row never arrived");
     // It gets narrowed by typing, which is what the palette is for: the
     // command's title is folded by the shared model together with its
     // description.
@@ -1073,16 +1073,16 @@ async fn the_palette_requests_the_plan_from_a_renamer_and_reviews_it_like_the_ai
     h.dispatch(key_mod("p", true, false))
         .await
         .expect("host alive");
-    let mut llego = false;
+    let mut arrived = false;
     for _ in 0..2_000 {
         h.dispatch(UiAction::Resync).await.expect("host alive");
         let p = next_snapshot(&mut sub).await.palette.expect("open");
         if p.rows.iter().any(|r| r.text.contains("Rename by date")) {
-            llego = true;
+            arrived = true;
             break;
         }
     }
-    assert!(llego, "the renamer's row never arrived");
+    assert!(arrived, "the renamer's row never arrived");
     for c in "Rename by date".chars() {
         h.dispatch(press(&c.to_string())).await.expect("host alive");
     }
@@ -1146,16 +1146,16 @@ async fn a_renamer_that_refuses_says_why_in_the_bar() {
     h.dispatch(key_mod("p", true, false))
         .await
         .expect("host alive");
-    let mut llego = false;
+    let mut arrived = false;
     for _ in 0..2_000 {
         h.dispatch(UiAction::Resync).await.expect("host alive");
         let p = next_snapshot(&mut sub).await.palette.expect("open");
         if p.rows.iter().any(|r| r.text.contains("Rename by date")) {
-            llego = true;
+            arrived = true;
             break;
         }
     }
-    assert!(llego, "the renamer's row never arrived");
+    assert!(arrived, "the renamer's row never arrived");
     for c in "Rename by date".chars() {
         h.dispatch(press(&c.to_string())).await.expect("host alive");
     }
@@ -1231,12 +1231,12 @@ async fn in_read_only_an_extension_command_does_not_run() {
 pub(super) async fn wait_buffer(h: &UiHost, sub: &mut norte_ui_host::UiSubscription) {
     for _ in 0..2_000 {
         h.dispatch(UiAction::Resync).await.expect("host alive");
-        let abierto = next_snapshot(sub)
+        let open = next_snapshot(sub)
             .await
             .extensions
             .and_then(|e| e.detail)
             .is_some_and(|d| d.editing.is_some());
-        if abierto {
+        if open {
             return;
         }
     }
@@ -1348,9 +1348,9 @@ async fn a_commands_output_does_not_let_keys_through() {
     // And `Enter` CLOSES it, which is the reflex of someone who just read
     // it.
     h.dispatch(press("Enter")).await.expect("host alive");
-    let despues = next_snapshot_after_resync(&h, &mut sub).await;
-    assert!(despues.plugin_output.is_none());
-    assert_eq!(listing(&despues).cursor, cursor_before);
+    let after = next_snapshot_after_resync(&h, &mut sub).await;
+    assert!(after.plugin_output.is_none());
+    assert_eq!(listing(&after).cursor, cursor_before);
 }
 
 /// Requests a snapshot and waits for it.
@@ -1686,9 +1686,9 @@ async fn a_dialogs_keys_are_set_by_the_preset() {
     h.dispatch(UiAction::Key(chord_key(&bound)))
         .await
         .expect("host alive");
-    let despues = next_columns(&h, &mut sub).await;
+    let after = next_columns(&h, &mut sub).await;
     assert_ne!(
-        despues.cursor, before.cursor,
+        after.cursor, before.cursor,
         "the preset's chord moves the cursor: {bound:?}"
     );
 }
@@ -1700,10 +1700,10 @@ async fn a_dialogs_keys_are_set_by_the_preset() {
 /// and then the test would say so instead of passing by coincidence.
 pub(super) fn chord_key(chord: &str) -> norte_ui_host::keys::KeyInput {
     let parts: Vec<&str> = chord.split('+').collect();
-    let (tecla, mods) = parts.split_last().expect("at least one part");
+    let (key, mods) = parts.split_last().expect("at least one part");
     let has = |m: &str| mods.iter().any(|p| p.eq_ignore_ascii_case(m));
     norte_ui_host::keys::KeyInput {
-        key: (*tecla).to_owned(),
+        key: (*key).to_owned(),
         ctrl: has("ctrl"),
         alt: has("alt"),
         shift: has("shift"),
@@ -2166,12 +2166,12 @@ async fn tab_cycles_the_listings_and_skips_the_sides() {
                 .iter()
                 .filter(|v| matches!(v, SlotView::Browser(_)))
                 .count();
-            let arbol = snapshot.slots.iter().find_map(|v| match v {
+            let tree = snapshot.slots.iter().find_map(|v| match v {
                 SlotView::Tree(t) => Some(t.slot_id),
                 _ => None,
             })?;
             let focus = snapshot.focus?;
-            (listings == 3).then_some((arbol, focus))
+            (listings == 3).then_some((tree, focus))
         })
         .await;
 
@@ -3277,8 +3277,8 @@ pub(super) async fn host_with_stacked_layers(
     dir_user: &std::path::Path,
 ) -> (UiHost, norte_ui_host::ViewSnapshot) {
     use norte_ui_host::settings::{ConfigLayer, HostPath, HostPaths};
-    let mut ajustes = test_settings();
-    ajustes.common.ui_theme = Some("tokyonight".to_owned());
+    let mut settings = test_settings();
+    settings.common.ui_theme = Some("tokyonight".to_owned());
     UiHost::start(UiHostOptions {
         backend: fake_tree(),
         initial_dir: dir(),
@@ -3290,7 +3290,7 @@ pub(super) async fn host_with_stacked_layers(
         keymap_dialog: norte_ui_host::keys::preset_dialog_keymap("orthodox").expect("preset"),
         layout: norte_frontend::layout::presets::tree("orthodox").expect("layout"),
         viewport: (120, 40),
-        settings: ajustes,
+        settings,
         paths: HostPaths {
             config_layers: vec![
                 (
@@ -3329,11 +3329,11 @@ pub(super) async fn host_with_layers_and_favorites(
     favorites: Vec<(&str, &str)>,
 ) -> (UiHost, norte_ui_host::ViewSnapshot) {
     use norte_ui_host::settings::{ConfigLayer, HostPath, HostPaths};
-    let mut ajustes = test_settings();
-    ajustes.common.hotlist = favorites
+    let mut settings = test_settings();
+    settings.common.hotlist = favorites
         .into_iter()
-        .map(|(nombre, dest)| norte_config::HotlistItem {
-            name: nombre.to_owned(),
+        .map(|(name, dest)| norte_config::HotlistItem {
+            name: name.to_owned(),
             target: VPath::parse(dest).map_err(|_| "hotlist-invalid".to_owned()),
         })
         .collect();
@@ -3348,7 +3348,7 @@ pub(super) async fn host_with_layers_and_favorites(
         keymap_dialog: norte_ui_host::keys::preset_dialog_keymap("orthodox").expect("preset"),
         layout: norte_frontend::layout::presets::tree("orthodox").expect("layout"),
         viewport: (120, 40),
-        settings: ajustes,
+        settings,
         paths: HostPaths {
             config_layers: vec![(
                 ConfigLayer::User,
@@ -3459,15 +3459,15 @@ async fn a_profiles_theme_can_be_a_path() {
     let mut nativos = h.native_effects();
 
     run_by_palette(&h, &mut sub, "profile.pick").await;
-    let mut abierto = false;
+    let mut open = false;
     for _ in 0..100 {
         h.dispatch(UiAction::Resync).await.expect("host alive");
         if next_snapshot(&mut sub).await.profiles.is_some() {
-            abierto = true;
+            open = true;
             break;
         }
     }
-    assert!(abierto, "the picker opened with the list");
+    assert!(open, "the picker opened with the list");
 
     h.dispatch(press("Enter")).await.expect("host alive");
     let effect = tokio::time::timeout(std::time::Duration::from_secs(2), nativos.recv())
@@ -3566,7 +3566,7 @@ async fn the_window_removes_the_favorite_under_the_cursor() {
     );
     // Same as when adding: the open list re-seeds when the write comes back,
     // so the row leaving is the signal that the file is already updated.
-    let despues = snapshot_until(&h, &mut sub, "the list without the favorite", |f| {
+    let after = snapshot_until(&h, &mut sub, "the list without the favorite", |f| {
         f.picker
             .as_ref()
             .is_some_and(|p| p.rows.is_empty())
@@ -3578,8 +3578,8 @@ async fn the_window_removes_the_favorite_under_the_cursor() {
     assert!(
         !written.contains("casa"),
         "the favorite left the file: {written}; filas={:?} msg={:?}",
-        despues.picker.as_ref().map(|p| p.rows.len()),
-        despues.status.message
+        after.picker.as_ref().map(|p| p.rows.len()),
+        after.status.message
     );
 }
 
@@ -3698,18 +3698,18 @@ async fn dragging_the_edge_splits_the_two_slots() {
     .await
     .expect("host alive");
     h.dispatch(UiAction::Resync).await.expect("host alive");
-    let despues = next_snapshot(&mut sub).await;
+    let after = next_snapshot(&mut sub).await;
     // With ONE cell of margin: the pair renormalizes to weights between 1
     // and 100 and the layout splits again in integers, so a third of 120
     // lands on 39 or 40 depending on which way the rounding falls. Demanding
     // the exact cell would be demanding the drag not go through weights.
-    let width_left = width(&despues, left);
+    let width_left = width(&after, left);
     assert!(
         width_left.abs_diff(40) <= 1,
         "the border goes where the pointer says: {width_left}"
     );
     assert_eq!(
-        width(&despues, left) + width(&despues, right),
+        width(&after, left) + width(&after, right),
         a0 + b0,
         "the pair occupies the same: dragging one border does not touch the rest"
     );
@@ -3730,8 +3730,8 @@ async fn the_theme_selector_chooses_and_notifies_the_host() {
 
     run_by_palette(&h, &mut sub, "app.theme").await;
     h.dispatch(UiAction::Resync).await.expect("host alive");
-    let abierta = next_snapshot(&mut sub).await;
-    let theme = abierta.theme.expect("the theme screen is open");
+    let opened = next_snapshot(&mut sub).await;
+    let theme = opened.theme.expect("the theme screen is open");
     assert!(
         theme.choices.len() > 1,
         "there is something to choose from: {:?}",
@@ -3793,12 +3793,12 @@ async fn the_menu_is_traversed_and_the_chosen_one_runs() {
     let mut sub = h.subscribe();
     run_by_palette(&h, &mut sub, "app.menu").await;
     h.dispatch(UiAction::Resync).await.expect("host alive");
-    let abierto = next_snapshot(&mut sub).await;
-    assert_eq!(abierto.menu.open, Some(0), "it drops down at the first one");
+    let open = next_snapshot(&mut sub).await;
+    assert_eq!(open.menu.open, Some(0), "it drops down at the first one");
     assert!(
-        !abierto.menu.items.is_empty(),
+        !open.menu.items.is_empty(),
         "and it carries its entries: {:?}",
-        abierto.menu.items
+        open.menu.items
     );
 
     // A down arrow moves the cursor INSIDE the menu, not the listing.
@@ -3808,7 +3808,7 @@ async fn the_menu_is_traversed_and_the_chosen_one_runs() {
             _ => None,
         })
     };
-    let cursor_before = listing_cursor(&abierto);
+    let cursor_before = listing_cursor(&open);
     h.dispatch(press("ArrowDown")).await.expect("host alive");
     h.dispatch(UiAction::Resync).await.expect("host alive");
     let moved = next_snapshot(&mut sub).await;
@@ -3873,13 +3873,13 @@ async fn the_pane_bar_shows_the_panes_and_a_click_opens_them() {
         "the same buttons and the same order as `panelbar::buttons`"
     );
     let places = kinds.iter().position(|k| *k == "places").expect("places");
-    let boton = &bar.buttons[places];
+    let button = &bar.buttons[places];
     assert_eq!(
-        boton.label, "Sitios",
+        button.label, "Sitios",
         "translated into the session's language"
     );
-    assert_eq!(boton.letter, "S");
-    assert_eq!(boton.state, PanelButtonState::Closed, "{bar:?}");
+    assert_eq!(button.letter, "S");
+    assert_eq!(button.state, PanelButtonState::Closed, "{bar:?}");
     assert!(
         bar.buttons.iter().all(|b| !b.attention),
         "with no tasks or notices nothing has anything new: {bar:?}"
@@ -3933,12 +3933,12 @@ async fn the_pane_bar_shows_the_panes_and_a_click_opens_them() {
     // state, not the next one that happens to be in the queue.
     let with_places =
         |s: &norte_ui_host::ViewSnapshot| s.slots.iter().any(|v| matches!(v, SlotView::Places(_)));
-    let abierto = snapshot_until(&h, &mut sub, "the places slot placed", |s| {
+    let open = snapshot_until(&h, &mut sub, "the places slot placed", |s| {
         with_places(s).then(|| s.clone())
     })
     .await;
     assert_ne!(
-        abierto.panel_bar.buttons[places].state,
+        open.panel_bar.buttons[places].state,
         PanelButtonState::Closed
     );
 
@@ -4133,13 +4133,13 @@ async fn the_details_edge_is_dragged_from_the_second_listing() {
         .expect("host alive");
     assert!(matches!(ack, ActionAck::Applied { .. }), "was {ack:?}");
     let width = meta.width;
-    let despues = snapshot_until(&h, &mut sub, "details about ten cells narrower", |s| {
+    let after = snapshot_until(&h, &mut sub, "details about ten cells narrower", |s| {
         let p = s.layout.placements.iter().find(|p| p.slot_id == meta_id)?;
         (p.width + 9 <= width && p.width + 11 >= width).then(|| s.clone())
     })
     .await;
     // And the other listing, which nobody grabbed, does not notice.
-    let other = despues
+    let other = after
         .layout
         .placements
         .iter()
@@ -4708,8 +4708,8 @@ async fn tabbing_exits_the_processes_panel() {
     let mut sub = h.subscribe();
     run_by_palette(&h, &mut sub, "layout.processes").await;
     h.dispatch(UiAction::Resync).await.expect("host alive");
-    let abierto = next_snapshot(&mut sub).await;
-    let processes = abierto
+    let open = next_snapshot(&mut sub).await;
+    let processes = open
         .slots
         .iter()
         .find_map(|v| match v {
@@ -4800,8 +4800,8 @@ async fn the_ring_does_not_stop_at_the_attributes_sheet() {
     let mut sub = h.subscribe();
     run_by_palette(&h, &mut sub, "layout.metadata").await;
     h.dispatch(UiAction::Resync).await.expect("host alive");
-    let abierto = next_snapshot(&mut sub).await;
-    let sheet = abierto
+    let open = next_snapshot(&mut sub).await;
+    let sheet = open
         .slots
         .iter()
         .find_map(|v| match v {

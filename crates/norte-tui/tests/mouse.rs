@@ -1263,7 +1263,7 @@ fn the_bar_announces_what_dropping_now_would_do() {
     );
     // …and the bar PAINTS it (over any pending message).
     app.message = Some("un mensaje cualquiera".to_owned());
-    let cabeza = copy
+    let the_head = copy
         .split_once("  ")
         .map_or(copy.as_str(), |(head, _)| head)
         .to_owned();
@@ -1276,7 +1276,7 @@ fn the_bar_announces_what_dropping_now_would_do() {
     // one about thirty, so the same sixty-wide screen passed in English and
     // failed in Spanish. What is asserted here is not how much fits, but WHO
     // RULES: the notice starts the bar and the pending message does not show.
-    let start: String = cabeza.chars().take(15).collect();
+    let start: String = the_head.chars().take(15).collect();
     assert!(
         bar.contains(&start),
         "the notice rules the bar while the drag lasts.\n\

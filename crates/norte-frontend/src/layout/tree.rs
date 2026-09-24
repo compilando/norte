@@ -574,11 +574,11 @@ impl Node {
                 children,
                 sizes,
             } => {
-                let hijos: Vec<Self> = children
+                let kids: Vec<Self> = children
                     .iter()
                     .map(|c| c.substitute_auto(natural))
                     .collect();
-                let nuevos = children
+                let new_ones = children
                     .iter()
                     .enumerate()
                     .map(|(i, c)| match sizes.get(i) {
@@ -595,8 +595,8 @@ impl Node {
                     .collect();
                 Self::Split {
                     dir: *dir,
-                    children: hijos,
-                    sizes: nuevos,
+                    children: kids,
+                    sizes: new_ones,
                 }
             }
             Self::Tabs { children, active } => Self::Tabs {
@@ -633,10 +633,10 @@ impl Node {
     /// born with the same weight as the one it comes from, which over the
     /// default layout — all at one — is exactly splitting evenly.
     #[must_use]
-    pub fn split_slot(&self, id: SlotId, dir: Dir, nuevo: &Self) -> Self {
+    pub fn split_slot(&self, id: SlotId, dir: Dir, new: &Self) -> Self {
         match self {
             Self::Slot { id: i, .. } if *i == id => {
-                Self::split(dir, vec![self.clone(), nuevo.clone()])
+                Self::split(dir, vec![self.clone(), new.clone()])
             }
             Self::Slot { .. } => self.clone(),
             Self::Split {
@@ -650,14 +650,14 @@ impl Node {
                         .position(|c| matches!(c, Self::Slot { id: s, .. } if *s == id))
                     && let Size::Weight(weight) = sizes.get(i).copied().unwrap_or(Size::Weight(1))
                 {
-                    let mut hijos = children.clone();
+                    let mut kids = children.clone();
                     let mut tam = sizes.clone();
-                    tam.resize(hijos.len(), Size::Weight(1));
-                    hijos.insert(i + 1, nuevo.clone());
+                    tam.resize(kids.len(), Size::Weight(1));
+                    kids.insert(i + 1, new.clone());
                     tam.insert(i + 1, Size::Weight(weight));
                     return Self::Split {
                         dir: *d,
-                        children: hijos,
+                        children: kids,
                         sizes: tam,
                     };
                 }
@@ -666,7 +666,7 @@ impl Node {
                     sizes: sizes.clone(),
                     children: children
                         .iter()
-                        .map(|c| c.split_slot(id, dir, nuevo))
+                        .map(|c| c.split_slot(id, dir, new))
                         .collect(),
                 }
             }
@@ -674,7 +674,7 @@ impl Node {
                 active: *active,
                 children: children
                     .iter()
-                    .map(|c| c.split_slot(id, dir, nuevo))
+                    .map(|c| c.split_slot(id, dir, new))
                     .collect(),
             },
         }
@@ -701,8 +701,8 @@ impl Node {
     /// `Split` left with one child: docking and undocking returns the
     /// starting tree.
     #[must_use]
-    pub fn dock(&self, anchor: SlotId, edge: Edge, size: Size, nuevo: &Self) -> Self {
-        self.dock_con(anchor, edge, size, nuevo, false)
+    pub fn dock(&self, anchor: SlotId, edge: Edge, size: Size, new: &Self) -> Self {
+        self.dock_con(anchor, edge, size, new, false)
     }
 
     /// Like [`Self::dock`], but a PANEL arriving at a border where there is
@@ -720,33 +720,20 @@ impl Node {
     /// A listing never groups, nor acts as a group: two listings side by
     /// side are the orthodox file manager.
     #[must_use]
-    pub fn dock_grouped(&self, anchor: SlotId, edge: Edge, size: Size, nuevo: &Self) -> Self {
-        self.dock_con(anchor, edge, size, nuevo, true)
+    pub fn dock_grouped(&self, anchor: SlotId, edge: Edge, size: Size, new: &Self) -> Self {
+        self.dock_con(anchor, edge, size, new, true)
     }
 
-    fn dock_con(
-        &self,
-        anchor: SlotId,
-        edge: Edge,
-        size: Size,
-        nuevo: &Self,
-        agrupar: bool,
-    ) -> Self {
+    fn dock_con(&self, anchor: SlotId, edge: Edge, size: Size, new: &Self, agrupar: bool) -> Self {
         if !self.contains(anchor) {
             return self.clone();
         }
-        self.dock_inner(anchor, edge, size, nuevo, agrupar)
+        self.dock_inner(anchor, edge, size, new, agrupar)
             .unwrap_or_else(|| {
                 let (children, sizes) = if edge.is_front() {
-                    (
-                        vec![nuevo.clone(), self.clone()],
-                        vec![size, Size::Weight(1)],
-                    )
+                    (vec![new.clone(), self.clone()], vec![size, Size::Weight(1)])
                 } else {
-                    (
-                        vec![self.clone(), nuevo.clone()],
-                        vec![Size::Weight(1), size],
-                    )
+                    (vec![self.clone(), new.clone()], vec![Size::Weight(1), size])
                 };
                 Self::Split {
                     dir: edge.axis(),
@@ -764,17 +751,17 @@ impl Node {
         anchor: SlotId,
         edge: Edge,
         size: Size,
-        nuevo: &Self,
+        new: &Self,
         agrupar: bool,
     ) -> Option<Self> {
-        let hijos = match self {
+        let kids = match self {
             Self::Split { children, .. } | Self::Tabs { children, .. } => children,
             Self::Slot { .. } => return None,
         };
-        let pos = hijos.iter().position(|c| c.contains(anchor))?;
+        let pos = kids.iter().position(|c| c.contains(anchor))?;
         // Inward first: the layout that rules is the DEEPEST one that runs
         // on the axis, not the first one found going down.
-        if let Some(inside) = hijos[pos].dock_inner(anchor, edge, size, nuevo, agrupar) {
+        if let Some(inside) = kids[pos].dock_inner(anchor, edge, size, new, agrupar) {
             return Some(self.with_child(pos, inside));
         }
         // A `Tabs` does not accept the dock: putting it inside a tab would
@@ -817,17 +804,17 @@ impl Node {
             at.checked_sub(1)
         };
         if agrupar
-            && es_panel(nuevo)
+            && es_panel(new)
             && let Some(v) = vecino
             && nc.get(v).is_some_and(is_a_group_of_panes)
         {
             let group = match &nc[v] {
                 Self::Tabs { children, .. } => {
                     let mut h = children.clone();
-                    h.push(nuevo.clone());
+                    h.push(new.clone());
                     h
                 }
-                other => vec![other.clone(), nuevo.clone()],
+                other => vec![other.clone(), new.clone()],
             };
             let active = group.len() - 1;
             nc[v] = Self::Tabs {
@@ -852,7 +839,7 @@ impl Node {
                 sizes: ns,
             });
         }
-        nc.insert(at, nuevo.clone());
+        nc.insert(at, new.clone());
         ns.insert(at.min(ns.len()), weight_between_hermanos(size, sizes));
         Some(Self::Split {
             dir: *dir,
@@ -868,17 +855,17 @@ impl Node {
     /// would leave a screen with nothing, and the caller decides that.
     #[must_use]
     pub fn close_slot(&self, id: SlotId) -> Option<Self> {
-        let hijos = match self {
+        let kids = match self {
             Self::Split { children, .. } | Self::Tabs { children, .. } => children,
             Self::Slot { .. } => return None,
         };
-        for (i, c) in hijos.iter().enumerate() {
+        for (i, c) in kids.iter().enumerate() {
             if let Some(changed) = c.close_slot(id) {
                 return Some(self.with_child(i, changed));
             }
         }
-        let pos = hijos.iter().position(|c| c.contains(id))?;
-        if hijos.len() <= 1 {
+        let pos = kids.iter().position(|c| c.contains(id))?;
+        if kids.len() <= 1 {
             return None;
         }
         match self {
@@ -991,11 +978,11 @@ impl Node {
                 sizes,
             });
         }
-        let hijos = match self {
+        let kids = match self {
             Self::Split { children, .. } | Self::Tabs { children, .. } => children,
             Self::Slot { .. } => return None,
         };
-        let pos = hijos.iter().position(|c| c.contains(target))?;
+        let pos = kids.iter().position(|c| c.contains(target))?;
         // Sibling in the SAME layout, if it runs on the axis and the unit is
         // weighted: this way it splits evenly, like `split_slot`. Never in
         // chrome's layout: that one is not flipped, and what got dropped
@@ -1028,7 +1015,7 @@ impl Node {
                 sizes: ns,
             });
         }
-        let inside = hijos[pos].place_beside(target, edge, node)?;
+        let inside = kids[pos].place_beside(target, edge, node)?;
         Some(self.with_child(pos, inside))
     }
 
@@ -1056,14 +1043,14 @@ impl Node {
     }
 
     fn flip_inner(&self, id: SlotId) -> Giro {
-        let hijos = match self {
+        let kids = match self {
             Self::Split { children, .. } | Self::Tabs { children, .. } => children,
             Self::Slot { .. } => return Giro::NoThis,
         };
-        let Some(pos) = hijos.iter().position(|c| c.contains(id)) else {
+        let Some(pos) = kids.iter().position(|c| c.contains(id)) else {
             return Giro::NoThis;
         };
-        match hijos[pos].flip_inner(id) {
+        match kids[pos].flip_inner(id) {
             Giro::Done(inside) => return Giro::Done(self.with_child(pos, inside)),
             Giro::Rehusado => return Giro::Rehusado,
             Giro::NoThis => {}
@@ -1154,14 +1141,14 @@ impl Node {
             let mut ns = sizes.to_vec();
             match ns.get(pos) {
                 Some(Size::Weight(w)) => {
-                    let nuevo = i32::from(*w).saturating_add(i32::from(delta)).clamp(1, 10);
-                    ns[pos] = Size::Weight(u16::try_from(nuevo).unwrap_or(1));
+                    let new = i32::from(*w).saturating_add(i32::from(delta)).clamp(1, 10);
+                    ns[pos] = Size::Weight(u16::try_from(new).unwrap_or(1));
                 }
                 Some(Size::Fixed(n)) => {
-                    let nuevo = i32::from(*n)
+                    let new = i32::from(*n)
                         .saturating_add(i32::from(delta).saturating_mul(PASO))
                         .clamp(2, 100);
-                    ns[pos] = Size::Fixed(u16::try_from(nuevo).unwrap_or(2));
+                    ns[pos] = Size::Fixed(u16::try_from(new).unwrap_or(2));
                 }
                 Some(Size::Auto) | None => {}
             }
@@ -1213,19 +1200,19 @@ impl Node {
     /// if they are not neighbors in any layout.
     #[must_use]
     pub fn border_pair(&self, a: SlotId, b: SlotId) -> Option<(Vec<SlotId>, Vec<SlotId>)> {
-        let hijos = match self {
+        let kids = match self {
             Self::Split { children, .. } | Self::Tabs { children, .. } => children,
             Self::Slot { .. } => return None,
         };
-        let pos = hijos.iter().position(|c| c.contains(a))?;
-        if hijos[pos].contains(b) {
-            return hijos[pos].border_pair(a, b);
+        let pos = kids.iter().position(|c| c.contains(a))?;
+        if kids[pos].contains(b) {
+            return kids[pos].border_pair(a, b);
         }
         if matches!(self, Self::Split { .. })
-            && let Some(next) = hijos.get(pos + 1)
+            && let Some(next) = kids.get(pos + 1)
             && next.contains(b)
         {
-            return Some((hijos[pos].slot_ids(), next.slot_ids()));
+            return Some((kids[pos].slot_ids(), next.slot_ids()));
         }
         None
     }
@@ -1237,15 +1224,15 @@ impl Node {
     /// one of its own layout.
     #[must_use]
     pub fn drag_border_between(&self, a: SlotId, b: SlotId, frac: f32, pair_cells: u16) -> Self {
-        let hijos = match self {
+        let kids = match self {
             Self::Split { children, .. } | Self::Tabs { children, .. } => children,
             Self::Slot { .. } => return self.clone(),
         };
-        let Some(pos) = hijos.iter().position(|c| c.contains(a)) else {
+        let Some(pos) = kids.iter().position(|c| c.contains(a)) else {
             return self.clone();
         };
-        if hijos[pos].contains(b) {
-            let inside = hijos[pos].drag_border_between(a, b, frac, pair_cells);
+        if kids[pos].contains(b) {
+            let inside = kids[pos].drag_border_between(a, b, frac, pair_cells);
             return self.with_child(pos, inside);
         }
         if let Self::Split {
@@ -1302,11 +1289,11 @@ impl Node {
     /// ```
     #[must_use]
     pub fn sizes_of(&self, id: SlotId) -> Option<(&[Size], usize)> {
-        let hijos = match self {
+        let kids = match self {
             Self::Split { children, .. } | Self::Tabs { children, .. } => children,
             Self::Slot { .. } => return None,
         };
-        for c in hijos {
+        for c in kids {
             if c.contains(id)
                 && !matches!(c, Self::Slot { .. })
                 && let Some(inside) = c.sizes_of(id)
@@ -1327,11 +1314,11 @@ impl Node {
     /// Applies `f` to the sizes of the `Split` that contains `id`, giving
     /// it the position of the child that contains it.
     fn map_split_of(&self, id: SlotId, f: &dyn Fn(&[Size], usize) -> Vec<Size>) -> Self {
-        let hijos = match self {
+        let kids = match self {
             Self::Split { children, .. } | Self::Tabs { children, .. } => children,
             Self::Slot { .. } => return self.clone(),
         };
-        for (i, c) in hijos.iter().enumerate() {
+        for (i, c) in kids.iter().enumerate() {
             if c.contains(id) && !matches!(c, Self::Slot { .. }) {
                 let inside = c.map_split_of(id, f);
                 if inside != *c {
@@ -1457,30 +1444,30 @@ impl Node {
     /// lone panel is what turns that panel into the first of a group, and
     /// asking the user for two steps for that would make no sense.
     #[must_use]
-    pub fn add_tab(&self, id: SlotId, nuevo: &Self) -> Self {
+    pub fn add_tab(&self, id: SlotId, new: &Self) -> Self {
         let envuelto = self.wrap_in_tabs(id);
-        envuelto.insert_tab_near(id, nuevo).unwrap_or(envuelto)
+        envuelto.insert_tab_near(id, new).unwrap_or(envuelto)
     }
 
-    fn insert_tab_near(&self, id: SlotId, nuevo: &Self) -> Option<Self> {
-        let hijos = match self {
+    fn insert_tab_near(&self, id: SlotId, new: &Self) -> Option<Self> {
+        let kids = match self {
             Self::Split { children, .. } | Self::Tabs { children, .. } => children,
             Self::Slot { .. } => return None,
         };
         // Deeper inside first: the `Tabs` that rules is the INNER one, not
         // the one wrapping half the screen.
-        for (i, c) in hijos.iter().enumerate() {
-            if let Some(changed) = c.insert_tab_near(id, nuevo) {
+        for (i, c) in kids.iter().enumerate() {
+            if let Some(changed) = c.insert_tab_near(id, new) {
                 return Some(self.with_child(i, changed));
             }
         }
         if let Self::Tabs { children, .. } = self
             && let Some(pos) = children.iter().position(|c| c.contains(id))
         {
-            let mut nuevos = children.clone();
-            nuevos.insert(pos + 1, nuevo.clone());
+            let mut new_ones = children.clone();
+            new_ones.insert(pos + 1, new.clone());
             return Some(Self::Tabs {
-                children: nuevos,
+                children: new_ones,
                 active: pos + 1,
             });
         }
@@ -1497,11 +1484,11 @@ impl Node {
     /// panel is `layout.close-slot`, not `pane.tab-close`.
     #[must_use]
     pub fn close_tab(&self, id: SlotId) -> Option<Self> {
-        let hijos = match self {
+        let kids = match self {
             Self::Split { children, .. } | Self::Tabs { children, .. } => children,
             Self::Slot { .. } => return None,
         };
-        for (i, c) in hijos.iter().enumerate() {
+        for (i, c) in kids.iter().enumerate() {
             if let Some(changed) = c.close_tab(id) {
                 return Some(self.with_child(i, changed));
             }
@@ -1510,10 +1497,10 @@ impl Node {
             && children.len() > 1
             && let Some(pos) = children.iter().position(|c| c.contains(id))
         {
-            let mut nuevos = children.clone();
-            nuevos.remove(pos);
-            if nuevos.len() == 1 {
-                return nuevos.into_iter().next();
+            let mut new_ones = children.clone();
+            new_ones.remove(pos);
+            if new_ones.len() == 1 {
+                return new_ones.into_iter().next();
             }
             // Closing a tab BEFORE the active one shifts the index; if not,
             // active would end up naming the one next to it. The clamp
@@ -1524,9 +1511,9 @@ impl Node {
             } else {
                 *active
             }
-            .min(nuevos.len() - 1);
+            .min(new_ones.len() - 1);
             return Some(Self::Tabs {
-                children: nuevos,
+                children: new_ones,
                 active: act,
             });
         }
@@ -1540,11 +1527,11 @@ impl Node {
     /// slot of each tab: that is who the title is taken from.
     #[must_use]
     pub fn tabs_of(&self, id: SlotId) -> Option<(Vec<SlotId>, usize)> {
-        let hijos = match self {
+        let kids = match self {
             Self::Split { children, .. } | Self::Tabs { children, .. } => children,
             Self::Slot { .. } => return None,
         };
-        for c in hijos {
+        for c in kids {
             if let Some(v) = c.tabs_of(id) {
                 return Some(v);
             }
@@ -1651,10 +1638,10 @@ impl Node {
             let dest = pos
                 .saturating_add_signed(delta)
                 .min(children.len().saturating_sub(1));
-            let mut nuevos = children.to_vec();
-            let who = nuevos.remove(pos);
-            nuevos.insert(dest, who);
-            (nuevos, dest)
+            let mut new_ones = children.to_vec();
+            let who = new_ones.remove(pos);
+            new_ones.insert(dest, who);
+            (new_ones, dest)
         })
     }
 
@@ -1662,11 +1649,11 @@ impl Node {
     /// and the position of the one that contains it, and expecting the new
     /// children and the active one.
     fn map_tabs_of(&self, id: SlotId, f: &ReTab<'_>) -> Self {
-        let hijos = match self {
+        let kids = match self {
             Self::Split { children, .. } | Self::Tabs { children, .. } => children,
             Self::Slot { .. } => return self.clone(),
         };
-        for (i, c) in hijos.iter().enumerate() {
+        for (i, c) in kids.iter().enumerate() {
             if c.contains(id) && !matches!(c, Self::Slot { .. }) {
                 let inside = c.map_tabs_of(id, f);
                 if inside != *c {
@@ -1677,9 +1664,9 @@ impl Node {
         if let Self::Tabs { children, .. } = self
             && let Some(pos) = children.iter().position(|c| c.contains(id))
         {
-            let (nuevos, act) = f(children, pos);
+            let (new_ones, act) = f(children, pos);
             return Self::Tabs {
-                children: nuevos,
+                children: new_ones,
                 active: act,
             };
         }
@@ -1694,23 +1681,23 @@ impl Node {
                 children,
                 sizes,
             } => {
-                let mut nuevos = children.clone();
-                if let Some(slot) = nuevos.get_mut(i) {
+                let mut new_ones = children.clone();
+                if let Some(slot) = new_ones.get_mut(i) {
                     *slot = child;
                 }
                 Self::Split {
                     dir: *dir,
-                    children: nuevos,
+                    children: new_ones,
                     sizes: sizes.clone(),
                 }
             }
             Self::Tabs { children, active } => {
-                let mut nuevos = children.clone();
-                if let Some(slot) = nuevos.get_mut(i) {
+                let mut new_ones = children.clone();
+                if let Some(slot) = new_ones.get_mut(i) {
                     *slot = child;
                 }
                 Self::Tabs {
-                    children: nuevos,
+                    children: new_ones,
                     active: *active,
                 }
             }

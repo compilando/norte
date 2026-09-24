@@ -1153,7 +1153,7 @@ async fn a_connection_that_fails_says_why() {
     // attends to `Notice`s of class `fatal`, and its status text comes from
     // `status.message`: a test that asserted on the notice went green with
     // the window painting nothing, which is exactly what happened.
-    let detalle = snapshot_until(&h, &mut sub, "the failure in the bar", |f| {
+    let detail = snapshot_until(&h, &mut sub, "the failure in the bar", |f| {
         f.status
             .message
             .clone()
@@ -1161,23 +1161,23 @@ async fn a_connection_that_fails_says_why() {
     })
     .await;
     assert!(
-        detalle.contains("cubo.example"),
-        "the notice names the machine that was not reached: {detalle}"
+        detail.contains("cubo.example"),
+        "the notice names the machine that was not reached: {detail}"
     );
     assert!(
-        detalle.contains("rosetta"),
-        "and the name from connections.toml, the one the human wrote: {detalle}"
+        detail.contains("rosetta"),
+        "and the name from connections.toml, the one the human wrote: {detail}"
     );
     assert!(
-        detalle.contains(&norte_i18n::t_in(
+        detail.contains(&norte_i18n::t_in(
             norte_i18n::Lang::Es,
             "failed-reason-secret-empty"
         )),
-        "and the translated REASON, which is what #322 exists to make cross over: {detalle}"
+        "and the translated REASON, which is what #322 exists to make cross over: {detail}"
     );
     assert!(
-        !detalle.contains("s3://"),
-        "the authority is labeled, never as a URL: {detalle}"
+        !detail.contains("s3://"),
+        "the authority is labeled, never as a URL: {detail}"
     );
 
     // And the notice travels ALSO, with the same line: a frontend that does
@@ -1214,7 +1214,7 @@ async fn a_failure_with_an_unknown_reason_leans_on_the_detail() {
     })
     .expect("the host is listening");
 
-    let detalle = snapshot_until(&h, &mut sub, "the unknown failure in the bar", |f| {
+    let detail = snapshot_until(&h, &mut sub, "the unknown failure in the bar", |f| {
         f.status
             .message
             .clone()
@@ -1222,22 +1222,22 @@ async fn a_failure_with_an_unknown_reason_leans_on_the_detail() {
     })
     .await;
     assert!(
-        detalle.contains("the server asked for a method norte does not have"),
-        "with no known reason, the detail is the only thing that orients: {detalle}"
+        detail.contains("the server asked for a method norte does not have"),
+        "with no known reason, the detail is the only thing that orients: {detail}"
     );
     assert!(
-        !detalle.contains(&norte_i18n::t_in(
+        !detail.contains(&norte_i18n::t_in(
             norte_i18n::Lang::Es,
             "failed-reason-auth-rejected"
         )),
-        "an unknown reason does not inherit another one's phrase: {detalle}"
+        "an unknown reason does not inherit another one's phrase: {detail}"
     );
 }
 
 /// Waits for the next notice with this key and returns its detail.
 pub(super) async fn snapshot_until_notice(
     sub: &mut norte_ui_host::controller::UiSubscription,
-    clave: &str,
+    map_key: &str,
 ) -> String {
     for _ in 0..40 {
         match tokio::time::timeout(WAIT_MAX, sub.recv())
@@ -1247,7 +1247,7 @@ pub(super) async fn snapshot_until_notice(
         {
             Update::Message(m) => {
                 if let UiUpdate::Notice(UiNotice::Message { key, detail }) = &m.payload
-                    && key == clave
+                    && key == map_key
                 {
                     return detail.clone().unwrap_or_default();
                 }
@@ -1255,7 +1255,7 @@ pub(super) async fn snapshot_until_notice(
             Update::Lagged => {}
         }
     }
-    panic!("the notice {clave} never arrived");
+    panic!("the notice {map_key} never arrived");
 }
 
 /// **A reason this binary does not know is not read as «FTP in the clear»**
@@ -1447,8 +1447,8 @@ async fn an_approval_expires_and_its_dialog_closes() {
         detail: norte_proto::methods::ApprovalDetail::default(),
     })
     .expect("the host is listening");
-    let abiertos = next_dialogs(&mut sub).await;
-    assert_eq!(abiertos.len(), 1);
+    let open_ones = next_dialogs(&mut sub).await;
+    assert_eq!(open_ones.len(), 1);
 
     let empty = next_dialogs(&mut sub).await;
     assert!(empty.is_empty(), "the dialog closed on its own: {empty:?}");
@@ -1616,8 +1616,8 @@ async fn a_clean_undo_opens_nothing() {
     let p = inyectar_task_de(&tx, 52, norte_proto::TaskKind::Undo);
     next_tasks(&mut sub).await;
     p.send_modify(|p| p.state = norte_proto::TaskState::Completed);
-    let detalle = task_detail(&mut sub).await;
-    assert!(detalle.contains('4'), "the board says how many: {detalle}");
+    let detail = task_detail(&mut sub).await;
+    assert!(detail.contains('4'), "the board says how many: {detail}");
     assert!(!was_dialogs(&mut sub).await);
 }
 
@@ -1744,7 +1744,7 @@ async fn a_reannouncement_does_not_erase_the_batchs_report() {
     let p = inyectar_task_de(&tx, 71, norte_proto::TaskKind::RenameBatch);
     next_tasks(&mut sub).await;
     p.send_modify(|p| p.state = norte_proto::TaskState::Completed);
-    let detalle = task_detail(&mut sub).await;
+    let detail = task_detail(&mut sub).await;
 
     // The same task, re-announced over the "others'" channel the way a
     // reconnection would: already terminal.
@@ -1753,7 +1753,7 @@ async fn a_reannouncement_does_not_erase_the_batchs_report() {
 
     let tasks = next_tasks(&mut sub).await;
     let t = tasks.iter().find(|t| t.task_id == 71).expect("still there");
-    assert_eq!(t.detail.as_deref(), Some(detalle.as_str()), "{t:?}");
+    assert_eq!(t.detail.as_deref(), Some(detail.as_str()), "{t:?}");
     assert_eq!(
         backend.informes_pedidos.lock().expect("pedidos").len(),
         1,
@@ -1874,7 +1874,7 @@ async fn a_batch_born_terminal_asks_for_its_report() {
 
     // Born COMPLETED: the sender is dropped right after, as the SDK does
     // with a task that already arrived terminal.
-    let progreso = norte_proto::TaskProgress {
+    let progress = norte_proto::TaskProgress {
         task_id: norte_proto::TaskId::new(81),
         kind: norte_proto::TaskKind::RenameBatch,
         state: norte_proto::TaskState::Completed,
@@ -1886,7 +1886,7 @@ async fn a_batch_born_terminal_asks_for_its_report() {
         unreadable: None,
         unvisited: None,
     };
-    let (ptx, prx) = tokio::sync::watch::channel(progreso);
+    let (ptx, prx) = tokio::sync::watch::channel(progress);
     drop(ptx);
     tx.send(norte_ui_host::backend::HostTask {
         id: norte_proto::TaskId::new(81),
@@ -1898,10 +1898,10 @@ async fn a_batch_born_terminal_asks_for_its_report() {
     })
     .expect("the host is listening");
 
-    let detalle = task_detail(&mut sub).await;
+    let detail = task_detail(&mut sub).await;
     assert!(
-        detalle.contains('2'),
-        "the report reached the board: {detalle}"
+        detail.contains('2'),
+        "the report reached the board: {detail}"
     );
     assert_eq!(*backend.informes_pedidos.lock().expect("pedidos"), vec![81]);
 }
@@ -2303,7 +2303,7 @@ async fn a_plaintext_notice_carries_the_connection_separately_and_marked() {
 #[tokio::test]
 async fn an_unknown_kind_with_an_altered_name_is_marked() {
     use norte_frontend::layout::{KindId, Node, SlotId};
-    let disposicion = Node::Split {
+    let layout = Node::Split {
         dir: norte_frontend::layout::Dir::Vertical,
         children: vec![
             Node::slot(SlotId(1), KindId::browser()),
@@ -2323,7 +2323,7 @@ async fn an_unknown_kind_with_an_altered_name_is_marked() {
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
         keymap_dialog: norte_ui_host::keys::preset_dialog_keymap("orthodox").expect("preset"),
-        layout: disposicion,
+        layout,
         viewport: (120, 40),
         settings: test_settings(),
         paths: norte_ui_host::settings::HostPaths::default(),

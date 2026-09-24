@@ -126,15 +126,15 @@ impl DiskMap {
     ///
     /// `ready` distinguishes the last report from the ones in between: it is
     /// what decides whether this can be saved to the cache.
-    pub fn land(&mut self, informe: FsDirUsageReportResult, ready: bool) {
+    pub fn land(&mut self, report: FsDirUsageReportResult, ready: bool) {
         let follows = self
             .chosen
             .as_ref()
-            .is_some_and(|n| informe.children.iter().any(|c| c.name == *n));
+            .is_some_and(|n| report.children.iter().any(|c| c.name == *n));
         if !follows {
             self.chosen = None;
         }
-        self.report = informe;
+        self.report = report;
         if ready {
             self.state = State::Done;
         }

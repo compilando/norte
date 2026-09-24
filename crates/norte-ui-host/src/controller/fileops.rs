@@ -225,13 +225,13 @@ impl State {
         // The body's names could come from a potential attacker: they are
         // painted with the canonical sanitizing and clamped, same as in the
         // listing.
-        let cuerpo: Vec<crate::dto::DialogLine> = paths
+        let body: Vec<crate::dto::DialogLine> = paths
             .iter()
             .take(Self::MAX_LINES_DIALOG)
             .map(Self::path_line)
             .collect();
-        let note = self.truncation_note(cuerpo.len(), paths.len());
-        let hostile_outside = norte_frontend::overflow_hostile(&paths, cuerpo.len());
+        let note = self.truncation_note(body.len(), paths.len());
+        let hostile_outside = norte_frontend::overflow_hostile(&paths, body.len());
         let id = ModalId(self.next_modal);
         self.next_modal += 1;
         let vista = DialogView {
@@ -248,7 +248,7 @@ impl State {
             asker: None,
             deadline: None,
             deadline_at_ms: None,
-            body: cuerpo,
+            body,
             overflow_note: note,
             overflow_hostile: hostile_outside,
             choices: vec![

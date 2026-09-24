@@ -69,8 +69,8 @@ impl State {
         // focus: they are BOARD commands, not the panel that paints it, and
         // with the process panel closed they still have to mean the same
         // thing.
-        if let Effect::TaskVecina { back: atras } = effect {
-            return self.move_on_board(atras);
+        if let Effect::TaskVecina { back: going_back } = effect {
+            return self.move_on_board(going_back);
         }
         if matches!(effect, Effect::DiscardTask) {
             return self.discard_task();
@@ -109,9 +109,9 @@ impl State {
             | Effect::MarkToEdge { .. }
             | Effect::UnmarkAll => self.listing_effect(effect, slot, backend, mailbox),
             Effect::Focus {
-                back: atras,
+                back: going_back,
                 solo_listings,
-            } => self.mover_focus(atras, solo_listings, backend, mailbox),
+            } => self.mover_focus(going_back, solo_listings, backend, mailbox),
             Effect::Dest => self.designar_dest(),
             Effect::JumpBack => self.jump_to_point(backend, mailbox),
             Effect::PinJump => self.set_jump_point(),
@@ -314,10 +314,10 @@ impl State {
                 )
             }
             Effect::Up => self.navigation(&UiAction::Parent { slot_id: slot }, backend, mailbox),
-            Effect::Trail { back: atras } => self.navigation(
+            Effect::Trail { back: going_back } => self.navigation(
                 &UiAction::History {
                     slot_id: slot,
-                    back: atras,
+                    back: going_back,
                 },
                 backend,
                 mailbox,
@@ -782,7 +782,9 @@ impl State {
             Effect::Exit => self.request_exit(),
             Effect::ProfileChoose => self.request_profiles(None, mailbox),
             Effect::ProfileSaveAs => self.request_save_profile(),
-            Effect::ProfileVecino { back: atras } => self.request_profiles(Some(!atras), mailbox),
+            Effect::ProfileVecino { back: going_back } => {
+                self.request_profiles(Some(!going_back), mailbox)
+            }
             Effect::Volumes => self.open_volumes(backend, mailbox),
             Effect::Connections => self.open_connections(backend, mailbox),
             Effect::History => self.open_history(),

@@ -142,7 +142,7 @@ flate2.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "sync", "time", "test-util"] }
 
 [[bench]]
-name = "copy_remoto"
+name = "copy_remote"
 harness = false
 
 [lints]

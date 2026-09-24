@@ -316,7 +316,7 @@ impl State {
         filter: Option<String>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let cap = self.config.common.ui_chrome.history_size();
-        let Some(hueco) = self.slots.get_mut(&slot) else {
+        let Some(target_slot) = self.slots.get_mut(&slot) else {
             // The slot left with the list open: it closes, like when the same
             // thing happens on choosing. Leaving it open offered rows from a
             // panel that no longer exists.
@@ -333,8 +333,8 @@ impl State {
                 outgoing,
             );
         };
-        hueco.history.set_capacity(cap);
-        let current = hueco.pane.dir().clone();
+        target_slot.history.set_capacity(cap);
+        let current = target_slot.pane.dir().clone();
         // History is painted with ITS panel's reinterpretation, like the
         // terminal and the path bar (#98/F4: a list is a decision surface).
         // The popular list gets none: it belongs to the whole session, and
@@ -343,13 +343,18 @@ impl State {
         let encoding = if popular {
             None
         } else {
-            hueco.pane.name_encoding()
+            target_slot.pane.name_encoding()
         };
         let query_text = filter.as_deref().unwrap_or("");
         let rows = if popular {
             norte_frontend::history::popular_rows(&self.popular, &current, query_text)
         } else {
-            norte_frontend::history::history_rows(&hueco.history, &current, query_text, encoding)
+            norte_frontend::history::history_rows(
+                &target_slot.history,
+                &current,
+                query_text,
+                encoding,
+            )
         };
         let mut selector = crate::pickers::Selector::history(
             slot,

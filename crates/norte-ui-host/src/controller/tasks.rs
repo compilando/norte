@@ -741,15 +741,12 @@ impl State {
             norte_frontend::display_name(req.session.as_deref().unwrap_or_default().as_bytes());
         let (op, _) = norte_frontend::display_name(req.op.as_bytes());
         let title = clamp_display(norte_i18n::t_in(self.lang, "notify-approval-title"));
-        let cuerpo = clamp_display(norte_i18n::ta_in(
+        let body = clamp_display(norte_i18n::ta_in(
             self.lang,
             "notify-approval-body",
             &[("op", &op), ("who", &who)],
         ));
-        self.nativo(crate::dto::NativeEffect::Notify {
-            title,
-            body: cuerpo,
-        });
+        self.nativo(crate::dto::NativeEffect::Notify { title, body });
     }
 
     /// Sends a desktop notification when a task FINISHES (#285).
@@ -768,7 +765,7 @@ impl State {
         if self.enfocada {
             return;
         }
-        let (clave, count) = match &p.state {
+        let (key, count) = match &p.state {
             norte_proto::TaskState::Completed => ("notify-task-done", p.entries_done),
             norte_proto::TaskState::Failed { .. } => ("notify-task-failed", p.entries_done),
             // Cancelling was requested by whoever is in front: no need to
@@ -792,20 +789,17 @@ impl State {
                 let bytes = path
                     .file_name()
                     .map_or_else(Vec::new, |s| s.as_bytes().to_vec());
-                let (texto, _) = norte_frontend::display_name(&bytes);
-                clamp_display(texto)
+                let (text, _) = norte_frontend::display_name(&bytes);
+                clamp_display(text)
             },
         );
-        let title = clamp_display(norte_i18n::t_in(self.lang, clave));
-        let cuerpo = clamp_display(norte_i18n::ta_in(
+        let title = clamp_display(norte_i18n::t_in(self.lang, key));
+        let body = clamp_display(norte_i18n::ta_in(
             self.lang,
             "notify-task-body",
             &[("what", &detail), ("kind", task_class(p.kind))],
         ));
-        self.nativo(crate::dto::NativeEffect::Notify {
-            title,
-            body: cuerpo,
-        });
+        self.nativo(crate::dto::NativeEffect::Notify { title, body });
     }
 
     /// A transfer that COLLIDED opens the missing question (#274).
@@ -1010,8 +1004,8 @@ impl State {
     /// says "already translated by the host": untranslated, the user read
     /// `err-not-found` in the status bar.
     pub(super) fn task_failed(&mut self, e: &Error) -> Vec<BridgeEnvelope<UiUpdate>> {
-        let clave = norte_frontend::error::error_key(e);
-        self.status.message = Some(clamp_display(norte_i18n::t_in(self.lang, clave)));
+        let key = norte_frontend::error::error_key(e);
+        self.status.message = Some(clamp_display(norte_i18n::t_in(self.lang, key)));
         // A journal rejection is not a mutation gone wrong: it is that THIS
         // SESSION does not mutate until the file is fixed (hard rule 4).
         // That lasts longer than one message.
@@ -1030,7 +1024,7 @@ impl State {
         let change = self.banner_change();
         let parche = self.parche(vec![change]);
         let notice = self.over(UiUpdate::Notice(UiNotice::Message {
-            key: clave.to_owned(),
+            key: key.to_owned(),
             detail: None,
         }));
         vec![parche, notice]
@@ -1156,17 +1150,17 @@ impl State {
         // Trimmed says "at least": the list is cut off at
         // `ARCHIVE_PACK_REPORT_MAX`, and painting the cap as if it were the
         // total is the lie `truncated` exists to prevent.
-        let clave = if report.truncated {
+        let key = if report.truncated {
             "msg-pack-warnings-partial"
         } else {
             "msg-pack-warnings"
         };
-        let texto = norte_i18n::ta_in(
+        let text = norte_i18n::ta_in(
             self.lang,
-            clave,
+            key,
             &[("risky", &report.risky.len().to_string())],
         );
-        self.status.message = Some(clamp_display(texto));
+        self.status.message = Some(clamp_display(text));
         let change = ViewChange::Status(self.status.clone());
         vec![self.parche(vec![change])]
     }
@@ -1187,19 +1181,19 @@ impl State {
         // in flight, but what got lost that way was exactly "was left
         // halfway", which never folds into "went fine". With no row, the
         // detail is skipped and whatever needs to be said is still shown.
-        let fallo_la_task = self.tasks.get(&task_id).is_some_and(|viva| {
+        let task_failed = self.tasks.get(&task_id).is_some_and(|viva| {
             matches!(
                 viva.vista.state,
                 crate::dto::TaskStateView::Failed | crate::dto::TaskStateView::Cancelled
             )
         });
-        let (detail, cuerpo) = match result {
+        let (detail, body) = match result {
             Ok(r) => (
                 norte_i18n::ta_in(self.lang, "task-undo-done", &[("n", &r.undone.to_string())]),
                 self.undo_body(r),
             ),
             Err(e) => {
-                let clave = if matches!(e, Error::Unsupported) {
+                let key = if matches!(e, Error::Unsupported) {
                     "modal-undo-unsupported"
                 } else {
                     "modal-undo-report-failed"
@@ -1207,7 +1201,7 @@ impl State {
                 (
                     norte_i18n::t_in(self.lang, "task-undo-unverified"),
                     vec![crate::dto::DialogLine {
-                        text: clamp_display(norte_i18n::t_in(self.lang, clave)),
+                        text: clamp_display(norte_i18n::t_in(self.lang, key)),
                         hostile: false,
                     }],
                 )
@@ -1223,11 +1217,11 @@ impl State {
         }];
         let hay_that_say_it = match result {
             Ok(r) => !Self::undo_clean(r),
-            Err(_) => fallo_la_task,
+            Err(_) => task_failed,
         };
         let mut caidos = Vec::new();
         if hay_that_say_it {
-            let (change, cayeron) = self.open_report("modal-undo-report-title".to_owned(), cuerpo);
+            let (change, cayeron) = self.open_report("modal-undo-report-title".to_owned(), body);
             changes.push(change);
             caidos = cayeron;
         }
@@ -1262,8 +1256,8 @@ impl State {
         lines
             .into_iter()
             .map(|line| match line {
-                norte_frontend::ReportLine::Phrase(texto) => crate::dto::DialogLine {
-                    text: clamp_display(texto),
+                norte_frontend::ReportLine::Phrase(text) => crate::dto::DialogLine {
+                    text: clamp_display(text),
                     hostile: false,
                 },
                 norte_frontend::ReportLine::Path(p) => Self::path_line(&p),
@@ -1286,16 +1280,16 @@ impl State {
         // See [`Self::undo_report`]: with no row, the report is shown
         // just the same. What is not done is inventing a row to hang it off
         // of.
-        let fallo_la_task = self.tasks.get(&task_id).is_some_and(|viva| {
+        let task_failed = self.tasks.get(&task_id).is_some_and(|viva| {
             matches!(
                 viva.vista.state,
                 crate::dto::TaskStateView::Failed | crate::dto::TaskStateView::Cancelled
             )
         });
-        let (detail, cuerpo) = match result {
+        let (detail, body) = match result {
             Ok(r) => (Self::batch_detail(self.lang, r), self.batch_body(r)),
             Err(e) => {
-                let clave = if matches!(e, Error::Unsupported) {
+                let key = if matches!(e, Error::Unsupported) {
                     "modal-batch-unsupported"
                 } else {
                     "modal-batch-report-failed"
@@ -1303,7 +1297,7 @@ impl State {
                 (
                     norte_i18n::t_in(self.lang, "task-batch-unverified"),
                     vec![crate::dto::DialogLine {
-                        text: clamp_display(norte_i18n::t_in(self.lang, clave)),
+                        text: clamp_display(norte_i18n::t_in(self.lang, key)),
                         hostile: false,
                     }],
                 )
@@ -1329,11 +1323,11 @@ impl State {
             // failed leaves the directory with no explanation: that is said
             // up front. If the batch finished fine, the board's row is
             // enough.
-            Err(_) => fallo_la_task,
+            Err(_) => task_failed,
         };
         let mut caidos = Vec::new();
         if hay_that_say_it {
-            let (change, cayeron) = self.open_report("modal-batch-report-title".to_owned(), cuerpo);
+            let (change, cayeron) = self.open_report("modal-batch-report-title".to_owned(), body);
             changes.push(change);
             caidos = cayeron;
         }
@@ -1413,7 +1407,7 @@ impl State {
     pub(super) fn open_report(
         &mut self,
         title_key: String,
-        cuerpo: Vec<crate::dto::DialogLine>,
+        body: Vec<crate::dto::DialogLine>,
     ) -> (ViewChange, Vec<BridgeEnvelope<UiUpdate>>) {
         let id = ModalId(self.next_modal);
         self.next_modal += 1;
@@ -1425,7 +1419,7 @@ impl State {
             asker: None,
             deadline: None,
             deadline_at_ms: None,
-            body: cuerpo,
+            body,
             overflow_note: String::new(),
             overflow_hostile: false,
             choices: vec![DialogChoice {
@@ -1807,24 +1801,24 @@ impl State {
     /// notification is what the renderer can announce to a screen reader.
     pub(super) fn say_with(
         &mut self,
-        clave: &str,
+        key: &str,
         args: &[(&str, &str)],
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
-        self.status.message = Some(clamp_display(norte_i18n::ta_in(self.lang, clave, args)));
+        self.status.message = Some(clamp_display(norte_i18n::ta_in(self.lang, key, args)));
         let parche = self.parche(vec![ViewChange::Status(self.status.clone())]);
         let notice = self.over(UiUpdate::Notice(UiNotice::Message {
-            key: clave.to_owned(),
+            key: key.to_owned(),
             detail: None,
         }));
         vec![parche, notice]
     }
 
     /// Like [`Self::say_with`], with no arguments.
-    pub(super) fn say(&mut self, clave: &str) -> Vec<BridgeEnvelope<UiUpdate>> {
-        self.status.message = Some(clamp_display(norte_i18n::t_in(self.lang, clave)));
+    pub(super) fn say(&mut self, key: &str) -> Vec<BridgeEnvelope<UiUpdate>> {
+        self.status.message = Some(clamp_display(norte_i18n::t_in(self.lang, key)));
         let parche = self.parche(vec![ViewChange::Status(self.status.clone())]);
         let notice = self.over(UiUpdate::Notice(UiNotice::Message {
-            key: clave.to_owned(),
+            key: key.to_owned(),
             detail: None,
         }));
         vec![parche, notice]

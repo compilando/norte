@@ -192,7 +192,7 @@ pub fn settle_cd(
     // scheme's sort order.
     if let Cd::Espejado {
         reader,
-        mirror: espejo,
+        mirror: the_mirror,
     } = outcome
     {
         settle_cd(
@@ -211,7 +211,7 @@ pub fn settle_cd(
             decorate_fetch,
             last_probed,
             search_run,
-            *espejo,
+            *the_mirror,
         );
         return;
     }
@@ -300,7 +300,7 @@ pub fn apply_cd(
         // are different panes, and the fill slots are indexed by pane.
         Cd::Espejado {
             reader,
-            mirror: espejo,
+            mirror: the_mirror,
         } => {
             apply_cd(
                 panes,
@@ -316,7 +316,7 @@ pub fn apply_cd(
                 decorate_fetch,
                 last_probed,
                 search_run,
-                *espejo,
+                *the_mirror,
             );
         }
     }

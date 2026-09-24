@@ -1,6 +1,6 @@
 //! **What happens if a SYNC's destination disappears halfway** (#368).
 //!
-//! The twin of `engine_destino_que_desaparece`, and the exact same mechanism:
+//! The twin of `engine_vanishing_destination`, and the exact same mechanism:
 //! `sync.apply` opens its destination root ONCE per task (#164) and writes
 //! through that descriptor. Deleting in norte means moving to the trash, i.e.
 //! a `rename`, and a `rename` does not invalidate a descriptor: the directory
@@ -47,7 +47,7 @@ fn vp(wire: &str) -> VPath {
 /// already landed, and there is work left behind that moment.
 const FILES: usize = 4000;
 
-/// Polls for a FACT, not a deadline. See `engine_destino_que_desaparece`.
+/// Polls for a FACT, not a deadline. See `engine_vanishing_destination`.
 async fn wait(mut cond: impl FnMut() -> bool) -> bool {
     let until = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
     while tokio::time::Instant::now() < until {

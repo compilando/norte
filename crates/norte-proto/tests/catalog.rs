@@ -131,7 +131,7 @@ fn the_catalogue_has_a_golden() {
     lines.sort();
     let actual = format!("{}\n", lines.join("\n"));
 
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden/catalogo.tsv");
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden/catalogue.tsv");
     if std::env::var_os("NORTE_UPDATE_GOLDEN").is_some() {
         std::fs::create_dir_all(path.parent().expect("has a parent")).expect("dir is created");
         std::fs::write(&path, &actual).expect("golden is written");

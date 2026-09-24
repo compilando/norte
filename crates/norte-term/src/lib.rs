@@ -325,9 +325,9 @@ impl Grid {
     /// Outside the region the cursor just moves down: there is no scroll
     /// there, which is exactly what the region promises.
     fn down(&mut self) {
-        let (up, abajo) = self.region;
-        if self.row == abajo {
-            self.up_region(up, abajo, 1);
+        let (up, down) = self.region;
+        if self.row == down {
+            self.up_region(up, down, 1);
             return;
         }
         if self.row + 1 < self.alto {
@@ -337,16 +337,16 @@ impl Grid {
 
     /// Scrolls the `[up, down]` chunk up `n` rows, filling in from the
     /// bottom.
-    fn up_region(&mut self, up: u16, abajo: u16, n: u16) {
-        if up > abajo {
+    fn up_region(&mut self, up: u16, down: u16, n: u16) {
+        if up > down {
             return;
         }
-        let alto_region = abajo - up + 1;
+        let alto_region = down - up + 1;
         let n = n.min(alto_region);
-        for f in up..=abajo {
+        for f in up..=down {
             let source = f + n;
             for c in 0..self.width {
-                let cell = if source <= abajo {
+                let cell = if source <= down {
                     self.index(source, c).map(|i| self.cells[i].clone())
                 } else {
                     None
@@ -361,13 +361,13 @@ impl Grid {
     /// Scrolls the `[up, down]` chunk down `n` rows, filling in from
     /// the top. It is the inverse of [`Self::up_region`], and `IL` uses
     /// it.
-    fn down_region(&mut self, up: u16, abajo: u16, n: u16) {
-        if up > abajo {
+    fn down_region(&mut self, up: u16, down: u16, n: u16) {
+        if up > down {
             return;
         }
-        let alto_region = abajo - up + 1;
+        let alto_region = down - up + 1;
         let n = n.min(alto_region);
-        for f in (up..=abajo).rev() {
+        for f in (up..=down).rev() {
             let source = f.checked_sub(n).filter(|o| *o >= up);
             for c in 0..self.width {
                 let cell = source.and_then(|o| self.index(o, c).map(|i| self.cells[i].clone()));
@@ -606,15 +606,15 @@ impl vte::Perform for Grid {
             // cursor: what an editor uses to open a gap without repainting
             // the rest.
             'L' if !privado => {
-                let (up, abajo) = self.region;
-                if self.row >= up && self.row <= abajo {
-                    self.down_region(self.row, abajo, one(0));
+                let (up, down) = self.region;
+                if self.row >= up && self.row <= down {
+                    self.down_region(self.row, down, one(0));
                 }
             }
             'M' if !privado => {
-                let (up, abajo) = self.region;
-                if self.row >= up && self.row <= abajo {
-                    self.up_region(self.row, abajo, one(0));
+                let (up, down) = self.region;
+                if self.row >= up && self.row <= down {
+                    self.up_region(self.row, down, one(0));
                 }
             }
             // Insert and delete CHARACTERS on the cursor's row, and clear
@@ -629,12 +629,12 @@ impl vte::Perform for Grid {
             // Scrolls the region up and down without moving the cursor
             // (`SU`/`SD`).
             'S' if !privado => {
-                let (up, abajo) = self.region;
-                self.up_region(up, abajo, one(0));
+                let (up, down) = self.region;
+                self.up_region(up, down, one(0));
             }
             'T' if !privado => {
-                let (up, abajo) = self.region;
-                self.down_region(up, abajo, one(0));
+                let (up, down) = self.region;
+                self.down_region(up, down, one(0));
             }
             // `REP`: repeat the last printed character. A `tput rep` uses it
             // to paint a line of dashes with four bytes.
@@ -651,17 +651,17 @@ impl vte::Perform for Grid {
             // granted.
             'r' if !privado => {
                 let up = codes.first().copied().filter(|v| *v != 0).unwrap_or(1) - 1;
-                let abajo = codes
+                let down = codes
                     .get(1)
                     .copied()
                     .filter(|v| *v != 0)
                     .unwrap_or(self.alto)
                     - 1;
-                let (up, abajo) = (up.min(self.alto - 1), abajo.min(self.alto - 1));
+                let (up, down) = (up.min(self.alto - 1), down.min(self.alto - 1));
                 // A backwards or single-row region is not accepted: there is
                 // nothing to scroll and leaving it set breaks normal scrolling.
-                if up < abajo {
-                    self.region = (up, abajo);
+                if up < down {
+                    self.region = (up, down);
                     self.row = up;
                     self.col = 0;
                 }
@@ -712,9 +712,9 @@ impl vte::Perform for Grid {
                 self.col = 0;
             }
             (None, b'M') => {
-                let (up, abajo) = self.region;
+                let (up, down) = self.region;
                 if self.row == up {
-                    self.down_region(up, abajo, 1);
+                    self.down_region(up, down, 1);
                 } else {
                     self.row = self.row.saturating_sub(1);
                 }
@@ -873,9 +873,9 @@ impl Screen {
         self.grid.saved = vieja
             .saved
             .map(|(f, c, e)| (f.min(alto - 1), c.min(width), e));
-        let (up, abajo) = vieja.region;
-        self.grid.region = if up < abajo.min(alto - 1) {
-            (up.min(alto - 1), abajo.min(alto - 1))
+        let (up, down) = vieja.region;
+        self.grid.region = if up < down.min(alto - 1) {
+            (up.min(alto - 1), down.min(alto - 1))
         } else {
             (0, alto - 1)
         };

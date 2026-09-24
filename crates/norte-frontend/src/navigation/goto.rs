@@ -579,16 +579,16 @@ pub fn row_path(
     path: &norte_proto::VPath,
     enc: Option<norte_encoding::NameEncoding>,
 ) -> GotoRow {
-    let (texto, hostil) = crate::path_display_with(path, enc);
+    let (content, hostile_name) = crate::path_display_with(path, enc);
     // The name the reader gave it (a favorite, a connection) goes IN FRONT
     // and the path behind: it is searched for by the name one chose
     // oneself, and the path confirms it is the one believed to be.
     let (text, desc, hostile) = match name {
         Some(n) => {
             let (nt, nh) = crate::display_name(n.as_bytes());
-            (nt, texto, nh || hostil)
+            (nt, content, nh || hostile_name)
         }
-        None => (texto, String::new(), hostil),
+        None => (content, String::new(), hostile_name),
     };
     GotoRow {
         section,
@@ -610,7 +610,7 @@ pub fn row_path(
 /// already shows it with its error.
 #[must_use]
 pub fn row_connection(name: &str, url: &str) -> GotoRow {
-    let (texto, hostil) = norte_proto::VPath::parse(url).map_or_else(
+    let (content, hostile_name) = norte_proto::VPath::parse(url).map_or_else(
         |_| (norte_encoding::mask_terminal_hazards(url), true),
         |p| crate::path_display_with(&p, None),
     );
@@ -619,8 +619,8 @@ pub fn row_connection(name: &str, url: &str) -> GotoRow {
         section: SECTION_CONNECTIONS.id,
         key: format!("{K_IR}{url}"),
         text: nt,
-        desc: texto,
-        hostile: nh || hostil,
+        desc: content,
+        hostile: nh || hostile_name,
     }
 }
 
@@ -687,8 +687,8 @@ pub fn action(key: &str) -> Action {
         return norte_proto::VPath::parse(wire)
             .map_or(Action::Nothing("msg-goto-bad-path"), Action::Ir);
     }
-    if let Some(texto) = key.strip_prefix(K_PATH) {
-        return resolver_tecleada(texto);
+    if let Some(content) = key.strip_prefix(K_PATH) {
+        return resolver_tecleada(content);
     }
     Action::Nothing("msg-goto-bad-path")
 }
@@ -701,21 +701,21 @@ pub fn action(key: &str) -> Action {
 /// as local, and one with a scheme is parsed as is — if the backend does
 /// not exist, the core says so, which beats navigating to something other
 /// than what was typed.
-fn resolver_tecleada(texto: &str) -> Action {
-    let expanded = if texto == "~" || texto.starts_with("~/") {
+fn resolver_tecleada(content: &str) -> Action {
+    let expanded = if content == "~" || content.starts_with("~/") {
         let Some(home) = std::env::var_os("HOME") else {
             return Action::Nothing("msg-goto-no-home");
         };
         let mut p = std::path::PathBuf::from(home);
-        if let Some(rest) = texto.strip_prefix("~/") {
+        if let Some(rest) = content.strip_prefix("~/") {
             p.push(rest);
         }
         p
-    } else if texto.starts_with('/') {
-        std::path::PathBuf::from(texto)
+    } else if content.starts_with('/') {
+        std::path::PathBuf::from(content)
     } else {
         // With a scheme: the wire is already a wire.
-        return norte_proto::VPath::parse(texto)
+        return norte_proto::VPath::parse(content)
             .map_or(Action::Nothing("msg-goto-bad-path"), Action::Ir);
     };
     norte_vfs::native::vpath_from_native(&expanded)

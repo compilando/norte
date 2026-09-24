@@ -165,13 +165,13 @@ async fn a_binary_shows_in_hexadecimal() {
 /// A styled preview, the way a previewer would return it.
 pub(super) fn preview_de(
     plugin: &str,
-    lineas: &[&str],
+    lines: &[&str],
     lossy: bool,
 ) -> norte_proto::methods::PluginPreviewStyled {
     norte_proto::methods::PluginPreviewStyled {
         plugin_id: "acme.pdf".to_owned(),
         plugin_name: plugin.to_owned(),
-        lines: lineas
+        lines: lines
             .iter()
             .map(|l| {
                 vec![norte_proto::methods::SpanWire {

@@ -305,7 +305,7 @@ async fn a_refusing_producer_says_so_and_opens_nothing() {
 #[tokio::test]
 async fn in_read_only_it_is_not_even_requested() {
     let backend = fake_with_tree(&[("a.pdf", "facturas/a.pdf")], true);
-    let (h, _snap) = crate::revisiones::host_solo_read(Arc::clone(&backend)).await;
+    let (h, _snap) = crate::reviews::host_solo_read(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
     request_tree(&h, &mut sub).await;
     asentar().await;

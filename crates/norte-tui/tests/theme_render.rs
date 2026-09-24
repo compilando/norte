@@ -43,15 +43,15 @@ fn the_pane_bar_paints_names_with_the_underlined_letter_and_falls_back_to_letter
 
     let mut terminal = Terminal::new(TestBackend::new(80, 16)).expect("terminal");
     terminal.draw(|f| ui::draw(f, &app)).expect("draw");
-    let fila: String = (0..80)
+    let row: String = (0..80)
         .map(|x| terminal.backend().buffer()[(x, 1)].symbol().to_string())
         .collect();
     assert!(
-        fila.contains("Sitios"),
-        "with names, the name reads: {fila:?}"
+        row.contains("Sitios"),
+        "with names, the name reads: {row:?}"
     );
-    let s = fila.find('S').expect("the S of Sitios");
-    let s = u16::try_from(fila[..s].chars().count()).expect("it fits");
+    let s = row.find('S').expect("the S of Sitios");
+    let s = u16::try_from(row[..s].chars().count()).expect("it fits");
     assert!(
         terminal.backend().buffer()[(s, 1)]
             .modifier
@@ -69,10 +69,10 @@ fn the_pane_bar_paints_names_with_the_underlined_letter_and_falls_back_to_letter
     // No room for all the names: letters, and three-cell zones.
     let mut terminal = Terminal::new(TestBackend::new(30, 16)).expect("terminal");
     terminal.draw(|f| ui::draw(f, &app)).expect("draw");
-    let fila: String = (0..30)
+    let row: String = (0..30)
         .map(|x| terminal.backend().buffer()[(x, 1)].symbol().to_string())
         .collect();
-    assert!(!fila.contains("Sitios"), "no room, letters: {fila:?}");
+    assert!(!row.contains("Sitios"), "no room, letters: {row:?}");
     let zones = ui::panel_zones(&app, ratatui::layout::Rect::new(0, 0, 30, 16));
     assert_eq!(zones[0].x1 - zones[0].x0 + 1, 3);
 
@@ -80,10 +80,10 @@ fn the_pane_bar_paints_names_with_the_underlined_letter_and_falls_back_to_letter
     app.chrome.panel_bar_style = Some(norte_config::PanelBarStyle::Letters);
     let mut terminal = Terminal::new(TestBackend::new(80, 16)).expect("terminal");
     terminal.draw(|f| ui::draw(f, &app)).expect("draw");
-    let fila: String = (0..80)
+    let row: String = (0..80)
         .map(|x| terminal.backend().buffer()[(x, 1)].symbol().to_string())
         .collect();
-    assert!(!fila.contains("Sitios"), "{fila:?}");
+    assert!(!row.contains("Sitios"), "{row:?}");
 }
 
 /// The pane footer (spec 2026-09-10): with `[ui] pane_footer` on, the
@@ -150,14 +150,14 @@ fn the_key_bar_paints_what_is_bound_and_a_click_is_the_key() {
         },
     ];
     let area = ratatui::layout::Rect::new(0, 0, 80, 16);
-    let fila = |app: &App, y: u16| -> String {
+    let row = |app: &App, y: u16| -> String {
         let mut terminal = Terminal::new(TestBackend::new(80, 16)).expect("terminal");
         terminal.draw(|f| ui::draw(f, app)).expect("draw");
         (0..80)
             .map(|x| terminal.backend().buffer()[(x, y)].symbol().to_string())
             .collect()
     };
-    let ultima = fila(&app, 15);
+    let ultima = row(&app, 15);
     // With a space between the number and the label (spec 2026-09-15): in a
     // cell with room for it, `2 Copiar` reads at a glance and `2Copiar`
     // needs the eye to split it. The ZONES do not change — they come from
@@ -168,7 +168,7 @@ fn the_key_bar_paints_what_is_bound_and_a_click_is_the_key() {
         "the empty one only carries the number: {ultima:?}"
     );
     assert!(
-        fila(&app, 14).contains("/casa"),
+        row(&app, 14).contains("/casa"),
         "the status bar moves up one row"
     );
 
@@ -201,7 +201,7 @@ fn the_key_bar_paints_what_is_bound_and_a_click_is_the_key() {
 
     app.chrome.key_bar = Some(false);
     assert!(
-        fila(&app, 15).contains("/casa"),
+        row(&app, 15).contains("/casa"),
         "off, the last row is the status one"
     );
 }

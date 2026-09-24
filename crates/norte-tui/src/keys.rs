@@ -297,8 +297,8 @@ pub async fn on_key(
         //
         // With no chord (`None`) the panel never gets the keyboard, so this
         // is never entered: `puede_tomar_teclas` prevents it.
-        let acorde = crate::keymap::chord_from_crossterm(key.modifiers, key.code);
-        if acorde.is_some() && acorde == app.terminal_chord {
+        let the_chord = crate::keymap::chord_from_crossterm(key.modifiers, key.code);
+        if the_chord.is_some() && the_chord == app.terminal_chord {
             // The SAME `toggle_terminal` that opened it: there is one key,
             // so the way back has to be the same code, or one day one of
             // the two learns something the other does not.

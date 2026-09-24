@@ -89,9 +89,9 @@ impl State {
     }
 
     /// Any slot's visible rows.
-    pub(super) fn rows_of(&self, slot: u32, hueco: &Slot) -> Vec<RowView> {
-        let first = usize::try_from(hueco.first_visible).unwrap_or(0);
-        let count = usize::try_from(hueco.visible).unwrap_or(0);
+    pub(super) fn rows_of(&self, slot: u32, target_slot: &Slot) -> Vec<RowView> {
+        let first = usize::try_from(target_slot.first_visible).unwrap_or(0);
+        let count = usize::try_from(target_slot.visible).unwrap_or(0);
         // ONCE per batch, not once per row: it walks the whole task map and
         // clones a `VPath` per live task. Inside `row` that was one walk and
         // one clone per VISIBLE entry, on every repaint, and the repaints are
@@ -99,15 +99,15 @@ impl State {
         let operands = self.operandos_alive();
         // And the column layout, for the same reason: the header and every
         // row of the batch have to come from the SAME one.
-        let fitted_columns = self.setting_of(slot, hueco);
-        hueco
+        let fitted_columns = self.setting_of(slot, target_slot);
+        target_slot
             .pane
             .entries()
             .iter()
             .enumerate()
             .skip(first)
             .take(count.min(MAX_ROWS_PER_BATCH))
-            .map(|(i, e)| self.row(hueco, i, e, &operands, &fitted_columns))
+            .map(|(i, e)| self.row(target_slot, i, e, &operands, &fitted_columns))
             .collect()
     }
 
@@ -183,37 +183,37 @@ impl State {
                 )
             })
             .unwrap_or_default();
-        let Some(hueco) = self.slots.get_mut(&slot) else {
+        let Some(target_slot) = self.slots.get_mut(&slot) else {
             return;
         };
         // One batch per slot, checked BEFORE choosing candidates: the other
         // way around, the chosen ones would end up marked as requested
         // without having been, and would never be requested again. It is the
         // same trap `sondear` documents, and just as easy to fall into.
-        if hueco.adornando {
+        if target_slot.adornando {
             return;
         }
-        let first = usize::try_from(hueco.first_visible).unwrap_or(0);
-        let count = usize::try_from(hueco.visible).unwrap_or(0);
-        let (candidates, kinds): (Vec<VPath>, Vec<norte_proto::EntryKind>) = hueco
+        let first = usize::try_from(target_slot.first_visible).unwrap_or(0);
+        let count = usize::try_from(target_slot.visible).unwrap_or(0);
+        let (candidates, kinds): (Vec<VPath>, Vec<norte_proto::EntryKind>) = target_slot
             .pane
             .entries()
             .iter()
             .skip(first)
             .take(count)
-            .filter(|e| !hueco.adornadas.contains(&e.path))
+            .filter(|e| !target_slot.adornadas.contains(&e.path))
             .map(|e| (e.path.clone(), e.kind))
             .unzip();
         if candidates.is_empty() {
             return;
         }
         for p in &candidates {
-            hueco.adornadas.insert(p.clone());
+            target_slot.adornadas.insert(p.clone());
         }
-        let dir = hueco.pane.dir().clone();
-        hueco.adornando = true;
-        let generation = hueco.gen_adornos;
-        let cancel_flag = hueco.cancel_probe.clone();
+        let dir = target_slot.pane.dir().clone();
+        target_slot.adornando = true;
+        let generation = target_slot.gen_adornos;
+        let cancel_flag = target_slot.cancel_probe.clone();
         let backend = Arc::clone(backend);
         let mailbox = mailbox.clone();
         tokio::spawn(async move {
@@ -245,7 +245,7 @@ impl State {
             .get(&slot)
             .map(|h| self.attrs_de(h.pane.dir()))
             .unwrap_or_default();
-        let Some(hueco) = self.slots.get_mut(&slot) else {
+        let Some(target_slot) = self.slots.get_mut(&slot) else {
             return;
         };
         // One probe per slot, and it is checked BEFORE choosing candidates:
@@ -254,27 +254,27 @@ impl State {
         // again. Without this order, a debounced scroll stacked batches of
         // two hundred trips against the same connection and also ate rows
         // along the way.
-        if hueco.sondeando {
+        if target_slot.sondeando {
             return;
         }
-        let first = usize::try_from(hueco.first_visible).unwrap_or(0);
-        let count = usize::try_from(hueco.visible).unwrap_or(0);
-        let candidates: Vec<VPath> = hueco
+        let first = usize::try_from(target_slot.first_visible).unwrap_or(0);
+        let count = usize::try_from(target_slot.visible).unwrap_or(0);
+        let candidates: Vec<VPath> = target_slot
             .pane
             .needs_stat_at(first..first.saturating_add(count))
             .into_iter()
-            .filter(|p| !hueco.sondeados.contains(p))
+            .filter(|p| !target_slot.sondeados.contains(p))
             .take(MAX_SONDEOS)
             .collect();
         if candidates.is_empty() {
             return;
         }
         for p in &candidates {
-            hueco.sondeados.insert(p.clone());
+            target_slot.sondeados.insert(p.clone());
         }
-        let dir = hueco.pane.dir().clone();
-        hueco.sondeando = true;
-        let cancel_flag = hueco.cancel_probe.clone();
+        let dir = target_slot.pane.dir().clone();
+        target_slot.sondeando = true;
+        let cancel_flag = target_slot.cancel_probe.clone();
         let backend = Arc::clone(backend);
         let mailbox = mailbox.clone();
         tokio::spawn(async move {
@@ -327,17 +327,17 @@ impl State {
         batch: Vec<Entry>,
         last: bool,
     ) -> Option<BridgeEnvelope<UiUpdate>> {
-        let hueco = self.slots.get_mut(&slot)?;
-        if hueco.drenando != Some(token) {
+        let target_slot = self.slots.get_mut(&slot)?;
+        if target_slot.drenando != Some(token) {
             // A batch from a navigation already superseded: pasting it would
             // mix two trees on one screen.
             return None;
         }
         if last {
             // The stream is done: this slot is no longer growing.
-            hueco.drenando = None;
+            target_slot.drenando = None;
         }
-        if batch.is_empty() && !hueco.rows_to_publish {
+        if batch.is_empty() && !target_slot.rows_to_publish {
             // Nothing to paste and nothing pending: the stream closed with no
             // leftover.
             return None;
@@ -356,9 +356,9 @@ impl State {
             .map(|h| self.rows_of(slot, h))
             .unwrap_or_default();
         if !batch.is_empty()
-            && let Some(hueco) = self.slots.get_mut(&slot)
+            && let Some(target_slot) = self.slots.get_mut(&slot)
         {
-            hueco.pane.extend(batch);
+            target_slot.pane.extend(batch);
         }
         let after = self
             .slots
@@ -395,25 +395,25 @@ impl State {
         dir: &VPath,
         probes: &[(VPath, Entry)],
     ) -> Option<BridgeEnvelope<UiUpdate>> {
-        let hueco = self.slots.get_mut(&slot)?;
+        let target_slot = self.slots.get_mut(&slot)?;
         // The flag is lowered ONLY if what arrives describes this listing. A
         // cancelled batch landing late used to lower the NEW batch's flag,
         // and then `sondear` would let a second one launch on the same slot.
-        if hueco.pane.dir() != dir {
+        if target_slot.pane.dir() != dir {
             // The slot is in ANOTHER directory: pasting these sizes onto it
             // would be lying about what is visible. (A filler batch, by
             // contrast, invalidates nothing: it bumps the epoch and shifts
             // indices, and here it is matched by path.)
             return None;
         }
-        hueco.sondeando = false;
+        target_slot.sondeando = false;
         for (requested, e) in probes {
             // By the path that was REQUESTED: the one the provider returns
             // can be a different spelling of the same name (NFD on HFS+, a
             // different case on SMB, a link's target) and then it matches
             // nothing — and since it is already in `sondeados`, it is never
             // retried.
-            hueco.pane.hydrate(requested, e.size, e.mtime_ms);
+            target_slot.pane.hydrate(requested, e.size, e.mtime_ms);
         }
         Some(self.patch_rows_of(slot))
     }
@@ -509,7 +509,7 @@ impl State {
     /// a thousand clones.
     pub(super) fn row(
         &self,
-        hueco: &Slot,
+        target_slot: &Slot,
         i: usize,
         e: &Entry,
         operands: &[(VPath, Option<u8>)],
@@ -529,14 +529,14 @@ impl State {
         // row reads as "there is a directory here named that". Neither a
         // hostile badge nor reinterpretation — two ASCII characters are
         // nobody's name.
-        let (text, hostile) = if hueco.pane.is_parent_row(i) {
+        let (text, hostile) = if target_slot.pane.is_parent_row(i) {
             ("..".to_owned(), false)
         } else {
-            norte_frontend::display_name_with(bytes, hueco.pane.name_encoding())
+            norte_frontend::display_name_with(bytes, target_slot.pane.name_encoding())
         };
         // Served by the PANE, which re-masks on serving: the host accumulates
         // but is not the one deciding what gets painted.
-        let decoration = hueco.pane.decoration_for(&e.path);
+        let decoration = target_slot.pane.decoration_for(&e.path);
         // The theme's color for THIS entry (`[files.ext]` / `[files.kind]`).
         // Against the RAW bytes, not against `text`: that one is masked and
         // reinterpreted for painting, and the masking is not injective — an
@@ -566,9 +566,9 @@ impl State {
                 operands.iter().map(|(r, p)| (r, *p)),
                 &e.path,
             ),
-            selected: i == hueco.pane.cursor(),
-            marked: hueco.pane.is_marked(e),
-            cells: self.cells(hueco, e, columns),
+            selected: i == target_slot.pane.cursor(),
+            marked: target_slot.pane.is_marked(e),
+            cells: self.cells(target_slot, e, columns),
             badge: decoration
                 .and_then(|d| d.badge.clone())
                 .map(clamp_display)
@@ -628,13 +628,13 @@ impl State {
     /// for a column the header dropped would paint with no width.
     pub(super) fn cells(
         &self,
-        hueco: &Slot,
+        target_slot: &Slot,
         e: &Entry,
         columns: &[norte_frontend::columns::Fitted],
     ) -> Vec<crate::dto::CellView> {
         use norte_frontend::columns::{ColumnId, styled_cell_in};
         let now = now_ms();
-        let scheme = hueco.pane.dir().scheme().to_owned();
+        let scheme = target_slot.pane.dir().scheme().to_owned();
         columns
             .iter()
             .filter(|f| {
@@ -648,7 +648,7 @@ impl State {
                 let text = match col {
                     // Plugin ones do not live in the `Entry` but in the
                     // pane's side-map: they are resolved that way.
-                    ColumnId::Plugin { plugin, column } => hueco.pane.plugin_cell(
+                    ColumnId::Plugin { plugin, column } => target_slot.pane.plugin_cell(
                         &norte_frontend::columns::plugin_display_id(plugin, column),
                         &e.path,
                     ),

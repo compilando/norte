@@ -419,14 +419,14 @@ impl State {
     pub(super) fn setting_of(
         &self,
         slot: u32,
-        hueco: &Slot,
+        target_slot: &Slot,
     ) -> Vec<norte_frontend::columns::Fitted> {
         use norte_frontend::columns::fitted_columns;
-        let scheme = hueco.pane.dir().scheme();
+        let scheme = target_slot.pane.dir().scheme();
         // This pane's catalogue: decides whether the permissions column the
         // listing sets is painted (spec 2026-09-20). The SAME one that feeds
         // the headers, so width and header do not disagree.
-        let catalog = self.catalog_of(hueco.pane.dir());
+        let catalog = self.catalog_of(target_slot.pane.dir());
         let width = self
             .split
             .placements
@@ -435,8 +435,8 @@ impl State {
             .map(|(_, r)| r.width);
         match width {
             Some(width) => {
-                let lead: u16 = 2 + if hueco.pane.any_icon() { 3 } else { 0 };
-                let wants = hueco.pane.name_width_p80().saturating_add(lead);
+                let lead: u16 = 2 + if target_slot.pane.any_icon() { 3 } else { 0 };
+                let wants = target_slot.pane.name_width_p80().saturating_add(lead);
                 fitted_columns(
                     &self.columns,
                     scheme,
@@ -449,16 +449,16 @@ impl State {
         }
     }
 
-    pub(super) fn headers(&self, slot: u32, hueco: &Slot) -> Vec<ColumnHeader> {
+    pub(super) fn headers(&self, slot: u32, target_slot: &Slot) -> Vec<ColumnHeader> {
         use norte_frontend::columns::{header_label_in, sort_column_id};
-        let spec = hueco.pane.sort();
-        let catalog = self.catalog_of(hueco.pane.dir());
-        let scheme = hueco.pane.dir().scheme().to_owned();
+        let spec = target_slot.pane.sort();
+        let catalog = self.catalog_of(target_slot.pane.dir());
+        let scheme = target_slot.pane.dir().scheme().to_owned();
         // Each column's width policy, ONCE per header: only the fixed one
         // travels (bridge 64); `auto` and `flex` paint at whatever they
         // measure, which is what this window used to do with all of them.
         let policies = self.columns.layout_items_for(&scheme);
-        self.setting_of(slot, hueco)
+        self.setting_of(slot, target_slot)
             .iter()
             .map(|f| {
                 let id = &f.id;
@@ -596,15 +596,17 @@ impl State {
     /// Read by the snapshot ([`Self::browser`]) and the patch
     /// ([`Self::header_of`]). Two derivations of the same fact is where half
     /// a parity audit came from, so there is a single one here.
-    pub(super) fn header_of(&self, id: u32, hueco: &Slot) -> crate::dto::ViewChange {
+    pub(super) fn header_of(&self, id: u32, target_slot: &Slot) -> crate::dto::ViewChange {
         // With the SAME reinterpretation as the rows: painting the header
         // with the raw bytes while the rows go transcoded leaves
         // `pane.names-encoding` half-done — the mojibake stays up top and the
         // reader cannot tell whether the command did anything (#57, #293).
-        let (path, hostile) =
-            norte_frontend::path_display_with(hueco.pane.dir(), hueco.pane.name_encoding());
+        let (path, hostile) = norte_frontend::path_display_with(
+            target_slot.pane.dir(),
+            target_slot.pane.name_encoding(),
+        );
         // One pass over the marks for the three things that count them.
-        let marks = hueco.pane.marks_summary(crate::dto::MARK_RULER_SPANS);
+        let marks = target_slot.pane.marks_summary(crate::dto::MARK_RULER_SPANS);
         crate::dto::ViewChange::BrowserHeader {
             slot_id: id,
             path_display: clamp_display(path),
@@ -617,36 +619,39 @@ impl State {
             // incomplete listing that was complete, spending the only signal
             // there is for when something really is missing.
             hidden_note: clamp_display(norte_frontend::notes::hidden(
-                hueco.pane.hidden_count(),
+                target_slot.pane.hidden_count(),
                 self.lang,
             )),
             skipped_note: clamp_display(norte_frontend::notes::skipped(
-                hueco.pane.skipped(),
+                target_slot.pane.skipped(),
                 self.lang,
             )),
             names_note: clamp_display(norte_frontend::notes::names_encoding(
-                hueco.pane.name_encoding(),
+                target_slot.pane.name_encoding(),
                 self.lang,
             )),
             filling_note: clamp_display(norte_frontend::notes::filling(
-                hueco.pane.loading(),
-                hueco.pane.entries().len(),
+                target_slot.pane.loading(),
+                target_slot.pane.entries().len(),
                 self.lang,
             )),
             pruned_note: clamp_display(norte_frontend::notes::pruned_marks(
-                hueco.pane.pruned_marks(),
+                target_slot.pane.pruned_marks(),
                 self.lang,
             )),
             marked_note: clamp_display(norte_frontend::notes::marked(
-                hueco.pane.marks_len(),
+                target_slot.pane.marks_len(),
                 marks.bytes,
                 marks.dirs,
                 self.lang,
             )),
-            footer: clamp_display(self.pie_con(hueco, &marks)),
-            path_segments: Self::crumbs_of(hueco),
-            used_ratio: norte_frontend::space::used_ratio_for(hueco.pane.dir(), &self.volumes_pie),
-            marks: hueco.pane.marks_len() as u64,
+            footer: clamp_display(self.pie_con(target_slot, &marks)),
+            path_segments: Self::crumbs_of(target_slot),
+            used_ratio: norte_frontend::space::used_ratio_for(
+                target_slot.pane.dir(),
+                &self.volumes_pie,
+            ),
+            marks: target_slot.pane.marks_len() as u64,
             mark_ruler: marks.ruler,
         }
     }
@@ -656,8 +661,8 @@ impl State {
     /// treated as such. The root carries the scheme and, if there is one, the
     /// authority, in the same shape as `path_display` (`⟨file⟩`,
     /// `⟨sftp⟩host`).
-    fn crumbs_of(hueco: &Slot) -> Vec<String> {
-        let dir = hueco.pane.dir();
+    fn crumbs_of(target_slot: &Slot) -> Vec<String> {
+        let dir = target_slot.pane.dir();
         let root = match dir.authority() {
             Some(a) => format!("⟨{}⟩{}", dir.scheme(), a),
             None => format!("⟨{}⟩", dir.scheme()),
@@ -672,28 +677,30 @@ impl State {
 
     /// A listing's footer (spec 2026-09-10), drafted by the shared crate;
     /// empty with `[ui] pane_footer` off.
-    pub(super) fn pie_de(&self, hueco: &Slot) -> String {
+    pub(super) fn pie_de(&self, target_slot: &Slot) -> String {
         if !self.config.common.ui_chrome.pane_footer() {
             return String::new();
         }
-        self.pie_con(hueco, &hueco.pane.marks_summary(0))
+        self.pie_con(target_slot, &target_slot.pane.marks_summary(0))
     }
 
     /// The footer with the marks already summarized: the header requests it
     /// together with its own summary and does not need to walk the listing
     /// again.
-    fn pie_con(&self, hueco: &Slot, marks: &norte_frontend::MarksSummary) -> String {
+    fn pie_con(&self, target_slot: &Slot, marks: &norte_frontend::MarksSummary) -> String {
         if !self.config.common.ui_chrome.pane_footer() {
             return String::new();
         }
-        let counts =
-            norte_frontend::footer::counts(hueco.pane.entries(), hueco.pane.is_parent_row(0));
+        let counts = norte_frontend::footer::counts(
+            target_slot.pane.entries(),
+            target_slot.pane.is_parent_row(0),
+        );
         let marked = norte_frontend::footer::Marked {
-            n: hueco.pane.marks_len(),
+            n: target_slot.pane.marks_len(),
             bytes: marks.bytes,
             dirs: marks.dirs,
         };
-        let free = norte_frontend::space::free_for(hueco.pane.dir(), &self.volumes_pie);
+        let free = norte_frontend::space::free_for(target_slot.pane.dir(), &self.volumes_pie);
         norte_frontend::footer::pane_footer(counts, marked, free, self.lang)
     }
 
@@ -750,7 +757,7 @@ impl State {
         (!changes.is_empty()).then(|| self.parche(changes))
     }
 
-    pub(super) fn browser(&self, id: u32, hueco: &Slot) -> BrowserSlotView {
+    pub(super) fn browser(&self, id: u32, target_slot: &Slot) -> BrowserSlotView {
         // NO `..`: the snapshot has to carry the same as the patch, and a
         // wildcard here is exactly how a new header field is left out of the
         // first paint with nothing complaining about it.
@@ -769,22 +776,22 @@ impl State {
             used_ratio,
             marks,
             mark_ruler,
-        } = self.header_of(id, hueco)
+        } = self.header_of(id, target_slot)
         else {
             unreachable!("`cabecera_de` builds that variant")
         };
         BrowserSlotView {
             slot_id: id,
-            generation: hueco.pane.listing_epoch(),
-            progress: self.slot_progress(hueco),
+            generation: target_slot.pane.listing_epoch(),
+            progress: self.slot_progress(target_slot),
             path_display,
             path_hostile,
-            total_rows: Some(hueco.pane.entries().len() as u64),
-            first_visible: hueco.first_visible,
-            rows: self.rows_of(id, hueco),
-            icon_column: hueco.pane.any_icon(),
-            cursor: (!hueco.pane.entries().is_empty())
-                .then_some(RowKey(hueco.pane.cursor() as u64)),
+            total_rows: Some(target_slot.pane.entries().len() as u64),
+            first_visible: target_slot.first_visible,
+            rows: self.rows_of(id, target_slot),
+            icon_column: target_slot.pane.any_icon(),
+            cursor: (!target_slot.pane.entries().is_empty())
+                .then_some(RowKey(target_slot.pane.cursor() as u64)),
             marks,
             mark_ruler,
             hidden_note,
@@ -796,9 +803,9 @@ impl State {
             footer,
             path_segments,
             used_ratio,
-            columns: self.headers(id, hueco),
-            state: hueco.state.clone(),
-            quick: hueco.pane.quick().map(|q| crate::dto::QuickView {
+            columns: self.headers(id, target_slot),
+            state: target_slot.state.clone(),
+            quick: target_slot.pane.quick().map(|q| crate::dto::QuickView {
                 query: clamp_display(q.query_display()),
                 mode: match q.mode() {
                     norte_frontend::nav::Mode::Filter => "filter",

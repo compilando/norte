@@ -133,7 +133,7 @@ fn min_visible(decls: &KindRegistry, kind: &super::KindId) -> (u16, u16) {
 pub fn border_span(
     res: &Resolved,
     left: &[SlotId],
-    der: &[SlotId],
+    right_side: &[SlotId],
     dir: Dir,
 ) -> Option<(u16, u16)> {
     let span = |ids: &[SlotId]| {
@@ -147,7 +147,7 @@ pub fn border_span(
             .reduce(|(a0, a1), (b0, b1)| (a0.min(b0), a1.max(b1)))
     };
     let (start, _) = span(left)?;
-    let (_, end) = span(der)?;
+    let (_, end) = span(right_side)?;
     Some((start, end.saturating_sub(start)))
 }
 
@@ -1039,7 +1039,7 @@ mod tests {
     /// screen was three chrome headers and not one file name.
     #[test]
     fn the_chrome_is_removed_before_leaving_the_screen_without_a_listing() {
-        let derecha = Node::Split {
+        let right = Node::Split {
             dir: Dir::Vertical,
             sizes: vec![Size::Weight(1), Size::Weight(1)],
             children: vec![
@@ -1059,7 +1059,7 @@ mod tests {
                 Node::slot(SlotId(5), KindId::new("places")),
                 browser(1),
                 browser(2),
-                derecha,
+                right,
             ],
         };
         let tree = Node::Split {
@@ -1243,7 +1243,7 @@ mod tests {
     /// processes panel's eight rows.
     #[test]
     fn only_the_chrome_of_the_missing_axis_is_set_aside() {
-        let derecha = Node::Split {
+        let right = Node::Split {
             dir: Dir::Vertical,
             sizes: vec![Size::Weight(1), Size::Weight(1)],
             children: vec![
@@ -1263,7 +1263,7 @@ mod tests {
                 Node::slot(SlotId(5), KindId::new("places")),
                 browser(1),
                 browser(2),
-                derecha,
+                right,
             ],
         };
         let tree = Node::Split {

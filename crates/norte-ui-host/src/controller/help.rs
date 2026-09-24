@@ -372,8 +372,8 @@ impl State {
         part: &norte_frontend::DetailPart,
     ) -> Vec<crate::dto::DialogLine> {
         use norte_frontend::DetailPart;
-        let plana = |texto: String| crate::dto::DialogLine {
-            text: clamp_display(texto),
+        let plana = |text: String| crate::dto::DialogLine {
+            text: clamp_display(text),
             hostile: false,
         };
         match part {

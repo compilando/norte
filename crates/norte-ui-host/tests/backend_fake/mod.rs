@@ -591,9 +591,9 @@ impl Fake {
         Arc::new(f)
     }
 
-    pub fn put(&mut self, dir: &str, entradas: impl IntoIterator<Item = (Vec<u8>, bool)>) {
+    pub fn put(&mut self, dir: &str, entries: impl IntoIterator<Item = (Vec<u8>, bool)>) {
         self.tree
-            .insert(dir.to_owned(), entradas.into_iter().collect());
+            .insert(dir.to_owned(), entries.into_iter().collect());
     }
 
     /// The exact KIND of an entry, when "directory or file" is not enough.
@@ -626,8 +626,8 @@ impl Fake {
     /// The level the daemon says it has set, in `log.level` and in every
     /// `log.tail`. Both answer the same thing, like the real daemon: the
     /// level is ONE and global to the process.
-    pub fn log_level_answers(&self, nivel: &str) {
-        *self.level_remote.lock().expect("nivel") = Some(nivel.to_owned());
+    pub fn log_level_answers(&self, the_level: &str) {
+        *self.level_remote.lock().expect("nivel") = Some(the_level.to_owned());
     }
 
     /// The levels that were requested from the daemon, in order.
@@ -734,7 +734,7 @@ impl Fake {
         kind: norte_proto::TaskKind,
         id: u64,
     ) -> BoxFuture<'static, Result<HostTask, Error>> {
-        let progreso = norte_proto::TaskProgress {
+        let progress = norte_proto::TaskProgress {
             task_id: norte_proto::TaskId::new(id),
             kind,
             state: norte_proto::TaskState::Running,
@@ -746,7 +746,7 @@ impl Fake {
             unreadable: None,
             unvisited: None,
         };
-        let (tx, rx) = tokio::sync::watch::channel(progreso);
+        let (tx, rx) = tokio::sync::watch::channel(progress);
         *self.progress.lock().expect("progreso") = Some(tx);
         let cancelaciones = Arc::clone(&self.cancelaciones);
         Box::pin(async move {
@@ -780,7 +780,7 @@ impl Fake {
         self.latido();
         let n = self.next_task.fetch_add(1, Ordering::SeqCst);
         let id = norte_proto::TaskId::new(100 + n as u64);
-        let progreso = norte_proto::TaskProgress {
+        let progress = norte_proto::TaskProgress {
             task_id: id,
             kind: if mover {
                 norte_proto::TaskKind::Move
@@ -799,7 +799,7 @@ impl Fake {
             unreadable: None,
             unvisited: None,
         };
-        let (tx, rx) = tokio::sync::watch::channel(progreso);
+        let (tx, rx) = tokio::sync::watch::channel(progress);
         *self.progress.lock().expect("progreso") = Some(tx.clone());
         self.progresos
             .lock()
@@ -963,7 +963,7 @@ impl HostBackend for Fake {
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         self.latido();
         let plugins = self.plugins.lock().expect("plugins").clone();
-        let errores = self
+        let errors = self
             .load_errors
             .iter()
             .map(|(dir, reason)| norte_proto::methods::PluginLoadError {
@@ -972,12 +972,7 @@ impl HostBackend for Fake {
                 dir_bytes: self.payload_bytes.get(dir).cloned(),
             })
             .collect();
-        Box::pin(async move {
-            Ok(norte_proto::methods::PluginListResult {
-                plugins,
-                errors: errores,
-            })
-        })
+        Box::pin(async move { Ok(norte_proto::methods::PluginListResult { plugins, errors }) })
     }
 
     fn plugin_help(
@@ -1047,7 +1042,7 @@ impl HostBackend for Fake {
                 unvisited: None,
             });
             tokio::spawn(async move {
-                let entradas: Vec<norte_proto::Entry> = hallazgos
+                let entries: Vec<norte_proto::Entry> = hallazgos
                     .into_iter()
                     .map(|path| norte_proto::Entry {
                         path,
@@ -1063,11 +1058,11 @@ impl HostBackend for Fake {
                 // would hide everything that depends on the first batch
                 // arriving. This is the divergence that covered up a search
                 // with no hits never getting cancelled.
-                if !entradas.is_empty() {
+                if !entries.is_empty() {
                     let _ = tx
                         .send(norte_proto::methods::SearchHits {
                             task_id: id,
-                            entries: entradas,
+                            entries,
                             matches: None,
                         })
                         .await;
@@ -1255,7 +1250,7 @@ impl HostBackend for Fake {
         self.latido();
         let n = self.next_task.fetch_add(1, Ordering::SeqCst);
         let id = norte_proto::TaskId::new(900 + n as u64);
-        let progreso = norte_proto::TaskProgress {
+        let progress = norte_proto::TaskProgress {
             task_id: id,
             kind: norte_proto::TaskKind::Undo,
             state: norte_proto::TaskState::Running,
@@ -1267,7 +1262,7 @@ impl HostBackend for Fake {
             unreadable: None,
             unvisited: None,
         };
-        let (tx, rx) = tokio::sync::watch::channel(progreso);
+        let (tx, rx) = tokio::sync::watch::channel(progress);
         self.progresos
             .lock()
             .expect("progresos")
@@ -1293,9 +1288,9 @@ impl HostBackend for Fake {
         let res = self
             .journal
             .as_ref()
-            .map_or(Err(Error::Unsupported), |filas| {
+            .map_or(Err(Error::Unsupported), |the_rows| {
                 let cap = usize::try_from(limit).unwrap_or(usize::MAX);
-                let remain: Vec<_> = filas
+                let remain: Vec<_> = the_rows
                     .iter()
                     .filter(|f| before_seq.is_none_or(|b| f.seq < b))
                     .cloned()
@@ -1324,7 +1319,7 @@ impl HostBackend for Fake {
         self.latido();
         let n = self.next_task.fetch_add(1, Ordering::SeqCst);
         let id = norte_proto::TaskId::new(950 + n as u64);
-        let progreso = norte_proto::TaskProgress {
+        let progress = norte_proto::TaskProgress {
             task_id: id,
             kind: norte_proto::TaskKind::Undo,
             state: norte_proto::TaskState::Running,
@@ -1336,7 +1331,7 @@ impl HostBackend for Fake {
             unreadable: None,
             unvisited: None,
         };
-        let (tx, rx) = tokio::sync::watch::channel(progreso);
+        let (tx, rx) = tokio::sync::watch::channel(progress);
         self.progresos
             .lock()
             .expect("progresos")
@@ -1489,8 +1484,8 @@ impl HostBackend for Fake {
         // comes from the same tree, but NOW with a size: that is what `stat`
         // does.
         let entry = path.parent().and_then(|dir| {
-            self.tree.get(&dir.to_wire()).and_then(|entradas| {
-                entradas
+            self.tree.get(&dir.to_wire()).and_then(|entries| {
+                entries
                     .iter()
                     .find(|(n, _)| path.file_name().is_some_and(|f| f.as_bytes() == n))
                     .map(|(_, es_dir)| Entry {
@@ -1593,7 +1588,7 @@ impl HostBackend for Fake {
         }
         let n = self.next_task.fetch_add(1, Ordering::SeqCst);
         let id = norte_proto::TaskId::new(500 + n as u64);
-        let progreso = norte_proto::TaskProgress {
+        let progress = norte_proto::TaskProgress {
             task_id: id,
             kind: norte_proto::TaskKind::Sync,
             state: norte_proto::TaskState::Running,
@@ -1605,7 +1600,7 @@ impl HostBackend for Fake {
             unreadable: None,
             unvisited: None,
         };
-        let (tx, rx) = tokio::sync::watch::channel(progreso);
+        let (tx, rx) = tokio::sync::watch::channel(progress);
         *self.progress.lock().expect("progreso") = Some(tx.clone());
         self.progresos
             .lock()
@@ -1659,7 +1654,7 @@ impl HostBackend for Fake {
         let plan = self.plan_de_sync.lock().expect("plan").clone();
         let n = self.next_task.fetch_add(1, Ordering::SeqCst);
         let id = norte_proto::TaskId::new(400 + n as u64);
-        let progreso = norte_proto::TaskProgress {
+        let progress = norte_proto::TaskProgress {
             task_id: id,
             kind: norte_proto::TaskKind::SyncPlan,
             state: norte_proto::TaskState::Running,
@@ -1671,14 +1666,14 @@ impl HostBackend for Fake {
             unreadable: None,
             unvisited: None,
         };
-        let (tx, rx) = tokio::sync::watch::channel(progreso);
+        let (tx, rx) = tokio::sync::watch::channel(progress);
         *self.progress.lock().expect("progreso") = Some(tx.clone());
         self.progresos
             .lock()
             .expect("progresos")
             .insert(id.get(), tx);
         Box::pin(async move {
-            let (pasos, mut done) = plan.ok_or(Error::Unsupported)?;
+            let (steps, mut done) = plan.ok_or(Error::Unsupported)?;
             // The closing carries ITS OWN Task: the shared model discards
             // another plan's for this id, which is exactly what it must do.
             done.task_id = id;
@@ -1686,10 +1681,7 @@ impl HostBackend for Fake {
             tokio::spawn(async move {
                 let _ = etx
                     .send(norte_client::SyncPlanEvent::Steps(
-                        norte_proto::methods::SyncStepsBatch {
-                            task_id: id,
-                            steps: pasos,
-                        },
+                        norte_proto::methods::SyncStepsBatch { task_id: id, steps },
                     ))
                     .await;
                 let _ = etx.send(norte_client::SyncPlanEvent::Done(done)).await;
@@ -1726,10 +1718,10 @@ impl HostBackend for Fake {
             .expect("comparaciones")
             .push((params.left, params.right));
         self.latido();
-        let filas = self.rows_comparadas.lock().expect("filas").clone();
+        let the_rows = self.rows_comparadas.lock().expect("filas").clone();
         let n = self.next_task.fetch_add(1, Ordering::SeqCst);
         let id = norte_proto::TaskId::new(300 + n as u64);
-        let progreso = norte_proto::TaskProgress {
+        let progress = norte_proto::TaskProgress {
             task_id: id,
             kind: norte_proto::TaskKind::Compare,
             state: norte_proto::TaskState::Running,
@@ -1741,20 +1733,20 @@ impl HostBackend for Fake {
             unreadable: None,
             unvisited: None,
         };
-        let (tx, rx) = tokio::sync::watch::channel(progreso);
+        let (tx, rx) = tokio::sync::watch::channel(progress);
         *self.progress.lock().expect("progreso") = Some(tx.clone());
         self.progresos
             .lock()
             .expect("progresos")
             .insert(id.get(), tx);
         Box::pin(async move {
-            let filas = filas.ok_or(Error::Unsupported)?;
+            let the_rows = the_rows.ok_or(Error::Unsupported)?;
             let (ftx, frx) = tokio::sync::mpsc::channel(4);
             tokio::spawn(async move {
                 let _ = ftx
                     .send(norte_proto::methods::CompareRowsBatch {
                         task_id: id,
-                        rows: filas,
+                        rows: the_rows,
                     })
                     .await;
             });
@@ -1817,7 +1809,7 @@ impl HostBackend for Fake {
             .expect("sumas")
             .push(params.paths.clone());
         self.latido();
-        let progreso = norte_proto::TaskProgress {
+        let progress = norte_proto::TaskProgress {
             task_id: norte_proto::TaskId::new(10),
             kind: norte_proto::TaskKind::Checksum,
             state: norte_proto::TaskState::Completed,
@@ -1829,7 +1821,7 @@ impl HostBackend for Fake {
             unreadable: None,
             unvisited: None,
         };
-        let (_tx, rx) = tokio::sync::watch::channel(progreso);
+        let (_tx, rx) = tokio::sync::watch::channel(progress);
         Box::pin(async move {
             Ok(HostTask {
                 id: norte_proto::TaskId::new(10),
@@ -1854,7 +1846,7 @@ impl HostBackend for Fake {
         // Already finished: the host asks for the report as soon as the Task
         // is terminal, so a double that left it running would never manage
         // to land anything and the test would be measuring silence.
-        let progreso = norte_proto::TaskProgress {
+        let progress = norte_proto::TaskProgress {
             task_id: norte_proto::TaskId::new(11),
             kind: norte_proto::TaskKind::DirUsage,
             state: norte_proto::TaskState::Completed,
@@ -1866,7 +1858,7 @@ impl HostBackend for Fake {
             unreadable: None,
             unvisited: None,
         };
-        let (_tx, rx) = tokio::sync::watch::channel(progreso);
+        let (_tx, rx) = tokio::sync::watch::channel(progress);
         Box::pin(async move {
             Ok(HostTask {
                 id: norte_proto::TaskId::new(11),
@@ -1921,7 +1913,7 @@ impl HostBackend for Fake {
             .expect("permisos")
             .push((params.paths.clone(), params.mode));
         self.latido();
-        let progreso = norte_proto::TaskProgress {
+        let progress = norte_proto::TaskProgress {
             task_id: norte_proto::TaskId::new(9),
             kind: norte_proto::TaskKind::SetMode,
             state: norte_proto::TaskState::Completed,
@@ -1933,7 +1925,7 @@ impl HostBackend for Fake {
             unreadable: Some(0),
             unvisited: None,
         };
-        let (_tx, rx) = tokio::sync::watch::channel(progreso);
+        let (_tx, rx) = tokio::sync::watch::channel(progress);
         Box::pin(async move {
             Ok(HostTask {
                 id: norte_proto::TaskId::new(9),
@@ -1949,7 +1941,7 @@ impl HostBackend for Fake {
     fn mkdir(&self, path: VPath) -> BoxFuture<'static, Result<HostTask, Error>> {
         self.creados.lock().expect("creados").push(path);
         self.latido();
-        let progreso = norte_proto::TaskProgress {
+        let progress = norte_proto::TaskProgress {
             task_id: norte_proto::TaskId::new(8),
             kind: norte_proto::TaskKind::Mkdir,
             state: norte_proto::TaskState::Completed,
@@ -1961,7 +1953,7 @@ impl HostBackend for Fake {
             unreadable: None,
             unvisited: None,
         };
-        let (_tx, rx) = tokio::sync::watch::channel(progreso);
+        let (_tx, rx) = tokio::sync::watch::channel(progress);
         Box::pin(async move {
             Ok(HostTask {
                 id: norte_proto::TaskId::new(8),
@@ -2066,7 +2058,7 @@ impl HostBackend for Fake {
         let idos = self.desaparecidos.lock().expect("desaparecidos").clone();
         // Unsorted: sorting is `PaneState`'s job, and returning it already
         // sorted would hide that the host delegates it.
-        let entradas: Vec<Entry> = self
+        let entries: Vec<Entry> = self
             .tree
             .get(&dir.to_wire())
             .cloned()
@@ -2123,7 +2115,7 @@ impl HostBackend for Fake {
             // 100 = the host's `FIRST_PAGE`: entry 101 is the first of the
             // DRAIN, and that is where it cuts off.
             let stream: norte_client::EntryStream = Box::pin(futures::stream::unfold(
-                (entradas.into_iter().enumerate(), gate),
+                (entries.into_iter().enumerate(), gate),
                 |(mut it, gate)| async move {
                     let (i, e) = it.next()?;
                     if i == 100
@@ -2333,7 +2325,7 @@ impl HostBackend for Fake {
         self.latido();
         let n = self.next_task.fetch_add(1, Ordering::SeqCst);
         let id = norte_proto::TaskId::new(300 + n as u64);
-        let progreso = norte_proto::TaskProgress {
+        let progress = norte_proto::TaskProgress {
             task_id: id,
             kind: norte_proto::TaskKind::Move,
             state: norte_proto::TaskState::Running,
@@ -2345,7 +2337,7 @@ impl HostBackend for Fake {
             unreadable: None,
             unvisited: None,
         };
-        let (tx, rx) = tokio::sync::watch::channel(progreso);
+        let (tx, rx) = tokio::sync::watch::channel(progress);
         *self.progress.lock().expect("progreso") = Some(tx.clone());
         self.progresos
             .lock()
@@ -2390,7 +2382,7 @@ impl HostBackend for Fake {
         self.latido();
         let n = self.next_task.fetch_add(1, Ordering::SeqCst);
         let id = norte_proto::TaskId::new(200 + n as u64);
-        let progreso = norte_proto::TaskProgress {
+        let progress = norte_proto::TaskProgress {
             task_id: id,
             kind: norte_proto::TaskKind::RenameBatch,
             state: norte_proto::TaskState::Running,
@@ -2402,7 +2394,7 @@ impl HostBackend for Fake {
             unreadable: None,
             unvisited: None,
         };
-        let (tx, rx) = tokio::sync::watch::channel(progreso);
+        let (tx, rx) = tokio::sync::watch::channel(progress);
         *self.progress.lock().expect("progreso") = Some(tx.clone());
         self.progresos
             .lock()
@@ -2484,7 +2476,7 @@ impl HostBackend for Fake {
         }
         self.borrados.lock().expect("borrados").push((path, mode));
         self.latido();
-        let progreso = norte_proto::TaskProgress {
+        let progress = norte_proto::TaskProgress {
             task_id: norte_proto::TaskId::new(7),
             kind: norte_proto::TaskKind::Delete,
             state: norte_proto::TaskState::Running,
@@ -2496,7 +2488,7 @@ impl HostBackend for Fake {
             unreadable: None,
             unvisited: None,
         };
-        let (tx, rx) = tokio::sync::watch::channel(progreso);
+        let (tx, rx) = tokio::sync::watch::channel(progress);
         *self.progress.lock().expect("progreso") = Some(tx);
         let cancelaciones = Arc::clone(&self.cancelaciones);
         Box::pin(async move {
@@ -2611,7 +2603,7 @@ impl HostBackend for Fake {
         // test arms is whatever was set when the request WENT OUT, and with
         // the gate shut there are two requests alive at once.
         let armado = self.log_remote.lock().expect("registro").take();
-        let nivel = self
+        let the_level = self
             .level_remote
             .lock()
             .expect("nivel")
@@ -2638,7 +2630,7 @@ impl HostBackend for Fake {
                 lines: armado.map(|(l, _)| l).unwrap_or_default(),
                 next,
                 lost: 0,
-                level: nivel,
+                level: the_level,
                 capacity: 64,
             })
         })
@@ -2653,14 +2645,14 @@ impl HostBackend for Fake {
         // What it answers is what the daemon HAS set, not what was
         // requested: its ring never lowers its level, so asking for less
         // verbosity leaves whatever was already there.
-        let nivel = self.level_remote.lock().expect("nivel").clone();
-        Box::pin(async move { nivel.ok_or(Error::Unsupported) })
+        let the_level = self.level_remote.lock().expect("nivel").clone();
+        Box::pin(async move { the_level.ok_or(Error::Unsupported) })
     }
 
     fn dir_size(&self, paths: Vec<VPath>) -> BoxFuture<'static, Result<HostTask, Error>> {
         self.recuentos.lock().expect("recuentos").push(paths);
         self.latido();
-        let progreso = norte_proto::TaskProgress {
+        let progress = norte_proto::TaskProgress {
             task_id: norte_proto::TaskId::new(9),
             kind: norte_proto::TaskKind::DirSize,
             state: norte_proto::TaskState::Running,
@@ -2672,7 +2664,7 @@ impl HostBackend for Fake {
             unreadable: None,
             unvisited: None,
         };
-        let (tx, rx) = tokio::sync::watch::channel(progreso);
+        let (tx, rx) = tokio::sync::watch::channel(progress);
         *self.progress.lock().expect("progreso") = Some(tx);
         let cancelaciones = Arc::clone(&self.cancelaciones);
         Box::pin(async move {

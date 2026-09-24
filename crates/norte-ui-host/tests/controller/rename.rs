@@ -722,12 +722,12 @@ async fn entering_a_compressed_file_navigates_inside() {
     fake.put("mem:///casa", vec![(b"cosas.zip".to_vec(), false)]);
     let (h, snap) = host_tree(Arc::new(fake)).await;
     let mut sub = h.subscribe();
-    let primero = listing(&snap);
+    let first_one = listing(&snap);
 
     h.dispatch(UiAction::Activate {
-        slot_id: primero.slot_id,
+        slot_id: first_one.slot_id,
         key: norte_ui_host::RowKey(0),
-        generation: primero.generation,
+        generation: first_one.generation,
     })
     .await
     .expect("host alive");
@@ -758,13 +758,13 @@ async fn entering_a_symlink_navigates_like_the_terminal() {
     fake.put("mem:///casa/atajo", vec![(b"dentro.txt".to_vec(), false)]);
     let (h, snap) = host_tree(Arc::new(fake)).await;
     let mut sub = h.subscribe();
-    let primero = listing(&snap);
+    let first_one = listing(&snap);
 
     let ack = h
         .dispatch(UiAction::Activate {
-            slot_id: primero.slot_id,
+            slot_id: first_one.slot_id,
             key: norte_ui_host::RowKey(0),
-            generation: primero.generation,
+            generation: first_one.generation,
         })
         .await
         .expect("host alive");
@@ -923,7 +923,7 @@ async fn per_column_style_governs_in_the_window() {
         .collect(),
         ..norte_config::ColumnsConfig::default()
     };
-    let columnas = norte_frontend::columns::ColumnsSettings::resolve(&cfg);
+    let columns = norte_frontend::columns::ColumnsSettings::resolve(&cfg);
     let (h, snap) = UiHost::start(UiHostOptions {
         backend: Arc::new(fake),
         initial_dir: dir(),
@@ -940,7 +940,7 @@ async fn per_column_style_governs_in_the_window() {
         theme: norte_ui_host::pickers::HostTheme::default(),
         user_layouts: Vec::new(),
         profile: None,
-        columns: columnas,
+        columns,
         effects: norte_ui_host::commands::Effects::Full,
         log_ring: None,
     })
@@ -948,19 +948,19 @@ async fn per_column_style_governs_in_the_window() {
     .expect("arranca");
     let mut sub = h.subscribe();
 
-    let cabecera = listing(&snap)
+    let header = listing(&snap)
         .columns
         .iter()
         .find(|c| c.id == "mtime")
         .expect("the column is there")
         .clone();
     assert_eq!(
-        cabecera.label, "When",
+        header.label, "When",
         "the custom label overrides the factory one"
     );
 
     // The other half of the fix — a CELL's `format` — is checked in
-    // `norte-gui-tauri/tests/celdas_locales.rs`: here the fake backend does
+    // `norte-gui-tauri/tests/local_cells.rs`: here the fake backend does
     // not carry a date in the listing (#52, the listing is lazy) and
     // hydrating it would need mounting half a probe just to test a format.
     // Over there are real files, which is where that question answers
@@ -1184,10 +1184,10 @@ async fn a_plan_is_reviewed_before_being_applied() {
     let mut sub = h.subscribe();
     request_plan(&h, &mut sub).await;
 
-    let primera = next_revision(&mut sub).await.expect("opens");
-    assert_eq!(primera.total, 2, "both pairs");
-    assert_eq!(primera.pairs[0].from.text, "ep1.mkv");
-    assert_eq!(primera.pairs[0].to.text, "ep01.mkv");
+    let first = next_revision(&mut sub).await.expect("opens");
+    assert_eq!(first.total, 2, "both pairs");
+    assert_eq!(first.pairs[0].from.text, "ep1.mkv");
+    assert_eq!(first.pairs[0].to.text, "ep01.mkv");
     assert!(
         backend.batches.lock().expect("lotes").is_empty(),
         "reviewing applies nothing"
@@ -1195,7 +1195,7 @@ async fn a_plan_is_reviewed_before_being_applied() {
 
     // The verdict arrives on its own trip, and until then it cannot be
     // approved.
-    let mut v = primera;
+    let mut v = first;
     for _ in 0..40 {
         if v.confirmable {
             break;
@@ -2095,7 +2095,7 @@ pub(super) fn inyectar_task(
     id: u64,
     canceladas: &Arc<std::sync::Mutex<Vec<u64>>>,
 ) -> tokio::sync::watch::Sender<norte_proto::TaskProgress> {
-    let progreso = norte_proto::TaskProgress {
+    let progress = norte_proto::TaskProgress {
         task_id: norte_proto::TaskId::new(id),
         kind: norte_proto::TaskKind::Copy,
         state: norte_proto::TaskState::Running,
@@ -2107,7 +2107,7 @@ pub(super) fn inyectar_task(
         unreadable: None,
         unvisited: None,
     };
-    let (ptx, prx) = tokio::sync::watch::channel(progreso);
+    let (ptx, prx) = tokio::sync::watch::channel(progress);
     let canceladas = Arc::clone(canceladas);
     tx.send(norte_ui_host::backend::HostTask {
         id: norte_proto::TaskId::new(id),
@@ -2296,7 +2296,7 @@ async fn a_task_that_expires_drags_the_panels_cursor() {
     let (h, _snap) = host_con_layout(Arc::new(fake), "full", (200, 60)).await;
     let mut sub = h.subscribe();
     let canceladas = Arc::new(std::sync::Mutex::new(Vec::new()));
-    let primera = inyectar_task(&tx, 11, &canceladas);
+    let first = inyectar_task(&tx, 11, &canceladas);
     let _b = inyectar_task(&tx, 12, &canceladas);
     let _c = inyectar_task(&tx, 13, &canceladas);
     let _d = inyectar_task(&tx, 14, &canceladas);
@@ -2318,7 +2318,7 @@ async fn a_task_that_expires_drags_the_panels_cursor() {
     h.dispatch(press("Down")).await.expect("host alive");
 
     // The first one finishes and, ten seconds later, leaves the board.
-    primera.send_modify(|p| p.state = norte_proto::TaskState::Completed);
+    first.send_modify(|p| p.state = norte_proto::TaskState::Completed);
     for _ in 0..4 {
         if next_tasks(&mut sub)
             .await
@@ -2368,7 +2368,7 @@ pub(super) fn inyectar_task_de(
     id: u64,
     kind: norte_proto::TaskKind,
 ) -> tokio::sync::watch::Sender<norte_proto::TaskProgress> {
-    let progreso = norte_proto::TaskProgress {
+    let progress = norte_proto::TaskProgress {
         task_id: norte_proto::TaskId::new(id),
         kind,
         state: norte_proto::TaskState::Running,
@@ -2380,7 +2380,7 @@ pub(super) fn inyectar_task_de(
         unreadable: None,
         unvisited: None,
     };
-    let (ptx, prx) = tokio::sync::watch::channel(progreso);
+    let (ptx, prx) = tokio::sync::watch::channel(progress);
     tx.send(norte_ui_host::backend::HostTask {
         id: norte_proto::TaskId::new(id),
         progress: prx,

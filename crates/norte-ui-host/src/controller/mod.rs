@@ -551,7 +551,7 @@ fn pump_plugin_notices(backend: &dyn HostBackend, buzon: mpsc::Sender<Message>) 
 fn bombear_canales_del_backend(
     backend: &dyn HostBackend,
     buzon: &mpsc::Sender<Message>,
-    efectos: crate::commands::Effects,
+    effects: crate::commands::Effects,
 ) {
     // The connection's two channels belong to the FIRST owner, so they are
     // taken once, here.
@@ -599,7 +599,7 @@ fn bombear_canales_del_backend(
     // another one to write either, so in read-only the channel is not even
     // taken (and the dialog does not exist, which is more honest than one
     // that does not respond).
-    if efectos == crate::commands::Effects::Full
+    if effects == crate::commands::Effects::Full
         && let Some(mut approvals) = backend.take_approvals()
     {
         let buzon = buzon.clone();
@@ -1258,8 +1258,8 @@ impl UiHost {
         // says about slots it does not know, and on top of that the
         // directory a human just typed.
         for (id, dest) in state.profile_seed() {
-            if let Some(hueco) = state.slots.get_mut(&id) {
-                hueco.pane.begin_loading(dest);
+            if let Some(target_slot) = state.slots.get_mut(&id) {
+                target_slot.pane.begin_loading(dest);
             }
         }
         state.pin_dir_requested();
@@ -1291,7 +1291,7 @@ impl UiHost {
         for slot in visible {
             state.sondear(slot, &backend, &tx2);
         }
-        let primero = state.snapshot();
+        let first_one = state.snapshot();
 
         pump_session_tick(tx.clone());
 
@@ -1304,7 +1304,7 @@ impl UiHost {
         };
         state.desktop.nativos = Some(nativos);
         tokio::spawn(actor(rx, state, backend, updates, tx2));
-        Ok((host, primero))
+        Ok((host, first_one))
     }
 
     /// This instance's identity. Any action not carrying it belongs to
@@ -1453,11 +1453,11 @@ async fn actor(
                     let _ = updates.send(u);
                 }
             }
-            Message::ApprovalNoEntregada(approval_id, clave) => {
+            Message::ApprovalNoEntregada(approval_id, key) => {
                 // NAMES the approval (#279): with two stacked, "the approval
                 // did not arrive" does not say which of the two, and they
                 // are security decisions over different operands.
-                for u in state.say_with(clave, &[("id", &approval_id.to_string())]) {
+                for u in state.say_with(key, &[("id", &approval_id.to_string())]) {
                     let _ = updates.send(u);
                 }
             }
@@ -1488,14 +1488,14 @@ async fn actor(
                 }
             }
             Message::Content(data) => {
-                let (token, path, leido, preview) = *data;
-                if let Some(u) = state.open_visor(token, path, leido, preview, &backend, &buzon) {
+                let (token, path, read, preview) = *data;
+                if let Some(u) = state.open_visor(token, path, read, preview, &backend, &buzon) {
                     let _ = updates.send(u);
                 }
             }
             Message::PreviewContent(data) => {
-                let (slot, (token, path, leido, preview)) = *data;
-                if let Some(u) = state.land_preview(slot, token, path, leido, preview) {
+                let (slot, (token, path, read, preview)) = *data;
+                if let Some(u) = state.land_preview(slot, token, path, read, preview) {
                     let _ = updates.send(u);
                 }
             }
@@ -1575,8 +1575,8 @@ async fn actor(
                     let _ = updates.send(u);
                 }
             }
-            Message::Say(clave) => {
-                for u in state.say(clave) {
+            Message::Say(key) => {
+                for u in state.say(key) {
                     let _ = updates.send(u);
                 }
             }
@@ -1586,8 +1586,8 @@ async fn actor(
                 }
             }
             Message::ThemePersistido(failure) | Message::WidthPersistido(failure) => {
-                if let Some(clave) = failure {
-                    for u in state.say(clave) {
+                if let Some(key) = failure {
+                    for u in state.say(key) {
                         let _ = updates.send(u);
                     }
                 }
@@ -1624,8 +1624,8 @@ async fn actor(
             Message::ThemeResolved(data) => {
                 let (spec, result) = *data;
                 match result {
-                    Ok(tema) => {
-                        state.theme_placed(&spec, &tema);
+                    Ok(theme) => {
+                        state.theme_placed(&spec, &theme);
                         // Snapshot and not a patch: changing theme moves the
                         // colors of the WHOLE screen, and the renderer plugs
                         // them back in from the catalog, not from a view
@@ -1636,8 +1636,8 @@ async fn actor(
                     // A theme that cannot be read does NOT leave the window
                     // with no colors: it stays on the one there was and
                     // reports why.
-                    Err(clave) => {
-                        for u in state.say(clave) {
+                    Err(key) => {
+                        for u in state.say(key) {
                             let _ = updates.send(u);
                         }
                     }
@@ -1973,7 +1973,7 @@ async fn plugin_cells(
 fn column_label(
     r: &norte_frontend::columns_picker::PickerRow,
     scheme: &str,
-    columnas: &norte_frontend::columns::ColumnsSettings,
+    columns: &norte_frontend::columns::ColumnsSettings,
     lang: norte_i18n::Lang,
 ) -> (String, bool) {
     use norte_frontend::columns::{ColumnId, header_label_in};
@@ -1982,7 +1982,7 @@ fn column_label(
         // text from a configuration file.
         return norte_frontend::display_name(r.id.as_bytes());
     };
-    let style = columnas.style_for_id(scheme, &cid, None);
+    let style = columns.style_for_id(scheme, &cid, None);
     norte_frontend::display_name(header_label_in(&cid, &style, None, lang).as_bytes())
 }
 
@@ -3261,11 +3261,11 @@ impl State {
         kinds: &KindRegistry,
         dir: &VPath,
         settings: &norte_frontend::config::FrontendConfig,
-        columnas: &norte_frontend::columns::ColumnsSettings,
+        columns: &norte_frontend::columns::ColumnsSettings,
     ) -> std::collections::BTreeMap<u32, Slot> {
         let hidden = settings.common.ui_show_hidden.unwrap_or(true);
         let up = settings.common.ui_parent_entry.unwrap_or(true);
-        let orden = columnas.sort_for(dir.scheme());
+        let orden = columns.sort_for(dir.scheme());
         let mut slots = std::collections::BTreeMap::new();
         for SlotId(id) in tree.slot_ids() {
             if es_listing(tree, SlotId(id), kinds) {
@@ -3322,8 +3322,8 @@ impl State {
             keymap_dialog,
             layout: tree,
             viewport,
-            columns: columnas,
-            effects: efectos,
+            columns,
+            effects,
             settings,
             paths,
             theme,
@@ -3335,7 +3335,7 @@ impl State {
         let lang = Self::lang_de(&locale);
         let kinds = KindRegistry::builtin();
         let split = resolve(rect(viewport), &tree, &kinds);
-        let slots = Self::slots_initial(&tree, &kinds, dir, &settings, &columnas);
+        let slots = Self::slots_initial(&tree, &kinds, dir, &settings, &columns);
         let active = slots.keys().copied().next().unwrap_or(1);
         let roles = Self::roles_initial(&tree, &split, &kinds, active);
         let state = Self {
@@ -3421,7 +3421,7 @@ impl State {
             resolver: Resolver::new(keymap),
             resolver_visor: Resolver::new(keymap_visor),
             resolver_dialog: Resolver::new(keymap_dialog),
-            effects: efectos,
+            effects,
             visor_rows: None,
             visor_columns: None,
             viewer_in_flight: None,
@@ -3443,7 +3443,7 @@ impl State {
             split,
             viewport,
             roles,
-            columns: columnas,
+            columns,
             catalogos: std::collections::HashMap::new(),
             slots,
             dialogs: Vec::new(),
@@ -3646,11 +3646,11 @@ impl State {
     ) -> Result<(Vec<Entry>, Option<u64>), Error> {
         use futures::StreamExt as _;
         let (mut stream, skipped) = listing?;
-        let mut primera = Vec::with_capacity(FIRST_PAGE);
+        let mut first = Vec::with_capacity(FIRST_PAGE);
         let mut agotado = false;
-        while primera.len() < FIRST_PAGE {
+        while first.len() < FIRST_PAGE {
             match stream.next().await {
-                Some(Ok(e)) => primera.push(e),
+                Some(Ok(e)) => first.push(e),
                 // An error mid-page counts as the listing's error: half a
                 // page is not a listing.
                 Some(Err(e)) => return Err(e),
@@ -3668,7 +3668,7 @@ impl State {
         // future: sending to the mailbox from inside it would block against
         // the only one that empties it.
         tokio::spawn(async move {
-            let mut lote = Vec::with_capacity(FILL_BATCH);
+            let mut the_batch = Vec::with_capacity(FILL_BATCH);
             if !agotado {
                 while let Some(entry) = stream.next().await {
                     let Ok(entry) = entry else {
@@ -3677,9 +3677,9 @@ impl State {
                         // than throwing away the whole listing.
                         break;
                     };
-                    lote.push(entry);
-                    if lote.len() >= FILL_BATCH {
-                        let batch = std::mem::take(&mut lote);
+                    the_batch.push(entry);
+                    if the_batch.len() >= FILL_BATCH {
+                        let batch = std::mem::take(&mut the_batch);
                         if buzon
                             .send(Message::MoreEntries(Box::new((token, slot, batch, false))))
                             .await
@@ -3687,15 +3687,17 @@ impl State {
                         {
                             return;
                         }
-                        lote = Vec::with_capacity(FILL_BATCH);
+                        the_batch = Vec::with_capacity(FILL_BATCH);
                     }
                 }
             }
             let _ = buzon
-                .send(Message::MoreEntries(Box::new((token, slot, lote, true))))
+                .send(Message::MoreEntries(Box::new((
+                    token, slot, the_batch, true,
+                ))))
                 .await;
         });
-        Ok((primera, skipped))
+        Ok((first, skipped))
     }
 
     /// The initial listing of each VISIBLE slot, the only one that is awaited
@@ -3755,70 +3757,70 @@ impl State {
             .get(&id)
             .is_some_and(|h| h.order_scheme != dir.scheme());
         let orden = changes_scheme.then(|| self.columns.sort_for(dir.scheme()));
-        let Some(hueco) = self.slots.get_mut(&id) else {
+        let Some(target_slot) = self.slots.get_mut(&id) else {
             return;
         };
         if changes_scheme {
-            dir.scheme().clone_into(&mut hueco.order_scheme);
+            dir.scheme().clone_into(&mut target_slot.order_scheme);
         }
-        hueco.in_flight = None;
-        hueco.dir_requested = None;
+        target_slot.in_flight = None;
+        target_slot.dir_requested = None;
         // The listing is a DIFFERENT one: what was probed before says nothing
         // about these entries, which are born lazy all over again. Without
         // this clearing, returning to an already-visited directory left the
         // size and date columns blank for the rest of the session — and along
         // the way the set grew by one `VPath` per file seen in the whole life
         // of the process.
-        hueco.sondeados.clear();
+        target_slot.sondeados.clear();
         // And whatever is in flight is no longer valid: it is marked so its
         // response gets discarded instead of sticking to another directory.
-        hueco
+        target_slot
             .cancel_probe
             .store(true, std::sync::atomic::Ordering::SeqCst);
-        hueco.cancel_probe = std::sync::Arc::default();
-        hueco.sondeando = false;
+        target_slot.cancel_probe = std::sync::Arc::default();
+        target_slot.sondeando = false;
         // And the same with what the plugins said: another directory's path
         // would not match, but the memory of "already requested" would, and
         // it would leave the new listing undecorated forever.
-        hueco.olvidar_adornos();
-        hueco.adornando = false;
+        target_slot.olvidar_adornos();
+        target_slot.adornando = false;
         match res {
             Ok((entries, skipped)) => {
                 if let Some(spec) = orden {
-                    hueco.pane.set_sort(spec);
+                    target_slot.pane.set_sort(spec);
                 }
-                hueco.pane.set_listing(dir, entries);
+                target_slot.pane.set_listing(dir, entries);
                 // A refresh keeps the selection; a `cd` has none to keep and
                 // arrives with an empty list. What the operation took away is
                 // not marked again.
-                let marks = std::mem::take(&mut hueco.marks_to_restore);
-                hueco.pane.restore_marks(&marks);
+                let marks = std::mem::take(&mut target_slot.marks_to_restore);
+                target_slot.pane.restore_marks(&marks);
                 // And the cursor the session left, also AFTER `set_listing`:
                 // before that there are no rows and row 12 would be row 0.
                 // `set_cursor` clamps it if the directory has fewer entries
                 // today than it did then.
-                if let Some(row) = hueco.cursor_to_restore.take() {
-                    hueco.pane.set_cursor(row);
+                if let Some(row) = target_slot.cursor_to_restore.take() {
+                    target_slot.pane.set_cursor(row);
                 }
                 // AFTER `set_listing`, which clears it: it is data for THIS
                 // listing, and carrying over the previous one's would mean
                 // saying entries are missing from a directory where they were
                 // missing from a different one.
-                hueco.pane.set_skipped(skipped);
-                hueco.first_visible = 0;
-                hueco.state = SlotState::Ready;
+                target_slot.pane.set_skipped(skipped);
+                target_slot.first_visible = 0;
+                target_slot.state = SlotState::Ready;
             }
             Err(e) => {
                 // With no stream there is no drain that will answer, so
                 // whoever raised the flag lowers it.
-                hueco.drenando = None;
-                hueco.pane.set_listing(dir, Vec::new());
-                hueco.marks_to_restore.clear();
+                target_slot.drenando = None;
+                target_slot.pane.set_listing(dir, Vec::new());
+                target_slot.marks_to_restore.clear();
                 // A failed listing CONSUMES the saved cursor: if it stayed
                 // pending, it would land on the next listing that arrives,
                 // which may be from somewhere else.
-                hueco.cursor_to_restore = None;
-                hueco.state = SlotState::Error {
+                target_slot.cursor_to_restore = None;
+                target_slot.state = SlotState::Error {
                     reason_key: norte_frontend::error::error_key(&e).to_owned(),
                     // WHICH one is asking for the password. Without this, a
                     // startup with two remote panes said "a secret is

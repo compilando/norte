@@ -640,11 +640,11 @@ fn others_screens(
 /// exists or not; the load then treats it as an absent layer, which is not an
 /// error, and `--profile ghost` used to start as if nothing happened. It is
 /// the same check, word for word, that the terminal makes.
-fn layers_with_profile(nombre: &std::ffi::OsStr) -> Result<norte_config::Layers, StartupError> {
+fn layers_with_profile(entry_name: &std::ffi::OsStr) -> Result<norte_config::Layers, StartupError> {
     let dir = norte_config::profiles_dir_from(&|k| std::env::var_os(k)).ok_or_else(|| {
         StartupError::Config("no configuration directory to hang a profile off of".to_owned())
     })?;
-    layers_with_profile_in(&dir, nombre)
+    layers_with_profile_in(&dir, entry_name)
 }
 
 /// The probable core of [`layers_with_profile`]: the profiles directory comes in
@@ -652,19 +652,19 @@ fn layers_with_profile(nombre: &std::ffi::OsStr) -> Result<norte_config::Layers,
 /// it.
 fn layers_with_profile_in(
     dir: &std::path::Path,
-    nombre: &std::ffi::OsStr,
+    entry_name: &std::ffi::OsStr,
 ) -> Result<norte_config::Layers, StartupError> {
     let hay = norte_config::list_profiles(dir)
         .unwrap_or_default()
         .iter()
-        .any(|n| n == nombre);
+        .any(|n| n == entry_name);
     if !hay {
         return Err(StartupError::Unknown {
             that: "--profile",
-            valor: nombre.to_string_lossy().into_owned(),
+            valor: entry_name.to_string_lossy().into_owned(),
         });
     }
-    Ok(norte_config::standard_layers_with_profile(Some(nombre)))
+    Ok(norte_config::standard_layers_with_profile(Some(entry_name)))
 }
 
 /// Mounts the host: configuration, socket, directory, keymap and layout.
@@ -696,7 +696,7 @@ pub async fn boot(cli: &Cli) -> Result<Boot, StartupError> {
     // belongs to the daemon, which is reached with the configuration we are
     // loading right now — and that is why it arrives by the other path.
     let layers = match &cli.profile {
-        Some(nombre) => layers_with_profile(nombre)?,
+        Some(entry_name) => layers_with_profile(entry_name)?,
         None => norte_config::standard_layers(),
     };
     // Saved for the "where each thing lives" view: the host does not
@@ -726,8 +726,8 @@ pub async fn boot(cli: &Cli) -> Result<Boot, StartupError> {
     // extensions are an open set. Always resolving against `[ui] theme`, a
     // desktop in light mode painted the chrome with the light variant and
     // the NAMES with the dark one's colors.
-    let variant = |nombre: Option<&str>| -> Option<Theme> {
-        let n = nombre?;
+    let variant = |entry_name: Option<&str>| -> Option<Theme> {
+        let n = entry_name?;
         match norte_frontend::theme::resolve_theme(Some(n)) {
             Ok(t) => Some(t),
             Err(e) => {
@@ -736,12 +736,12 @@ pub async fn boot(cli: &Cli) -> Result<Boot, StartupError> {
             }
         }
     };
-    let tema_claro = variant(cfg.common.ui_theme_light.as_deref());
-    let tema_oscuro = variant(cfg.common.ui_theme_dark.as_deref());
+    let light_theme = variant(cfg.common.ui_theme_light.as_deref());
+    let dark_theme = variant(cfg.common.ui_theme_dark.as_deref());
     let theme_light: Option<BTreeMap<String, String>> =
-        tema_claro.as_ref().map(crate::catalog::variables);
+        light_theme.as_ref().map(crate::catalog::variables);
     let theme_dark: Option<BTreeMap<String, String>> =
-        tema_oscuro.as_ref().map(crate::catalog::variables);
+        dark_theme.as_ref().map(crate::catalog::variables);
     // Outside the runtime (rule 2): `metadata` over a downed NFS mount blocks
     // the worker thread until the mount times out, and before there is even
     // a window to say so in. The configuration read above already went
@@ -844,21 +844,24 @@ pub async fn boot(cli: &Cli) -> Result<Boot, StartupError> {
     // read by nobody who is looking at a layout they did not ask for.
     let notice_layout = layout_broken.map(|e| {
         tracing::warn!(error = %e, "user layout did not load: the factory one stays");
-        let nombre = cli.layout.clone().unwrap_or_else(|| {
+        let entry_name = cli.layout.clone().unwrap_or_else(|| {
             std::ffi::OsString::from(cfg.common.ui_layout.as_deref().unwrap_or("orthodox"))
         });
         norte_i18n::ta_in(
             lang,
             "msg-layout-load-failed",
-            &[("name", &layout_pintable(&nombre)), ("err", &e.to_string())],
+            &[
+                ("name", &layout_pintable(&entry_name)),
+                ("err", &e.to_string()),
+            ],
         )
     });
 
-    let columnas = norte_frontend::columns::ColumnsSettings::resolve(&cfg.common.ui_columns)
+    let columns = norte_frontend::columns::ColumnsSettings::resolve(&cfg.common.ui_columns)
         .with_date_format(cfg.common.ui_chrome.date_format());
     // A column id that fails to parse does not disappear silently: `doctor`
     // reports it, and here it at least stays in the startup log.
-    for malo in &columnas.invalid {
+    for malo in &columns.invalid {
         tracing::warn!(column = %malo, "invalid column id: ignored");
     }
     let (paths, user_layouts) = diagnostic(&layers_vistas, &socket).await;
@@ -883,11 +886,11 @@ pub async fn boot(cli: &Cli) -> Result<Boot, StartupError> {
         // The WHOLE settings: columns are configured per scheme, and
         // resolving them here for `file` left that half of the
         // configuration dead as soon as a pane navigated to an `sftp://`.
-        columns: columnas,
+        columns,
         effects: EFFECTS,
         settings: cfg.clone(),
         paths,
-        theme: theme_seen(theme_resolved.as_deref(), &theme, tema_claro, tema_oscuro),
+        theme: theme_seen(theme_resolved.as_deref(), &theme, light_theme, dark_theme),
         user_layouts,
         // Already APPLIED in `settings` (its layers went in above); this is
         // so the host knows and the picker marks it as set (#307).
@@ -1051,8 +1054,8 @@ fn name_of(v: &std::ffi::OsStr, that: &'static str) -> Result<String, StartupErr
 /// there from the inside, and titling it with a name whose colors are not
 /// the ones underneath is exactly what that view exists to prevent. A file
 /// theme has no preset name, so it goes with its own if it declares one.
-fn theme(nombre: Option<&str>) -> (Theme, Option<String>) {
-    let Some(n) = nombre else {
+fn theme(entry_name: Option<&str>) -> (Theme, Option<String>) {
+    let Some(n) = entry_name else {
         return (Theme::preset_default(), None);
     };
     match norte_frontend::theme::resolve_theme(Some(n)) {
@@ -1244,11 +1247,12 @@ mod tests {
     fn a_non_utf8_layout_name_is_looked_up_all_the_same() {
         use std::os::unix::ffi::OsStrExt;
         let dir = tempfile::tempdir().expect("tmp");
-        let nombre = std::ffi::OsStr::from_bytes(b"\xff\xfe");
-        let mut file = nombre.to_os_string();
+        let entry_name = std::ffi::OsStr::from_bytes(b"\xff\xfe");
+        let mut file = entry_name.to_os_string();
         file.push(".toml");
         writes_layout(dir.path(), &file, "[slot]\nid = 1\nkind = \"browser\"\n");
-        let (tree, _) = startup_tree(Some(nombre), None, Some(dir.path())).expect("loads by bytes");
+        let (tree, _) =
+            startup_tree(Some(entry_name), None, Some(dir.path())).expect("loads by bytes");
         assert_eq!(tree.slot_ids().len(), 1);
     }
 

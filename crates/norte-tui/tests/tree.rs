@@ -70,24 +70,24 @@ fn after_paint(app: &mut App, area: ratatui::layout::Rect) -> Vec<norte_tui::ui:
     terminal
         .draw(|f| norte_tui::ui::draw(f, app))
         .expect("draw");
-    let (geo, tabs, menus, sitios, branches) = (
+    let (geo, tabs, menus, places, branches) = (
         norte_tui::ui::pane_geometry(app, area),
         norte_tui::ui::tab_zones(app, area),
         norte_tui::ui::menu_zones(app, area),
         norte_tui::ui::places_zones(app, area),
         norte_tui::ui::tree_zones(app, area),
     );
-    let huecos = norte_tui::ui::panel_slots(app, area);
+    let slots = norte_tui::ui::panel_slots(app, area);
     norte_tui::mouse::after_frame(
         app,
         geo,
         norte_tui::mouse::FrameZones {
             tabs,
             menus,
-            places: sitios,
+            places,
             tree: branches.clone(),
             session: None,
-            slots: huecos,
+            slots,
             ..Default::default()
         },
     );

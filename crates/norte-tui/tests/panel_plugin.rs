@@ -69,10 +69,10 @@ fn app_con_panel() -> App {
     app
 }
 
-fn marco(texto: &str, hits: Vec<Hit>) -> StyledFrame {
+fn marco(text: &str, hits: Vec<Hit>) -> StyledFrame {
     StyledFrame::clamped(
         vec![vec![StyledSpan {
-            text: texto.to_owned(),
+            text: text.to_owned(),
             role: None,
             fg: None,
             bg: None,

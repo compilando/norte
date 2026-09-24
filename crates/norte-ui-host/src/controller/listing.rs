@@ -33,10 +33,10 @@ impl State {
         backend: &Arc<dyn HostBackend>,
         buzon: &mpsc::Sender<Message>,
     ) {
-        let Some(hueco) = self.slots.get(&slot) else {
+        let Some(target_slot) = self.slots.get(&slot) else {
             return;
         };
-        let dir = hueco.pane.dir().clone();
+        let dir = target_slot.pane.dir().clone();
         // The old ones are NOT deleted: they are tied to their path, so
         // another place's are simply no longer read, and this place's are
         // still good. Deleting them here left the help reading "unknown" on
@@ -270,9 +270,9 @@ impl State {
         // listing. They live in the SHARED model, the one that resolves a
         // column's style for both frontends.
         let change_headers = self.columns.apply_plugin_headers(labels);
-        let hueco = self.slots.get_mut(&slot)?;
-        hueco.adornando = false;
-        if generacion != hueco.gen_adornos {
+        let target_slot = self.slots.get_mut(&slot)?;
+        target_slot.adornando = false;
+        if generacion != target_slot.gen_adornos {
             // Requested BEFORE the decorations were forgotten — a plugin
             // turned off, a setting changed — it describes what there was,
             // not what there is. It is dropped, and what was left unasked is
@@ -280,7 +280,7 @@ impl State {
             self.adornar(slot, backend, buzon);
             return None;
         }
-        if *hueco.pane.dir() != dir {
+        if *target_slot.pane.dir() != dir {
             return None;
         }
         if adornos.is_empty() && cells.is_empty() {
@@ -292,14 +292,22 @@ impl State {
                 self.parche(changes)
             });
         }
-        hueco.adornos.extend(adornos);
+        target_slot.adornos.extend(adornos);
         for (column, values) in cells {
-            hueco.cells_plugin.entry(column).or_default().extend(values);
+            target_slot
+                .cells_plugin
+                .entry(column)
+                .or_default()
+                .extend(values);
         }
         // And to the pane, which is the one that serves them: its setters
         // REPLACE, so the whole accumulated set is passed, not the batch.
-        hueco.pane.set_decorations(hueco.adornos.clone());
-        hueco.pane.set_plugin_columns(hueco.cells_plugin.clone());
+        target_slot
+            .pane
+            .set_decorations(target_slot.adornos.clone());
+        target_slot
+            .pane
+            .set_plugin_columns(target_slot.cells_plugin.clone());
         // The ROWS, which are the only thing that changes: a badge moves
         // neither the cursor nor the directory. With new labels, the headers
         // of ALL slots also travel: a column's name does not belong to one
@@ -495,7 +503,7 @@ impl State {
                 t.afectados.clear();
             }
         }
-        let huecos: Vec<(u32, bool)> = self
+        let slots: Vec<(u32, bool)> = self
             .slots
             .iter()
             .filter(|(_, h)| {
@@ -504,7 +512,7 @@ impl State {
             .map(|(id, _)| (*id, self.oculto(*id)))
             .collect();
         let mut changes = Vec::new();
-        for (slot, oculto) in huecos {
+        for (slot, oculto) in slots {
             if oculto {
                 // A slot that is not visible does not request listings —
                 // what is not seen is not fetched — but it also cannot keep
@@ -557,28 +565,28 @@ impl State {
     ) -> Vec<ViewChange> {
         self.token += 1;
         let token = RequestToken(self.token);
-        let Some(hueco) = self.slots.get_mut(&slot) else {
+        let Some(target_slot) = self.slots.get_mut(&slot) else {
             return Vec::new();
         };
-        if hueco.in_flight.is_some() {
+        if target_slot.in_flight.is_some() {
             return Vec::new();
         }
-        if let Some(sel) = hueco.pane.selected().map(|e| e.path.clone()) {
-            hueco.pane.set_pending_focus(sel);
+        if let Some(sel) = target_slot.pane.selected().map(|e| e.path.clone()) {
+            target_slot.pane.set_pending_focus(sel);
         }
-        hueco.pane.remember_cursor();
+        target_slot.pane.remember_cursor();
         // `marked_paths` falls back to the cursor when there are no marks,
         // and restoring THAT would turn a refresh into a mark the reader
         // never made.
-        hueco.marks_to_restore = if hueco.pane.marks_len() > 0 {
-            hueco.pane.marked_paths()
+        target_slot.marks_to_restore = if target_slot.pane.marks_len() > 0 {
+            target_slot.pane.marked_paths()
         } else {
             Vec::new()
         };
-        let dir = hueco.pane.dir().clone();
-        hueco.state = Self::loading_toward(None, None);
-        hueco.in_flight = Some(token);
-        hueco.drenando = Some(token);
+        let dir = target_slot.pane.dir().clone();
+        target_slot.state = Self::loading_toward(None, None);
+        target_slot.in_flight = Some(token);
+        target_slot.drenando = Some(token);
         self.request_listing(slot, &dir, token, backend, buzon);
         vec![ViewChange::SlotState {
             slot_id: slot,
@@ -623,9 +631,9 @@ impl State {
     /// that shrinks without saying why reads as a pane failure.
     pub(super) fn toggle_hidden(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let (visible, podadas) = {
-            let hueco = self.slot_mut();
-            let visible = hueco.pane.toggle_hidden();
-            (visible, hueco.pane.pruned_marks())
+            let target_slot = self.slot_mut();
+            let visible = target_slot.pane.toggle_hidden();
+            (visible, target_slot.pane.pruned_marks())
         };
         let key = if visible {
             "msg-hidden-shown"

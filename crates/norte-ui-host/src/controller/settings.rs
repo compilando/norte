@@ -288,12 +288,8 @@ impl State {
         backend: &Arc<dyn HostBackend>,
         mailbox: &mpsc::Sender<Message>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
-        let SettingRestablecido {
-            name: nombre,
-            id,
-            result: resultado,
-        } = done;
-        let cfg = match resultado {
+        let SettingRestablecido { name, id, result } = done;
+        let cfg = match result {
             Err(key) => return self.say(key),
             Ok(cfg) => cfg,
         };
@@ -318,7 +314,7 @@ impl State {
         self.status.message = Some(clamp_display(norte_i18n::ta_in(
             self.lang,
             key,
-            &[("name", &nombre)],
+            &[("name", &name)],
         )));
         let snap = self.snapshot();
         vec![self.over(UiUpdate::Snapshot(Box::new(snap)))]
@@ -408,11 +404,9 @@ impl State {
                     None => (self.applied(), outgoing),
                 }
             }
-            crate::settings::Activacion::RequestText {
-                name: nombre,
-                actual,
-                id,
-            } => self.request_setting_value(&nombre, actual, id),
+            crate::settings::Activacion::RequestText { name, actual, id } => {
+                self.request_setting_value(&name, actual, id)
+            }
         }
     }
 
@@ -599,11 +593,11 @@ impl State {
         mailbox: &mpsc::Sender<Message>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
         let SettingWritten {
-            name: nombre,
+            name,
             valor,
-            result: resultado,
+            result,
         } = done;
-        let cfg = match resultado {
+        let cfg = match result {
             Err(key) => {
                 // The optimistic row was LYING: it is rebuilt over what is
                 // actually set.
@@ -638,13 +632,13 @@ impl State {
             norte_i18n::ta_in(
                 self.lang,
                 "msg-settings-saved",
-                &[("name", &nombre), ("value", &valor)],
+                &[("name", &name), ("value", &valor)],
             )
         } else {
             norte_i18n::ta_in(
                 self.lang,
                 "msg-settings-saved-restart",
-                &[("name", &nombre), ("value", &valor)],
+                &[("name", &name), ("value", &valor)],
             )
         }));
         let snap = self.snapshot();

@@ -518,7 +518,7 @@ it-remote:
 
 # Benchmarks for spec §12's budgets (manual: they take a while).
 bench:
-    cargo bench -p norte-tui --bench presupuestos
+    cargo bench -p norte-tui --bench budgets
     cargo bench -p norte-core --bench copy_remoto
     # ADR 0002 / #12's: the system's floor against the provider's path. It is
     # the yardstick that expires the decision not to bring in `tokio-uring`.

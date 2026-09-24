@@ -177,16 +177,16 @@ impl State {
     /// lines sent whole on every patch is the waste decision D7 exists to
     /// prevent, and a log moves more than a directory does.
     pub(super) fn log_panel(&self, slot: u32) -> crate::dto::LogSlotView {
-        let lineas = self
+        let lines = self
             .log_ring
             .as_ref()
             .map(norte_config::logring::LogRing::snapshot)
             .unwrap_or_default();
-        let fuente = self.source_efectiva();
+        let origin = self.source_efectiva();
         // Borrowed, not cloned: `merge` returns references on purpose — the
         // ring already cloned once in its `snapshot` — and the panel paints
         // at most one screen.
-        let mezcla = norte_frontend::logpanel::merge(&lineas, &self.log_remote.lines, fuente);
+        let mezcla = norte_frontend::logpanel::merge(&lines, &self.log_remote.lines, origin);
         let visible: Vec<_> = mezcla
             .into_iter()
             .filter(|(l, _)| self.log_panel.matches(l))
@@ -228,11 +228,11 @@ impl State {
             following: self.log_panel.following(),
             total: visible.len() as u64,
             first_visible: start as u64,
-            dropped_note: self.discard_note(fuente),
-            capturing: self.capture_note(fuente),
+            dropped_note: self.discard_note(origin),
+            capturing: self.capture_note(origin),
             source: clamp_display(norte_i18n::t_in(
                 self.lang,
-                match fuente {
+                match origin {
                     // From THIS process, and saying so is the point: the
                     // window starts its own daemon (#300), so what is NOT
                     // here is the daemon's — the providers, the journal, the
@@ -252,14 +252,14 @@ impl State {
                     LogSource::Both => "log-source-both",
                 },
             )),
-            source_mode: match fuente {
+            source_mode: match origin {
                 LogSource::Window => "window",
                 LogSource::Daemon => "daemon",
                 LogSource::Both => "both",
             }
             .to_owned(),
             sources_available: self.log_remote.servicio == Servicio::Serves,
-            source_note: self.source_note(fuente),
+            source_note: self.source_note(origin),
         }
     }
 
@@ -302,10 +302,10 @@ impl State {
     /// shared with all its clients, that never comes back down and that
     /// closing this panel does not lower. Staying quiet about it on the
     /// common path left that decision unannounced.
-    fn source_note(&self, fuente: LogSource) -> String {
+    fn source_note(&self, origin: LogSource) -> String {
         let key = if self.log_remote.servicio == Servicio::NoRing {
             "log-source-unsupported"
-        } else if fuente == LogSource::Window {
+        } else if origin == LogSource::Window {
             return String::new();
         } else {
             "log-source-daemon-level"
@@ -325,7 +325,7 @@ impl State {
     /// legible: its own is global to its clients and only goes up, so it can
     /// sit well above what this panel shows, and that gap is exactly what
     /// this phrase exists to not keep quiet about.
-    fn capture_note(&self, fuente: LogSource) -> String {
+    fn capture_note(&self, origin: LogSource) -> String {
         let shows = self.log_panel.level();
         let local = self
             .log_ring
@@ -340,7 +340,7 @@ impl State {
             .filter(|cap| *cap > shows);
         let phrase =
             |key, cap: LogLevel| norte_i18n::ta_in(self.lang, key, &[("level", cap.wire())]);
-        let parts: Vec<String> = match fuente {
+        let parts: Vec<String> = match origin {
             LogSource::Window => local
                 .map(|c| phrase("log-capturing", c))
                 .into_iter()
@@ -405,9 +405,9 @@ impl State {
     /// here for a reason of its own: a log message can carry inside it a
     /// file name someone chose, and a `U+202E` there reorders the panel's
     /// whole line.
-    fn log_line(l: &LogLine, origen: LogSource) -> crate::dto::LogLineView {
+    fn log_line(l: &LogLine, src: LogSource) -> crate::dto::LogLineView {
         let (target, t_hostile) = norte_frontend::display_name(l.target.as_bytes());
-        let (mensaje, m_hostile) = norte_frontend::display_name(l.message.as_bytes());
+        let (message, m_hostile) = norte_frontend::display_name(l.message.as_bytes());
         crate::dto::LogLineView {
             time: norte_frontend::format::time_utc(l.epoch_ms),
             level: l.level.wire().to_owned(),
@@ -420,12 +420,12 @@ impl State {
             // which is a fixed-width thing the window does not have.
             level_label: l.level.label().trim().to_owned(),
             target: clamp_display(target),
-            message: clamp_display(mensaje),
+            message: clamp_display(message),
             hostile: t_hostile || m_hostile,
             // `Both` is never passed to a line: `merge` marks each one with
             // the process it came from, which is the only thing that means
             // anything here.
-            source: if origen == LogSource::Daemon {
+            source: if src == LogSource::Daemon {
                 "daemon"
             } else {
                 "window"
@@ -536,7 +536,7 @@ impl State {
     /// be read while something is writing, which is exactly when it is
     /// needed.
     pub(super) fn scroll_log(&mut self, delta: i64) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let lineas = self
+        let lines = self
             .log_ring
             .as_ref()
             .map(norte_config::logring::LogRing::snapshot)
@@ -544,14 +544,11 @@ impl State {
         // Over the MERGED list, which is what is seen: counting only the
         // local ones would leave the cap short and a page would not reach
         // the end.
-        let visible = norte_frontend::logpanel::merge(
-            &lineas,
-            &self.log_remote.lines,
-            self.source_efectiva(),
-        )
-        .into_iter()
-        .filter(|(l, _)| self.log_panel.matches(l))
-        .count();
+        let visible =
+            norte_frontend::logpanel::merge(&lines, &self.log_remote.lines, self.source_efectiva())
+                .into_iter()
+                .filter(|(l, _)| self.log_panel.matches(l))
+                .count();
         let delta = isize::try_from(delta).unwrap_or(PAGE);
         if delta < 0 {
             self.log_panel.scroll_up(delta.unsigned_abs(), visible);

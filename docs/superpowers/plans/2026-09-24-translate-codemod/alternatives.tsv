@@ -1,0 +1,96 @@
+hueco	slot target_slot slot_id this_slot
+nombre	name entry_name file_name the_name
+sinc	sync sync_state sync_view
+texto	text content typed_text the_text
+clave	key map_key the_key entry_key
+hijos	children kids child_nodes
+cuerpo	body dialog_body body_text
+progreso	progress progress_state task_progress
+fila	row the_row this_row
+abajo	down bottom lower
+nuevo	new fresh new_node replacement
+lineas	lines text_lines body_lines
+nuevos	new_ones fresh_ones added
+filas	rows the_rows row_list
+hostil	hostile hostile_name hostile_one
+fuente	source origin src
+abierto	open opened is_open
+escritura	write writer write_half
+despues	after after_state later
+detalle	detail details detail_text
+columnas	columns cols column_list
+derecha	right right_side right_one
+destino	dest target destination
+origen	source origin src
+primera	first first_one first_row
+entradas	entries entry_list
+parejas	pairs pair_list
+pasos	steps step_list
+atras	back going_back backwards
+huecos	slots slot_list
+izquierda	left left_side left_one
+primero	first first_one
+comando	command cmd
+ajustes	settings the_settings
+izquierdo	left left_one
+llego	arrived got
+lote	batch the_batch
+nivel	level the_level
+sitios	places place_list
+tema	theme the_theme
+titulo	title the_title
+llama	calls call_count
+boton	button the_button
+der	right right_side
+efectos	effects effect_list
+espejo	mirror the_mirror
+estado	state the_state
+estrecho	narrow is_narrow
+fallo_la_task	task_failed the_task_failed
+informe	report the_report
+leido	read read_back
+resultado	result outcome
+sesion	session the_session
+acorde	chord the_chord
+cara	side face
+llegaron	arrived got
+ruta	path the_path
+tema_claro	light_theme
+tema_oscuro	dark_theme
+tras	after then
+Ancho	Width
+abierta	open opened
+abiertos	open_ones opened
+almacen	store the_store
+ancho	width the_width
+arbol	tree the_tree
+archivo	archive the_archive
+cabecera	header the_header
+cabeza	head the_head
+der_hostil	right_hostile
+descripcion	description the_description
+destino_encoding	dest_encoding
+disposicion	layout the_layout
+entrada	entry the_entry
+errores	errors error_list
+estrecha	narrow is_narrow
+etiqueta	label the_label
+fallos	failures failure_list
+filtros	filters filter_list
+izq	left left_side
+izq_hostil	left_hostile
+lado	side the_side
+libre	free is_free
+lista	list the_list
+mensaje	message the_message
+origen_encoding	source_encoding
+rota	broken is_broken
+rutas	paths path_list
+tecla	key the_key
+trabajo	work job
+alterado	altered was_altered
+clase_del_futuro	future_class
+marcado	marked is_marked
+mundo	world
+permanente	permanent is_permanent
+una	one

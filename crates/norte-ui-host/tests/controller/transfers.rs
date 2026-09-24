@@ -755,7 +755,7 @@ async fn settings_come_out_whole_in_the_hosts_language() {
     run_by_palette(&h, &mut sub, "app.settings").await;
     let settings =
         snapshot_until(&h, &mut sub, "the settings screen", |s| s.settings.clone()).await;
-    let filas: Vec<norte_ui_host::dto::SettingRowView> = settings
+    let the_rows: Vec<norte_ui_host::dto::SettingRowView> = settings
         .sections
         .iter()
         .filter_map(|s| match s {
@@ -764,7 +764,7 @@ async fn settings_come_out_whole_in_the_hosts_language() {
         })
         .flatten()
         .collect();
-    assert!(!filas.is_empty(), "there are options to show");
+    assert!(!the_rows.is_empty(), "there are options to show");
 
     let in_spanish = norte_i18n::t_in(norte_i18n::Lang::Es, "setting-ui-theme-name");
     let in_english = norte_i18n::t_in(norte_i18n::Lang::En, "setting-ui-theme-name");
@@ -772,7 +772,7 @@ async fn settings_come_out_whole_in_the_hosts_language() {
         in_spanish, in_english,
         "the premise: the key gets translated"
     );
-    let row = filas
+    let row = the_rows
         .iter()
         .find(|r| r.name == in_spanish || r.name == in_english)
         .expect("the option is in the catalogue");

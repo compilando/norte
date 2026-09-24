@@ -339,7 +339,7 @@ pub(super) async fn leaf_host_without_viewer(
 
 /// The kinds whose view comes from the CURSOR of the listing they follow.
 ///
-/// A hand-written list, on purpose, like `paridad.rs::NO_APLICA`: whoever
+/// A hand-written list, on purpose, like `parity_matrix.rs::NO_APLICA`: whoever
 /// adds a slot that follows the cursor edits it, and the test below demands
 /// it have a probe. Deriving it from the kind registry does not work —
 /// "following" is a bond of the slot, not a property of the kind, so the

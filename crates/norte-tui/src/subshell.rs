@@ -155,7 +155,7 @@ impl Subshell {
         // The slave is RELEASED here: while norte keeps it open, closing the
         // shell would not close the pty and the reader would never see EOF.
         drop(pair.slave);
-        let escritura: Escritor = Arc::new(Mutex::new(
+        let write: Escritor = Arc::new(Mutex::new(
             pair.master.take_writer().map_err(std::io::Error::other)?,
         ));
         let reader = pair
@@ -169,7 +169,7 @@ impl Subshell {
         launch_reader(
             reader,
             Arc::clone(&buzon),
-            Arc::clone(&escritura),
+            Arc::clone(&write),
             nonce.clone(),
         );
 
@@ -178,7 +178,7 @@ impl Subshell {
         // inside.
         let buzon_file = which.and_then(|_| create_buzon(&nonce));
         let mut me = Self {
-            write: escritura,
+            write,
             maestro: pair.master,
             child,
             buzon,
@@ -479,8 +479,8 @@ fn write_buzon(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
 /// Used by both writers. The distinction matters: typing a command puts
 /// something on the line, and answering a terminal query does not — the
 /// program that asked is waiting for those bytes, not `readline`.
-fn write_raw(escritura: &Escritor, bytes: &[u8]) -> std::io::Result<()> {
-    let mut e = escritura
+fn write_raw(write: &Escritor, bytes: &[u8]) -> std::io::Result<()> {
+    let mut e = write
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     e.write_all(bytes)?;
@@ -490,7 +490,7 @@ fn write_raw(escritura: &Escritor, bytes: &[u8]) -> std::io::Result<()> {
 fn launch_reader(
     mut reader: PtyReader,
     buzon: Arc<Mutex<Buzon>>,
-    escritura: Escritor,
+    write: Escritor,
     nonce: norte_frontend::subshell::Nonce,
 ) {
     std::thread::spawn(move || {
@@ -507,7 +507,7 @@ fn launch_reader(
                     // which does not matter here, and `write_raw`
                     // takes its own.
                     if let Some(r) = norte_frontend::subshell::terminal_reply(&buf[..n]) {
-                        let _ = write_raw(&escritura, &r);
+                        let _ = write_raw(&write, &r);
                     }
                     let mut b = buzon_de(&buzon);
                     // The previous chunk's tail goes FIRST: a marker split

@@ -328,7 +328,7 @@ impl State {
         // core has always copied between providers.
         let dest = self.slot().pane.dir().clone();
         let dest_line = Self::path_line(&dest);
-        let cuerpo: Vec<crate::dto::DialogLine> = usables
+        let body: Vec<crate::dto::DialogLine> = usables
             .iter()
             .take(Self::MAX_LINES_DIALOG)
             .map(Self::path_line)
@@ -336,8 +336,8 @@ impl State {
         // The trim counts against what ARRIVED, not against what could be
         // converted: "16 of 40 shown" has to stay true when four of those
         // 40 fell out along the way.
-        let note = self.truncation_note(cuerpo.len(), arrived.max(usables.len()));
-        let hostile_outside = norte_frontend::overflow_hostile(&usables, cuerpo.len());
+        let note = self.truncation_note(body.len(), arrived.max(usables.len()));
+        let hostile_outside = norte_frontend::overflow_hostile(&usables, body.len());
         let id = ModalId(self.next_modal);
         self.next_modal += 1;
         let vista = DialogView {
@@ -348,7 +348,7 @@ impl State {
             asker: None,
             deadline: None,
             deadline_at_ms: None,
-            body: cuerpo,
+            body,
             overflow_note: note,
             overflow_hostile: hostile_outside,
             choices: vec![
@@ -522,13 +522,13 @@ impl State {
         let dest_line = Self::path_line(&dest);
         // And the sources, masked and clamped the same as the listing: these
         // names are controlled by whoever has written to the directory.
-        let cuerpo: Vec<crate::dto::DialogLine> = paths
+        let body: Vec<crate::dto::DialogLine> = paths
             .iter()
             .take(Self::MAX_LINES_DIALOG)
             .map(Self::path_line)
             .collect();
-        let note = self.truncation_note(cuerpo.len(), paths.len());
-        let hostile_outside = norte_frontend::overflow_hostile(&paths, cuerpo.len());
+        let note = self.truncation_note(body.len(), paths.len());
+        let hostile_outside = norte_frontend::overflow_hostile(&paths, body.len());
         let id = ModalId(self.next_modal);
         self.next_modal += 1;
         let vista = DialogView {
@@ -544,7 +544,7 @@ impl State {
             asker: None,
             deadline: None,
             deadline_at_ms: None,
-            body: cuerpo,
+            body,
             overflow_note: note,
             overflow_hostile: hostile_outside,
             choices: vec![
@@ -712,14 +712,14 @@ impl State {
 
     pub(super) fn launch_transfer(
         paths: &[VPath],
-        rutas: (&VPath, &VPath),
+        path_list: (&VPath, &VPath),
         mover: bool,
         enc: Option<norte_encoding::NameEncoding>,
         a_la_cola: bool,
         backend: &Arc<dyn HostBackend>,
         buzon: &mpsc::Sender<Message>,
     ) {
-        let (source_dir, dest) = rutas;
+        let (source_dir, dest) = path_list;
         // The directories the outcome leaves out of date. In a copy, only
         // the destination; in a move, also where it came from — and the
         // source one is taken from the SLOT, not from each entry's parent:

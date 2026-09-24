@@ -157,16 +157,16 @@ impl Help {
             .is_none()
             .then(|| self.state.plugin_needs_fetch())
             .flatten();
-        let titulo = if in_keys {
+        let title = if in_keys {
             norte_i18n::t_in(lang, "help-topic-keys")
         } else if let Some(id) = in_flight {
             self.title_of_node(id)
         } else {
             topic.map_or_else(String::new, |t| t.title.clone())
         };
-        let filas = self.rows(lang, effects, visor_open);
+        let rows = self.rows(lang, effects, visor_open);
         HelpView {
-            title: clamp_display(titulo),
+            title: clamp_display(title),
             // Does NOT go through `clamp_display`: it is a KEY, and
             // clamping is not injective. Whole or empty.
             topic_id: identity(self.state.current().as_str()),
@@ -187,7 +187,7 @@ impl Help {
                         .collect()
                 })
             },
-            actions: filas.into_iter().map(|(_, v, _)| v).collect(),
+            actions: rows.into_iter().map(|(_, v, _)| v).collect(),
             action_cursor: (!self.state.actions().is_empty())
                 .then_some(self.state.action_cursor() as u64),
             filter: clamp_display(self.state.filter_display()),
@@ -339,8 +339,8 @@ impl Help {
         effects: crate::commands::Effects,
         visor_open: bool,
     ) -> Result<Action, String> {
-        let filas = self.rows(lang, effects, visor_open);
-        let (action, _, motivo) = filas.get(i).ok_or_else(String::new)?;
+        let rows = self.rows(lang, effects, visor_open);
+        let (action, _, motivo) = rows.get(i).ok_or_else(String::new)?;
         match motivo {
             None => Ok(action.clone()),
             Some(k) => Err((*k).to_owned()),
@@ -503,17 +503,17 @@ fn keyboard_sheet(listing: &Effective, visor: &Effective, lang: Lang) -> Vec<Hel
             text: clamp_display(norte_i18n::t_in(lang, "keys-page-note")),
         }],
     }];
-    for (titulo, screen, eff) in [
+    for (title, screen, eff) in [
         ("help-section-browse", Screen::Browse, listing),
         ("help-section-viewer", Screen::Viewer, visor),
     ] {
-        let filas: Vec<HelpKeyRowView> = sheet(&[(screen, eff.clone())])
+        let rows: Vec<HelpKeyRowView> = sheet(&[(screen, eff.clone())])
             .into_iter()
             .map(|row| {
                 // The label can come from a user's `keymap.toml`: it is
                 // masked, and it says that it was masked (#266).
-                let etiqueta = norte_frontend::whichkey::command_label(&row.command, lang);
-                let (pintable, hostile) = norte_frontend::display_name(etiqueta.as_bytes());
+                let label = norte_frontend::whichkey::command_label(&row.command, lang);
+                let (pintable, hostile) = norte_frontend::display_name(label.as_bytes());
                 HelpKeyRowView {
                     chord: clamp_display(row.chord),
                     label: clamp_display(pintable),
@@ -523,14 +523,14 @@ fn keyboard_sheet(listing: &Effective, visor: &Effective, lang: Lang) -> Vec<Hel
                 }
             })
             .collect();
-        if filas.is_empty() {
+        if rows.is_empty() {
             continue;
         }
         out.push(HelpBlockView::Heading {
             level: 2,
-            text: clamp_display(norte_i18n::t_in(lang, titulo)),
+            text: clamp_display(norte_i18n::t_in(lang, title)),
         });
-        out.push(HelpBlockView::Keys { rows: filas });
+        out.push(HelpBlockView::Keys { rows });
     }
     out
 }
@@ -543,8 +543,8 @@ fn keyboard_sheet(listing: &Effective, visor: &Effective, lang: Lang) -> Vec<Hel
 /// least a word.
 fn group_label(tag: &str, lang: Lang) -> String {
     let id = format!("help-group-{tag}");
-    let texto = norte_i18n::t_in(lang, &id);
-    if texto == id { tag.to_owned() } else { texto }
+    let text = norte_i18n::t_in(lang, &id);
+    if text == id { tag.to_owned() } else { text }
 }
 
 /// A page's title, or its id if this language's corpus does not have it.
@@ -626,10 +626,10 @@ fn fragmento(s: &Span, chords: &Chords, actions: &[Action]) -> HelpSpanView {
             // runs in `norte-tui/tests/help_gate.rs`) and this host paints
             // that SAME corpus. A plugin page does not count: it comes from
             // `parse_untrusted`, which refuses a key it could not paint.
-            let texto = norte_help::render_command(c, chords);
+            let text = norte_help::render_command(c, chords);
             HelpSpanView::Command {
-                is_chord: texto.is_chord(),
-                text: clamp_display(texto.into_text()),
+                is_chord: text.is_chord(),
+                text: clamp_display(text.into_text()),
             }
         }
         Span::TopicLink(id) => HelpSpanView::Link {

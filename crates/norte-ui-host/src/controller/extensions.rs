@@ -527,7 +527,7 @@ impl State {
         let Some(e) = self.extensions.as_mut() else {
             return (Self::stale(StaleAction::Modal), Vec::new());
         };
-        let escritura = e.activate_key();
+        let write = e.activate_key();
         let change = ViewChange::Extensions {
             extensions: self.vista_extensions(),
         };
@@ -535,11 +535,11 @@ impl State {
         // A `bool` or an `enum` ALREADY changed value in the model: what is
         // left is telling the daemon. A `string`/`int` only opened the
         // buffer and there is nothing to write yet.
-        if let Some((id, escritura)) = escritura {
+        if let Some((id, write)) = write {
             outside.extend(Self::write_config(
                 self.gen_extensions,
                 &id,
-                escritura,
+                write,
                 backend,
                 buzon,
             ));
@@ -567,7 +567,7 @@ impl State {
             return (Self::stale(StaleAction::Modal), Vec::new());
         };
         match result {
-            Ok((id, escritura)) => {
+            Ok((id, write)) => {
                 let change = ViewChange::Extensions {
                     extensions: self.vista_extensions(),
                 };
@@ -575,7 +575,7 @@ impl State {
                 outside.extend(Self::write_config(
                     self.gen_extensions,
                     &id,
-                    escritura,
+                    write,
                     backend,
                     buzon,
                 ));
@@ -626,13 +626,13 @@ impl State {
     pub(super) fn write_config(
         opening: u64,
         id: &str,
-        escritura: norte_frontend::plugin_config::PendingConfigWrite,
+        write: norte_frontend::plugin_config::PendingConfigWrite,
         backend: &Arc<dyn HostBackend>,
         buzon: &mpsc::Sender<Message>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
         let backend2 = Arc::clone(backend);
         let buzon2 = buzon.clone();
-        let (id2, key, value) = (id.to_owned(), escritura.key, escritura.value);
+        let (id2, key, value) = (id.to_owned(), write.key, write.value);
         tokio::spawn(async move {
             let res = match tokio::time::timeout(
                 DEADLINE_PLUGINS,
@@ -711,7 +711,7 @@ impl State {
         let Some(e) = self.extensions.as_ref() else {
             return (Self::stale(StaleAction::Modal), Vec::new());
         };
-        let Some(fila) = e.row_chosen() else {
+        let Some(the_row) = e.row_chosen() else {
             // One that did NOT load: there are no capabilities to read and
             // nothing to turn on, and all it can be asked is to be removed —
             // if its directory is named like an id, which is what gets
@@ -738,7 +738,7 @@ impl State {
                 self.say(key),
             );
         };
-        let (id, approved, on) = (fila.id.clone(), fila.approved, fila.enabled);
+        let (id, approved, on) = (the_row.id.clone(), the_row.approved, the_row.enabled);
         match change {
             // Granting ASKS; revoking does not.
             Change::Approval if !approved => self.ask_for_approval(&id),
@@ -934,10 +934,10 @@ impl State {
         if Self::extension_row(e, row, id).is_none() {
             return (Self::stale(StaleAction::Modal), Vec::new());
         }
-        let Some(fila) = e.row_chosen() else {
+        let Some(the_row) = e.row_chosen() else {
             return (Self::stale(StaleAction::Modal), Vec::new());
         };
-        if !fila.has_help {
+        if !the_row.has_help {
             return (
                 ActionAck::Unavailable {
                     reason_key: "msg-extensions-no-help".to_owned(),
@@ -1005,11 +1005,11 @@ impl State {
                 outside,
             );
         }
-        let mut cuerpo = vec![crate::dto::DialogLine {
+        let mut body = vec![crate::dto::DialogLine {
             text: name.0,
             hostile: name.1,
         }];
-        cuerpo.extend(
+        body.extend(
             capabilities
                 .iter()
                 .cloned()
@@ -1033,7 +1033,7 @@ impl State {
             asker: None,
             deadline: None,
             deadline_at_ms: None,
-            body: cuerpo,
+            body,
             overflow_note: note,
             // This dialog trims nothing: its body is the lines it is given
             // ready-made, not a list of paths to be capped.
@@ -1211,10 +1211,12 @@ impl State {
         let slots: Vec<u32> = self.slots.keys().copied().collect();
         let mut outside = Vec::new();
         for slot in slots {
-            if let Some(hueco) = self.slots.get_mut(&slot) {
-                hueco.olvidar_adornos();
-                hueco.pane.set_decorations(std::collections::HashMap::new());
-                hueco
+            if let Some(target_slot) = self.slots.get_mut(&slot) {
+                target_slot.olvidar_adornos();
+                target_slot
+                    .pane
+                    .set_decorations(std::collections::HashMap::new());
+                target_slot
                     .pane
                     .set_plugin_columns(std::collections::HashMap::new());
             }
@@ -1277,28 +1279,28 @@ impl State {
         let OutputPedida {
             id,
             plugin,
-            command: comando,
+            command,
             res,
         } = data;
         if opening != self.gen_output {
             return Vec::new();
         }
         match res {
-            Ok(texto) => {
+            Ok(text) => {
                 // THIRD-PARTY text: it is CLAMPED first — masking a
                 // megabyte only to keep four thousand characters is doing
                 // the whole job for nothing — it is split into lines, and
                 // each one is masked on its own. That it was cut is STATED:
                 // the receiver cannot infer it, because what arrives is
                 // already short.
-                let cropped: String = texto.chars().take(MAX_OUTPUT).collect();
-                let mut truncado = texto.chars().nth(MAX_OUTPUT).is_some();
-                let mut lineas = Vec::new();
-                let mut hostil = false;
+                let cropped: String = text.chars().take(MAX_OUTPUT).collect();
+                let mut truncado = text.chars().nth(MAX_OUTPUT).is_some();
+                let mut lines = Vec::new();
+                let mut hostile = false;
                 for line in cropped.lines().take(MAX_OUTPUT_LINES) {
                     let (pintable, marked) = norte_frontend::display_name(line.as_bytes());
-                    hostil |= marked;
-                    lineas.push(clamp_display(pintable));
+                    hostile |= marked;
+                    lines.push(clamp_display(pintable));
                 }
                 truncado |= cropped.lines().nth(MAX_OUTPUT_LINES).is_some();
                 self.desktop.output = Some(crate::dto::ExtensionOutputView {
@@ -1308,11 +1310,11 @@ impl State {
                     },
                     plugin_id: id,
                     command: crate::dto::MaskedTextView {
-                        text: comando.0,
-                        hostile: comando.1,
+                        text: command.0,
+                        hostile: command.1,
                     },
-                    lines: lineas,
-                    text_hostile: hostil,
+                    lines,
+                    text_hostile: hostile,
                     truncated: truncado,
                 });
                 let change = ViewChange::PluginOutput {

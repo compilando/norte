@@ -19,7 +19,7 @@ impl State {
     pub(super) fn write_in_dialog(
         &mut self,
         id: ModalId,
-        texto: &str,
+        text: &str,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let Some(dialog) = self.dialogs.iter_mut().find(|d| d.id == id) else {
             return (Self::stale(StaleAction::Modal), Vec::new());
@@ -39,7 +39,7 @@ impl State {
             // "names".
             return (Self::stale(StaleAction::Modal), Vec::new());
         }
-        if texto.len() > MAX_NAME {
+        if text.len() > MAX_NAME {
             // Neither trimmed nor accepted halfway: a name is not a screen
             // string, and trimming it is inventing another one.
             return (
@@ -54,12 +54,12 @@ impl State {
             // anything.
             return (Self::stale(StaleAction::Modal), Vec::new());
         };
-        texto.clone_into(raw);
+        text.clone_into(raw);
         // What gets PAINTED is something else: masked (a `U+202E` in the
         // name you are about to be asked to approve shows) and clamped.
-        let (pintable, hostil) = norte_frontend::display_name(texto.as_bytes());
+        let (pintable, hostile) = norte_frontend::display_name(text.as_bytes());
         dialog.vista.input = Some(clamp_display(pintable));
-        dialog.vista.input_hostile = hostil;
+        dialog.vista.input_hostile = hostile;
         let change = ViewChange::Dialogs {
             dialogs: self.dialog_views(),
         };
@@ -528,8 +528,10 @@ impl State {
                 rehusado = motivo;
                 outputs.extend(parts);
             }
-            Some(Pending::UndoSession { session: sesion }) => {
-                let (motivo, parts) = self.undo_session(&sesion, backend, buzon);
+            Some(Pending::UndoSession {
+                session: the_session,
+            }) => {
+                let (motivo, parts) = self.undo_session(&the_session, backend, buzon);
                 rehusado = motivo;
                 outputs.extend(parts);
             }
@@ -556,8 +558,8 @@ impl State {
                 // panel's row distinguishes "asked N times" from "M were
                 // approved", which are not the same when a different window
                 // answered, when it was denied, or when it timed out.
-                if let Some(sesion) = &session {
-                    self.agencia.sessions.approved(sesion);
+                if let Some(the_session) = &session {
+                    self.agencia.sessions.approved(the_session);
                     if self.agencia.panel {
                         let change = ViewChange::Agents {
                             agents: self.vista_agents(),
@@ -780,7 +782,7 @@ impl State {
     /// and the spot where one of them forgets the `bool` is exactly where
     /// someone approves something else.
     pub(super) fn path_line(p: &VPath) -> crate::dto::DialogLine {
-        let (texto, hostil) = norte_frontend::path_display(p);
+        let (text, hostile) = norte_frontend::path_display(p);
         // TRIMMING also alters what is painted, and it happens AFTER
         // `path_display`'s verdict: a clean, long UTF-8 path — twelve
         // 255-byte segments are enough — used to be painted with a trailing
@@ -788,10 +790,10 @@ impl State {
         // name, so a reader cannot tell "that is its name" from "this got
         // cut", and in a batch's report that name is the only actionable
         // thing there is: it is about to be typed by hand.
-        let cropped = texto.len() > crate::bridge::MAX_STRING_BYTES;
+        let cropped = text.len() > crate::bridge::MAX_STRING_BYTES;
         crate::dto::DialogLine {
-            text: clamp_display(texto),
-            hostile: hostil || cropped,
+            text: clamp_display(text),
+            hostile: hostile || cropped,
         }
     }
 
@@ -824,13 +826,13 @@ impl State {
         p: &VPath,
         enc: Option<norte_encoding::NameEncoding>,
     ) -> crate::dto::DialogLine {
-        let (texto, hostil) = norte_frontend::path_display_with(p, enc);
+        let (text, hostile) = norte_frontend::path_display_with(p, enc);
         // TRIMMING also alters what is painted, and an ellipsis is a legal
         // character in a name: same reasoning as `path_line`.
-        let cropped = texto.len() > crate::bridge::MAX_STRING_BYTES;
+        let cropped = text.len() > crate::bridge::MAX_STRING_BYTES;
         crate::dto::DialogLine {
-            text: clamp_display(texto),
-            hostile: hostil || cropped,
+            text: clamp_display(text),
+            hostile: hostile || cropped,
         }
     }
 

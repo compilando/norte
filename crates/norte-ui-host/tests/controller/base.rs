@@ -599,7 +599,7 @@ async fn a_command_the_host_does_not_do_triggers_nothing() {
     // until the docked viewer (#291), `alt+r` until the batch (#310), `alt+C`
     // until compare (#312) — and they ran out: the window does everything
     // the catalogue has live. What is left is what does NOT APPLY to a
-    // window (`tests/paridad.rs`), and `ctrl+o` in the `norton` preset is
+    // window (`tests/parity_matrix.rs`), and `ctrl+o` in the `norton` preset is
     // bound to one of those, `app.toggle-panels`: hiding the panels to see
     // the terminal behind them means nothing in a window.
     let (h, snap) = UiHost::start(UiHostOptions {

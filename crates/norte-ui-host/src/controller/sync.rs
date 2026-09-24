@@ -111,7 +111,7 @@ impl State {
         backend: &Arc<dyn HostBackend>,
         buzon: &mpsc::Sender<Message>,
     ) {
-        let Some(sinc) = self.sync.as_ref() else {
+        let Some(sync) = self.sync.as_ref() else {
             return;
         };
         // The SAME three guards as a batch's report, and for the same
@@ -119,18 +119,18 @@ impl State {
         // handoff), the connection EPOCH (the new daemon's ids start over at
         // 1) and idempotence (a reconnection re-announces the terminal, and
         // this is an RPC).
-        if sinc.task != p.task_id
-            || sinc.epoch_connection != self.epoch_connection
+        if sync.task != p.task_id
+            || sync.epoch_connection != self.epoch_connection
             || !matches!(p.kind, norte_proto::TaskKind::Sync)
-            || sinc.report_requested
+            || sync.report_requested
             || !matches!(
-                sinc.vista.state,
+                sync.vista.state,
                 norte_frontend::sync::SyncState::Applying(_)
             )
         {
             return;
         }
-        let epoch = sinc.epoch;
+        let epoch = sync.epoch;
         let state = p.state.clone();
         let id = p.task_id;
         if let Some(s) = self.sync.as_mut() {
@@ -159,7 +159,7 @@ impl State {
         report: Result<norte_proto::methods::SyncReportResult, Error>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
         let lang = self.lang;
-        let Some(sinc) = self.sync.as_mut().filter(|s| s.epoch == epoch) else {
+        let Some(sync) = self.sync.as_mut().filter(|s| s.epoch == epoch) else {
             return Vec::new();
         };
         // `on_apply_ended` is the one that knows how to read the (outcome,
@@ -170,8 +170,8 @@ impl State {
         // window's language, because the model receives it as a parameter:
         // reading it from the global would have put a write's outcome in
         // another window's language.
-        if let Some(category) = sinc.vista.on_apply_ended(state, report, lang) {
-            sinc.vista.error = Some(clamp_display(category));
+        if let Some(category) = sync.vista.on_apply_ended(state, report, lang) {
+            sync.vista.error = Some(clamp_display(category));
         }
         let change = ViewChange::Sync {
             sync: self.vista_sync(),
@@ -193,18 +193,18 @@ impl State {
     /// closing its stream used to leave the panel at "planning…" forever.
     pub(super) fn close_sync(&mut self, p: &norte_proto::TaskProgress) -> Vec<ViewChange> {
         let lang = self.lang;
-        let Some(sinc) = self.sync.as_mut() else {
+        let Some(sync) = self.sync.as_mut() else {
             return Vec::new();
         };
-        if sinc.task != p.task_id {
+        if sync.task != p.task_id {
             return Vec::new();
         }
-        sinc.vista.run = norte_frontend::sync::SyncRunState::from_task_state(&p.state);
+        sync.vista.run = norte_frontend::sync::SyncRunState::from_task_state(&p.state);
         if let norte_proto::TaskState::Failed { error } = &p.state {
             // The localized CATEGORY, never the English `Display`: this is
             // painted persistently and several variants interpolate data
             // from the other end.
-            sinc.vista.error = Some(clamp_display(norte_frontend::error::error_category_in(
+            sync.vista.error = Some(clamp_display(norte_frontend::error::error_category_in(
                 lang, error,
             )));
         }
@@ -255,18 +255,18 @@ impl State {
         backend: &Arc<dyn HostBackend>,
         buzon: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let Some(sinc) = self.sync.as_mut() else {
+        let Some(sync) = self.sync.as_mut() else {
             return (Self::stale(StaleAction::Modal), Vec::new());
         };
         // With the SECOND question in front, the keys belong to it: only `y`
         // answers yes, and anything else withdraws it. A question that can
         // be answered with any key is not a question.
-        if sinc.vista.confirming.is_some() {
+        if sync.vista.confirming.is_some() {
             let si = self.dialog_verb(k).is_some_and(|v| v == "dialog.approve");
-            let Some(sinc) = self.sync.as_mut() else {
+            let Some(sync) = self.sync.as_mut() else {
                 return (Self::stale(StaleAction::Modal), Vec::new());
             };
-            sinc.vista.confirming = None;
+            sync.vista.confirming = None;
             if si {
                 return self.apply_plan(backend, buzon);
             }
@@ -281,7 +281,7 @@ impl State {
             "Home" | "home" | "End" | "end" => None,
             _ => self.dialog_verb(k),
         };
-        let Some(sinc) = self.sync.as_mut() else {
+        let Some(sync) = self.sync.as_mut() else {
             return (Self::stale(StaleAction::Modal), Vec::new());
         };
         match (verb.as_deref(), k.key.as_str()) {
@@ -295,9 +295,9 @@ impl State {
                 // does not close: closing loses the report — and with it the
                 // count, the failures and the undo handle — over a
                 // destination rewritten halfway.
-                let writing = sinc.vista.is_submitted()
+                let writing = sync.vista.is_submitted()
                     || matches!(
-                        sinc.vista.state,
+                        sync.vista.state,
                         norte_frontend::sync::SyncState::Applying(_)
                     );
                 if writing {
@@ -311,9 +311,9 @@ impl State {
                     // Task whose channel drops with no outcome. Without this
                     // exit, this screen — the one that WRITES — was the only
                     // one in norte with no way out.
-                    if !sinc.vista.cancel_requested {
-                        sinc.vista.cancel_requested = true;
-                        let task = sinc.task;
+                    if !sync.vista.cancel_requested {
+                        sync.vista.cancel_requested = true;
+                        let task = sync.task;
                         if task.get() != 0 {
                             self.cancel(task.get());
                         }
@@ -322,7 +322,7 @@ impl State {
                         };
                         return (self.applied(), vec![self.parche(vec![change])]);
                     }
-                    let task = sinc.task;
+                    let task = sync.task;
                     self.sync = None;
                     if task.get() != 0 {
                         self.cancel(task.get());
@@ -334,9 +334,9 @@ impl State {
                     outside.extend(self.say("msg-sync-closed-midway"));
                     return (self.applied(), outside);
                 }
-                if sinc.vista.cancel_requested {
-                    let task = sinc.task;
-                    sinc.abandonada
+                if sync.vista.cancel_requested {
+                    let task = sync.task;
+                    sync.abandonada
                         .store(true, std::sync::atomic::Ordering::SeqCst);
                     self.sync = None;
                     if task.get() != 0 {
@@ -347,7 +347,7 @@ impl State {
                         vec![self.parche(vec![ViewChange::Sync { sync: None }])],
                     );
                 }
-                sinc.vista.cancel_requested = true;
+                sync.vista.cancel_requested = true;
                 // And the model finds out RIGHT AWAY: if `plan_done` is on
                 // its way, without this the panel would switch to "ready to
                 // approve" a plan the reader just told to stop.
@@ -358,10 +358,10 @@ impl State {
                 // over a synchronization that finished in full: two false
                 // sentences about what is on disk, on the one screen that
                 // describes it.
-                if matches!(sinc.vista.run, norte_frontend::sync::SyncRunState::Running) {
-                    sinc.vista.run = norte_frontend::sync::SyncRunState::Cancelled;
+                if matches!(sync.vista.run, norte_frontend::sync::SyncRunState::Running) {
+                    sync.vista.run = norte_frontend::sync::SyncRunState::Cancelled;
                 }
-                let task = sinc.task;
+                let task = sync.task;
                 if task.get() != 0 {
                     self.cancel(task.get());
                 }
@@ -372,7 +372,7 @@ impl State {
             }
             (Some("dialog.down" | "dialog.up" | "dialog.page-down" | "dialog.page-up"), _)
             | (_, "Home" | "home" | "End" | "end") => {
-                let total = sinc.vista.steps().len();
+                let total = sync.vista.steps().len();
                 if total == 0 {
                     return (self.applied(), Vec::new());
                 }
@@ -380,13 +380,13 @@ impl State {
                 // not "how much there is minus one": with the latter, a
                 // single arrow over a two-step plan and a window of two
                 // hundred used to stop sending the first step.
-                let cap = total.saturating_sub(sinc.window.max(1));
-                let page = sinc.window.max(1);
-                sinc.first_visible = match (verb.as_deref(), k.key.as_str()) {
-                    (Some("dialog.down"), _) => sinc.first_visible.saturating_add(1),
-                    (Some("dialog.up"), _) => sinc.first_visible.saturating_sub(1),
-                    (Some("dialog.page-down"), _) => sinc.first_visible.saturating_add(page),
-                    (Some("dialog.page-up"), _) => sinc.first_visible.saturating_sub(page),
+                let cap = total.saturating_sub(sync.window.max(1));
+                let page = sync.window.max(1);
+                sync.first_visible = match (verb.as_deref(), k.key.as_str()) {
+                    (Some("dialog.down"), _) => sync.first_visible.saturating_add(1),
+                    (Some("dialog.up"), _) => sync.first_visible.saturating_sub(1),
+                    (Some("dialog.page-down"), _) => sync.first_visible.saturating_add(page),
+                    (Some("dialog.page-up"), _) => sync.first_visible.saturating_sub(page),
                     (_, "Home" | "home") => 0,
                     _ => cap,
                 }
@@ -415,10 +415,10 @@ impl State {
         buzon: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let lang = self.lang;
-        let Some(sinc) = self.sync.as_mut() else {
+        let Some(sync) = self.sync.as_mut() else {
             return (Self::stale(StaleAction::Modal), Vec::new());
         };
-        if !sinc.vista.can_approve() {
+        if !sync.vista.can_approve() {
             return (
                 ActionAck::Unavailable {
                     reason_key: "msg-sync-cannot-approve".to_owned(),
@@ -426,10 +426,10 @@ impl State {
                 Vec::new(),
             );
         }
-        let question = sinc.vista.state.plan().and_then(|p| p.confirmation(lang));
+        let question = sync.vista.state.plan().and_then(|p| p.confirmation(lang));
         match question {
             Some(c) => {
-                sinc.vista.confirming = Some(c);
+                sync.vista.confirming = Some(c);
                 let change = ViewChange::Sync {
                     sync: self.vista_sync(),
                 };
@@ -516,21 +516,21 @@ impl State {
         backend: &Arc<dyn HostBackend>,
         buzon: &mpsc::Sender<Message>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
-        let Some(sinc) = self.sync.as_mut().filter(|s| s.epoch == epoch) else {
+        let Some(sync) = self.sync.as_mut().filter(|s| s.epoch == epoch) else {
             return Vec::new();
         };
         // The Task being followed switches to the APPLY's: it is what
         // `Escape` points at now, and the one the report has to be requested
         // from.
-        sinc.task = task;
-        sinc.epoch_connection = self.epoch_connection;
-        if !sinc.vista.on_apply_started(task) {
+        sync.task = task;
+        sync.epoch_connection = self.epoch_connection;
+        if !sync.vista.on_apply_started(task) {
             // The model DENIES it — the reader asked to stop in the window
             // during which the apply had no id yet — and then canceling it
             // is OUR job: nobody else knows that id, and the model's
             // contract spells it out. Without this, the daemon kept
             // rewriting the destination of a plan the human cancelled.
-            sinc.vista.on_apply_abandoned();
+            sync.vista.on_apply_abandoned();
             let (_, mut outside) = self.cancel(task.get());
             outside.extend(self.say("msg-sync-cancelled-late"));
             outside.push(self.parche(vec![ViewChange::Sync {
@@ -625,12 +625,12 @@ impl State {
                     .selected_id()
                     .and_then(|id| visible.iter().position(|v| *v == id))
                     .unwrap_or(0);
-                let destino = if down {
+                let dest = if down {
                     (actual + 1).min(visible.len() - 1)
                 } else {
                     actual.saturating_sub(1)
                 };
-                let id = visible[destino];
+                let id = visible[dest];
                 c.vista.pane.select(id);
                 let change = ViewChange::Compare {
                     compare: self.vista_comparison(),
@@ -760,13 +760,14 @@ impl State {
             return (Self::stale(StaleAction::Modal), Vec::new());
         };
         c.vista.pane.select(id);
-        let Some(destino) = c.vista.pane.navigation_target() else {
-            let lado = norte_frontend::compare::side_label(c.vista.pane.active_side(), self.lang);
+        let Some(dest) = c.vista.pane.navigation_target() else {
+            let the_side =
+                norte_frontend::compare::side_label(c.vista.pane.active_side(), self.lang);
             return (
                 ActionAck::Unavailable {
                     reason_key: "compare-no-target".to_owned(),
                 },
-                self.say_with("compare-no-target", &[("side", &lado)]),
+                self.say_with("compare-no-target", &[("side", &the_side)]),
             );
         };
         // The pane that navigates is the ACTIVE side's, not whichever has
@@ -778,7 +779,7 @@ impl State {
             self.roles.set(RoleId::Active, SlotId(slot));
             self.reconcilia_roles();
         }
-        let mut outputs = self.navigate(&destino, Trail::Record, backend, buzon);
+        let mut outputs = self.navigate(&dest, Trail::Record, backend, buzon);
         let change = ViewChange::Compare {
             compare: self.vista_comparison(),
         };
@@ -789,10 +790,10 @@ impl State {
     /// The slot corresponding to the comparison's ACTIVE side.
     pub(super) fn side_slot(&self) -> Option<u32> {
         let c = self.comparison.as_ref()?;
-        let izquierdo = u32::try_from(c.vista.left_pane).ok()?;
+        let left_one = u32::try_from(c.vista.left_pane).ok()?;
         match c.vista.pane.active_side() {
             norte_proto::methods::Side::Right => self.slot_dest().ok(),
-            _ => Some(izquierdo),
+            _ => Some(left_one),
         }
     }
 
@@ -847,8 +848,8 @@ impl State {
                 other_encoding: None,
             },
         );
-        let (origen, destino) = (roots.source.clone(), roots.dest.clone());
-        if origen == destino {
+        let (source, dest) = (roots.source.clone(), roots.dest.clone());
+        if source == dest {
             // Overlapping roots: the daemon rejects it with
             // `OverlappingRoots` and creates no Task. This local shortcut is
             // a courtesy — the authority is the core, which also catches
@@ -872,10 +873,10 @@ impl State {
         buzon: &mpsc::Sender<Message>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
         let norte_frontend::sync::SyncRoots {
-            source: origen,
-            dest: destino,
-            source_encoding: origen_encoding,
-            dest_encoding: destino_encoding,
+            source,
+            dest,
+            source_encoding,
+            dest_encoding,
         } = roots;
         self.epoch_search += 1;
         let epoch = self.epoch_search;
@@ -886,8 +887,8 @@ impl State {
         // offered.
         let modo = norte_proto::methods::SyncMode::Update;
         let params = norte_proto::methods::SyncPlanParams {
-            source: origen.clone(),
-            dest: destino.clone(),
+            source: source.clone(),
+            dest: dest.clone(),
             mode: modo,
             compare: norte_proto::methods::SyncCompareOptions::default(),
             on_unknown: norte_proto::methods::OnUnknown::default(),
@@ -957,10 +958,10 @@ impl State {
             epoch,
             abandonada,
             modo,
-            source: origen,
-            dest: destino,
-            source_encoding: origen_encoding,
-            dest_encoding: destino_encoding,
+            source,
+            dest,
+            source_encoding,
+            dest_encoding,
         });
         Vec::new()
     }
@@ -1018,18 +1019,18 @@ impl State {
         epoch: u64,
         ev: norte_client::SyncPlanEvent,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
-        let Some(sinc) = self.sync.as_mut() else {
+        let Some(sync) = self.sync.as_mut() else {
             return Vec::new();
         };
-        if sinc.epoch != epoch {
+        if sync.epoch != epoch {
             return Vec::new();
         }
         // The SHARED model decides what gets in: it discards whatever comes
         // from another plan by its `task_id`, and it is the one that knows
         // when the plan closes.
         let change = match ev {
-            norte_client::SyncPlanEvent::Steps(batch) => sinc.vista.state.on_steps(batch),
-            norte_client::SyncPlanEvent::Done(done) => sinc.vista.state.on_plan_done(done),
+            norte_client::SyncPlanEvent::Steps(batch) => sync.vista.state.on_steps(batch),
+            norte_client::SyncPlanEvent::Done(done) => sync.vista.state.on_plan_done(done),
         };
         if !change {
             // That it was discarded IS STATED: a batch rejected after
@@ -1046,12 +1047,12 @@ impl State {
 
     /// The window's steps, projected by the SHARED model.
     pub(super) fn steps_proyectados(
-        pasos: &[norte_proto::methods::SyncStep],
+        steps: &[norte_proto::methods::SyncStep],
         trash: norte_proto::methods::DestTrash,
         enc: norte_frontend::sync::SyncEncodings,
         lang: norte_i18n::Lang,
     ) -> Vec<crate::dto::SyncStepView> {
-        pasos
+        steps
             .iter()
             .map(|paso| {
                 // The cells are composed by the SHARED model: what the step
@@ -1134,29 +1135,29 @@ impl State {
 
     /// The synchronization panel's projection, capped to its window.
     pub(super) fn vista_sync(&self) -> Option<crate::dto::SyncView> {
-        let sinc = self.sync.as_ref()?;
-        let v = &sinc.vista;
-        let (origen, source_hostile) = norte_frontend::path_display(&v.source_root);
-        let (destino, dest_hostile) = norte_frontend::path_display(&v.dest_root);
-        let pasos = v.steps();
-        let first = sinc.first_visible.min(pasos.len());
-        let until = first.saturating_add(sinc.window).min(pasos.len());
+        let sync = self.sync.as_ref()?;
+        let v = &sync.vista;
+        let (source, source_hostile) = norte_frontend::path_display(&v.source_root);
+        let (dest, dest_hostile) = norte_frontend::path_display(&v.dest_root);
+        let steps = v.steps();
+        let first = sync.first_visible.min(steps.len());
+        let until = first.saturating_add(sync.window).min(steps.len());
         let trash = v.dest_trash();
         let enc = v.encodings();
-        let filas = Self::steps_proyectados(
-            pasos.get(first..until).unwrap_or_default(),
+        let rows = Self::steps_proyectados(
+            steps.get(first..until).unwrap_or_default(),
             trash,
             enc,
             self.lang,
         );
-        let fallos = Self::failures_proyectados(&v.state, enc, self.lang);
+        let failures = Self::failures_proyectados(&v.state, enc, self.lang);
         Some(crate::dto::SyncView {
             source: crate::dto::DialogLine {
-                text: clamp_display(origen),
+                text: clamp_display(source),
                 hostile: source_hostile,
             },
             dest: crate::dto::DialogLine {
-                text: clamp_display(destino),
+                text: clamp_display(dest),
                 hostile: dest_hostile,
             },
             // The mode, by the SHARED label. Falling back to "update" for a
@@ -1164,12 +1165,12 @@ impl State {
             // is being approved — "this does not delete" — about something
             // unknown, and the catalog itself forbids that in writing.
             mode: clamp_display(norte_frontend::sync::mode_label(v.mode, self.lang)),
-            steps: filas,
+            steps: rows,
             first_visible: first as u64,
             // The RETAINED ones plus what the model dropped: without adding
             // them, this number and the status line's contradict each other
             // on a large plan, and both cross in the same message.
-            total: (pasos.len() as u64).saturating_add(
+            total: (steps.len() as u64).saturating_add(
                 v.state
                     .plan()
                     .map_or(0, norte_frontend::sync::SyncPlan::dropped),
@@ -1209,14 +1210,14 @@ impl State {
                             // nothing because this window has no name-
                             // encoding override; the day it does, the rule
                             // goes up there and not here.
-                            let ruta =
+                            let path =
                                 norte_frontend::sync::rel_display_or_root(&b.rel, None, self.lang);
                             crate::dto::SyncBlockerView {
                                 label: clamp_display(norte_frontend::sync::blocker_label(
                                     b.kind, self.lang,
                                 )),
-                                path: clamp_display(ruta.text),
-                                path_hostile: ruta.hostile,
+                                path: clamp_display(path.text),
+                                path_hostile: path.hostile,
                             }
                         })
                         .collect()
@@ -1241,7 +1242,7 @@ impl State {
             // The report's failures, one by one. The count goes in the
             // status line, composed by the shared model; this is the
             // detail, and without it "3 failed" does not say which.
-            failures: fallos,
+            failures,
             cancel_requested: v.cancel_requested,
             can_approve: v.can_approve(),
             running: matches!(v.run, norte_frontend::sync::SyncRunState::Running),
@@ -1263,7 +1264,7 @@ impl State {
         backend: &Arc<dyn HostBackend>,
         buzon: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let derecha = match self.directory_dest() {
+        let right = match self.directory_dest() {
             Ok(d) => d,
             Err(reason_key) => {
                 return (
@@ -1274,8 +1275,8 @@ impl State {
                 );
             }
         };
-        let izquierda = self.slot().pane.dir().clone();
-        if izquierda == derecha {
+        let left = self.slot().pane.dir().clone();
+        if left == right {
             // The daemon would reject it just the same (`-32602`), and
             // opening a panel that promises an impossible answer is worse
             // than saying so beforehand.
@@ -1288,7 +1289,7 @@ impl State {
         }
         (
             self.applied(),
-            self.launch_comparison(izquierda, derecha, backend, buzon),
+            self.launch_comparison(left, right, backend, buzon),
         )
     }
 
@@ -1335,8 +1336,8 @@ impl State {
     /// Enqueues `fs.compare` and hooks its row channel to the actor.
     pub(super) fn launch_comparison(
         &mut self,
-        izquierda: VPath,
-        derecha: VPath,
+        left: VPath,
+        right: VPath,
         backend: &Arc<dyn HostBackend>,
         buzon: &mpsc::Sender<Message>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
@@ -1344,8 +1345,8 @@ impl State {
         let epoch = self.epoch_search;
         let abandonada = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let params = norte_proto::methods::FsCompareParams {
-            left: izquierda.clone(),
-            right: derecha.clone(),
+            left: left.clone(),
+            right: right.clone(),
             criteria: norte_proto::methods::CompareCriteria::default(),
             // With no depth cap, like the TUI: a comparison that stops
             // halfway has not answered what it was asked.
@@ -1367,8 +1368,8 @@ impl State {
             task: norte_proto::TaskId::new(0),
             abandonada: Arc::clone(&abandonada),
             vista: norte_frontend::compare::CompareView::new(
-                izquierda,
-                derecha,
+                left,
+                right,
                 // The slot that launched the comparison IS the left side, and
                 // that decides which pane an `Enter` navigates to. Without
                 // it, whoever is looking at the right side lost their left
@@ -1457,12 +1458,12 @@ impl State {
 
         let c = self.comparison.as_ref()?;
         let now = now_ms();
-        let (izq, izq_hostil) = norte_frontend::path_display(&c.vista.left_root);
-        let (der, der_hostil) = norte_frontend::path_display(&c.vista.right_root);
+        let (left_side, left_hostile) = norte_frontend::path_display(&c.vista.left_root);
+        let (right_side, right_hostile) = norte_frontend::path_display(&c.vista.right_root);
         let visible: Vec<&norte_proto::methods::CompareRow> = c.vista.pane.visible().collect();
         let first = c.first_visible.min(visible.len());
         let until = first.saturating_add(c.window).min(visible.len());
-        let filas = visible
+        let rows = visible
             .get(first..until)
             .unwrap_or_default()
             .iter()
@@ -1471,7 +1472,7 @@ impl State {
                 // names with their flag, and the two glyphs in the middle.
                 // Neither the pairing nor the verdict is recomputed here.
                 let cells = cells_for(r, None, None);
-                let cara = |f: Option<&norte_frontend::compare::RowFace>| {
+                let side = |f: Option<&norte_frontend::compare::RowFace>| {
                     f.map(|f| crate::dto::CompareFaceView {
                         name: clamp_display(f.name.clone()),
                         hostile: f.hostile,
@@ -1510,8 +1511,8 @@ impl State {
                     reason: r.reason.map(|x| {
                         clamp_display(norte_frontend::compare::reason_label(x, self.lang))
                     }),
-                    left: cara(cells.left.as_ref()),
-                    right: cara(cells.right.as_ref()),
+                    left: side(cells.left.as_ref()),
+                    right: side(cells.right.as_ref()),
                     paired_under: norte_frontend::compare::paired_under_label(
                         r.paired_under,
                         self.lang,
@@ -1520,7 +1521,7 @@ impl State {
                 }
             })
             .collect();
-        let filtros = norte_frontend::compare::CATEGORIES
+        let filters = norte_frontend::compare::CATEGORIES
             .iter()
             .map(|cat| crate::dto::CompareFilterView {
                 id: cat.id().to_owned(),
@@ -1530,15 +1531,15 @@ impl State {
             })
             .collect();
         Some(crate::dto::CompareView {
-            left: clamp_display(izq),
-            left_hostile: izq_hostil,
-            right: clamp_display(der),
-            right_hostile: der_hostil,
-            rows: filas,
+            left: clamp_display(left_side),
+            left_hostile,
+            right: clamp_display(right_side),
+            right_hostile,
+            rows,
             first_visible: first as u64,
             total: visible.len() as u64,
             selected: c.vista.pane.selected_id(),
-            filters: filtros,
+            filters,
             // The phrase is composed by the SHARED model, and it is not a
             // detail: its five states are how it is said whether the answer
             // is complete, and a comparison that lost batches has to read
