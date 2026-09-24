@@ -4,9 +4,13 @@ One term, one translation, everywhere: code, comments, rustdoc and the `en`
 Fluent catalogue (`crates/norte-i18n/i18n/en.ftl`). When the catalogue already
 uses a word for a concept, the catalogue wins and this table follows it.
 
-**Spelling: American English** (`color`, `favorite`). The catalogue mixes in
-some British spellings today (`goto-section-favorites = Favourites`, "colour"
-in `setting-ui-row-stripes-desc`); PC4 aligns them.
+**Spelling: follow the text around you, and one concept has one label.**
+Identifiers are American (`Color`, `favorite`), except wire values that were
+already British (`cancelled`, `catalogue` in several names) and stay. The
+English help topics and much of the catalogue's prose are British ("colour");
+they are left as they are — rewriting user documentation was not this job.
+What PC4 did fix is the same concept labelled two ways in the UI:
+`Favourites`/`favourite` are now `Favorites`/`favorite` everywhere in en.ftl.
 
 Grown batch by batch. A term missing here: pick the orthodox-file-manager word,
 then add the row in the same commit.

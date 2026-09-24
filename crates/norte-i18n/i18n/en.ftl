@@ -802,7 +802,7 @@ goto-title = Go to
 goto-section-path = Path
 goto-section-history = History
 goto-section-popular = Frequent
-goto-section-favorites = Favourites
+goto-section-favorites = Favorites
 goto-section-connections = Connections
 goto-section-commands = Commands
 goto-section-index = Found by the index
@@ -2376,8 +2376,8 @@ modal-chmod-count = { $n } entries
 modal-new-file-title = New file
 # #309: the window can now ADD a favourite, not just open the list. The name
 # comes suggested, and saving REPLACES the one that already has that name.
-modal-hotlist-name-title = Save as favourite
-hotlist-name-empty = a favourite with no name is not saved
+modal-hotlist-name-title = Save as favorite
+hotlist-name-empty = a favorite with no name is not saved
 modal-rename-title = Rename
 modal-delete-title = Move to trash?
 # The three verdicts of the shared resolver, for a key that IS bound.
