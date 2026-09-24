@@ -675,10 +675,20 @@ pub async fn dispatch(
         Command::PaneConnect => {
             let dir = norte_core::connect::config_dir();
             match norte_core::connect::named_connections(&dir).await {
-                Ok(filas) => app.open_connections_picker(
+                // Las inservibles van DETRÁS de las buenas y no mezcladas
+                // (#365): lo primero que se ve es lo que sí lleva a algún
+                // sitio, y lo que no vale queda abajo, visible y sin poder
+                // elegirse. Hacerlas desaparecer dejaría al lector buscando
+                // por qué falta una conexión que él escribió.
+                Ok((filas, inservibles)) => app.open_connections_picker(
                     filas
                         .into_iter()
-                        .map(|(name, url)| norte_frontend::connections_picker::Row { name, url })
+                        .map(|(name, url)| {
+                            norte_frontend::connections_picker::Row::buena(name, url)
+                        })
+                        .chain(inservibles.into_iter().map(|(name, motivo)| {
+                            norte_frontend::connections_picker::Row::inservible(name, motivo)
+                        }))
                         .collect(),
                 ),
                 Err(e) => app.message = Some(error_message(&e)),
@@ -1019,7 +1029,11 @@ pub async fn dispatch(
         // hacer.
         Command::AppGoto => {
             let dir = norte_core::connect::config_dir();
-            let conexiones = norte_core::connect::named_connections(&dir)
+            // Aquí SOLO las que llevan a algún sitio: «ir a cualquier sitio»
+            // es una lista de destinos, y una entrada inservible no lo es. El
+            // sitio donde se dice qué le pasa es el selector de conexiones
+            // (#365), que es adonde el lector va a arreglarla.
+            let (conexiones, _inservibles) = norte_core::connect::named_connections(&dir)
                 .await
                 .unwrap_or_default();
             crate::goto::abrir(app, &conexiones);

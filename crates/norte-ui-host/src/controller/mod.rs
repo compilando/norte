@@ -1057,9 +1057,12 @@ enum Fondo {
         Result<Vec<norte_proto::methods::SemanticHit>, Error>,
     ),
     /// Las conexiones configuradas, con la APERTURA que las pidió (#264).
+    ///
+    /// El resultado entero: desde #365 trae también las que el daemon no supo
+    /// leer, y el selector las enseña sin destino.
     Conexiones(
         u64,
-        Result<Vec<norte_proto::methods::ConnectionEntry>, Error>,
+        Result<norte_proto::methods::ConnectionListResult, Error>,
     ),
     /// Un lote de resultados, con la época de la búsqueda que lo pidió.
     Resultados(u64, Box<norte_proto::methods::SearchHits>),

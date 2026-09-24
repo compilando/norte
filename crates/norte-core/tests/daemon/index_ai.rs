@@ -91,7 +91,7 @@ pub(super) async fn spawn_daemon_ai_delay(reply: &str, delay: Option<Duration>) 
     TestDaemon {
         socket,
         run,
-        _dir: dir,
+        dir,
         mem,
     }
 }

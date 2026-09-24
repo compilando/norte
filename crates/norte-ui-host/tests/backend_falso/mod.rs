@@ -149,7 +149,7 @@ pub struct Falso {
     /// Lo que el daemon contesta a `connection.list` (#264). Por defecto una
     /// lista vacía, que es lo que ve quien no tiene ninguna configurada.
     pub conexiones:
-        std::sync::Mutex<Option<Result<Vec<norte_proto::methods::ConnectionEntry>, Error>>>,
+        std::sync::Mutex<Option<Result<norte_proto::methods::ConnectionListResult, Error>>>,
     /// Las sesiones que se mandó CERRAR, en orden (#140).
     pub cerradas: std::sync::Mutex<Vec<VPath>>,
     /// Lo que `connection.close` contesta. `None` = «sí, había una».
@@ -2512,13 +2512,18 @@ impl HostBackend for Falso {
 
     fn connections(
         &self,
-    ) -> BoxFuture<'static, Result<Vec<norte_proto::methods::ConnectionEntry>, Error>> {
+    ) -> BoxFuture<'static, Result<norte_proto::methods::ConnectionListResult, Error>> {
         let cs = self
             .conexiones
             .lock()
             .expect("conexiones")
             .clone()
-            .unwrap_or_else(|| Ok(Vec::new()));
+            .unwrap_or_else(|| {
+                Ok(norte_proto::methods::ConnectionListResult {
+                    connections: Vec::new(),
+                    unusable: Vec::new(),
+                })
+            });
         Box::pin(async move { cs })
     }
 

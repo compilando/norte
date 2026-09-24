@@ -2140,14 +2140,17 @@ impl RemoteBackend {
     /// URL, y eso ya establece la sesión por el camino de siempre, con su
     /// TOFU y su política.
     ///
+    /// Devuelve el resultado ENTERO y no solo las buenas: desde 0.84.0 trae
+    /// también las entradas que el daemon no supo leer (#365), y tirarlas aquí
+    /// dejaría al cliente sin poder decir por qué falta una conexión que el
+    /// lector sabe que escribió.
+    ///
     /// # Errors
     /// Taxonomía: `PolicyDenied` si la conexión es de agente; `InvalidPath` si
-    /// el fichero del daemon existe y no parsea.
-    pub async fn connections(&self) -> Result<Vec<methods::ConnectionEntry>, Error> {
-        let result: methods::ConnectionListResult = self
-            .call_timed(methods::CONNECTION_LIST, &serde_json::json!({}))
-            .await?;
-        Ok(result.connections)
+    /// el fichero del daemon existe y su TOML no parsea.
+    pub async fn connections(&self) -> Result<methods::ConnectionListResult, Error> {
+        self.call_timed(methods::CONNECTION_LIST, &serde_json::json!({}))
+            .await
     }
 
     /// `session.get` contra el daemon (L2): la pantalla y si ESTA conexión

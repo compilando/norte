@@ -1097,15 +1097,41 @@
       "description": "Result de [`CONNECTION_LIST`].",
       "properties": {
         "connections": {
-          "description": "Las conexiones, en orden alfabético por nombre.\n\nVacío = no hay ninguna configurada, que es lo normal el primer día. Un\nfichero que no PARSEA sí es un error: decir «no tienes ninguna» cuando\nlo que pasa es que hay una coma de más sería mentir sobre lo que el\nusuario escribió.",
+          "description": "Las conexiones, en orden alfabético por nombre.\n\nVacío = no hay ninguna configurada, que es lo normal el primer día. Un\nfichero cuya SINTAXIS no parsea sí es un error: decir «no tienes\nninguna» cuando lo que pasa es que hay una coma de más sería mentir\nsobre lo que el usuario escribió.",
           "items": {
             "$ref": "#/$defs/ConnectionEntry"
+          },
+          "type": "array"
+        },
+        "unusable": {
+          "default": [],
+          "description": "Las que el daemon no supo leer, con el motivo (0.84.0, #365).\n\nVan APARTE y no se cuelan entre las buenas: una entrada inservible no\nes una conexión a la que se pueda ir, y ofrecerla en un selector sería\nofrecer un botón muerto. Pero tampoco desaparece — que es lo que hacía\nantes de 0.84.0, cuando UNA entrada mala hacía fallar la llamada entera\ny el lector perdía la lista de todas sus conexiones con un error que no\nnombraba ninguna.\n\nVacío en el caso normal. Un cliente N-1 no la ve y sigue viendo las\nbuenas, que es exactamente la mejora.",
+          "items": {
+            "$ref": "#/$defs/ConnectionProblem"
           },
           "type": "array"
         }
       },
       "required": [
         "connections"
+      ],
+      "type": "object"
+    },
+    "ConnectionProblem": {
+      "description": "Una entrada de `connections.toml` que el daemon no supo leer (0.84.0, #365).",
+      "properties": {
+        "name": {
+          "description": "Su nombre, tal como está escrito en el fichero. Es lo que el lector\ntiene que ir a buscar, así que sin él el aviso no sirve de nada.",
+          "type": "string"
+        },
+        "reason": {
+          "description": "Qué le pasa, en la lengua del parser. No es bonito y es ACCIONABLE, que\nes lo que hace falta: dice qué campo sobra o falta.\n\n**Nunca un secreto.** Lo que falla es la FORMA de la entrada, y un\n`ConnectionSpec` referencia sus credenciales en vez de guardarlas\n(ADR 0015) — pero quien lo pinte lo trata como texto del wire, igual\nque una URL: el fichero lo escribió alguien.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "reason"
       ],
       "type": "object"
     },

@@ -255,7 +255,7 @@ impl Estado {
     pub(super) fn aplicar_conexiones(
         &mut self,
         apertura: u64,
-        res: Result<Vec<norte_proto::methods::ConnectionEntry>, Error>,
+        res: Result<norte_proto::methods::ConnectionListResult, Error>,
     ) -> Option<BridgeEnvelope<UiUpdate>> {
         if apertura != self.gen_selector {
             return None;
@@ -264,7 +264,8 @@ impl Estado {
         // Un fallo se pinta como lista VACÍA con su frase, no como una lista
         // sin explicación: «no tienes ninguna» y «no se pudo preguntar» no son
         // lo mismo, y sin la frase las dos se leen igual.
-        s.con_conexiones(res.unwrap_or_default());
+        let (buenas, inservibles) = res.map(|r| (r.connections, r.unusable)).unwrap_or_default();
+        s.con_conexiones(buenas, inservibles);
         self.gen_selector += 1;
         let cambio = ViewChange::Picker {
             picker: self.vista_selector(),

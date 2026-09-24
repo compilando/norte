@@ -45,7 +45,7 @@ pub(super) async fn spawn_daemon_plugins() -> TestDaemon {
     TestDaemon {
         socket,
         run,
-        _dir: dir,
+        dir,
         mem,
     }
 }
@@ -215,7 +215,7 @@ pub(super) async fn spawn_daemon_help_plugin(
     TestDaemon {
         socket,
         run,
-        _dir: dir,
+        dir,
         mem,
     }
 }
@@ -375,7 +375,7 @@ pub(super) async fn spawn_daemon_config_plugin() -> TestDaemon {
     TestDaemon {
         socket,
         run,
-        _dir: dir,
+        dir,
         mem,
     }
 }

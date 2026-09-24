@@ -404,6 +404,64 @@ impl ConnectionsFile {
         };
         toml::from_str(&text).map_err(|e| ConnectError::Config(e.to_string()))
     }
+
+    /// Igual, pero **una entrada inservible no se lleva por delante a las
+    /// demás** (#365).
+    ///
+    /// Devuelve las que sirven y, aparte, el nombre y el motivo de las que no.
+    ///
+    /// La diferencia con [`Self::load`] importa porque las dos preguntas son
+    /// distintas y tienen respuestas distintas. Quien va a CONECTARSE necesita
+    /// la entrada entera o nada, y ahí un fallo es un fallo. Quien va a
+    /// LISTARLAS —un selector— pierde toda su lista por una sola entrada que
+    /// norte no sabe leer, con un error que no nombra ninguna conexión y no
+    /// apunta a nada que el lector pueda arreglar. Eso es peor que inútil:
+    /// esconde las diecinueve que sí valían.
+    ///
+    /// Un fichero con un error de SINTAXIS sigue siendo un error entero, y
+    /// tiene que serlo: sin poder partirlo en entradas no hay nada que salvar,
+    /// y decir «no tienes ninguna» sobre una coma de más sería mentir.
+    ///
+    /// # Errors
+    /// Si el fichero no es legible, o su TOML no parsea ni como tabla.
+    pub fn load_tolerante(dir: &Path) -> Result<(Self, Vec<(String, String)>), ConnectError> {
+        let path = dir.join("connections.toml");
+        let text = match std::fs::read_to_string(&path) {
+            Ok(t) => t,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Ok((Self::default(), Vec::new()));
+            }
+            Err(e) => return Err(ConnectError::Io(e)),
+        };
+        let crudo: toml::Table =
+            toml::from_str(&text).map_err(|e| ConnectError::Config(e.to_string()))?;
+        let Some(tabla) = crudo.get("connections").and_then(toml::Value::as_table) else {
+            // Sin sección `connections` no hay nada, y no es un error: un
+            // fichero que solo trae otras secciones es un fichero válido.
+            return Ok((Self::default(), Vec::new()));
+        };
+        let mut buenas = std::collections::BTreeMap::new();
+        let mut malas = Vec::new();
+        for (nombre, valor) in tabla {
+            match valor.clone().try_into::<ConnectionSpec>() {
+                Ok(spec) => {
+                    buenas.insert(nombre.clone(), spec);
+                }
+                // El motivo se guarda como TEXTO y va a la interfaz: es lo
+                // único que convierte «una de tus conexiones no vale» en algo
+                // accionable. No lleva secretos — lo que falla es la forma de
+                // la entrada, y `ConnectionSpec` referencia sus credenciales
+                // en vez de guardarlas (ADR 0015).
+                Err(e) => malas.push((nombre.clone(), e.to_string())),
+            }
+        }
+        Ok((
+            Self {
+                connections: buenas,
+            },
+            malas,
+        ))
+    }
 }
 
 #[cfg(test)]

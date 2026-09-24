@@ -45,6 +45,11 @@ impl Estado {
                 Ok(r) => r,
                 Err(_) => Err(Error::ProviderUnavailable { retryable: true }),
             };
+            // «Ir a cualquier sitio» es una lista de DESTINOS, y una entrada
+            // que no se entiende no lo es: aquí se quedan solo las buenas. El
+            // sitio donde se dice qué le pasa a la otra es el selector de
+            // conexiones (#365), que es adonde se va a arreglarla.
+            let res = res.map(|r| r.connections);
             let _ = buzon
                 .send(Mensaje::Fondo(Box::new(Fondo::ConexionesDeIrA(
                     apertura, res,

@@ -103,8 +103,23 @@ fn client_info() -> ClientInfo {
 struct TestDaemon {
     socket: PathBuf,
     run: tokio::task::JoinHandle<Result<(), DaemonError>>,
-    _dir: tempfile::TempDir,
+    /// El tempdir del daemon, que es a la vez su raíz de config: de aquí sale
+    /// el `connections.toml` que sirve `connection.list` (#365). Se guarda
+    /// para que viva tanto como el daemon Y para poder escribir dentro.
+    dir: tempfile::TempDir,
     mem: Arc<MemProvider>,
+}
+
+impl TestDaemon {
+    /// La raíz de config de ESTE daemon: un tempdir, jamás el `~/.config`
+    /// de quien corra la suite (#365).
+    ///
+    /// Es donde un test puede poner un `connections.toml` y contar con que el
+    /// daemon lea ése. Antes no existía, `connection.list` leía la config real
+    /// y el color de la suite dependía de la máquina.
+    fn config_dir(&self) -> &std::path::Path {
+        self.dir.path()
+    }
 }
 
 async fn spawn_daemon(idle: Option<Duration>) -> TestDaemon {
@@ -144,7 +159,7 @@ async fn spawn_daemon_mem(
     TestDaemon {
         socket,
         run,
-        _dir: dir,
+        dir,
         mem,
     }
 }
@@ -189,7 +204,7 @@ async fn spawn_daemon_policy() -> TestDaemon {
     TestDaemon {
         socket,
         run,
-        _dir: dir,
+        dir,
         mem,
     }
 }
@@ -227,7 +242,7 @@ async fn spawn_daemon_ask(approval_ttl: Duration) -> TestDaemon {
     TestDaemon {
         socket,
         run,
-        _dir: dir,
+        dir,
         mem,
     }
 }

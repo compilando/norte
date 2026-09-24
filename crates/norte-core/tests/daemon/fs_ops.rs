@@ -141,7 +141,7 @@ async fn fs_list_skipped_viaja_en_todas_las_paginas() {
     let d = TestDaemon {
         socket,
         run,
-        _dir: dir,
+        dir,
         mem,
     };
     seed(&d.mem, 5).await;

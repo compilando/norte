@@ -1887,10 +1887,13 @@ async fn desconectar_vuelve_a_donde_estaba_antes() {
     let mut falso = arbol_como_falso();
     falso.pon("sftp://servidor/datos", vec![(b"a.txt".to_vec(), false)]);
     *falso.conexiones.lock().expect("conexiones") =
-        Some(Ok(vec![norte_proto::methods::ConnectionEntry {
-            name: "trabajo".to_owned(),
-            url: "sftp://servidor/datos".to_owned(),
-        }]));
+        Some(Ok(norte_proto::methods::ConnectionListResult {
+            connections: vec![norte_proto::methods::ConnectionEntry {
+                name: "trabajo".to_owned(),
+                url: "sftp://servidor/datos".to_owned(),
+            }],
+            unusable: Vec::new(),
+        }));
     let backend = Arc::new(falso);
     let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
@@ -2439,16 +2442,20 @@ async fn soltar_lo_que_no_es_ruta_se_dice() {
 #[tokio::test]
 async fn el_selector_de_conexiones_lo_llena_el_daemon() {
     let falso = arbol_como_falso();
-    *falso.conexiones.lock().expect("conexiones") = Some(Ok(vec![
-        norte_proto::methods::ConnectionEntry {
-            name: "trabajo".to_owned(),
-            url: "sftp://oscar@servidor.example/datos".to_owned(),
-        },
-        norte_proto::methods::ConnectionEntry {
-            name: "archivo".to_owned(),
-            url: "s3://mi-bucket".to_owned(),
-        },
-    ]));
+    *falso.conexiones.lock().expect("conexiones") =
+        Some(Ok(norte_proto::methods::ConnectionListResult {
+            connections: vec![
+                norte_proto::methods::ConnectionEntry {
+                    name: "trabajo".to_owned(),
+                    url: "sftp://oscar@servidor.example/datos".to_owned(),
+                },
+                norte_proto::methods::ConnectionEntry {
+                    name: "archivo".to_owned(),
+                    url: "s3://mi-bucket".to_owned(),
+                },
+            ],
+            unusable: Vec::new(),
+        }));
     let backend = Arc::new(falso);
     let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
@@ -2475,13 +2482,66 @@ async fn el_selector_de_conexiones_lo_llena_el_daemon() {
     );
 }
 
+/// **Una conexión que el daemon no supo leer se VE, detrás, y con el motivo**
+/// (#365).
+///
+/// Antes de esto una sola entrada mala hacía fallar `connection.list` entera y
+/// el selector se abría vacío: el lector perdía la lista de TODAS sus
+/// conexiones por una, con un error que no nombraba ninguna. Ahora las buenas
+/// se listan y la mala queda abajo, visible, sin destino y diciendo qué le
+/// pasa — que es lo único con lo que el lector puede hacer algo.
+#[tokio::test]
+async fn una_conexion_ilegible_no_esconde_a_las_demas_en_la_ventana() {
+    let falso = arbol_como_falso();
+    *falso.conexiones.lock().expect("conexiones") =
+        Some(Ok(norte_proto::methods::ConnectionListResult {
+            connections: vec![norte_proto::methods::ConnectionEntry {
+                name: "buena".to_owned(),
+                url: "sftp://servidor.example/datos".to_owned(),
+            }],
+            unusable: vec![norte_proto::methods::ConnectionProblem {
+                name: "rota".to_owned(),
+                reason: "unknown field `password`".to_owned(),
+            }],
+        }));
+    let backend = Arc::new(falso);
+    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+
+    ejecutar_por_paleta(&h, &mut sub, "pane.connect").await;
+
+    let mut con_filas = None;
+    for _ in 0..20 {
+        let Some(v) = siguiente_selector(&mut sub).await else {
+            continue;
+        };
+        if !v.rows.is_empty() {
+            con_filas = Some(v);
+            break;
+        }
+    }
+    let v = con_filas.expect("la lista del daemon llega");
+    assert_eq!(v.rows.len(), 2, "las dos se ven: {:?}", v.rows);
+    assert_eq!(v.rows[0].label, "buena", "y la que sirve va primero");
+    assert_eq!(v.rows[1].label, "rota");
+    assert!(
+        v.rows[1].detail.contains("password"),
+        "la inservible dice QUÉ le pasa donde iría su URL: {:?}",
+        v.rows[1]
+    );
+}
+
 /// Sin ninguna configurada, el selector lo DICE. «No tienes ninguna» y
 /// «todavía no ha contestado» no son lo mismo, y una lista vacía sin frase se
 /// lee siempre como lo primero.
 #[tokio::test]
 async fn sin_conexiones_configuradas_el_selector_lo_dice() {
     let falso = arbol_como_falso();
-    *falso.conexiones.lock().expect("conexiones") = Some(Ok(Vec::new()));
+    *falso.conexiones.lock().expect("conexiones") =
+        Some(Ok(norte_proto::methods::ConnectionListResult {
+            connections: Vec::new(),
+            unusable: Vec::new(),
+        }));
     let backend = Arc::new(falso);
     let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();

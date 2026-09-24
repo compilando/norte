@@ -365,7 +365,11 @@ pub trait HostBackend: Send + Sync + 'static {
     /// ya la tiene porque es quien abre las sesiones.
     ///
     /// No conecta. Devuelve a dónde se PODRÍA ir; ir es navegar a esa URL.
-    fn connections(&self) -> BoxFuture<'static, Result<Vec<methods::ConnectionEntry>, Error>>;
+    ///
+    /// El resultado ENTERO, con las entradas que el daemon no supo leer
+    /// (#365): sin ellas, el selector no puede decir por qué falta una
+    /// conexión que el lector sabe que escribió.
+    fn connections(&self) -> BoxFuture<'static, Result<methods::ConnectionListResult, Error>>;
 
     /// Cierra la SESIÓN de una conexión, nombrada por cualquiera de sus rutas
     /// (#140).
@@ -1438,7 +1442,7 @@ impl HostBackend for norte_client::RemoteBackend {
         })
     }
 
-    fn connections(&self) -> BoxFuture<'static, Result<Vec<methods::ConnectionEntry>, Error>> {
+    fn connections(&self) -> BoxFuture<'static, Result<methods::ConnectionListResult, Error>> {
         let backend = self.clone();
         Box::pin(async move { backend.connections().await })
     }

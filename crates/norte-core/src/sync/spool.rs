@@ -349,7 +349,8 @@ struct Registry {
     /// acota `dead`: solo se recuerda a una conexión muerta mientras alguno de
     /// sus planes siga escribiéndose.
     planning: HashMap<u64, usize>,
-    /// Conexiones que se cerraron TENIENDO un plan a medias.
+    /// Conexiones que se cerraron y a las que, por tanto, ya no se les puede
+    /// retener un plan.
     ///
     /// Sin esto, un plan que termina después del desmontaje de su conexión
     /// renombra su fichero y se apunta como emitido DESPUÉS de que la única
@@ -358,8 +359,28 @@ struct Registry {
     /// necesita ninguna carrera para darse: un plan que no emite NI UN paso
     /// (dos árboles idénticos) nunca toca el canal, así que jamás se entera de
     /// que su dueño se fue.
+    ///
+    /// **Se apunta aunque no hubiera un plan a medias**, y ésa fue la
+    /// corrección: antes la lápida solo se ponía si la conexión tenía ya un
+    /// writer abierto, de modo que un `sync.plan` que abría el suyo un
+    /// instante DESPUÉS del desmontaje no se enteraba de nada y retenía su
+    /// plan para siempre. Salía como un rojo intermitente —el orden de las dos
+    /// cosas no está fijado— y un rojo intermitente aquí es un bug, no ruido.
+    ///
+    /// Lo que la acota ya no es «tener un plan en vuelo» sino [`TOPE_DIFUNTAS`]:
+    /// al llegar a él se barren las que no tienen ningún writer abierto, que
+    /// son las que ya no pueden servir para nada. Ver [`Spool::forget_issued`].
     dead: HashSet<u64>,
 }
+
+/// Cuántas conexiones difuntas se recuerdan antes de barrer las inútiles.
+///
+/// Una lápida solo sirve mientras pueda llegar el `finish` de un plan de esa
+/// conexión, y eso es la vida de una tarea de planificación: milisegundos. El
+/// número es holgado a propósito —recordar de más no rompe nada y recordar de
+/// menos sí— y lo que compra es que el conjunto no crezca con el contador de
+/// conexiones de un daemon que lleva días levantado.
+const TOPE_DIFUNTAS: usize = 1024;
 
 impl Spool {
     /// Ancla el spool bajo `state_dir`. No toca el disco: el directorio se crea
@@ -414,8 +435,8 @@ impl Spool {
 
     /// Olvida los planes de una conexión (o todos, con `None`).
     ///
-    /// Con `Some`, marca además la conexión como MUERTA si todavía tenía algún
-    /// plan escribiéndose: ese plan no puede terminar en un plan aprobable.
+    /// Con `Some`, marca además la conexión como MUERTA: ningún plan suyo,
+    /// esté a medias o todavía sin empezar, puede acabar en un plan aprobable.
     fn forget_issued(&self, conn_id: Option<u64>) {
         let Some(mut reg) = self.reg() else {
             return;
@@ -428,9 +449,16 @@ impl Spool {
         };
         reg.issued.retain(|(c, _)| *c != id);
         reg.applying.retain(|(c, _)| *c != id);
-        if reg.planning.contains_key(&id) {
-            reg.dead.insert(id);
+        // Antes de apuntar, barrer lo que ya no puede servir: una lápida sin
+        // writer abierto solo vale mientras pueda llegar el `finish` de un
+        // plan que arrancó a la vez que el desmontaje, y eso dura lo que dura
+        // una tarea. Sin este barrido el conjunto crecería con el contador de
+        // conexiones de un daemon que lleva días levantado.
+        if reg.dead.len() >= TOPE_DIFUNTAS {
+            let vivas: Vec<u64> = reg.planning.keys().copied().collect();
+            reg.dead.retain(|c| vivas.contains(c));
         }
+        reg.dead.insert(id);
     }
 
     /// Suelta la marca de «aplicándose» SIN tocar el disco y sin `await`:
@@ -2625,9 +2653,10 @@ mod tests {
 
     #[tokio::test]
     async fn la_lapida_de_una_conexion_muerta_no_sobrevive_a_sus_planes() {
-        // `dead` está acotado por los planes EN VUELO, no por el contador de
-        // conexiones: en cuanto el último writer de esa conexión se cierra, la
-        // marca se va y una conexión con ese id podría volver a planificar.
+        // En cuanto el último writer de esa conexión se cierra, la marca se
+        // va: ya no puede llegar ningún `finish` suyo, así que no hay nada que
+        // recordar. Es lo que mantiene el conjunto pequeño en el caso normal,
+        // y `TOPE_DIFUNTAS` es el suelo para el caso en que no lo sea.
         let dir = tempfile::tempdir().expect("tempdir");
         let spool = Spool::new(dir.path());
         let w = spool
@@ -2640,6 +2669,45 @@ mod tests {
         assert!(
             !spool.is_dead(7),
             "sin planes en vuelo no hay nada que marcar"
+        );
+    }
+
+    /// **Un plan que EMPIEZA después del desmontaje tampoco queda retenido.**
+    ///
+    /// Antes, la lápida solo se ponía si la conexión ya tenía un writer
+    /// abierto. Un `sync.plan` que abría el suyo un instante después del
+    /// desmontaje no se enteraba de nada, terminaba tan tranquilo y dejaba un
+    /// plan retenido de una conexión que ya no existe: nadie puede aplicarlo y
+    /// nadie lo va a recoger.
+    ///
+    /// Salía como un rojo intermitente en
+    /// `engine_sync_plan::un_plan_de_cero_pasos_cuyo_dueno_se_fue_no_queda_retenido`,
+    /// porque el orden de las dos cosas no está fijado — y aquí un rojo
+    /// intermitente es un bug, no ruido. Este test fija el orden malo.
+    #[tokio::test]
+    async fn un_plan_que_arranca_tras_el_desmontaje_no_queda_retenido() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let spool = Spool::new(dir.path());
+        // El desmontaje va PRIMERO, sin ningún plan en vuelo.
+        spool.drop_connection(9).await.expect("drop");
+        // Y el plan arranca después, como si la tarea hubiera perdido la
+        // carrera por un pelo.
+        let w = spool
+            .create(9, &opts(), &compare_opts())
+            .await
+            .expect("create");
+        // Se NIEGA, igual que uno que estaba a medias cuando cayó su dueño:
+        // un plan sin dueño no es un plan a medio hacer, es un plan que no
+        // puede aplicar nadie.
+        let e = w
+            .finish(PlanOutcome::Ended)
+            .await
+            .expect_err("su dueño ya no está");
+        assert!(matches!(e, SpoolError::Interrupted), "fue {e:?}");
+        assert_eq!(spool.retained_for(9), 0, "y no queda retenido nada suyo");
+        assert!(
+            spool_files(&spool).is_empty(),
+            "y no queda fichero suyo en disco"
         );
     }
 

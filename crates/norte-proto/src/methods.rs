@@ -4864,10 +4864,40 @@ pub struct ConnectionListResult {
     /// Las conexiones, en orden alfabético por nombre.
     ///
     /// Vacío = no hay ninguna configurada, que es lo normal el primer día. Un
-    /// fichero que no PARSEA sí es un error: decir «no tienes ninguna» cuando
-    /// lo que pasa es que hay una coma de más sería mentir sobre lo que el
-    /// usuario escribió.
+    /// fichero cuya SINTAXIS no parsea sí es un error: decir «no tienes
+    /// ninguna» cuando lo que pasa es que hay una coma de más sería mentir
+    /// sobre lo que el usuario escribió.
     pub connections: Vec<ConnectionEntry>,
+    /// Las que el daemon no supo leer, con el motivo (0.84.0, #365).
+    ///
+    /// Van APARTE y no se cuelan entre las buenas: una entrada inservible no
+    /// es una conexión a la que se pueda ir, y ofrecerla en un selector sería
+    /// ofrecer un botón muerto. Pero tampoco desaparece — que es lo que hacía
+    /// antes de 0.84.0, cuando UNA entrada mala hacía fallar la llamada entera
+    /// y el lector perdía la lista de todas sus conexiones con un error que no
+    /// nombraba ninguna.
+    ///
+    /// Vacío en el caso normal. Un cliente N-1 no la ve y sigue viendo las
+    /// buenas, que es exactamente la mejora.
+    #[serde(default)]
+    pub unusable: Vec<ConnectionProblem>,
+}
+
+/// Una entrada de `connections.toml` que el daemon no supo leer (0.84.0, #365).
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConnectionProblem {
+    /// Su nombre, tal como está escrito en el fichero. Es lo que el lector
+    /// tiene que ir a buscar, así que sin él el aviso no sirve de nada.
+    pub name: String,
+    /// Qué le pasa, en la lengua del parser. No es bonito y es ACCIONABLE, que
+    /// es lo que hace falta: dice qué campo sobra o falta.
+    ///
+    /// **Nunca un secreto.** Lo que falla es la FORMA de la entrada, y un
+    /// `ConnectionSpec` referencia sus credenciales en vez de guardarlas
+    /// (ADR 0015) — pero quien lo pinte lo trata como texto del wire, igual
+    /// que una URL: el fichero lo escribió alguien.
+    pub reason: String,
 }
 
 /// What a comparison concluded about ONE pair (0.39.0, ADR 0048).

@@ -477,9 +477,15 @@ impl Selector {
     /// siempre. Una que no parsea como `VPath` se enseña sin destino — se ve
     /// que está configurada y que no se puede abrir, que es más honesto que
     /// esconderla.
+    ///
+    /// Las que el daemon no supo LEER (#365) entran por la misma puerta y
+    /// detrás de las buenas: sin destino, y con el motivo donde iría la URL.
+    /// Antes de 0.84.0 no llegaba ninguna, porque una sola entrada mala hacía
+    /// fallar la llamada y el selector se abría vacío con un error.
     pub(crate) fn con_conexiones(
         &mut self,
         conexiones: Vec<norte_proto::methods::ConnectionEntry>,
+        inservibles: Vec<norte_proto::methods::ConnectionProblem>,
     ) {
         self.filas = conexiones
             .into_iter()
@@ -496,6 +502,22 @@ impl Selector {
                     nombre: None,
                 }
             })
+            .chain(inservibles.into_iter().map(|p| {
+                let (nombre, nombre_hostil) = norte_frontend::display_name(p.name.as_bytes());
+                // El motivo lo escribió un parser sobre un fichero del
+                // usuario, así que se enmascara igual que un nombre: es texto
+                // de fuera, no una cadena nuestra.
+                let (motivo, motivo_hostil) = norte_frontend::display_name(p.reason.as_bytes());
+                Fila {
+                    vista: PickerRowView {
+                        label: clamp_display(nombre),
+                        hostile: nombre_hostil || motivo_hostil,
+                        detail: clamp_display(motivo),
+                    },
+                    destino: None,
+                    nombre: None,
+                }
+            }))
             .collect();
         self.cursor = 0;
         self.vacio = if self.filas.is_empty() {

@@ -103,13 +103,59 @@ async fn connection_list_es_solo_del_humano() {
         }
     }
 
-    // El humano SÍ, y sin params: la ausencia se acepta (ADR 0004). Cuántas
-    // haya depende de la máquina; lo que se sostiene es que contesta.
+    // El humano SÍ, y sin params: la ausencia se acepta (ADR 0004). Y la
+    // lista es la del tempdir del daemon, no la de la máquina (#365): antes
+    // esto leía el `~/.config/norte` de quien corriera la suite, y bastaba
+    // que tuviera una conexión que norte no supiera leer para ponerlo rojo.
     let human = connected_client(&d).await;
-    let _: methods::ConnectionListResult = human
+    let r: methods::ConnectionListResult = human
         .call(methods::CONNECTION_LIST, &serde_json::Value::Null)
         .await
         .expect("el humano lista sin gate");
+    assert!(
+        r.connections.is_empty() && r.unusable.is_empty(),
+        "el daemon de un test no tiene conexiones configuradas, las tenga \
+         quien las tenga en su casa: {r:?}"
+    );
+}
+
+/// **Una entrada que el daemon no sabe leer no esconde a las demás** (#365).
+///
+/// El fallo que lo destapó era doble y cada mitad tapaba a la otra: el test
+/// leía la config REAL de la máquina, y una sola entrada inservible hacía
+/// fallar `connection.list` entera. La segunda mitad es la que le cuesta algo
+/// a un lector — pierde la lista de TODAS sus conexiones por una, con un error
+/// que no nombra ninguna y no apunta a nada que pueda arreglar.
+#[tokio::test]
+async fn connection_list_no_se_cae_por_una_entrada_mala() {
+    let d = spawn_daemon(None).await;
+    // El daemon resuelve su `connections.toml` bajo su raíz de config, que en
+    // un test es su tempdir: por eso esto se puede escribir.
+    std::fs::write(
+        d.config_dir().join("connections.toml"),
+        "[connections.buena]\nurl = \"sftp://servidor.example/datos\"\n\
+         \n[connections.rota]\nurl = \"sftp://otro.example/\"\npassword = \"no va aquí\"\n",
+    )
+    .expect("escribir");
+
+    let human = connected_client(&d).await;
+    let r: methods::ConnectionListResult = human
+        .call(methods::CONNECTION_LIST, &serde_json::Value::Null)
+        .await
+        .expect("una entrada mala ya no tira la llamada");
+
+    assert_eq!(r.connections.len(), 1, "la buena se lista: {r:?}");
+    assert_eq!(r.connections[0].name, "buena");
+    assert_eq!(r.unusable.len(), 1, "y la mala sale aparte: {r:?}");
+    assert_eq!(
+        r.unusable[0].name, "rota",
+        "nombrada, o el aviso no sirve de nada"
+    );
+    assert!(
+        r.unusable[0].reason.contains("password"),
+        "y con el motivo, que es lo accionable: {}",
+        r.unusable[0].reason
+    );
 }
 
 #[tokio::test]
@@ -1066,7 +1112,7 @@ pub(super) async fn spawn_daemon_journal() -> TestDaemon {
     TestDaemon {
         socket,
         run,
-        _dir: dir,
+        dir,
         mem,
     }
 }
@@ -1460,7 +1506,7 @@ pub(super) async fn spawn_daemon_plugins_con(extra: &[(&str, &str)]) -> (TestDae
     let d = TestDaemon {
         socket,
         run,
-        _dir: dir,
+        dir,
         mem,
     };
     (d, cfg)
@@ -3128,7 +3174,7 @@ pub(super) async fn spawn_daemon_degrading() -> TestDaemon {
     TestDaemon {
         socket,
         run,
-        _dir: dir,
+        dir,
         mem,
     }
 }
@@ -3248,7 +3294,7 @@ pub(super) async fn spawn_daemon_failing() -> TestDaemon {
     TestDaemon {
         socket,
         run,
-        _dir: dir,
+        dir,
         mem,
     }
 }
@@ -3443,7 +3489,7 @@ pub(super) async fn spawn_daemon_embed(delay: Option<Duration>) -> TestDaemon {
     TestDaemon {
         socket,
         run,
-        _dir: dir,
+        dir,
         mem,
     }
 }

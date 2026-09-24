@@ -304,23 +304,35 @@ pub async fn named_url(dir: &std::path::Path, name: &str) -> Result<String, Erro
 /// (ADR 0015) y esta lista es para pintar un selector.
 ///
 /// Un fichero que no está es una lista VACÍA y no un error: no tener
-/// conexiones configuradas es lo normal el primer día. Uno que no parsea sí lo
-/// es — decir «no tienes ninguna» cuando lo que pasa es que su fichero tiene
-/// una coma de más sería mentir sobre lo que el usuario escribió.
+/// conexiones configuradas es lo normal el primer día. Uno cuya SINTAXIS no
+/// parsea sí lo es — decir «no tienes ninguna» cuando lo que pasa es que su
+/// fichero tiene una coma de más sería mentir sobre lo que el usuario
+/// escribió.
+///
+/// **Una entrada inservible no se lleva por delante a las demás** (#365).
+/// Sale aparte, en el segundo miembro, con su nombre y el motivo. Antes
+/// fallaba la llamada entera, y eso le costaba al lector la lista de TODAS sus
+/// conexiones por una sola que norte no supo leer, con un error que no nombraba
+/// ninguna y no apuntaba a nada arreglable.
 ///
 /// # Errors
-/// [`Error::InvalidPath`] si el fichero existe y no parsea.
-pub async fn named_connections(dir: &std::path::Path) -> Result<Vec<(String, String)>, Error> {
+/// [`Error::InvalidPath`] si el fichero existe y su TOML no parsea.
+pub async fn named_connections(
+    dir: &std::path::Path,
+) -> Result<(Vec<(String, String)>, Vec<(String, String)>), Error> {
     let dir = dir.to_path_buf();
-    let file = crate::blocking::spawn_blocking(move || ConnectionsFile::load(&dir))
-        .await
-        .map_err(|_| Error::Internal { panic: true })?
-        .map_err(log_and_map)?;
-    Ok(file
-        .connections
-        .into_iter()
-        .map(|(nombre, spec)| (nombre, spec.url))
-        .collect())
+    let (file, malas) =
+        crate::blocking::spawn_blocking(move || ConnectionsFile::load_tolerante(&dir))
+            .await
+            .map_err(|_| Error::Internal { panic: true })?
+            .map_err(log_and_map)?;
+    Ok((
+        file.connections
+            .into_iter()
+            .map(|(nombre, spec)| (nombre, spec.url))
+            .collect(),
+        malas,
+    ))
 }
 
 /// La implementación real de [`RemoteConnector`] sobre `norte-connect`.
@@ -1386,7 +1398,8 @@ url = "s3://mi-bucket"
         )
         .expect("escribir");
 
-        let cs = named_connections(dir.path()).await.expect("lista");
+        let (cs, malas) = named_connections(dir.path()).await.expect("lista");
+        assert!(malas.is_empty(), "todas parsean");
         assert_eq!(
             cs.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(),
             vec!["archivo", "trabajo"],
@@ -1404,18 +1417,54 @@ url = "s3://mi-bucket"
     #[tokio::test]
     async fn sin_fichero_es_vacio_y_un_fichero_roto_es_error() {
         let dir = tempfile::tempdir().expect("tempdir");
-        assert!(
-            named_connections(dir.path())
-                .await
-                .expect("sin fichero no es error")
-                .is_empty()
-        );
+        let (cs, malas) = named_connections(dir.path())
+            .await
+            .expect("sin fichero no es error");
+        assert!(cs.is_empty() && malas.is_empty());
 
         std::fs::write(dir.path().join("connections.toml"), "esto no es toml [[[")
             .expect("escribir");
         assert!(
             named_connections(dir.path()).await.is_err(),
             "un fichero roto se DICE"
+        );
+    }
+
+    /// **Una entrada inservible no se lleva por delante a las demás** (#365).
+    ///
+    /// El fallo que lo destapó: el `connections.toml` de una máquina tenía una
+    /// entrada que norte no sabía leer y `connection.list` contestaba
+    /// `InvalidPath` a secas. El lector perdía la lista de TODAS sus
+    /// conexiones por una sola, con un error que no nombraba ninguna y no
+    /// apuntaba a nada que pudiera arreglar.
+    #[tokio::test]
+    async fn una_entrada_que_no_se_entiende_no_esconde_a_las_demas() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            dir.path().join("connections.toml"),
+            r#"
+[connections.buena]
+url = "sftp://servidor.example/datos"
+
+[connections.rota]
+url = "sftp://otro.example/"
+password = "esto no va aquí"
+"#,
+        )
+        .expect("escribir");
+
+        let (cs, malas) = named_connections(dir.path()).await.expect("lista");
+        assert_eq!(
+            cs.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(),
+            vec!["buena"],
+            "la que sirve se lista"
+        );
+        assert_eq!(malas.len(), 1, "y la que no, sale aparte: {malas:?}");
+        assert_eq!(malas[0].0, "rota", "nombrada, o el aviso no sirve de nada");
+        assert!(
+            malas[0].1.contains("password"),
+            "y con el motivo, que es lo accionable: {}",
+            malas[0].1
         );
     }
 

@@ -494,7 +494,7 @@ pub(super) async fn spawn_daemon_at(socket: PathBuf) -> TestDaemon {
     TestDaemon {
         socket,
         run,
-        _dir: dir,
+        dir,
         mem,
     }
 }
@@ -967,7 +967,7 @@ pub(super) async fn spawn_daemon_estado(state: &std::path::Path) -> TestDaemon {
     TestDaemon {
         socket,
         run,
-        _dir: dir,
+        dir,
         mem,
     }
 }
@@ -1324,7 +1324,7 @@ pub(super) async fn spawn_daemon_con_anillo_de(
         TestDaemon {
             socket,
             run,
-            _dir: dir,
+            dir,
             mem,
         },
         anillo,

@@ -160,11 +160,27 @@ pub struct DaemonConfig {
     /// este tiempo se descarta aunque la conexión siga viva. Configurable para
     /// testear la expiración sin esperas largas.
     pub listing_ttl: Duration,
-    /// Raíz de config donde vive el catálogo de plugins
-    /// (`<dir>/plugins/<id>/plugin.toml`) y su estado (`<dir>/plugins-state.toml`),
-    /// M4-P3. `None` = [`crate::connect::config_dir`] real (la capa de usuario);
+    /// **La raíz de config de ESTE daemon**, no solo la de los plugins.
+    /// `None` = [`crate::connect::config_dir`] real (la capa de usuario);
     /// `Some(dir)` = ese directorio — para tests, SIEMPRE un tempdir, jamás el
     /// `~/.config` real.
+    ///
+    /// De ella cuelgan el catálogo de plugins (`<dir>/plugins/<id>/plugin.toml`
+    /// y `<dir>/plugins-state.toml`, M4-P3) y el `connections.toml` que sirve
+    /// `connection.list` (#365).
+    ///
+    /// **El nombre se quedó corto y es histórico**: nació con los plugins y
+    /// hoy manda sobre más. Se dice aquí en vez de renombrarlo porque el
+    /// renombrado toca una veintena de literales en los tests de cuatro
+    /// crates, y un nombre corto documentado engaña menos que un nombre exacto
+    /// conseguido con un diff que nadie va a leer entero.
+    ///
+    /// Que `connections.toml` cuelgue de aquí es lo que hace HERMÉTICA la
+    /// suite del daemon (#365). Antes, `connection.list` leía el
+    /// `~/.config/norte` de quien corriera los tests: bastaba que esa máquina
+    /// tuviera una conexión que norte no supiera leer para ponerlos rojos, y
+    /// el color del test dejaba de ser sobre el código. Es la misma clase de
+    /// problema que un test que toma un lock en el `HOME` de verdad.
     pub plugins_dir: Option<PathBuf>,
     /// Dónde vive la sesión de UI (L2): `<state_dir>/session.json` y su lock.
     /// `None` = **no se persiste nada** — ni se toma el lock ni se arranca el
@@ -211,6 +227,10 @@ struct Shared {
     hard_shutdown: CancellationToken,
     /// uid del daemon (derivado del propio socket): el ÚNICO peer admitido.
     uid: u32,
+    /// La raíz de config de este daemon, de [`DaemonConfig::plugins_dir`].
+    /// `None` = la config real del usuario. De aquí sale el `connections.toml`
+    /// que sirve `connection.list` (#365).
+    connections_dir: Option<PathBuf>,
     /// TTL de un listado paginado retenido (ADR 0017); de [`DaemonConfig`].
     listing_ttl: Duration,
     /// Listados paginados retenidos en TODO el daemon (M1): tope global
@@ -818,7 +838,7 @@ impl Daemon {
         let (listener, uid, socket_path, plugins, plugin_runtime) =
             crate::blocking::spawn_blocking({
                 let requested = cfg.socket_path;
-                let plugins_dir = cfg.plugins_dir;
+                let plugins_dir = cfg.plugins_dir.clone();
                 move || -> Result<
                 (
                     std::os::unix::net::UnixListener,
@@ -874,6 +894,7 @@ impl Daemon {
             shutdown: CancellationToken::new(),
             hard_shutdown: CancellationToken::new(),
             uid,
+            connections_dir: cfg.plugins_dir.clone(),
             listing_ttl: cfg.listing_ttl,
             open_listings: Arc::new(AtomicUsize::new(0)),
             scopes,
@@ -2802,7 +2823,7 @@ async fn dispatch(
                     rule: "not-approved".into(),
                 }));
             }
-            handle_connection_list().await
+            handle_connection_list(shared).await
         }
         // `log.tail` / `log.level` (0.65.0, #328, ADR 0092): el registro de
         // ESTE proceso, que un frontend en otro no puede ver de ninguna otra
@@ -3543,21 +3564,32 @@ async fn handle_host_volumes(p: methods::HostVolumesParams) -> Result<serde_json
 ///
 /// Lee el `connections.toml` del DAEMON, que es lo que hace útil el método: el
 /// frontend no lo tiene y no debería tenerlo. Un fichero que no está es una
-/// lista vacía —no tener conexiones es lo normal el primer día—, y uno que no
-/// parsea es un error, porque decir «no tienes ninguna» cuando hay una coma de
-/// más sería mentir sobre lo que el usuario escribió.
+/// lista vacía —no tener conexiones es lo normal el primer día—, y uno cuya
+/// SINTAXIS no parsea es un error, porque decir «no tienes ninguna» cuando hay
+/// una coma de más sería mentir sobre lo que el usuario escribió.
+///
+/// Una ENTRADA que no se entiende ya no tira la llamada (#365): sale en
+/// `unusable` con su motivo y las demás se listan. Antes, una sola entrada mala
+/// costaba la lista entera con un error que no nombraba ninguna conexión.
 ///
 /// Jamás un secreto: lo que sale es el par `(nombre, url)` tal como está
 /// escrito, y las credenciales se REFERENCIAN (ADR 0015).
-async fn handle_connection_list() -> Result<serde_json::Value, RpcError> {
-    let dir = crate::connect::config_dir();
-    let conexiones = crate::connect::named_connections(&dir)
+async fn handle_connection_list(shared: &Arc<Shared>) -> Result<serde_json::Value, RpcError> {
+    let dir = shared
+        .connections_dir
+        .clone()
+        .unwrap_or_else(crate::connect::config_dir);
+    let (conexiones, inservibles) = crate::connect::named_connections(&dir)
         .await
         .map_err(RpcError::from)?;
     to_value(&methods::ConnectionListResult {
         connections: conexiones
             .into_iter()
             .map(|(name, url)| methods::ConnectionEntry { name, url })
+            .collect(),
+        unusable: inservibles
+            .into_iter()
+            .map(|(name, reason)| methods::ConnectionProblem { name, reason })
             .collect(),
     })
 }
